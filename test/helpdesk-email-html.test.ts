@@ -122,6 +122,7 @@ const parse = require("../src/lib/helpdesk/inbound-parse") as typeof import("../
 const m365Message = require("../src/lib/helpdesk/m365/message") as typeof import("../src/lib/helpdesk/m365/message");
 const html = require("../src/lib/helpdesk/email-html") as typeof import("../src/lib/helpdesk/email-html");
 const sanitize = require("../src/lib/helpdesk/email-html-sanitize") as typeof import("../src/lib/helpdesk/email-html-sanitize");
+const worker = require("../src/lib/helpdesk/email-html-worker.cjs") as { cleanCss(css: string): string; cidKey(raw: string): string; SANITIZER_VERSION: number };
 const shared = require("../src/lib/helpdesk/email-html-shared") as typeof import("../src/lib/helpdesk/email-html-shared");
 const retention = require("../src/lib/helpdesk/retention") as typeof import("../src/lib/helpdesk/retention");
 const retentionShared = require("../src/lib/helpdesk/retention-shared") as typeof import("../src/lib/helpdesk/retention-shared");
@@ -312,6 +313,7 @@ before(async () => {
 });
 
 after(async () => {
+  await sanitize.stopSanitizeWorkerForTests();
   roles.setRoleMatrixForTests(null);
   email.setHelpdeskTransportForTests(null);
   inbound.setInboundAttachmentStoreForTests(null);
@@ -572,13 +574,13 @@ describe("who may open it", () => {
 // --- The sanitiser ----------------------------------------------------------------------------------
 
 describe("the sanitiser", () => {
-  const clean = (h: string, opts: Parameters<typeof sanitize.sanitizeEmailHtml>[1] = {}) => {
-    const r = sanitize.sanitizeEmailHtml(h, opts);
+  const clean = async (h: string, opts: Parameters<typeof sanitize.sanitizeEmailHtml>[1] = {}) => {
+    const r = await sanitize.sanitizeEmailHtml(h, opts);
     assert.equal(r.ok, true, h);
     return r as Extract<typeof r, { ok: true }>;
   };
   /** The email's own part of the document (after our head). */
-  const bodyOf = (h: string, opts?: Parameters<typeof sanitize.sanitizeEmailHtml>[1]) => clean(h, opts).html.replace(/^[\s\S]*?<\/head>/, "");
+  const bodyOf = async (h: string, opts?: Parameters<typeof sanitize.sanitizeEmailHtml>[1]) => (await clean(h, opts)).html.replace(/^[\s\S]*?<\/head>/, "");
   /**
    * Nothing in the output can run or load, read the way a browser reads it
    * (parsed again, as the frame will): no script, frame, form, meta refresh,
@@ -619,17 +621,28 @@ describe("the sanitiser", () => {
     ["mXSS: style break-out", `<style>p::after{content:"</style><img src=x onerror=alert(1)>"}</style>`],
     ["mXSS: template and comments", `<template><img src=x onerror=alert(1)></template><!--<img src=x onerror=alert(1)>--><xmp><img src=x onerror=alert(1)></xmp>`],
     ["data URIs", `<img src="data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+"><img src="data:text/html,<script>alert(1)</script>"><a href="data:image/png;base64,AAAA">p</a>`],
+    // The security review's corpus (1.20.8): escapes that decode to escapes, and the rest of its payloads.
+    ["review: CSS escape of an escape", `<div style="background:\\5c \\5c 75rl(https://evil.example/a.png)">x</div><style>body{background:\\5c \\5c 75rl(https://evil.example/b.png)}</style>`],
+    ["review: @import by escapes", `<style>@\\5c \\5c 69mport "https://evil.example/c.css";</style>`],
+    ["review: CSS escape split by a comment", `<div style="background:\\5c 75/**/rl(https://evil.example/a.png)">x</div>`],
+    ["review: image-set", `<div style="background-image:-webkit-image-set(url(https://e/x) 1x)">x</div>`],
+    ["review: links", `<a href="java&#x09;script:alert(1)">a</a><a href=" JAVASCRIPT:alert(1)">b</a><a href="//evil.example/x">c</a><a href="/desk/x">d</a><a href="https://u:p@e.com">e</a>`],
+    ["review: pictures", `<img src="https://e/x.png" srcset="https://e/y 2x"><img src="data:image/svg+xml;base64,PHN2Zz4="><img src="cid:abc"><picture><source srcset="https://e/z"></picture><video poster="https://e/p"></video><input type=image src=https://e/i>`],
+    ["review: svg and math styles", `<svg><style><img src=x onerror=alert(1)></style></svg><math><mtext><table><mglyph><style><img src=x onerror=alert(1)></style></math>`],
+    ["review: area, target, ping, hash", `<map><area href="javascript:alert(1)"><area href="https://ok.example/"></map><a href="https://ok.example" target="_top" rel="opener">x</a><a href="https://ok" ping="https://e/ping">p</a><a href="#x&quot;onclick">h</a><a href="#javascript:alert(1)">h2</a>`],
+    ["review: comments and CDATA", `<!--><img src=x onerror=alert(1)>--><p>hi</p><![CDATA[<img src=x onerror=1>]]><table><style>x{}</style><a href="https://ok">t</a></table>`],
+    ["review: data URL breaking out", `<img src="data:image/png;base64,AAAA&quot; onerror=alert(1)">`],
   ];
 
   for (const [name, h] of CORPUS) {
-    test(`hostile: ${name}`, () => {
-      const out = clean(h).html;
+    test(`hostile: ${name}`, async () => {
+      const out = (await clean(h)).html;
       inert(out);
     });
   }
 
-  test("what is kept: the email's look, http(s)/mailto/tel links opening a new tab, in-page anchors, tables, safe data: pictures", () => {
-    const out = bodyOf(
+  test("what is kept: the email's look, http(s)/mailto/tel links opening a new tab, in-page anchors, tables, safe data: pictures", async () => {
+    const out = await bodyOf(
       `<body bgcolor="#f4f4f4"><table width="600" style="border:1px solid #ddd"><tr><td style="font-family:Georgia;color:#333">Hello <b>Ana</b></td></tr></table>` +
         `<a href="https://vendor.example/invoice?id=1">Invoice</a> <a href="mailto:ap@vendor.example">Mail</a> <a href="tel:+441234">Call</a> <a href="#top">Top</a> <a href="/api/helpdesk/tickets">Relative</a>` +
         `<img src="data:image/png;base64,iVBORw0KGgo=" alt="logo"></body>`
@@ -645,32 +658,93 @@ describe("the sanitiser", () => {
     assert.match(out, /<img alt="logo" referrerpolicy="no-referrer" src="data:image\/png;base64,iVBORw0KGgo=">/);
   });
 
-  test("the document: a light page, the referrer meta, the email's own style sheet cleaned", () => {
-    const r = clean(`<html><head><title>T</title><style>.x{color:red;background:url(https://e.example/a.png)}</style></head><body><p class="x">x</p></body></html>`);
+  test("the document: a light page, the referrer meta, the email's own style sheet cleaned", async () => {
+    const r = await clean(`<html><head><title>T</title><style>.x{color:red;background:url(https://e.example/a.png)}</style></head><body><p class="x">x</p></body></html>`);
     assert.match(r.html, /^<!doctype html>\n<html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><style>html\{color-scheme:light;background:#fff/);
     assert.match(r.html, /<style>\.x\{color:red;background:none\}<\/style>/);
     assert.doesNotMatch(r.html, /<title>/);
   });
 
-  test("CSS escapes, comments and nesting cannot hide a URL", () => {
-    assert.equal(sanitize.cleanCss("a{b:u\\72l(x)}"), "a{b:none}");
-    assert.equal(sanitize.cleanCss("a{b:u/**/rl(x)}"), "a{b:u rl(x)}", "a comment splits the word: not a function any more");
-    assert.equal(sanitize.cleanCss("a{b:url(url(x))}"), "a{b:none}");
-    assert.equal(sanitize.cleanCss("a{b:-webkit-image-set(url(a) 1x)}"), "a{b:none}");
-    assert.equal(sanitize.cleanCss("@import 'x.css'; a{c:d}"), "a{c:d}");
-    assert.equal(sanitize.cleanCss("a{content:'</style><script>'}"), "a{content:'\\3c /style>\\3c script>'}");
-    assert.equal(sanitize.cleanCss("a{-moz-binding:url(x.xml#y)} b{behavior:url(x)}"), "a{} b{}");
+  test("CSS escapes, comments and nesting cannot hide a URL; an escape of an escape is undone too, and what keeps a backslash goes", () => {
+    assert.equal(worker.cleanCss("a{b:u\\72l(x)}"), "a{b:none}");
+    assert.equal(worker.cleanCss("a{b:u/**/rl(x)}"), "a{b:u rl(x)}", "a comment splits the word: not a function any more");
+    assert.equal(worker.cleanCss("a{b:url(url(x))}"), "a{b:none}");
+    assert.equal(worker.cleanCss("a{b:-webkit-image-set(url(a) 1x)}"), "a{b:none}");
+    assert.equal(worker.cleanCss("@import 'x.css'; a{c:d}"), "a{c:d}");
+    assert.equal(worker.cleanCss("a{content:'</style><script>'}"), "a{content:'\\3c /style>\\3c script>'}");
+    assert.equal(worker.cleanCss("a{-moz-binding:url(x.xml#y)} b{behavior:url(x)}"), "a{} b{}");
+    // The review's finding: "\5c " is a backslash, so "\5c \5c 75rl(" is "\75rl(" after one round and "url(" after two.
+    assert.equal(worker.cleanCss("background:\\5c \\5c 75rl(https://evil/x)"), "background:none");
+    assert.equal(worker.cleanCss("body{background:\\5c \\5c 75rl(https://evil/b.png)}"), "body{background:none}");
+    // Comments in the way: whatever the rounds leave, no escape and no url( is written out for the browser to read again.
+    for (const v of ["background:\\5c 75/**/rl(https://evil/x)", "background:\\5c /**/75rl(x)", "background:\\5c \\5c \\5c 5c 75rl(x)", "background:u\\/**/rl(x)"]) {
+      const o = worker.cleanCss(v);
+      assert.doesNotMatch(o, /\\|url\(/i, `${v} → ${o}`);
+    }
+    assert.equal(worker.cleanCss("@\\5c \\5c 69mport 'https://evil/c.css'; a{c:d}"), "a{c:d}");
+    // Forty levels deep: undone round after round, never written out.
+    const deep = worker.cleanCss("a{color:red;background:" + "\\5c ".repeat(40) + "75rl(x)} b{c:d}");
+    assert.doesNotMatch(deep, /\\|url\(/i, deep);
+    assert.match(deep, /color:red/);
+    // Whatever still holds a backslash after the rounds loses its declaration (the rest of the rule stays).
+    assert.equal(worker.cleanCss("a{color:red;b:x\\\ry} c{d:e}"), "a{color:red;} c{d:e}");
+    // The worker's version is the one the cache keys on.
+    assert.equal(worker.SANITIZER_VERSION, shared.EMAIL_HTML_SANITIZER_VERSION);
+    assert.equal(worker.cidKey("<Image001.png%40X>"), sanitize.cidKey("<Image001.png%40X>"));
   });
 
-  test("bounds: too many elements or too deep is refused before parsing, with a sentence for the agent", () => {
-    assert.deepEqual(sanitize.sanitizeEmailHtml("<div>".repeat(shared.EMAIL_HTML_LIMITS.depth + 5)), { ok: false, reason: "too_complex" });
-    assert.deepEqual(sanitize.sanitizeEmailHtml("<span>a</span>".repeat(shared.EMAIL_HTML_LIMITS.tags + 5)), { ok: false, reason: "too_complex" });
-    assert.equal(sanitize.sanitizeEmailHtml("<p>a".repeat(5000)).ok, true, "unclosed paragraphs are no nesting");
-    assert.equal(sanitize.sanitizeEmailHtml("<div>".repeat(300) + "deep enough").ok, true);
-    const t0 = Date.now();
-    assert.equal(sanitize.sanitizeEmailHtml("<style>" + "a{b:url(".repeat(20_000) + "</style>").ok, true);
-    assert.equal(sanitize.sanitizeEmailHtml(`<div style="${"\\75 rl(".repeat(50_000)}">x</div>`).ok, true);
-    assert.ok(Date.now() - t0 < 5000, "pathological CSS stays fast");
+  test("bounds: measured in one linear pass before parsing; too many elements, attributes, or too deep is refused", async () => {
+    const LIM = shared.EMAIL_HTML_LIMITS;
+    const refuse = async (h: string, why: string) => {
+      assert.equal(sanitize.htmlComplexity(h).over, why, h.slice(0, 40));
+      assert.deepEqual(await sanitize.sanitizeEmailHtml(h), { ok: false, reason: "too_complex" });
+    };
+    await refuse("<div>".repeat(LIM.depth + 5), "depth");
+    await refuse("<span>a</span>".repeat(LIM.tags + 5), "elements");
+    // The review's payloads: closing tags never opened lower nothing; "/>" opens an ordinary element; attributes are counted.
+    await refuse("<div></q>".repeat(59_000), "depth");
+    await refuse("<div/>".repeat(LIM.depth + 5), "depth");
+    await refuse(`<div ${Array.from({ length: LIM.tagAttrs + 1 }, (_, i) => `a${i}=1`).join(" ")}>x</div>`, "tag_attrs");
+    await refuse(`<img ${Array.from({ length: 150 }, (_, i) => `a${i}`).join(" ")}>`.repeat(Math.ceil(LIM.attrs / 150) + 1), "attrs");
+    assert.equal((await sanitize.sanitizeEmailHtml("<p>a".repeat(5000))).ok, true, "unclosed paragraphs are no nesting");
+    assert.equal((await sanitize.sanitizeEmailHtml("<div>".repeat(300) + "deep enough")).ok, true);
+    assert.equal((await sanitize.sanitizeEmailHtml("<svg>" + "<path/>".repeat(1000) + "</svg>")).ok, true, "inside SVG, /> closes");
+    // The measuring itself is linear: a megabyte of "<a<a<a" (197 s before the review) is read at once.
+    let t0 = Date.now();
+    const lt = "<a".repeat(512 * 1024);
+    sanitize.htmlComplexity(lt);
+    assert.ok(Date.now() - t0 < 1000, `the scan took ${Date.now() - t0} ms`);
+    t0 = Date.now();
+    const quoted = '<a title="' + "<a ".repeat(300_000);
+    sanitize.htmlComplexity(quoted);
+    assert.ok(Date.now() - t0 < 1000, "an unclosed quote is one long value, read once");
+    t0 = Date.now();
+    assert.equal((await sanitize.sanitizeEmailHtml("<style>" + "a{b:url(".repeat(20_000) + "</style>")).ok, true);
+    assert.equal((await sanitize.sanitizeEmailHtml(`<div style="${"\\75 rl(".repeat(50_000)}">x</div>`)).ok, true);
+    assert.equal((await sanitize.sanitizeEmailHtml("<style>a{b:-" + "a".repeat(500_000) + "}</style>")).ok, true);
+    assert.ok(Date.now() - t0 < 6000, "pathological CSS stays fast");
+  });
+
+  test("the worker: off the main thread, stopped after its time, the next email gets a fresh one", async () => {
+    // The main thread stays free while the worker works: a timer fires during a sanitise.
+    let ticks = 0;
+    const timer = setInterval(() => ticks++, 5);
+    const big = "<span>a</span>".repeat(50_000);
+    const r = await sanitize.sanitizeEmailHtml(big);
+    clearInterval(timer);
+    assert.equal(r.ok, true);
+    assert.ok(ticks > 5, `the main thread ran ${ticks} timer ticks meanwhile`);
+    // Past its time: refused as a timeout, and the work is stopped.
+    sanitize.setSanitizeTimeoutForTests(1);
+    try {
+      assert.deepEqual(await sanitize.sanitizeEmailHtml(big), { ok: false, reason: "timeout" });
+    } finally {
+      sanitize.setSanitizeTimeoutForTests(null);
+    }
+    assert.equal((await sanitize.sanitizeEmailHtml("<p>after</p>")).ok, true, "a fresh worker takes the next email");
+    // Several at once: each answered, in turn.
+    const all = await Promise.all(Array.from({ length: 5 }, (_, i) => sanitize.sanitizeEmailHtml(`<p>email ${i}</p>`)));
+    all.forEach((x, i) => assert.ok(x.ok && x.html.includes(`email ${i}`)));
   });
 
   test("the route: too complex answers 422 with the sentence, the frame's page says it too", async () => {
@@ -680,8 +754,72 @@ describe("the sanitiser", () => {
     assert.equal(info.body.error, shared.HD_ORIGINAL_COPY.tooComplex);
     const doc = await original(first.id, P.agent.session);
     assert.equal(doc.status, 422);
-    assert.match(doc.text, /too large or too complex to show safely/);
+    assert.match(doc.text, /This email is too complex to show\. Its text is in the conversation\./);
     assert.match(doc.headers.get("content-security-policy") ?? "", /sandbox/);
+  });
+
+  test("the route: a sanitise past its time is 422 with the same sentence, and that answer is kept (not worked on again)", async () => {
+    const { first } = await opened(mail(P.req, { html: "<p>Slow one</p>" + "<span>a</span>".repeat(20_000) }));
+    html.resetOriginalCacheForTests();
+    sanitize.setSanitizeTimeoutForTests(1);
+    try {
+      const info = await call(originalRoute.GET, req(`/messages/${first.id}/original?format=info`, P.agent.session), { id: String(first.id) });
+      assert.equal(info.status, 422);
+      assert.equal(info.body.error, "This email is too complex to show. Its text is in the conversation.");
+    } finally {
+      sanitize.setSanitizeTimeoutForTests(null);
+    }
+    // The frame's read that follows gets the kept answer at once, although the worker would now have time.
+    const t0 = Date.now();
+    const doc = await call(originalRoute.GET, req(`/messages/${first.id}/original`, P.agent.session), { id: String(first.id) });
+    assert.equal(doc.status, 422);
+    assert.match(doc.text, /This email is too complex to show/);
+    assert.ok(Date.now() - t0 < 500, "kept, not sanitised again");
+    // A kept result is per Show images: that one is worked on (and succeeds now).
+    const shown = await call(originalRoute.GET, req(`/messages/${first.id}/original?images=1`, P.agent.session), { id: String(first.id) });
+    assert.equal(shown.status, 200);
+    // And a success is kept too: the second read is the same document.
+    const again = await call(originalRoute.GET, req(`/messages/${first.id}/original?images=1`, P.agent.session), { id: String(first.id) });
+    assert.equal(again.text, shown.text);
+  });
+
+  test("the route: images and format may be given once each; a repeated one is 400", async () => {
+    const { first } = await opened(mail(P.req, { html: '<p>Twice</p><img src="https://t.example/p.gif">' }));
+    for (const q of ["?images=1&images=0", "?images=0&images=1", "?format=info&format=html", "?images=1&format=info&images=1"]) {
+      const r = await original(first.id, P.agent.session, q);
+      assert.equal(r.status, 400, q);
+      assert.ok(!r.text.includes("t.example"), q);
+    }
+    assert.equal((await original(first.id, P.agent.session, "?images=0")).status, 200);
+    assert.doesNotMatch((await original(first.id, P.agent.session, "?images=0")).text, /t\.example/);
+  });
+});
+
+// --- Arrival: a hostile email can't stall intake ---------------------------------------------------------
+
+describe("arrival", () => {
+  test("the text of a hostile or huge HTML-only email is read in bounded time, and the HTML kept is capped", async () => {
+    const MB = 1024 * 1024;
+    const cases: [string, string][] = [
+      ["unclosed nesting (23.7 s before the review)", "<div></q>".repeat(59_000)],
+      ["a megabyte of '<a'", "<a".repeat(MB / 2)],
+      ["one tag, 20,000 attributes", `<div ${Array.from({ length: 20_000 }, (_, i) => `a${i}=1`).join(" ")}>x</div>`],
+      ["two megabytes of paragraphs (over 400 s before)", "<p>word word word</p>".repeat(Math.floor((2 * MB) / 21))],
+    ];
+    for (const [name, h] of cases) {
+      let t0 = Date.now();
+      parse.inboundBody({ ...mail(P.req), html: h }, { reply: false });
+      assert.ok(Date.now() - t0 < 2000, `${name}: the text took ${Date.now() - t0} ms`);
+      t0 = Date.now();
+      const { first } = await opened(mail(P.req, { html: h }));
+      assert.ok(Date.now() - t0 < 10_000, `${name}: the whole intake took ${Date.now() - t0} ms`);
+      const row = await stored(first.id);
+      assert.ok(Buffer.byteLength(row.html) <= shared.EMAIL_HTML_LIMITS.storeBytes);
+    }
+    // Over the limits the text is still there, without a parser.
+    assert.equal(parse.htmlToText("<div></q>".repeat(5000) + "<p>Hello &amp; welcome</p><script>x()</script>"), "Hello & welcome");
+    // And the 1 MB read for text: what is past it is left out.
+    assert.ok(parse.htmlToText("<p>" + "a ".repeat(MB) + "</p><p>tail-marker</p>").length < MB);
   });
 });
 
@@ -808,21 +946,31 @@ describe("privacy, merge and the API", () => {
     assert.equal(await stored(later.id), undefined);
   });
 
-  test("a removed account: their own request and their messages as a CC lose their originals", async (t) => {
+  test("a removed account: the originals of every ticket they asked, were copied on or wrote on go, since other emails quote them", async (t) => {
     if (!(await retention.getRetentionSettings()).anonymise_on_account_removal) return t.skip("this workspace keeps a removed account's tickets (Desk settings → Data retention)");
     const own = await opened(mail(P.leaver, { html: "<p>Lena's own request</p>" }));
-    const theirs = await opened(mail(P.req, { html: "<p>Daniel's ticket, Lena copied</p>" }));
-    await pool().query("INSERT INTO hd_ticket_ccs (ticket_id, user_id, email, name) VALUES ($1, $2, $3, $4)", [theirs.t.id, P.leaver.id, P.leaver.email, P.leaver.name]);
-    const r = await deliver(mail(P.leaver, { subject: `[#${theirs.t.number} ref:${theirs.t.reply_token}]`, html: "<p>Lena's reply as a CC</p>" }));
-    assert.equal(r.outcome, "appended");
-    const lena = (await messagesOf(theirs.t.id)).filter((m) => m.author_id === P.leaver.id);
-    assert.equal(lena.length, 1);
-    assert.ok(await stored(lena[0].id));
+    // Copied on Daniel's ticket: her reply, and Daniel's next email quoting her.
+    const copied = await opened(mail(P.req, { html: "<p>Daniel's ticket, Lena copied</p>" }));
+    await pool().query("INSERT INTO hd_ticket_ccs (ticket_id, user_id, email, name) VALUES ($1, $2, $3, $4)", [copied.t.id, P.leaver.id, P.leaver.email, P.leaver.name]);
+    assert.equal((await deliver(mail(P.leaver, { subject: `[#${copied.t.number} ref:${copied.t.reply_token}]`, html: "<p>Lena's reply as a CC</p>" }))).outcome, "appended");
+    const quoting = `<p>Agreed.</p><blockquote>Lena Moreau &lt;${P.leaver.email}&gt; wrote: my desk phone is 4471</blockquote>`;
+    assert.equal((await deliver(mail(P.req, { subject: `[#${copied.t.number} ref:${copied.t.reply_token}]`, html: quoting }))).outcome, "appended");
+    // Wrote on Priya's ticket while copied, and is no longer copied: Priya's email quoting her goes too.
+    const wrote = await opened(mail(P.req2, { html: "<p>Priya's ticket</p>" }));
+    await pool().query("INSERT INTO hd_ticket_ccs (ticket_id, user_id, email, name) VALUES ($1, $2, $3, $4)", [wrote.t.id, P.leaver.id, P.leaver.email, P.leaver.name]);
+    assert.equal((await deliver(mail(P.leaver, { subject: `[#${wrote.t.number} ref:${wrote.t.reply_token}]`, html: "<p>Lena chimes in</p>" }))).outcome, "appended");
+    await pool().query("DELETE FROM hd_ticket_ccs WHERE ticket_id = $1", [wrote.t.id]);
+    assert.equal((await deliver(mail(P.req2, { subject: `[#${wrote.t.number} ref:${wrote.t.reply_token}]`, html: quoting }))).outcome, "appended");
+    // Nothing to do with her: kept.
+    const unrelated = await opened(mail(P.req2, { html: "<p>Priya's other ticket</p>" }));
+    const ids = async (ticketId: number) => (await messagesOf(ticketId)).map((m) => m.id);
+    const related = [...(await ids(own.t.id)), ...(await ids(copied.t.id)), ...(await ids(wrote.t.id))];
+    const count = async (list: number[]) => (await pool().query("SELECT count(*)::int AS n FROM hd_message_html WHERE message_id = ANY($1)", [list])).rows[0].n;
+    assert.equal(await count(related), 7);
     const done = await dbCore.withTx((c) => retention.anonymiseRemovedAccountTx(c, P.leaver.id));
     assert.ok(done.result);
-    assert.equal(await stored(lena[0].id), undefined, "their message on someone else's ticket");
-    assert.equal(await stored(own.first.id), undefined, "their own request, anonymised whole");
-    assert.ok(await stored(theirs.first.id), "Daniel's own email is not theirs to remove");
+    assert.equal(await count(related), 0, "her request, the ticket she was copied on and the one she wrote on: every original gone");
+    assert.ok(await stored(unrelated.first.id), "a ticket she had nothing to do with keeps its original");
   });
 
   test("the personal data export carries the HTML of the emails the person sent, never anyone else's", async (t0) => {

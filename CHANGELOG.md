@@ -4,6 +4,54 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.8] - 2026-11-14
+
+See incoming email as it was sent, filter the queue by custom fields, and
+export tickets as CSV.
+
+### Added
+- **"View original" for incoming email.** Emailed messages on a ticket get
+  an envelope button that shows the email as its sender wrote it:
+  formatting, signature, and the quoted or forwarded history the text view
+  leaves out. Replies from the desk are still sent as plain text. It works
+  for mail through the inbound webhook and through Microsoft 365 mailboxes,
+  from this version on; earlier messages have no original.
+- **It is shown safely.** The email is cleaned on every view and shown in a
+  sealed frame that cannot run scripts or reach the desk. Remote pictures
+  are hidden until you press "Show images" for that message; pictures sent
+  inside the email show straight away. An email too complex to clean in a
+  few seconds is not shown, and its text stays in the conversation. Agents
+  only, with the same visibility as the message.
+- **Filter the queue by custom fields.** The Filter dialog and saved views
+  take conditions on custom fields that fit each kind (any of, contains, at
+  least, before, is a person, not filled in, and more). Conditions show as
+  removable chips. API v1 `GET /tickets` takes `cf.<key>=<condition>`, and
+  the Claude connector's `hd_queue` takes `custom_fields`.
+- **Export CSV from the queue.** Exports the whole current list (up to
+  10,000 tickets) with ticket details, category and sub-category, the event,
+  and a column per custom field, for people with "Export tickets" (Managers
+  and Admins by default). Each export is written to the audit log.
+
+### Changed
+- **API v1 messages carry `has_original_html`.**
+- **Turning incoming HTML email into text is faster** and bounded on very
+  large or deeply nested mail.
+- **Removing an account also deletes the stored originals** of every message
+  on the tickets that person was on, since others' replies quote them.
+- **The CSV formula guard** (also used by compliance exports) now also
+  catches a leading line feed, full-width formula characters, and formula
+  characters after leading spaces.
+
+### Upgrading
+- **Nothing to run.** One table, `hd_message_html`, is added on start. Saved
+  views from 1.20.7 work as before.
+- **Dependencies:** `dompurify` is added and `jsdom` moves to the runtime
+  dependencies (both were already installed).
+- **Rolling back to 1.20.7 is safe,** but 1.20.7 ignores custom field
+  conditions in saved views (they then list more tickets) and does not
+  delete stored originals when a ticket is anonymised. See the updating
+  page.
+
 ## [1.20.7] - 2026-11-14
 
 Microsoft 365 mailboxes for desk email: the desk reads your help mailboxes

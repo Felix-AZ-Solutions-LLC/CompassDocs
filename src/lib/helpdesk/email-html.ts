@@ -16,15 +16,20 @@
 // Showing it. Only through GET /api/helpdesk/messages/{id}/original, to an
 // agent who works the ticket (the same check the desk's ticket read uses:
 // licence, desk role, queues, the Duo desk rule; internal notes included,
-// as the desk shows them to that agent). Sanitised every time
-// (lib/helpdesk/email-html-sanitize); remote pictures only on "Show images",
+// as the desk shows them to that agent). Sanitised from the stored copy in a
+// worker thread, bounded (lib/helpdesk/email-html-sanitize); the result is
+// kept ten minutes in this process per message, per Show images and per
+// sanitiser version, so a repeat view is cheap and a better sanitiser
+// applies to old mail. Remote pictures only on "Show images",
 // one message at a time; cid: pictures from that message's own attachments
 // only, inlined as data: (the sandboxed frame has no cookies to fetch them
 // with). Viewing is not audited: it is reading a message.
 //
 // Privacy. Anonymising a ticket deletes its rows (anonymiseOriginalHtmlTx);
-// deleting a ticket or a message cascades; a removed account's blanked
-// messages lose theirs (dropOriginalHtmlTx). Merging and the recycle bin
+// deleting a ticket or a message cascades; a removed account
+// (dropOriginalHtmlForPersonTx, 1.20.8 security review) takes the originals
+// of every ticket the person asked, was copied on or wrote on, since other
+// people's emails quote theirs. Merging and the recycle bin
 // move or keep messages by id, so the HTML stays with its message. The
 // requester's personal data export carries the HTML of the emails they sent
 // (originalHtmlFor). Server-only.
@@ -36,7 +41,7 @@ import type { PoolClient } from "pg";
 import { logEvent } from "../log";
 import { isValidStoredName, sniffImage, uploadDir } from "../uploads";
 import { hq, hqOne } from "./db-core";
-import { EMAIL_HTML_LIMITS, HD_ORIGINAL_COPY, type HdOriginalInfo } from "./email-html-shared";
+import { EMAIL_HTML_LIMITS, EMAIL_HTML_SANITIZER_VERSION, HD_ORIGINAL_COPY, type HdOriginalInfo } from "./email-html-shared";
 import { cidKey, sanitizeEmailHtml } from "./email-html-sanitize";
 import type { InboundEmail } from "./inbound-parse";
 
@@ -103,9 +108,30 @@ export async function anonymiseOriginalHtmlTx(client: PoolClient, ticketId: numb
   await client.query("DELETE FROM hd_message_html WHERE message_id IN (SELECT id FROM hd_messages WHERE ticket_id = $1)", [ticketId]);
 }
 
-/** A removed account's blanked messages (lib/helpdesk/retention): their originals go. */
+/** Messages blanked elsewhere (lib/helpdesk/retention): their originals go. */
 export async function dropOriginalHtmlTx(client: PoolClient, messageIds: number[]): Promise<void> {
   if (messageIds.length) await client.query("DELETE FROM hd_message_html WHERE message_id = ANY($1::int[])", [messageIds]);
+}
+
+/**
+ * A removed account (lib/helpdesk/retention anonymiseRemovedAccountTx, in its
+ * transaction, before CC rows and authors are cleared): the originals of
+ * every message on every ticket the person was the requester of, was copied
+ * on, or wrote on, by account or by address. Other people's emails quote
+ * theirs ("Jane Doe <jane@…> wrote: …"), so not only their own go. Tickets on
+ * legal hold keep theirs, as their messages are kept.
+ */
+export async function dropOriginalHtmlForPersonTx(client: PoolClient, userId: number, email: string, opts: { ccs: boolean }): Promise<number> {
+  const r = await client.query(
+    `DELETE FROM hd_message_html h USING hd_messages m, hd_tickets t
+      WHERE h.message_id = m.id AND t.id = m.ticket_id AND t.legal_hold = 0
+        AND m.ticket_id IN (
+          SELECT id FROM hd_tickets WHERE requester_id = $1 OR ($2 <> '' AND lower(requester_email) = $2)
+          ${opts.ccs ? "UNION SELECT ticket_id FROM hd_ticket_ccs WHERE user_id = $1 OR ($2 <> '' AND lower(email) = $2)" : ""}
+          UNION SELECT ticket_id FROM hd_messages WHERE author_id = $1 OR ($2 <> '' AND lower(author_email) = $2))`,
+    [userId, email.trim().toLowerCase()]
+  );
+  return r.rowCount ?? 0;
 }
 
 /** The personal data export: message id → the stored HTML of those messages (the caller picks the person's own). */
@@ -155,19 +181,39 @@ async function cidPictures(messageId: number, stored: StoredOriginal): Promise<M
 
 export type OriginalView =
   | { ok: true; html: string; info: HdOriginalInfo }
-  | { ok: false; status: 404 | 422; info: HdOriginalInfo };
+  | { ok: false; status: 404 | 422 | 503; info: HdOriginalInfo };
 
-// The info read and the frame's read come one after the other: the sanitised result is kept a minute for the second.
-const recent = new Map<string, { at: number; view: OriginalView }>();
-const RECENT_MS = 60_000;
-const RECENT_MAX = 8;
+// 1.20.8 (security review): sanitised results are kept, in this process, per message, per Show images and per
+// sanitiser version (so a better sanitiser makes them again), for ten minutes after the work is done; a refusal too,
+// so a hostile email is worked on once, not on every view. The info read and the frame's read that follow each other
+// share one piece of work while it runs. At most 32 results and about 48 MB are kept; the oldest go first.
+const kept = new Map<string, { at: number; view: OriginalView; bytes: number }>();
+const working = new Map<string, Promise<OriginalView>>();
+const KEPT_MS = 10 * 60_000;
+const KEPT_MAX = 32;
+const KEPT_BYTES = 48 * 1024 * 1024;
 
 /** Tests: forget the kept results. */
 export function resetOriginalCacheForTests(): void {
-  recent.clear();
+  kept.clear();
+  working.clear();
 }
 
-const refused = (status: 404 | 422, error: string, extra: Partial<HdOriginalInfo> = {}): OriginalView => ({
+function keep(key: string, view: OriginalView): void {
+  const now = Date.now();
+  for (const [k, v] of kept) if (now - v.at >= KEPT_MS) kept.delete(k);
+  const bytes = view.ok ? view.html.length * 2 : 256;
+  let total = bytes;
+  for (const v of kept.values()) total += v.bytes;
+  while (kept.size && (kept.size >= KEPT_MAX || total > KEPT_BYTES)) {
+    const [oldest, v] = kept.entries().next().value!;
+    kept.delete(oldest);
+    total -= v.bytes;
+  }
+  if (bytes <= KEPT_BYTES) kept.set(key, { at: now, view, bytes });
+}
+
+const refused = (status: 404 | 422 | 503, error: string, extra: Partial<HdOriginalInfo> = {}): OriginalView => ({
   ok: false,
   status,
   info: { ok: false, error, remote_images: 0, insecure_images: 0, truncated: false, size: 0, ...extra },
@@ -180,23 +226,28 @@ const refused = (status: 404 | 422, error: string, extra: Partial<HdOriginalInfo
 export async function originalView(messageId: number, opts: { remoteImages?: boolean } = {}): Promise<OriginalView> {
   const stored = await getOriginalHtml(messageId);
   if (!stored) return refused(404, "This message has no original email.");
-  const key = `${messageId}:${opts.remoteImages ? 1 : 0}:${stored.created_at}`;
-  const now = Date.now();
-  const hit = recent.get(key);
-  if (hit && now - hit.at < RECENT_MS) return hit.view;
-  const cids = await cidPictures(messageId, stored);
-  const r = sanitizeEmailHtml(stored.html, { remoteImages: opts.remoteImages === true, cids });
-  const view: OriginalView = r.ok
-    ? {
-        ok: true,
-        html: r.html,
-        info: { ok: true, remote_images: r.remoteImages, insecure_images: r.insecureImages, truncated: stored.truncated === true, size: Number(stored.size) },
-      }
-    : refused(422, HD_ORIGINAL_COPY.tooComplex, { truncated: stored.truncated === true, size: Number(stored.size) });
-  for (const [k, v] of recent) if (now - v.at >= RECENT_MS) recent.delete(k);
-  if (recent.size >= RECENT_MAX) recent.delete(recent.keys().next().value!);
-  recent.set(key, { at: now, view });
-  return view;
+  const key = `${messageId}:${opts.remoteImages ? 1 : 0}:${EMAIL_HTML_SANITIZER_VERSION}:${new Date(stored.created_at).getTime()}`;
+  const hit = kept.get(key);
+  if (hit && Date.now() - hit.at < KEPT_MS) return hit.view;
+  const running = working.get(key);
+  if (running) return running;
+  const work = (async (): Promise<OriginalView> => {
+    const cids = await cidPictures(messageId, stored);
+    const r = await sanitizeEmailHtml(stored.html, { remoteImages: opts.remoteImages === true, cids });
+    const extra = { truncated: stored.truncated === true, size: Number(stored.size) };
+    if (r.ok) return { ok: true, html: r.html, info: { ok: true, remote_images: r.remoteImages, insecure_images: r.insecureImages, ...extra } };
+    if (r.reason === "busy" || r.reason === "failed") return refused(503, r.reason === "busy" ? HD_ORIGINAL_COPY.busy : HD_ORIGINAL_COPY.failed, extra);
+    return refused(422, HD_ORIGINAL_COPY.tooComplex, extra);
+  })();
+  working.set(key, work);
+  try {
+    const view = await work;
+    // Kept from when the work ended (a slow one is not done again for the next read); a busy desk is not kept.
+    if (view.ok || view.status !== 503) keep(key, view);
+    return view;
+  } finally {
+    working.delete(key);
+  }
 }
 
 /**

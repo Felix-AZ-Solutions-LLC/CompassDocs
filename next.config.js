@@ -27,8 +27,15 @@ const nextConfig = {
   // Keep the Postgres driver out of the server bundle (it has optional native
   // deps and dynamic requires); load it from node_modules at runtime. The PDF
   // renderer likewise: it carries its own font and image decoders that do not
-  // survive bundling.
-  serverExternalPackages: ["pg", "@react-pdf/renderer"],
+  // survive bundling. DOMPurify (1.20.8) is required by the email sanitiser's
+  // worker from node_modules, so the build's file tracing must ship it there.
+  serverExternalPackages: ["pg", "@react-pdf/renderer", "dompurify"],
+  // 1.20.8: the "View original" sanitiser runs in a worker thread loaded by its path
+  // (lib/helpdesk/email-html-sanitize workerFile), never bundled: ship the file to the
+  // standalone folder. jsdom (external by default) and dompurify (above) come from its node_modules.
+  outputFileTracingIncludes: {
+    "/api/helpdesk/messages/**": ["./src/lib/helpdesk/email-html-worker.cjs"],
+  },
   async headers() {
     // Baseline hardening on every response. HSTS is a no-op over plain HTTP
     // (browsers ignore it), so it's safe to send unconditionally.

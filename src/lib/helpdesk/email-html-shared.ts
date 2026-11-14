@@ -7,8 +7,11 @@ export const EMAIL_HTML_LIMITS = {
   storeBytes: 1024 * 1024,
   /** Elements (opening tags) in a document the sanitiser will read. Past it the original is refused with a sentence. */
   tags: 60_000,
-  /** How deep elements may nest (an estimate read before parsing). Past it the original is refused. */
+  /** How deep elements may nest (an open-element stack read before parsing). Past it the original is refused. */
   depth: 400,
+  /** Attributes on one tag, and in all (1.20.8 security review). Past either the original is refused. */
+  tagAttrs: 200,
+  attrs: 200_000,
   /** Inline pictures (cid:) drawn from the message's own attachments, in bytes in total per view. */
   inlineBytes: 8 * 1024 * 1024,
   /** Tiny inline pictures the attachment rules skip (signature logos), kept with the HTML: how many, per message. */
@@ -30,6 +33,9 @@ export interface HdOriginalInfo {
   size: number;
 }
 
+/** Raised whenever the sanitiser's output changes (email-html-worker.cjs SANITIZER_VERSION): kept results are made again. */
+export const EMAIL_HTML_SANITIZER_VERSION = 2;
+
 export const HD_ORIGINAL_COPY = {
   control: "View original",
   title: "Original email",
@@ -39,7 +45,8 @@ export const HD_ORIGINAL_COPY = {
   insecure: (n: number) => (n === 1 ? "1 picture is not shown because it is not sent securely." : `${n} pictures are not shown because they are not sent securely.`),
   truncated: "This email was larger than 1 MB. Only its first part was kept.",
   plainReplies: "Replies from the desk are still sent as plain text.",
-  tooComplex: "This email is too large or too complex to show safely. Its text is in the conversation.",
+  tooComplex: "This email is too complex to show. Its text is in the conversation.",
+  busy: "The desk is busy showing other emails. Try again in a moment.",
   failed: "The original email couldn't be shown. Try again.",
   frameTitle: "The original email, as its sender wrote it",
 } as const;

@@ -709,6 +709,9 @@ export async function anonymiseRemovedAccountTx(client: PoolClient, userId: numb
   const opt = await optional(client);
   const s = await getRetentionSettings();
   if (!s.anonymise_on_account_removal) return { result: null, files };
+  // 1.20.8 (security review): the original emails of every ticket they asked, were copied on or wrote on, which may
+  // quote them, before the CC rows and authors below are cleared (lib/helpdesk/email-html).
+  await (await import("./email-html")).dropOriginalHtmlForPersonTx(client, userId, email, { ccs: opt.has("hd_ticket_ccs") });
   const own = await hq<{ id: number }>(
     `WITH mine AS (
        SELECT id FROM hd_tickets

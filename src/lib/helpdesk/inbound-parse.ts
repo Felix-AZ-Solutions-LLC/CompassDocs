@@ -32,6 +32,7 @@
 import { unified } from "unified";
 import rehypeParse from "rehype-parse";
 import { scanAddresses } from "./mailboxes-shared";
+import { linearHtmlText, scanHtml } from "./html-scan";
 
 export const INBOUND_PROVIDERS = ["generic", "postmark", "sendgrid", "mailgun"] as const;
 export type InboundProvider = (typeof INBOUND_PROVIDERS)[number];
@@ -585,33 +586,62 @@ function isQuoteContainer(node: HastNode): boolean {
   return false;
 }
 
+/** 1.20.8 (security review): at most this much of an email's HTML is read for its text (the rest is left out). */
+export const INBOUND_MAX_HTML_FOR_TEXT = 1024 * 1024;
+
 /**
  * The text of an HTML email. Nothing of the markup survives: blocks become
  * line breaks, list items "- ", a link "label (https://…)" when its target
  * is http(s) or mailto and differs from its label. `dropQuotes` also leaves
  * out the quoted history the common clients wrap in a marked container.
+ *
+ * 1.20.8 (security review): bounded. Only the first 1 MB is read; it is
+ * measured first in one linear pass (lib/helpdesk/html-scan), and HTML with
+ * too many elements or attributes, or nested too deep for the parser to
+ * read in bounded time, is turned into text without a parser
+ * (linearHtmlText: no quote cutting then). The text is written out in
+ * pieces, never re-read from the end of a growing string.
  */
 export function htmlToText(html: string, opts: { dropQuotes?: boolean } = {}): string {
+  const input = html.length > INBOUND_MAX_HTML_FOR_TEXT ? html.slice(0, INBOUND_MAX_HTML_FOR_TEXT) : html;
+  if (scanHtml(input).over) return linearHtmlText(input);
   let tree: HastNode;
   try {
-    tree = unified().use(rehypeParse, { fragment: false }).parse(html.slice(0, 2_000_000)) as unknown as HastNode;
+    tree = unified().use(rehypeParse, { fragment: false }).parse(input) as unknown as HastNode;
   } catch {
-    return "";
+    return linearHtmlText(input);
   }
-  let out = "";
+  // The text so far, in pieces; `tail` holds its last characters (all the walk ever looks back at).
+  const parts: string[] = [];
+  let tail = "";
+  const put = (v: string) => {
+    if (!v) return;
+    parts.push(v);
+    tail = (tail + v).slice(-8);
+  };
+  const empty = () => parts.length === 0;
+  const endsWith = (c: string) => tail.endsWith(c);
   const nl = (n: number) => {
-    const trailing = out.match(/\n*$/)?.[0].length ?? 0;
-    if (out.length === 0) return;
-    if (trailing < n) out += "\n".repeat(n - trailing);
+    if (empty()) return;
+    const trailing = tail.length - tail.replace(/\n+$/, "").length;
+    if (trailing < n) put("\n".repeat(n - trailing));
+  };
+  const trimSpaces = () => {
+    while (parts.length && parts[parts.length - 1].endsWith(" ")) {
+      const last = parts[parts.length - 1].replace(/ +$/, "");
+      if (last) parts[parts.length - 1] = last;
+      else parts.pop();
+      tail = parts.length ? parts.slice(-4).join("").slice(-8) : "";
+    }
   };
   const walk = (node: HastNode, pre: boolean) => {
     if (node.type === "text") {
       const v = node.value ?? "";
-      if (pre) out += v;
+      if (pre) put(v);
       else {
         const collapsed = v.replace(/[ \t\r\n\f ]+/g, (m) => (m.includes(" ") ? " " : " "));
-        if (collapsed === " " && (out.endsWith(" ") || out.endsWith("\n") || out === "")) return;
-        out += out.endsWith("\n") || out.endsWith(" ") || out === "" ? collapsed.replace(/^ /, "") : collapsed;
+        if (collapsed === " " && (endsWith(" ") || endsWith("\n") || empty())) return;
+        put(endsWith("\n") || endsWith(" ") || empty() ? collapsed.replace(/^ /, "") : collapsed);
       }
       return;
     }
@@ -623,13 +653,13 @@ export function htmlToText(html: string, opts: { dropQuotes?: boolean } = {}): s
     if (SKIP.has(tag)) return;
     if (opts.dropQuotes && isQuoteContainer(node)) return;
     if (tag === "br") {
-      out = out.replace(/ +$/, "");
-      out += "\n";
+      trimSpaces();
+      put("\n");
       return;
     }
     if (tag === "hr") {
       nl(2);
-      out += "---";
+      put("---");
       nl(2);
       return;
     }
@@ -637,10 +667,10 @@ export function htmlToText(html: string, opts: { dropQuotes?: boolean } = {}): s
     if (block) nl(tag === "p" || /^h\d$/.test(tag) || tag === "blockquote" || tag === "pre" || tag === "table" || tag === "ul" || tag === "ol" ? 2 : 1);
     if (tag === "li") {
       nl(1);
-      out += "- ";
+      put("- ");
     }
     if (tag === "td" || tag === "th") {
-      if (!out.endsWith("\n") && out !== "") out += " | ";
+      if (!endsWith("\n") && !empty()) put(" | ");
     }
     const isPre = pre || tag === "pre";
     for (const c of node.children ?? []) walk(c, isPre);
@@ -649,13 +679,14 @@ export function htmlToText(html: string, opts: { dropQuotes?: boolean } = {}): s
       if (/^(https?:|mailto:)/i.test(href)) {
         const label = textOf(node).trim();
         const target = href.replace(/^mailto:/i, "");
-        if (target && label !== target && label !== href) out += ` (${href.replace(/^mailto:/i, "")})`;
+        if (target && label !== target && label !== href) put(` (${href.replace(/^mailto:/i, "")})`);
       }
     }
     if (block) nl(tag === "p" || /^h\d$/.test(tag) || tag === "blockquote" || tag === "pre" || tag === "table" || tag === "ul" || tag === "ol" ? 2 : 1);
   };
   walk(tree, false);
-  return out
+  return parts
+    .join("")
     .split("\n")
     .map((l) => l.replace(/[ \t]+$/g, ""))
     .join("\n")
