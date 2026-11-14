@@ -19,12 +19,13 @@
 // while the dialog is open; the choice is never remembered.
 
 import { useEffect, useId, useState } from "react";
-import { ArrowLeft, ImageOff, Image as ImageIcon, MailOpen, X } from "lucide-react";
+import { ArrowLeft, ImageOff, Image as ImageIcon, MailOpen, Printer, X } from "lucide-react";
 import { Button, iconButtonClass } from "@/components/Button";
 import { Modal } from "@/components/Modal";
 import { LoadingRow } from "@/components/Spinner";
 import { RelativeTime } from "@/components/RelativeTime";
 import { HD_ORIGINAL_COPY, type HdOriginalInfo } from "@/lib/helpdesk/email-html-shared";
+import { HD_ORIGINAL_PRINT_COPY, originalPrintHref } from "@/lib/helpdesk/email-html-print-shared";
 import type { HdMessage } from "@/lib/helpdesk/types";
 import { getJson } from "../api";
 
@@ -87,6 +88,20 @@ export function OriginalEmailDialog({ message, onClose }: { message: HdMessage |
             </p>
           )}
         </div>
+        {/* 1.20.9: the print view in a new tab, with this dialog's image choice (lib/helpdesk/email-html-print). */}
+        {id !== null && info?.ok && (
+          <a
+            href={originalPrintHref(id, images)}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={HD_ORIGINAL_PRINT_COPY.tooltip}
+            data-tt={HD_ORIGINAL_PRINT_COPY.tooltip}
+            data-testid="print-original"
+            className={iconButtonClass("quiet", "sm", "-mt-1")}
+          >
+            <Printer className="h-4 w-4" aria-hidden />
+          </a>
+        )}
         <button type="button" onClick={onClose} aria-label="Close" data-tt="Close" className={iconButtonClass("quiet", "sm", "-mr-1 -mt-1")}>
           <X className="h-4 w-4" aria-hidden />
         </button>

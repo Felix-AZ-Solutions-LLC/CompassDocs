@@ -4,6 +4,28 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.9] - 2026-11-14
+
+Print the original email.
+
+### Added
+- **Print from "View original".** The Original email dialog has a Print
+  button that opens a print view of that email in a new tab, with a header:
+  the ticket's number and subject, who it is from, the ticket's CCs, when it
+  arrived, and who printed it and when. Press Ctrl+P or Cmd+P to print or
+  save it as a PDF. Pages carry "Ticket #… · Original email" and page
+  numbers, and pictures and table rows are not split across pages.
+- **Pictures follow the dialog.** Remote pictures print only if you pressed
+  "Show images"; pictures sent inside the email always print.
+- **The same protection as viewing.** The print view runs no script, the
+  email cannot hide or change the printed header, and only agents who can
+  see the message can print it.
+
+### Upgrading
+- **Nothing to run, and no schema change.** Every original kept since 1.20.8
+  can be printed. The email's own To and Cc lines are not kept, so the
+  header shows the ticket's CCs instead.
+
 ## [1.20.8] - 2026-11-14
 
 See incoming email as it was sent, filter the queue by custom fields, and
