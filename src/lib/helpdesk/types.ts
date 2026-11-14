@@ -279,6 +279,8 @@ export interface HdMessage {
   review_note?: string | null;
   /** 1.19.4 (C6): a feature's own internal timeline line ('share'), else null; agent-side only (lib/helpdesk/share-schema). */
   event?: string | null;
+  /** 1.20.8: the email it came from had an HTML part, kept for the desk's "View original" (lib/helpdesk/email-html); agent-side only. */
+  has_original_html?: boolean;
 }
 
 export type HdReviewState = "pending" | "approved" | "returned";

@@ -39,6 +39,7 @@ import { HD_SOLVE_REQUIREMENTS_SCHEMA } from "./helpdesk/solve-requirements-sche
 import { HD_CATEGORIES_SCHEMA } from "./helpdesk/categories-schema";
 import { HD_DESK_CALENDAR_SCHEMA } from "./helpdesk/desk-calendar-schema";
 import { HD_CUSTOM_FIELDS_SCHEMA } from "./helpdesk/custom-fields-schema";
+import { HD_EMAIL_HTML_SCHEMA } from "./helpdesk/email-html-schema";
 import { createHash, randomBytes } from "node:crypto";
 import { SEED_SPACES, SEED_DOCS } from "./seed-data";
 import { hashPassword } from "./password";
@@ -2393,6 +2394,8 @@ const SCHEMA_SQL = `
   ${HD_DESK_CALENDAR_SCHEMA}
   -- Custom fields per team and a ticket's values (1.20.6, lib/helpdesk/custom-fields-schema; after hd_tickets, hd_solve_requirement_sets).
   ${HD_CUSTOM_FIELDS_SCHEMA}
+  -- An inbound email's original HTML beside its message (1.20.8, lib/helpdesk/email-html-schema; after hd_messages).
+  ${HD_EMAIL_HTML_SCHEMA}
   --- end Helpdesk 1.19.0 ---------------------------------------------------
   ${EMAIL_PARTS_SCHEMA}
   ${NOTIFY_POLICY_SCHEMA}

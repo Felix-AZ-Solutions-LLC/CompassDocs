@@ -1378,6 +1378,40 @@ describe("attachments", () => {
     assert.doesNotMatch(note, /\.\.\/|\u0000/);
     assert.equal((await seen(m.id)).outcome, "created");
   });
+
+  test("1.20.8: the HTML body is kept for View original, and an inline picture is mapped by Graph's contentId", async () => {
+    let next = 0;
+    inbound.setInboundAttachmentStoreForTests({
+      save: async (i) => ({ id: 950000 + ++next, filename: i.filename, mime: i.mime, size: i.buf.length }) as never,
+      bind: async () => [],
+    });
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]), Buffer.alloc(6000)]);
+    const body = '<html><body><p>The error is in the <b>screenshot</b>.</p><img src="cid:image001.png@01DB4F2A"><div id="divRplyFwdMsg">From: Ana</div><blockquote>Earlier mail</blockquote></body></html>';
+    // Inline only (hasAttachments false): the cid in the body is what makes the intake fetch the attachments.
+    inboxMessage({
+      subject: `${STAMP} inline picture`,
+      body: { contentType: "html", content: body },
+      attachments: [{ id: "i1", name: "image001.png", contentType: "image/png", data: png, isInline: true, contentId: "image001.png@01DB4F2A" }],
+    });
+    await poll();
+    inbound.setInboundAttachmentStoreForTests(null);
+    const [t] = await ticketFor(`${STAMP} inline picture`);
+    assert.ok(t);
+    const first = (await pool().query("SELECT id, body FROM hd_messages WHERE ticket_id = $1 AND via <> 'system' ORDER BY id LIMIT 1", [t.id])).rows[0];
+    assert.match(first.body, /^The error is in the screenshot\./, "the text body is as before");
+    assert.doesNotMatch(first.body, /<|cid:/);
+    const kept = (await pool().query("SELECT html, truncated, cids FROM hd_message_html WHERE message_id = $1", [first.id])).rows[0];
+    assert.equal(kept.html, body, "Graph's HTML body, as it arrived");
+    assert.equal(kept.truncated, false);
+    // (The fake, like Graph, sends contentId only when the $select asks for it.)
+    assert.deepEqual(kept.cids, { "image001.png@01db4f2a": { attachment_id: 950001 } });
+    // A text body from Graph keeps nothing.
+    inboxMessage({ subject: `${STAMP} plain from Outlook`, body: { contentType: "text", content: "Plain words." } });
+    await poll();
+    const [p] = await ticketFor(`${STAMP} plain from Outlook`);
+    const pm = (await pool().query("SELECT id FROM hd_messages WHERE ticket_id = $1 AND via <> 'system' ORDER BY id LIMIT 1", [p.id])).rows[0];
+    assert.equal((await pool().query("SELECT count(*)::int AS n FROM hd_message_html WHERE message_id = $1", [pm.id])).rows[0].n, 0);
+  });
 });
 
 // --- After intake: mark read or move; failures -----------------------------------------------

@@ -5,7 +5,11 @@
 // card with the "Internal note" chip (never shown to the requester), and
 // system events (assignments, rules, workflow steps) as one muted line.
 // Bodies are Markdown through the house MarkdownView (sanitised).
+// 1.20.8: with `originals`, a message whose email had an HTML part carries
+// the quiet "View original" control (./OriginalEmail); the text body stays
+// what the card shows.
 
+import { useState } from "react";
 import { Forward, Lock, Paperclip, RotateCw } from "lucide-react";
 import { isShareLine } from "@/lib/helpdesk/share-shared";
 import { ReviewStateChip } from "../roles/role-ui";
@@ -17,6 +21,7 @@ import { RelativeTime } from "@/components/RelativeTime";
 import { initialsOf } from "@/components/UserAvatar";
 import type { HdMessage } from "@/lib/helpdesk/types";
 import { bytesLabel } from "../ui";
+import { OriginalEmailDialog, ViewOriginalButton } from "./OriginalEmail";
 
 const VIA: Record<string, string> = { email: "by email", portal: "in Get help", desk: "", system: "", mcp: "via Claude", customer_portal: "in the customer portal", api: "via API" };
 
@@ -26,6 +31,7 @@ export function Conversation({
   meId,
   ticketNumber,
   origins,
+  originals = false,
 }: {
   /** With it, authors' names open their contact card on hover (agent O). */
   ticketNumber?: number;
@@ -34,7 +40,10 @@ export function Conversation({
   meId: number;
   /** Message id → the ticket a merge moved it from ("from #1051", 1.19.1). */
   origins?: Record<number, number>;
+  /** 1.20.8: offer "View original" on emailed messages (the ticket pane of an agent who works the ticket). */
+  originals?: boolean;
 }) {
+  const [original, setOriginal] = useState<HdMessage | null>(null);
   return (
     <ol className="flex flex-col gap-3" aria-label="Conversation">
       {messages.map((m) => {
@@ -108,6 +117,11 @@ export function Conversation({
                 {via && ` · ${via}`}
                 {origins?.[m.id] && ` · from #${origins[m.id]}`}
               </span>
+              {originals && m.has_original_html && (
+                <span className="-my-1 ml-auto">
+                  <ViewOriginalButton onOpen={() => setOriginal(m)} />
+                </span>
+              )}
             </div>
             {review.review_state === "returned" && review.review_note && (
               <p className="mt-1 pl-9 text-xs text-slate-600">Reviewer&apos;s note: {review.review_note}</p>
@@ -145,6 +159,8 @@ export function Conversation({
           </li>
         );
       })}
+      {/* The dialog is a portal to <body> (components/Modal): nothing of it renders inside the list. */}
+      {originals && <OriginalEmailDialog message={original} onClose={() => setOriginal(null)} />}
     </ol>
   );
 }

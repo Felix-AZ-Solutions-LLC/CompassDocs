@@ -1,5 +1,18 @@
 const path = require("path");
 
+/** 1.20.8: the policy of an email's original ("View original"); the same string as lib/helpdesk/email-html originalHeaders. */
+function originalCsp(remoteImages) {
+  return [
+    "default-src 'none'",
+    `img-src data:${remoteImages ? " https:" : ""}`,
+    "style-src 'unsafe-inline'",
+    "form-action 'none'",
+    "base-uri 'none'",
+    "frame-ancestors 'self'",
+    "sandbox allow-popups allow-popups-to-escape-sandbox",
+  ].join("; ");
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Emit a self-contained server (.next/standalone) for small Docker images and
@@ -85,6 +98,22 @@ const nextConfig = {
       {
         source: "/oauth/authorize",
         headers: [...base, { key: "Content-Security-Policy", value: authorizeCsp }],
+      },
+      // 1.20.8: an inbound email's original (lib/helpdesk/email-html originalHeaders, which the
+      // route also sets and test/helpdesk-email-html checks against these): a sandboxed document
+      // that loads pictures only (https ones only with ?images=1), runs nothing, sends no referrer.
+      // Config headers win over a route's own, so they are stated here, after the general rule.
+      {
+        source: "/api/helpdesk/messages/:id/original",
+        headers: [
+          { key: "Content-Security-Policy", value: originalCsp(false) },
+          { key: "Referrer-Policy", value: "no-referrer" },
+        ],
+      },
+      {
+        source: "/api/helpdesk/messages/:id/original",
+        has: [{ type: "query", key: "images", value: "1" }],
+        headers: [{ key: "Content-Security-Policy", value: originalCsp(true) }],
       },
     ];
   },

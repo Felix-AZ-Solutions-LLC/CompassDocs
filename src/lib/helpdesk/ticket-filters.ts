@@ -15,6 +15,9 @@
 //   created_within  1–366: created in the last N days, today included
 //               (saved views' "Created in the last 7 days"; 1.19.1)
 //   q           search text · sort updated|created|due|priority|number
+//   cf.<key>    1.20.8: a custom field condition, one per field, up to 10
+//               (lib/helpdesk/custom-field-filters: "any:laptop,phone",
+//               "contains:dock", "gte:5", "before:2026-12-01", "empty", ...)
 // Server-only.
 
 import "server-only";
@@ -23,6 +26,7 @@ import type { TicketListFilters } from "./tickets";
 import { cleanMailboxAddress } from "./mailboxes-shared";
 import { splitCategoryLabel } from "./categories-shared";
 import type { HdTicketSort } from "./types";
+import { parseCustomFieldFilters } from "./custom-field-filters";
 
 export const TICKET_SORTS: HdTicketSort[] = ["updated", "created", "due", "priority", "number"];
 
@@ -58,6 +62,7 @@ export const TICKET_FILTER_KEYS = [
   "sort",
 ] as const;
 export type TicketFilterKey = (typeof TICKET_FILTER_KEYS)[number];
+// 1.20.8: besides these, any `cf.<key>` (custom-field-filters isCfFilterKey).
 
 export type ParsedTicketFilters = { ok: true; filters: TicketListFilters } | { ok: false; error: string };
 
@@ -198,5 +203,9 @@ export async function parseTicketFilters(p: URLSearchParams): Promise<ParsedTick
   }
   const q = p.get("q");
   if (q !== null) f.q = q.slice(0, TICKET_LIMITS.q);
+  // 1.20.8: custom field conditions; reads the field definitions only when there are some.
+  const custom = await parseCustomFieldFilters(p);
+  if (!custom.ok) return bad(custom.error);
+  if (custom.filters.length) f.custom = custom.filters;
   return { ok: true, filters: f };
 }

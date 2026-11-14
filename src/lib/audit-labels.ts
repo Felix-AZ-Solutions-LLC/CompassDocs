@@ -286,6 +286,8 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.time.edited": "Edited logged time",
   "helpdesk.time.deleted": "Deleted logged time",
   "helpdesk.time.exported": "Exported logged time",
+  // 1.20.8: the queue's Export CSV (lib/helpdesk/ticket-export).
+  "helpdesk.tickets.exported": "Exported tickets as CSV",
   "helpdesk.team.time_setting_changed": "Changed whether a team is asked for time on solve",
   // Checklists (1.19.2, agent W3).
   "helpdesk.checklist_template.created": "Created a checklist",

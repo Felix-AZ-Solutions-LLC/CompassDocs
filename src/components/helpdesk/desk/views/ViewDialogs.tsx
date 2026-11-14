@@ -8,9 +8,10 @@
 //   Filter / Edit    the queue's filters as a form (start from a list,
 //                    contains, status, priority, team, owner, tag, created);
 //                    Apply shows the filtered list; on a view you may change
-//                    "Save to view" stores them.
+//                    "Save to view" stores them. 1.20.8: and conditions on
+//                    custom fields (CustomFieldConditions).
 
-import { useId, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Bookmark, Filter, X } from "lucide-react";
 import { Modal } from "@/components/Modal";
@@ -26,6 +27,9 @@ import { filterSummary, SAVED_VIEW_NAME_MAX, type HdSavedView, type HdViewFilter
 import { itemOf, sendJson } from "../api";
 import { VIEWS, selQs, type QueueSel } from "../queue/views";
 import { filterSel, type SavedViews } from "./saved";
+import { isCfFilterKey } from "@/lib/helpdesk/custom-field-filters-shared";
+import { useDeskFilterFields, useFilterPeopleNames } from "../custom-fields/filters";
+import { CustomFieldConditions, rowsFrom, rowsToFilters, type CfRow } from "./CustomFieldConditions";
 
 type Team = { team_id: number; name: string };
 
@@ -99,6 +103,9 @@ function SaveViewDialog({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const share = sv.list?.share_teams ?? [];
+  // 1.20.8: custom field conditions in words ("Device type: Laptop").
+  const fields = useDeskFilterFields();
+  const names = useFilterPeopleNames(filters, fields);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -125,7 +132,7 @@ function SaveViewDialog({
     <DialogFrame titleId={titleId} icon={<Bookmark />} title="Save this view" onClose={onClose}>
       <form onSubmit={submit} noValidate>
         <p className="mt-1 text-sm text-slate-500">
-          Saved views sit under Views with their own count. Filters: {filterSummary(filters, teams)}.
+          Saved views sit under Views with their own count. Filters: {filterSummary(filters, teams, fields, names)}.
         </p>
         <Field label="Name" className="mt-4" error={error && !name.trim() ? error : undefined}>
           <TextInput value={name} onChange={(e) => setName(e.target.value)} maxLength={SAVED_VIEW_NAME_MAX} required data-autofocus />
@@ -328,21 +335,36 @@ function FilterDialog({
   const [form, setForm] = useState<Form>(() => formFrom(initial));
   // What the form has no control for stays as it came (1.20.6: "none", a report's "no category", among them).
   const [extra, setExtra] = useState<HdViewFilters>(() =>
-    Object.fromEntries(Object.entries(initial).filter(([k, v]) => !FORM_KEYS.has(k) || ((k === "category" || k === "subcategory") && v === "none")))
+    Object.fromEntries(Object.entries(initial).filter(([k, v]) => (!FORM_KEYS.has(k) && !isCfFilterKey(k)) || ((k === "category" || k === "subcategory") && v === "none")))
   );
   const [busy, setBusy] = useState(false);
+  // 1.20.8: custom field conditions, one row each once the desk's fields have loaded (until then the list's own are kept as they are).
+  const fields = useDeskFilterFields();
+  const [cfRows, setCfRows] = useState<CfRow[] | null>(null);
+  const [cfTried, setCfTried] = useState(false);
+  useEffect(() => {
+    if (fields && cfRows === null) setCfRows(rowsFrom(initial, fields));
+  }, [fields, cfRows, initial]);
+  const cf = useMemo(
+    () => (fields && cfRows ? rowsToFilters(cfRows, fields) : { filters: Object.fromEntries(Object.entries(initial).filter(([k]) => isCfFilterKey(k))), errors: {} }),
+    [fields, cfRows, initial]
+  );
+  const cfBlocked = Object.keys(cf.errors).length > 0;
   const set = (k: keyof Form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }));
-  const filters = useMemo(() => filtersFrom(form, extra), [form, extra]);
+  const filters = useMemo(() => ({ ...filtersFrom(form, extra), ...cf.filters }), [form, extra, cf]);
+  const names = useFilterPeopleNames(filters, fields);
   const extraText = Object.keys(extra).length ? filterSummary(extra, teams) : "";
 
   function apply(e?: FormEvent) {
     e?.preventDefault();
+    if (cfBlocked) return setCfTried(true);
     onClose();
     router.push(`${basePath}${selQs(filterSel(filters, sort))}`);
   }
 
   async function saveToView() {
     if (!view) return;
+    if (cfBlocked) return setCfTried(true);
     setBusy(true);
     const ok = await sv.setFilters(view, filters);
     setBusy(false);
@@ -444,6 +466,7 @@ function FilterDialog({
             testid="filter"
           />
         </div>
+        {fields && cfRows && <CustomFieldConditions fields={fields} rows={cfRows} onChange={setCfRows} errors={cfTried ? cf.errors : {}} />}
         {extraText && (
           <p className="mt-3 text-xs text-slate-500">
             Also filtered by: {extraText}.{" "}
@@ -453,7 +476,7 @@ function FilterDialog({
           </p>
         )}
         <p className="mt-3 text-xs text-slate-500" aria-live="polite">
-          {filterSummary(filters, teams)}
+          {filterSummary(filters, teams, fields, names)}
         </p>
         <div className="mt-5 flex flex-wrap justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>

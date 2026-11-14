@@ -13,7 +13,9 @@
 //
 // Filters are the tickets API's queue parameters, checked against the same
 // whitelist and parser (lib/helpdesk/ticket-filters); sort is the list's,
-// not the view's. Counts run the queue's own query in the viewer's scope
+// not the view's. 1.20.8: also custom field conditions (`cf.<key>`); a view
+// whose field was archived keeps working, one whose field was deleted
+// counts as null and its list answers the parser's sentence. Counts run the queue's own query in the viewer's scope
 // (listTickets countOnly), batched and cached for 20 seconds per viewer.
 // Server-only.
 
@@ -23,6 +25,7 @@ import { memberTeamIds } from "./access";
 import { hdCan } from "./roles";
 import { listTickets } from "./tickets";
 import { parseTicketFilters, TICKET_FILTER_KEYS } from "./ticket-filters";
+import { isCfFilterKey, CF_VALUE_MAX } from "./custom-field-filters-shared";
 import { SAVED_VIEW_LIMIT, SAVED_VIEW_NAME_MAX, type HdSavedView, type HdViewFilters } from "./saved-views-shared";
 import type { Role } from "../types";
 
@@ -73,12 +76,14 @@ export async function cleanViewFilters(raw: unknown): Promise<HdViewFilters> {
   const out: HdViewFilters = {};
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
     if (k === "sort") continue;
-    if (!VIEW_FILTER_KEYS.includes(k)) throw new SavedViewError(`Unknown filter: ${k.slice(0, 40)}.`);
+    // 1.20.8: a custom field condition, cf.<key> (lib/helpdesk/custom-field-filters), checked by the parser below.
+    const custom = isCfFilterKey(k);
+    if (!custom && !VIEW_FILTER_KEYS.includes(k)) throw new SavedViewError(`Unknown filter: ${k.slice(0, 40)}.`);
     if (v === null || v === undefined || v === "") continue;
-    if (typeof v !== "string" && typeof v !== "number") throw new SavedViewError(`The ${k} filter is text.`);
+    if (typeof v !== "string" && typeof v !== "number") throw new SavedViewError(`The ${k.slice(0, 40)} filter is text.`);
     const s = String(v).trim();
     if (!s) continue;
-    if (s.length > 320) throw new SavedViewError(`The ${k} filter is too long.`);
+    if (s.length > (custom ? CF_VALUE_MAX : 320)) throw new SavedViewError(`The ${k.slice(0, 40)} filter is too long.`);
     out[k] = s;
   }
   const parsed = await parseTicketFilters(new URLSearchParams(out));

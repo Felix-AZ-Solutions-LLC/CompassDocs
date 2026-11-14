@@ -174,7 +174,7 @@ export const HELPDESK_TOOL_DEFS: HdToolDef[] = [
     name: "hd_queue",
     side: "agent",
     description:
-      "Helpdesk desk: tickets in the person's queues (their teams' and those assigned to them; every team with See every team's tickets). Filter by view, team, status, priority, assignee, requester, tag, category, sub-category, missed target or text. Also lists the teams they work, with ids, and the categories tickets can be given.",
+      "Helpdesk desk: tickets in the person's queues (their teams' and those assigned to them; every team with See every team's tickets). Filter by view, team, status, priority, assignee, requester, tag, category, sub-category, custom field, missed target or text. Also lists the teams they work, with ids, the categories tickets can be given and the custom fields that can be filtered on.",
     inputSchema: obj({
       view: { type: "string", description: "mine | unassigned | open (default) | overdue | workflow | waiting | solved_week | all | team:<id>" },
       team: { type: "number", description: "Team id." },
@@ -186,6 +186,12 @@ export const HELPDESK_TOOL_DEFS: HdToolDef[] = [
       category: { type: "string", description: "A category's name (the result lists them), or \"none\" for tickets without one." },
       subcategory: { type: "string", description: "A sub-category's name; send its category too." },
       breached: { type: "boolean", description: "Only tickets past a running reply or resolution target now." },
+      // 1.20.8 (additive): the queue's cf.<key> conditions (lib/helpdesk/custom-field-filters).
+      custom_fields: {
+        type: "object",
+        description:
+          'Custom field conditions by field key (the result lists the fields), all of which must match: { "device_type": "any:laptop,phone" }. Conditions: empty, filled, yes, no, any:<option values, comma-separated>, any_or_empty:<values>, contains:<text>, eq:/gte:/lte:<number>, on:/before:/after:<YYYY-MM-DD>, is:<user id>; only those that fit the field\'s kind. A value only matches on the field\'s teams; empty counts only tickets of those teams.',
+      },
       query: { type: "string", description: "Text in the subject, requester or conversation, or a ticket number." },
       limit: { type: "number", description: "1 to 50 (default 25)." },
     }),
@@ -737,6 +743,19 @@ async function queue(user: User, a: Args, ctx: Ctx) {
   if (typeof a.category === "string" && a.category) f.category = a.category === "none" ? "" : a.category.slice(0, 80);
   if (typeof a.subcategory === "string" && a.subcategory) f.subcategory = a.subcategory === "none" ? "" : a.subcategory.slice(0, 80);
   if (a.breached === true) f.breached = "now";
+  // 1.20.8: custom field conditions, the queue's own cf.<key> parameters.
+  const cfMod = await import("../helpdesk/custom-field-filters");
+  if (a.custom_fields !== undefined && a.custom_fields !== null) {
+    if (typeof a.custom_fields !== "object" || Array.isArray(a.custom_fields)) return refuse('Send custom_fields as an object by field key, like { "device_type": "any:laptop" }.');
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(a.custom_fields as Record<string, unknown>)) {
+      if (typeof v !== "string") return refuse(`The condition for "${k.slice(0, 60)}" is text, like "empty" or "contains:dock".`);
+      p.set(cfMod.cfParamKey(k), v);
+    }
+    const custom = await cfMod.parseCustomFieldFilters(p);
+    if (!custom.ok) return refuse(custom.error);
+    if (custom.filters.length) f.custom = custom.filters;
+  }
   f.q = String(a.query ?? "").slice(0, TICKET_LIMITS.q);
   f.limit = Math.min(50, Math.max(1, Number(a.limit) || 25));
   const [{ rows, total }, scope] = await Promise.all([listTickets(user, f), agentTeamIds(user)]);
@@ -764,7 +783,15 @@ async function queue(user: User, a: Args, ctx: Ctx) {
     teams: teams.map((t) => ({ id: t.id, name: t.name })),
     // 1.20.6: the categories a ticket can be given, each with its sub-categories (the desk admin's list).
     categories: (await (await import("../helpdesk/categories")).activeCategories()).map((c) => ({ name: c.name, subcategories: c.subcategories.map((x) => x.name) })),
+    // 1.20.8: the live custom fields custom_fields can filter on (left out when there are none).
+    ...(await queueCustomFields()),
   });
+}
+
+async function queueCustomFields(): Promise<{ custom_fields?: { key: string; label: string; type: string; options?: string[] }[] }> {
+  const fields = (await (await import("../helpdesk/custom-fields")).customFieldsSnapshot()).filter((x) => !x.archived);
+  if (!fields.length) return {};
+  return { custom_fields: fields.map((x) => ({ key: x.key, label: x.label, type: x.type, ...(x.options.length ? { options: x.options.map((o) => o.value) } : {}) })) };
 }
 
 async function readTicket(user: User, a: Args, ctx: Ctx) {

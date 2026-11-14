@@ -7,24 +7,27 @@
 // fields:
 //   generic   JSON { from, to, cc, subject, text, html, message_id,
 //             in_reply_to, references, headers, attachments: [{ filename,
-//             content_type, content (base64) }], calendar (1.20.6: a
-//             meeting invite's text/calendar part, as text) }
+//             content_type, content (base64), content_id (1.20.8) }],
+//             calendar (1.20.6: a meeting invite's text/calendar part, as
+//             text) }
 //   postmark  Postmark's inbound webhook JSON (FromFull, ToFull, TextBody,
 //             HtmlBody, Headers [{Name, Value}], Attachments [{Name,
-//             Content, ContentType}])
+//             Content, ContentType, ContentID}])
 //   sendgrid  SendGrid Inbound Parse, multipart/form-data, NOT the "raw"
 //             option (from, to, cc, subject, text, html, headers, envelope,
-//             attachment-info, files attachment1..N)
+//             attachment-info (with each file's content-id), files
+//             attachment1..N)
 //   mailgun   a Mailgun route's forward(), multipart/form-data or urlencoded
 //             (sender, from, recipient, subject, body-plain, body-html,
 //             stripped-text, Message-Id, In-Reply-To, References,
-//             message-headers, files attachment-1..N)
+//             message-headers, content-id-map, files attachment-1..N)
 //
-// The email's HTML is never stored or rendered: it is walked as a tree and
-// written out as text (lists, line breaks and link targets kept, scripts,
-// styles and images dropped), then escaped so the desk's markdown renderer
-// shows it as the characters it is. A reply's quoted history is cut off
-// before it reaches the ticket.
+// The message body is never the email's HTML: the HTML is walked as a tree
+// and written out as text (lists, line breaks and link targets kept,
+// scripts, styles and images dropped), then escaped so the desk's markdown
+// renderer shows it as the characters it is. A reply's quoted history is cut
+// off before it reaches the ticket. (1.20.8: the HTML part itself is kept
+// apart, untouched, for "View original": lib/helpdesk/email-html.)
 
 import { unified } from "unified";
 import rehypeParse from "rehype-parse";
@@ -43,6 +46,8 @@ export interface InboundFile {
   /** What the provider claimed; never trusted for serving (lib/helpdesk/inbound decides the type). */
   type: string;
   data: Buffer;
+  /** 1.20.8: the part's Content-ID, without angle brackets, when the provider gives it (an inline picture the HTML names as cid:…). */
+  contentId?: string;
 }
 
 export interface InboundEmail {
@@ -210,6 +215,12 @@ function b64(v: unknown): Buffer {
   }
 }
 
+/** A Content-ID as { contentId } (angle brackets off, capped), or nothing. */
+function contentIdOf(v: unknown): { contentId?: string } {
+  const s = str(v).trim().replace(/^<|>$/g, "").trim().slice(0, 500);
+  return s ? { contentId: s } : {};
+}
+
 function finish(e: Omit<InboundEmail, "subject"> & { subject: string }): InboundEmail {
   return {
     ...e,
@@ -246,6 +257,7 @@ export function parseGeneric(body: Record<string, unknown>): InboundEmail {
           name: str(a.filename ?? a.name),
           type: str(a.content_type ?? a.type ?? a.contentType),
           data: b64(a.content ?? a.data),
+          ...contentIdOf(a.content_id ?? a.contentId ?? a.cid),
         }))
     : [];
   // 1.20.6: a meeting invite's text/calendar part, sent as `calendar` (the iCalendar text): read like an .ics attachment.
@@ -284,7 +296,7 @@ export function parsePostmark(body: Record<string, unknown>): InboundEmail {
   const list = (full: unknown, plain: unknown) =>
     Array.isArray(full) ? (full as Record<string, unknown>[]).map(fromObject).filter((a) => a.email) : parseAddressList(plain);
   const files: InboundFile[] = Array.isArray(body.Attachments)
-    ? (body.Attachments as Record<string, unknown>[]).map((a) => ({ name: str(a.Name), type: str(a.ContentType), data: b64(a.Content) }))
+    ? (body.Attachments as Record<string, unknown>[]).map((a) => ({ name: str(a.Name), type: str(a.ContentType), data: b64(a.Content), ...contentIdOf(a.ContentID) }))
     : [];
   return finish({
     provider: "postmark",
@@ -332,7 +344,7 @@ export async function parseSendgrid(form: FormData): Promise<InboundEmail> {
   } catch {
     /* no envelope */
   }
-  let info: Record<string, { filename?: string; name?: string; type?: string }> = {};
+  let info: Record<string, { filename?: string; name?: string; type?: string; "content-id"?: string }> = {};
   try {
     info = JSON.parse(formStr(form, "attachment-info") || "{}");
   } catch {
@@ -342,7 +354,7 @@ export async function parseSendgrid(form: FormData): Promise<InboundEmail> {
   const names = Object.keys(info).length ? Object.keys(info) : Array.from({ length: Math.min(count, 50) }, (_, i) => `attachment${i + 1}`);
   const files = (await formFiles(form, names)).map((f, i) => {
     const meta = info[names[i]] ?? {};
-    return { ...f, name: meta.filename || meta.name || f.name, type: meta.type || f.type };
+    return { ...f, name: meta.filename || meta.name || f.name, type: meta.type || f.type, ...contentIdOf(meta["content-id"]) };
   });
   return finish({
     provider: "sendgrid",
@@ -381,6 +393,19 @@ export async function parseMailgun(form: FormData): Promise<InboundEmail> {
   const headers = listToMap(headerList);
   const count = Math.min(Number(formStr(form, "attachment-count")) || 0, 50);
   const files = await formFiles(form, Array.from({ length: count }, (_, i) => `attachment-${i + 1}`));
+  // 1.20.8: content-id-map {"<cid>": "attachment-N"} names the inline pictures.
+  try {
+    const map = JSON.parse(formStr(form, "content-id-map") || "{}");
+    if (map && typeof map === "object" && !Array.isArray(map)) {
+      for (const [cid, field] of Object.entries(map as Record<string, unknown>).slice(0, 100)) {
+        const n = String(field).match(/^attachment-(\d{1,3})$/);
+        const f = n ? files[Number(n[1]) - 1] : undefined;
+        if (f) Object.assign(f, contentIdOf(cid));
+      }
+    }
+  } catch {
+    /* no map */
+  }
   return finish({
     provider: "mailgun",
     from: parseAddress(formStr(form, "from") || formStr(form, "sender")),

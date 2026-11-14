@@ -890,6 +890,8 @@ export interface TicketListFilters {
   offset?: number;
   /** Only the total, no rows (saved views' counts, 1.19.1). */
   countOnly?: boolean;
+  /** 1.20.8: custom field conditions (`cf.<key>`, lib/helpdesk/custom-field-filters), all of which must match. */
+  custom?: import("./custom-field-filters").HdCfFilter[];
 }
 
 const OPEN_SQL = "t.status IN ('new', 'open', 'pending', 'on_hold')";
@@ -931,7 +933,7 @@ function viewSql(view: HdView, userId: number, params: unknown[], tz: string): s
   }
 }
 
-const SORT_SQL: Record<HdTicketSort, string> = {
+export const SORT_SQL: Record<HdTicketSort, string> = {
   updated: "t.updated_at DESC, t.id DESC",
   created: "t.created_at DESC, t.id DESC",
   number: "t.number DESC",
@@ -955,11 +957,12 @@ export function parseView(raw: string | null | undefined): HdView | "all" | null
     : null;
 }
 
-/** The desk's queue: the caller's scope, a view, the filters. */
-export async function listTickets(
-  user: { id: number; role: Role },
-  f: TicketListFilters = {}
-): Promise<{ rows: HdTicketListRow[]; total: number }> {
+/**
+ * The queue's WHERE over `hd_tickets t` for the caller's scope, a view and
+ * the filters (1.20.8: shared by listTickets and the ticket export,
+ * lib/helpdesk/ticket-export, so an export holds exactly what the list does).
+ */
+export async function ticketListWhere(user: { id: number; role: Role }, f: TicketListFilters = {}): Promise<{ whereSql: string; params: unknown[] }> {
   // An agent in no team still sees what is assigned to them (scopeSql).
   const teams = await agentTeamIds(user);
   // "This week" in the default calendar's zone; each row's label in its team's.
@@ -1025,6 +1028,11 @@ export async function listTickets(
     params.push(f.assignee === "me" ? user.id : f.assignee);
     where.push(`t.assignee_id = $${params.length}`);
   }
+  // 1.20.8: custom field conditions (lib/helpdesk/custom-field-filters), AND-ed with the rest.
+  if (f.custom?.length) {
+    const { customFieldFilterSql } = await import("./custom-field-filters");
+    for (const c of f.custom) where.push(customFieldFilterSql(c, bind));
+  }
   if (q) {
     const num = parseTicketNumber(q);
     params.push(`%${q.replace(/[\\%_]/g, (c) => "\\" + c)}%`);
@@ -1047,9 +1055,17 @@ export async function listTickets(
     const vips = await vipsAmong(cand.map((r) => Number(r.id)));
     where.push(f.vip === "yes" ? `t.requester_id = ANY(${bind(vips)}::int[])` : `(t.requester_id IS NULL OR NOT (t.requester_id = ANY(${bind(vips)}::int[])))`);
   }
+  return { whereSql: where.join(" AND "), params };
+}
+
+/** The desk's queue: the caller's scope, a view, the filters. */
+export async function listTickets(
+  user: { id: number; role: Role },
+  f: TicketListFilters = {}
+): Promise<{ rows: HdTicketListRow[]; total: number }> {
+  const { whereSql, params } = await ticketListWhere(user, f);
   const limit = Math.min(Math.max(1, f.limit ?? 50), TICKET_LIMITS.page);
   const offset = Math.max(0, f.offset ?? 0);
-  const whereSql = where.join(" AND ");
   const total = (await hqOne<{ n: number }>(`SELECT count(*)::int AS n FROM hd_tickets t WHERE ${whereSql}`, params))?.n ?? 0;
   if (f.countOnly) return { rows: [], total }; // saved views' counts (1.19.1, lib/helpdesk/saved-views)
   params.push(limit, offset);

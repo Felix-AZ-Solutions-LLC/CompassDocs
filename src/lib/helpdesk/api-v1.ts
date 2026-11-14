@@ -16,13 +16,21 @@
 //         assignee: <user id> | none.  sort: updated (default) | created | number.  limit 1..100 (25).
 //         created_from / created_to: YYYY-MM-DD (the default calendar's zone).
 //         1.20.6: category / subcategory: a name from GET /categories; none = tickets without one.
+//         1.20.8: cf.<field key>=<condition>, one per custom field (up to 10, all must match):
+//         empty | filled | yes | no | any:<option values,comma-separated> | any_or_empty:<values> |
+//         contains:<text> | eq:/gte:/lte:<number> | on:/before:/after:<YYYY-MM-DD> | is:<user id>.
+//         Only conditions that fit the field's kind; a value only matches on the field's teams,
+//         and empty counts only tickets of those teams. Unknown key or a condition that does not
+//         fit: 400 with a sentence (lib/helpdesk/custom-field-filters).
 //         → { tickets: [Ticket], total, next_cursor: string | null }
 //         Cursor paging: pass next_cursor back (same filters) for the next page. It is
 //         offset-based: a ticket that changes while you page may show twice or move pages.
 //   GET   /tickets/{number}
 //         → Ticket + { messages: [Message] }  Public replies and status lines always; internal
 //           notes (and replies held for review, with review_state) only if the role can add
-//           internal notes in the ticket's team.
+//           internal notes in the ticket's team. 1.20.8: each Message carries has_original_html
+//           (true when the email it came from had an HTML part, which agents can open in the
+//           desk as "View original"); the API itself serves the text body only.
 //   PATCH /tickets/{number}  { status?, priority?, team_id?, assignee_id?, tags?, category?, subcategory?, solve_answers? }
 //         Each change needs the desk capability for it (Change status, Change priority,
 //         Transfer to another team, Assign within their teams / Assign to anyone); tags need
@@ -347,6 +355,8 @@ function messageOut(m: HdMessage, withReview: boolean) {
     body: m.body,
     attachments: (m.attachments ?? []).map((a) => a.name),
     created_at: m.created_at,
+    // 1.20.8: the email it came from had an HTML part (kept for the desk's "View original"; the API serves text only).
+    has_original_html: m.has_original_html === true,
     ...(withReview && review ? { review_state: review } : {}),
   };
 }
@@ -451,6 +461,10 @@ export async function listTicketsRoute(ctx: ApiCtx): Promise<ApiOut> {
       f[k] = v;
     }
   }
+  // 1.20.8 (additive): custom field conditions, cf.<key>=<condition> (lib/helpdesk/custom-field-filters).
+  const custom = await (await import("./custom-field-filters")).parseCustomFieldFilters(sp);
+  if (!custom.ok) return json(400, custom.error);
+  if (custom.filters.length) f.custom = custom.filters;
   const sort = sp.get("sort") ?? "updated";
   if (!(SORTS as readonly string[]).includes(sort)) return json(400, "Unknown sort. Use updated, created or number.");
   f.sort = sort as (typeof SORTS)[number];
