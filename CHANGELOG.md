@@ -4,6 +4,20 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.10] - 2026-11-14
+
+A fix for long links in messages.
+
+### Fixed
+- **A long link no longer runs past its message.** In the desk, a very long
+  link (such as the login or tracking links in alert emails) made its link
+  chip wider than the message and pushed it over the side panel. Link chips
+  and long unbroken words now wrap inside the message, in the desk and
+  everywhere else documents and messages are shown.
+
+### Upgrading
+- **Nothing to run.** A style change only.
+
 ## [1.20.9] - 2026-11-14
 
 Print the original email.

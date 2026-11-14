@@ -273,6 +273,8 @@ mark {
 .doc-prose {
   /* 1rem, not 16px: the body must follow the root scale with the UI. */
   @apply text-base leading-7 text-slate-700;
+  /* 1.20.10: a long unbroken word or token wraps instead of widening its container. */
+  overflow-wrap: break-word;
 }
 .doc-prose h1 {
   @apply mb-4 mt-8 text-2xl font-bold text-slate-900 first:mt-0;
@@ -630,6 +632,11 @@ mark {
   font-weight: 500;
   color: rgb(var(--compass-700));
   vertical-align: baseline;
+  /* 1.20.10: a long link (a tracking or login URL in an email) wraps inside its chip
+     instead of running past the message card. As a flex box the chip's text would
+     otherwise never be narrower than its longest unbroken stretch. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .doc-prose a.ext-link:hover {
   border-color: rgb(var(--compass-300));
