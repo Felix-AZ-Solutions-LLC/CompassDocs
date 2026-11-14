@@ -110,7 +110,7 @@ const ROWS_SQL = `
     LEFT JOIN users a ON a.id = t.assignee_id
     LEFT JOIN hd_mailboxes mb ON mb.id = t.mailbox_id
     LEFT JOIN hd_ticket_events ev ON ev.ticket_id = t.id AND ev.cancelled_at IS NULL
-   WHERE t.id = ANY($2::int[])`;
+   WHERE t.id = ANY($2::int[]) AND t.deleted_at IS NULL`; // 1.20.8 review: a ticket moved to the recycle bin since the plan is not written
 
 /** A row's cells: numbers bare (never a formula), everything else through csvCell. */
 const line = (cells: unknown[]) => cells.map((c) => (typeof c === "number" && Number.isFinite(c) ? String(c) : csvCell(c))).join(",") + "\r\n";
@@ -148,7 +148,7 @@ async function batchLines(ids: number[], fields: HdCustomField[], tz: string): P
   let out = "";
   for (const id of ids) {
     const r = byId.get(id);
-    if (!r) continue; // deleted between the plan and this batch
+    if (!r) continue; // deleted, or moved to the recycle bin, between the plan and this batch
     const custom = fields.map((f) => {
       if (!customFieldApplies(f, r.team_id)) return "";
       const v = values.get(`${id}:${f.id}`);

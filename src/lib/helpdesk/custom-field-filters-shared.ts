@@ -135,29 +135,44 @@ function isDay(v: string): boolean {
   return d.toISOString().slice(0, 10) === v;
 }
 
+/** How many comma-separated pieces every option of a field makes together: the most an "any" list can hold. */
+export function cfMaxPieces(options: HdFormOption[]): number {
+  return options.reduce((n, o) => n + o.value.split(",").length, 0);
+}
+
 /**
  * Option values out of "a,b,c". A value may itself hold a comma, so the
- * pieces are joined back into known values (the first way that uses every
- * piece wins); null when some piece names no option.
+ * pieces are joined back into known values (at each piece the shortest
+ * value that still lets the rest be read wins); null when some piece names
+ * no option, or when there are more pieces than the field's options make
+ * (cfMaxPieces). 1.20.8 security review: one pass from the end, so the work
+ * is the pieces times the longest option's pieces, never a search that
+ * backtracks ("any:pc,pc,…,nope" used to take seconds).
  */
 export function splitOptionValues(raw: string, options: HdFormOption[]): string[] | null {
   const known = new Set(options.map((o) => o.value));
   if (known.has(raw)) return [raw];
   const parts = raw.split(",");
-  const out: string[] = [];
-  const walk = (i: number): boolean => {
-    if (i === parts.length) return true;
-    for (let j = i + 1; j <= parts.length; j++) {
-      const v = parts.slice(i, j).join(",");
-      if (known.has(v)) {
-        out.push(v);
-        if (walk(j)) return true;
-        out.pop();
+  if (parts.length > cfMaxPieces(options)) return null;
+  const longest = options.reduce((m, o) => Math.max(m, o.value.split(",").length), 1);
+  const n = parts.length;
+  // next[i]: where the value starting at piece i ends, for a reading of pieces i..n-1; -1 when there is none.
+  const next = new Array<number>(n + 1).fill(-1);
+  next[n] = n;
+  for (let i = n - 1; i >= 0; i--) {
+    let v = "";
+    for (let j = i + 1; j <= Math.min(n, i + longest); j++) {
+      v = j === i + 1 ? parts[i] : `${v},${parts[j - 1]}`;
+      if (next[j] !== -1 && known.has(v)) {
+        next[i] = j;
+        break;
       }
     }
-    return false;
-  };
-  return walk(0) ? [...new Set(out)] : null;
+  }
+  if (next[0] === -1) return null;
+  const out: string[] = [];
+  for (let i = 0; i < n; i = next[i]) out.push(parts.slice(i, next[i]).join(","));
+  return [...new Set(out)];
 }
 
 type Parsed = { ok: true; cond: HdCfCondition } | { ok: false; error: string };
@@ -183,6 +198,10 @@ export function parseCfCondition(field: Pick<HdCfFilterField, "label" | "type" |
   switch (op) {
     case "any":
     case "any_or_empty": {
+      if (arg.split(",").length > cfMaxPieces(field.options)) {
+        const n = field.options.length;
+        return { ok: false, error: `${name} has ${n === 1 ? "1 option" : `${n} options`}, so list each at most once.` };
+      }
       const values = arg ? splitOptionValues(arg, field.options) : null;
       if (!values || !values.length) {
         const names = field.options.slice(0, 20).map((o) => o.value);

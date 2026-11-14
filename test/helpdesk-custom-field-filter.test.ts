@@ -86,6 +86,8 @@ const filtersLib = require("../src/lib/helpdesk/ticket-filters") as typeof impor
 const savedShared = require("../src/lib/helpdesk/saved-views-shared") as typeof import("../src/lib/helpdesk/saved-views-shared");
 const savedViews = require("../src/lib/helpdesk/saved-views") as typeof import("../src/lib/helpdesk/saved-views");
 const exportShared = require("../src/lib/helpdesk/ticket-export-shared") as typeof import("../src/lib/helpdesk/ticket-export-shared");
+const exportLib = require("../src/lib/helpdesk/ticket-export") as typeof import("../src/lib/helpdesk/ticket-export");
+const csvLib = require("../src/lib/csv") as typeof import("../src/lib/csv");
 const roles = require("../src/lib/helpdesk/roles") as typeof import("../src/lib/helpdesk/roles");
 const tickets = require("../src/lib/helpdesk/tickets") as typeof import("../src/lib/helpdesk/tickets");
 const claude = require("../src/lib/helpdesk/claude-connector") as typeof import("../src/lib/helpdesk/claude-connector");
@@ -331,6 +333,48 @@ describe("the condition grammar (pure)", () => {
     const summary = savedShared.filterSummary({ view: "all", "cf.device_type": "any:laptop" }, [], [{ key: "device_type", label: "Device type", type: "select", options: DEVICE, archived: false }]);
     assert.equal(summary, "Device type: Laptop");
     assert.equal(savedShared.filterSummary({ "cf.gone": "empty" }, [], []), "gone: deleted field");
+  });
+});
+
+describe("security review (1.20.8): hostile option lists finish fast", () => {
+  const ms = (fn: () => unknown) => {
+    const t = process.hrtime.bigint();
+    fn();
+    return Number(process.hrtime.bigint() - t) / 1e6;
+  };
+
+  test("a 6,000-character list of one repeated option is refused with a sentence, at once", () => {
+    const pc = { label: "Kind", type: "select" as const, options: [{ value: "pc", label: "PC" }] };
+    const raw = `any:${"pc,".repeat(1997)}nope`;
+    assert.ok(raw.length <= cff.CF_VALUE_MAX);
+    let r: ReturnType<typeof cff.parseCfCondition> | undefined;
+    assert.ok(ms(() => (r = cff.parseCfCondition(pc, raw))) < 50);
+    assert.deepEqual(r, { ok: false, error: '"Kind" has 1 option, so list each at most once.' });
+    // The splitter alone (no piece count first) is linear too.
+    assert.ok(ms(() => assert.equal(cff.splitOptionValues(raw.slice(4), pc.options), null)) < 50);
+    const one = { label: "Kind", type: "select" as const, options: "abcdefghij".split("").map((c) => ({ value: c, label: c })) };
+    assert.ok(ms(() => assert.equal(cff.parseCfCondition(one, `any:${"a,".repeat(2900)}z`).ok, false)) < 50);
+  });
+
+  test("options that are other options joined by commas: no exponential search; a valid list still reads", () => {
+    const options = [{ value: "a", label: "A" }, { value: "a,a", label: "A, A" }, ...Array.from({ length: 48 }, (_, i) => ({ value: `o${i}`, label: `O${i}` }))];
+    assert.equal(cff.cfMaxPieces(options), 51);
+    const f = { label: "Mix", type: "select" as const, options };
+    const hostile = `${"a,".repeat(50)}b`; // 51 pieces, within the count, and no reading
+    assert.ok(ms(() => assert.equal(cff.splitOptionValues(hostile, options), null)) < 50);
+    assert.ok(ms(() => assert.equal(cff.parseCfCondition(f, `any:${hostile}`).ok, false)) < 50);
+    assert.deepEqual(cff.splitOptionValues("a,a,o3", options), ["a", "o3"], "the shortest value that lets the rest be read");
+    assert.deepEqual(cff.splitOptionValues("o1,a,a", options), ["o1", "a"]);
+    assert.deepEqual(cff.splitOptionValues("a,a", options), ["a,a"], "a whole option wins first");
+  });
+
+  test("through the queue's parser on a real field: refused fast with a sentence", async () => {
+    const raw = `any:${"laptop,".repeat(800)}nope`;
+    const t = Date.now();
+    const parsed = await filtersLib.parseTicketFilters(new URLSearchParams({ [cfk("device")]: raw }));
+    assert.ok(Date.now() - t < 1000, "one definition read, then linear work");
+    assert.equal(parsed.ok, false);
+    assert.match((parsed as { error: string }).error, /has 4 options, so list each at most once\.$/);
   });
 });
 
@@ -619,6 +663,37 @@ describe("the CSV export", () => {
       assert.deepEqual(rows.map((x) => x[c]).sort(), ["'\tx", "'\rcr", "'=1+1", "'@SUM(A1)"].sort());
     } finally {
       await cf.deleteCustomField(F.risk);
+    }
+  });
+
+  test("csvCell also defuses a line feed, full-width formula characters, and a formula after spaces or control characters", () => {
+    const c = csvLib.csvCell;
+    for (const v of ["\nx", "\r=1", "\t@x", "＝1+1", "＋1", "－1", "＠SUM(A1)", "  =1+1", " \t+1", "\u0000=1", "\u0007@x", "\u3000=1", "\u00a0-2", "\ufeff=1"]) {
+      assert.equal(c(v), `"'${v.replace(/"/g, '""')}"`, JSON.stringify(v));
+    }
+    for (const v of [" hello", "a=b", "x+1", "50%", "Ünïcode ✓", ""]) assert.equal(c(v), `"${v}"`, JSON.stringify(v));
+  });
+
+  test("a ticket moved to the recycle bin after the plan is not written", async () => {
+    const user = (await getUserById(P.manager.id))!;
+    const parsed = await filtersLib.parseTicketFilters(new URLSearchParams({ view: "all", requester: String(P.req.id) }));
+    assert.ok(parsed.ok);
+    const plan = await exportLib.planTicketExport(user, parsed.filters);
+    assert.ok(plan.ids.includes(ID.t3));
+    await pool().query("UPDATE hd_tickets SET deleted_at = now() WHERE id = $1", [ID.t3]);
+    try {
+      const reader = (await exportLib.ticketExportStream(plan.ids, "UTC")).getReader();
+      let text = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        text += Buffer.from(value).toString("utf8");
+      }
+      const numbers = parseCsv(text, ",").rows.map((x) => Number(x[0]));
+      assert.ok(!numbers.includes(N.t3), "the binned ticket is left out");
+      assert.equal(numbers.length, plan.ids.length - 1);
+    } finally {
+      await pool().query("UPDATE hd_tickets SET deleted_at = NULL WHERE id = $1", [ID.t3]);
     }
   });
 
