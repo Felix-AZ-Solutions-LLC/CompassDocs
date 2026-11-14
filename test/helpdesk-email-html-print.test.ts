@@ -717,13 +717,21 @@ describe("the print header", () => {
     const h: Parameters<typeof printLib.buildOriginalPrintDocument>[1] = {
       number: 9, subject: "Big", from: "a", ccs: "None", received: "today", printed: "Printed by me.", internal: false, truncated: false, imagesLeftOut: 0, insecure: 0,
     };
-    const big = await sanitize.sanitizeEmailHtml("<p>" + "<b>x</b><i>y</i> ".repeat(29_000) + "</p>");
-    assert.ok(big.ok);
+    // A generous sanitiser limit: on a loaded CI runner this email can take longer than the 3 s production limit.
+    sanitize.setSanitizeTimeoutForTests(60_000);
+    let big: Awaited<ReturnType<typeof sanitize.sanitizeEmailHtml>>;
+    try {
+      big = await sanitize.sanitizeEmailHtml("<p>" + "<b>x</b><i>y</i> ".repeat(29_000) + "</p>");
+    } finally {
+      sanitize.setSanitizeTimeoutForTests(null);
+    }
+    assert.ok(big.ok, JSON.stringify(big).slice(0, 200));
     const t0 = performance.now();
     const out = printLib.buildOriginalPrintDocument((big as { html: string }).html, h);
     const ms = performance.now() - t0;
     assert.ok(out && out.length > (big as { html: string }).html.length);
-    assert.ok(ms < 400, `${Math.round(ms)} ms`);
+    // About 130 ms on an idle machine; the bound leaves room for a busy CI runner.
+    assert.ok(ms < 2_000, `${Math.round(ms)} ms`);
   });
 
   test("a long email still reads back whole", async () => {

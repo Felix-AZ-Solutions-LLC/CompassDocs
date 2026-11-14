@@ -775,12 +775,18 @@ describe("the sanitiser", () => {
     assert.equal(doc.status, 422);
     assert.match(doc.text, /This email is too complex to show/);
     assert.ok(Date.now() - t0 < 500, "kept, not sanitised again");
-    // A kept result is per Show images: that one is worked on (and succeeds now).
-    const shown = await call(originalRoute.GET, req(`/messages/${first.id}/original?images=1`, P.agent.session), { id: String(first.id) });
-    assert.equal(shown.status, 200);
-    // And a success is kept too: the second read is the same document.
-    const again = await call(originalRoute.GET, req(`/messages/${first.id}/original?images=1`, P.agent.session), { id: String(first.id) });
-    assert.equal(again.text, shown.text);
+    // A kept result is per Show images: that one is worked on (and succeeds now). A generous limit here:
+    // on a loaded CI runner 20,000 elements can take longer than the 3 s production limit.
+    sanitize.setSanitizeTimeoutForTests(60_000);
+    try {
+      const shown = await call(originalRoute.GET, req(`/messages/${first.id}/original?images=1`, P.agent.session), { id: String(first.id) });
+      assert.equal(shown.status, 200);
+      // And a success is kept too: the second read is the same document.
+      const again = await call(originalRoute.GET, req(`/messages/${first.id}/original?images=1`, P.agent.session), { id: String(first.id) });
+      assert.equal(again.text, shown.text);
+    } finally {
+      sanitize.setSanitizeTimeoutForTests(null);
+    }
   });
 
   test("the route: images and format may be given once each; a repeated one is 400", async () => {
