@@ -17,12 +17,16 @@
 // frame-ancestors 'self'; sandbox allow-popups allow-popups-to-escape-sandbox. X-Content-Type-Options: nosniff,
 // Referrer-Policy: no-referrer, Cache-Control: private, no-store. Not audited: viewing an original, or showing its
 // pictures, is reading a message. 120 reads a minute per person.
+// 1.20.9: ?print=1 (with or without images=1) answers the print view instead (lib/helpdesk/email-html-print), the
+// same reads and limit, under its own policy (originalPrintHeaders; next.config.js states it too). Not audited either.
+// A repeated print (or images beside print=1): 400.
 
 import { NextResponse } from "next/server";
 import { mfaRequired } from "@/lib/api-auth";
 import { canWorkTicket, deskDuoBarsTicket, hdRateLimited, helpdeskGate, tooMany } from "@/lib/helpdesk/access";
 import { hqOne } from "@/lib/helpdesk/db-core";
 import { originalHeaders, originalView } from "@/lib/helpdesk/email-html";
+import { originalPrintResponse, printQuery, repeatedPrintQuery } from "@/lib/helpdesk/email-html-print";
 import { HD_ORIGINAL_COPY } from "@/lib/helpdesk/email-html-shared";
 import { notFound } from "@/lib/helpdesk/routes";
 import { getTicketRow } from "@/lib/helpdesk/tickets";
@@ -47,11 +51,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   if (url.searchParams.getAll("images").length > 1 || url.searchParams.getAll("format").length > 1) {
     return NextResponse.json({ error: "Give images and format once each." }, { status: 400, headers: NO_STORE });
   }
+  const print = printQuery(url); // 1.20.9: ?print=1, the print view (lib/helpdesk/email-html-print)
+  if (print === "repeated") return repeatedPrintQuery();
   const images = url.searchParams.get("images") === "1";
   const view = await originalView(id, { remoteImages: images });
   if (url.searchParams.get("format") === "info") {
     return NextResponse.json(view.info, { status: view.ok ? 200 : view.status, headers: NO_STORE });
   }
+  if (print === "print" && (view.ok || view.status !== 404)) return originalPrintResponse(gate, t, id, view, images);
   if (!view.ok) {
     if (view.status === 404) return notFound();
     // The frame's own page says why, under the same policy as an email.

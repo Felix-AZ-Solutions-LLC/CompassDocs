@@ -13,6 +13,14 @@ function originalCsp(remoteImages) {
   ].join("; ");
 }
 
+/** 1.20.9: the print view of an original (?print=1): the same, never framed, printable (lib/helpdesk/email-html-print originalPrintCsp). */
+function originalPrintCsp(remoteImages) {
+  return originalCsp(remoteImages)
+    .split("; ")
+    .map((d) => (d.startsWith("frame-ancestors ") ? "frame-ancestors 'none'" : d.startsWith("sandbox ") ? `${d} allow-modals` : d))
+    .join("; ");
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Emit a self-contained server (.next/standalone) for small Docker images and
@@ -121,6 +129,23 @@ const nextConfig = {
         source: "/api/helpdesk/messages/:id/original",
         has: [{ type: "query", key: "images", value: "1" }],
         headers: [{ key: "Content-Security-Policy", value: originalCsp(true) }],
+      },
+      // 1.20.9: the print view (?print=1, with or without images=1) has a policy of its own; last, so it wins.
+      {
+        source: "/api/helpdesk/messages/:id/original",
+        has: [{ type: "query", key: "print", value: "1" }],
+        headers: [
+          { key: "Content-Security-Policy", value: originalPrintCsp(false) },
+          { key: "X-Frame-Options", value: "DENY" },
+        ],
+      },
+      {
+        source: "/api/helpdesk/messages/:id/original",
+        has: [
+          { type: "query", key: "print", value: "1" },
+          { type: "query", key: "images", value: "1" },
+        ],
+        headers: [{ key: "Content-Security-Policy", value: originalPrintCsp(true) }],
       },
     ];
   },

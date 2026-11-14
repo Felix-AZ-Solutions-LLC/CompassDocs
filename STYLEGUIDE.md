@@ -2843,6 +2843,18 @@ open in its own tab beside CompassDocs. Components live in
   replies are still plain text and offers **Back to the conversation**
   beside the close button. The card's text body stays the default view
   everywhere; Get help, the portal and the print page never show it.
+- **Print the original** (1.20.9, `lib/helpdesk/email-html-print`): a
+  quiet `Printer` icon link left of the dialog's close button (`data-tt`
+  and `aria-label` "Print this email"), shown once the original has
+  loaded. It opens `?print=1` (plus `images=1` after Show images) in a new
+  tab (`target="_blank" rel="noopener noreferrer"`). That page is not a
+  desk page and has no app CSS: a dark bar on screen saying to press
+  Ctrl+P (hidden on paper), then a white sheet with a text-only header
+  (`#number subject`, then From / CCs on the ticket / Received rows and
+  "Printed by {name} on {date}.", black ink, a black rule under it) and
+  the email in its own shadow root. Page numbers and "Ticket #n ·
+  Original email" are `@page` margin boxes. No automatic print dialog:
+  the page runs no script.
 - **The composer**: a `Segmented size="sm"` (Reply to {first name} |
   Internal note), never hand-rolled tabs; the box turns amber in note
   mode. Macro (`Zap`) and Article (`BookOpen`) are `secondary` `sm`
