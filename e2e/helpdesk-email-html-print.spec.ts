@@ -114,7 +114,7 @@ test.describe("Print the original email (licensed)", () => {
     await page.goto(`/desk/tickets/${opened.ticket}`);
     await expect(page.getByRole("heading", { level: 2, name: t.subject })).toBeVisible({ timeout: 120_000 });
     const card = page.locator("li", { hasText: "this morning" }).last();
-    await card.getByRole("button", { name: "View original" }).click();
+    await card.getByRole("button", { name: "Open in a window" }).click();
     const dialog = page.getByRole("dialog", { name: "Original email" });
     await expect(dialog).toBeVisible();
     const print = dialog.getByRole("link", { name: "Print this email" });

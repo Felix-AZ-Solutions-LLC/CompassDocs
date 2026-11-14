@@ -27,7 +27,7 @@ import { PwaHead } from "@/components/helpdesk/desk/pwa/PwaHead";
 import { InstallDeskMenuItem } from "@/components/helpdesk/desk/pwa/InstallDesk";
 import { deskPwaMetadata, deskPwaViewport } from "@/components/helpdesk/desk/pwa/metadata";
 import { firstSettingsHref } from "@/components/helpdesk/desk/settings/settings-nav";
-import { agentAvailability, deskAccess, deskRoleCaps } from "./desk-access";
+import { agentAvailability, agentEmailView, deskAccess, deskRoleCaps } from "./desk-access";
 import { deskLookFor } from "@/lib/helpdesk/appearance";
 import { claudeDeskClientProps } from "@/lib/helpdesk/claude/desk-props";
 
@@ -59,7 +59,7 @@ export default async function DeskLayout({ children }: { children: React.ReactNo
   } else if (!access.any) {
     body = <DeskForbidden />;
   } else {
-    const [unread, availability, role, look, claude] = await Promise.all([
+    const [unread, availability, role, look, claude, emailView] = await Promise.all([
       unreadNotificationCount(user.id),
       agentAvailability(user.id),
       deskRoleCaps(user),
@@ -67,6 +67,8 @@ export default async function DeskLayout({ children }: { children: React.ReactNo
       deskLookFor(user.id),
       // Claude in the desk (1.20.0): null unless it is on for this agent.
       claudeDeskClientProps(user),
+      // 1.20.11: emails formatted or as plain text in the conversation (the agent's desk preference).
+      agentEmailView(user.id),
     ]);
     const reports = access.reports || role.can("reports.own") || role.can("reports.team") || role.can("reports.all");
     body = (
@@ -84,6 +86,7 @@ export default async function DeskLayout({ children }: { children: React.ReactNo
         claude={claude}
         unread={unread}
         availability={availability}
+        emailView={emailView}
         installSlot={<InstallDeskMenuItem />}
         look={look.look}
         lookMenu={look.menu}

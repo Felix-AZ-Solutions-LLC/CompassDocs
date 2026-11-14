@@ -32,6 +32,11 @@
 //     written as a CSS escape so no style text can close its element.
 // The caller measures the email first (lib/helpdesk/html-scan) and the
 // worker's 3 seconds bound whatever is left.
+// 1.20.11, `opts.inline` (the desk conversation shows the email in place,
+// lib/helpdesk/email-html originalView): the same cleaning, then the first
+// quoted history folded into <details> (foldQuotes, below), pictures on the
+// desk's own host dropped, the inline look (INLINE_CSS), and a
+// <meta name="compass-email"> the desk reads (pictures hidden, quote folded).
 
 const { JSDOM, VirtualConsole } = require("jsdom");
 const purifyModule = require("dompurify");
@@ -207,6 +212,9 @@ function instance() {
         if (raw.length <= 2000000 && SAFE_IMAGE_DATA.test(raw)) el.setAttribute("src", raw);
       } else if (/^https:/i.test(raw)) {
         const url = absoluteUrl(raw, ["https:"]);
+        // 1.20.11: the inline variant is same-origin with the desk, so a picture on the desk's own host
+        // (which would carry the agent's cookies) is never loaded nor offered.
+        if (url && s.selfHost && new URL(url).hostname.toLowerCase() === s.selfHost) return;
         if (url && s.remote) el.setAttribute("src", url);
         else if (url) s.remoteImages++;
       } else if (/^http:/i.test(raw)) {
@@ -218,10 +226,161 @@ function instance() {
   return p;
 }
 
+// --- Quoted history (1.20.11, the desk conversation's inline variant only) ----------------
+//
+// A reply's HTML carries the whole earlier thread, which the conversation already shows message by message.
+// The first quote is folded into <details><summary>Show quoted text</summary>…</details> (no script needed),
+// from where it starts to the end of the email. Conservative, as lib/helpdesk/inbound-parse stripQuotedReply is
+// for the text body: when unsure, nothing is folded. What starts a quote:
+//   - Gmail: div.gmail_quote (its "On … wrote:" line is inside it);
+//   - Yahoo: an element whose class or id holds "yahoo_quoted";
+//   - Outlook on the web and new Outlook: #appendonsend, #divRplyFwdMsg (with the rule just before it),
+//     #mail-editor-reference-message-container;
+//   - Outlook desktop: a block with a solid top border whose text is a "From: … Sent: … To:/Subject: …" header;
+//   - "-----Original Message-----" (and its translations) starting a line;
+//   - Apple Mail and Thunderbird: blockquote[type=cite], with the "On … wrote:" line (or .moz-cite-prefix) just before it;
+//   - any other blockquote with an "On … wrote:" line (or a translation) just before it.
+// Never folded: a forward (its marker before the quote or at its top: the forwarded part is the content), a
+// quote with new text after it outside the quote (an answer written below or between quoted lines), and an
+// email with nothing but the quote (nothing would be left to read).
+
+const ATTRIBUTION = [
+  /^On\b[\s\S]{0,300}\bwrote:$/i,
+  /^Le\b[\s\S]{0,300}\ba écrit\s*:$/i,
+  /^Am\b[\s\S]{0,300}\bschrieb\b[\s\S]{0,200}:$/i,
+  /^El\b[\s\S]{0,300}\bescribió:$/i,
+  /^Op\b[\s\S]{0,300}\bschreef\b[\s\S]{0,200}:$/i,
+];
+const ORIGINAL_MESSAGE = /^-{2,}\s*(?:Original Message|Ursprüngliche Nachricht|Message d'origine|Oorspronkelijk bericht|Mensaje original)\s*-{2,}/i;
+const FORWARD =
+  /-{2,}\s*(?:Forwarded message|Forwarded Message|Message transféré|Weitergeleitete Nachricht|Mensaje reenviado|Doorgestuurd bericht)\s*-{2,}|Begin forwarded message:|Début du message réexpédié|Anfang der weitergeleiteten Nachricht/i;
+const HEADER_FROM = /^(?:From|De|Von|Van|Da)\s?:/i;
+const HEADER_SENT = /(?:^|\s)(?:Sent|Date|Envoyé|Gesendet|Verzonden|Inviato|Enviado|Datum)\s?:/i;
+const HEADER_TO = /(?:^|\s)(?:To|Subject|À|An|Objet|Betreff|Aan|Onderwerp|Oggetto|Para|Asunto)\s?:/i;
+
+const squash = (s) => String(s || "").replace(/\s+/g, " ").trim();
+const isAttribution = (s) => {
+  const t = squash(s);
+  return t.length > 0 && t.length < 400 && ATTRIBUTION.some((re) => re.test(t));
+};
+
+/** The node before `node` among its siblings, passing over whitespace and line breaks. */
+function previousContent(node) {
+  let p = node.previousSibling;
+  while (p && ((p.nodeType === 3 && !p.nodeValue.trim()) || p.nodeName === "BR")) p = p.previousSibling;
+  return p;
+}
+
+/** Text in the range from `start` to the end of `body`, outside the quote containers listed. */
+function textAfter(doc, body, after) {
+  const r = doc.createRange();
+  r.setStartAfter(after);
+  r.setEnd(body, body.childNodes.length);
+  const frag = r.cloneContents();
+  for (const q of frag.querySelectorAll("blockquote, div.gmail_quote, [class*='yahoo_quoted'], [id*='yahoo_quoted']")) q.remove();
+  return squash(frag.textContent);
+}
+
+/** Where the quoted history starts and whether new text may follow it ("container": it must not), or null. */
+function quoteStart(doc, body) {
+  const found = [];
+  const add = (start, end) => start && found.push({ start, end });
+  for (const el of body.querySelectorAll("div.gmail_quote")) if (!el.parentElement.closest("div.gmail_quote")) add(el, el);
+  for (const el of body.querySelectorAll("[class*='yahoo_quoted'], [id*='yahoo_quoted']")) add(el, el);
+  for (const el of body.querySelectorAll("#appendonsend, #mail-editor-reference-message-container")) add(el, null);
+  for (const el of body.querySelectorAll("#divRplyFwdMsg")) {
+    const before = previousContent(el);
+    add(before && before.nodeName === "HR" ? before : el, null);
+  }
+  for (const el of body.querySelectorAll("div[style*='border-top'], p[style*='border-top']")) {
+    const style = el.getAttribute("style") || "";
+    if (!/border-top(?:-style)?\s*:[^;]*\bsolid\b/i.test(style)) continue;
+    if ((el.textContent || "").length > 1500) continue;
+    // Its lines as the eye reads them (a line break between "Sent: …" and "To: …" is a space).
+    const lines = el.cloneNode(true);
+    for (const br of lines.querySelectorAll("br, p, div")) br.before(doc.createTextNode(" "));
+    const t = squash(lines.textContent);
+    if (HEADER_FROM.test(t) && HEADER_SENT.test(t) && HEADER_TO.test(t)) add(el, null);
+  }
+  const walker = doc.createTreeWalker(body, 4 /* text */);
+  for (let n = walker.nextNode(), seen = 0; n && seen < 200000; n = walker.nextNode(), seen++) {
+    if (ORIGINAL_MESSAGE.test(n.nodeValue.trim())) {
+      add(n, null);
+      break;
+    }
+  }
+  for (const q of body.querySelectorAll("blockquote")) {
+    if (q.parentElement.closest("blockquote")) continue;
+    const before = previousContent(q);
+    const prefix = before && before.nodeType === 1 && before.classList.contains("moz-cite-prefix");
+    if (prefix || (before && isAttribution(before.textContent))) add(before, q);
+    else if (q.getAttribute("type") === "cite") add(q, q);
+  }
+  if (!found.length) return null;
+  // The first in the document wins.
+  found.sort((a, b) => (a.start === b.start ? 0 : a.start.compareDocumentPosition(b.start) & 4 ? -1 : 1));
+  return found[0];
+}
+
+/** Fold the first quoted history of the email's body. True when something was folded. */
+function foldQuotes(doc, body) {
+  const q = quoteStart(doc, body);
+  if (!q) return false;
+  const before = doc.createRange();
+  before.setStart(body, 0);
+  before.setEndBefore(q.start);
+  const head = before.cloneContents();
+  const kept = squash(head.textContent);
+  // Nothing of its own before the quote: shown whole.
+  if (!kept && !head.querySelector("img")) return false;
+  // A forward: its marker before the quote, or at the quote's top.
+  const startText = q.start.nodeType === 3 ? q.start.nodeValue : q.start.textContent;
+  if (FORWARD.test(kept.slice(-2000)) || FORWARD.test(squash(startText).slice(0, 600))) return false;
+  // An answer written after the quote (below it, or between quoted parts): shown whole.
+  if (q.end && textAfter(doc, body, q.end)) return false;
+  const range = doc.createRange();
+  range.setStartBefore(q.start);
+  range.setEnd(body, body.childNodes.length);
+  const quoted = range.extractContents();
+  const details = doc.createElement("details");
+  details.setAttribute("class", "cd-quote");
+  const summary = doc.createElement("summary");
+  const show = doc.createElement("span");
+  show.setAttribute("class", "cd-quote-show");
+  show.textContent = "Show quoted text";
+  const hide = doc.createElement("span");
+  hide.setAttribute("class", "cd-quote-hide");
+  hide.textContent = "Hide quoted text";
+  summary.append(show, hide);
+  const inner = doc.createElement("div");
+  inner.setAttribute("class", "cd-quote-body");
+  inner.append(quoted);
+  details.append(summary, inner);
+  body.append(details);
+  return true;
+}
+
 /** The light look an email client gives an email, under the email's own styles. */
 const BASE_CSS =
   "html{color-scheme:light;background:#fff;color:#1f2937;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5}" +
   "body{overflow-wrap:break-word}img{max-width:100%}";
+
+/**
+ * 1.20.11, the inline variant: the email sits edge to edge in the desk's message card and the desk sizes the
+ * frame to it (the root's height follows the content, never the frame's; nothing scrolls up and down inside),
+ * and the folded quote's control looks the same in every email.
+ */
+const INLINE_CSS =
+  "html:root{height:auto!important;min-height:0!important;max-height:none!important;overflow-y:hidden!important}body{margin:0}" +
+  "details.cd-quote{display:block!important;margin:12px 0 0!important;padding:0!important;border:0!important}" +
+  "details.cd-quote>summary{display:inline-block!important;list-style:none!important;cursor:pointer!important;margin:0!important;padding:1px 10px!important;" +
+  "border:1px solid #cbd5e1!important;border-radius:999px!important;background:#f8fafc!important;color:#475569!important;visibility:visible!important;opacity:1!important;" +
+  "font:500 12px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif!important;text-decoration:none!important}" +
+  "details.cd-quote>summary::-webkit-details-marker{display:none}" +
+  "details.cd-quote>summary:hover{background:#f1f5f9!important;color:#1e293b!important}" +
+  "details.cd-quote>summary:focus-visible{outline:2px solid #475569!important;outline-offset:2px!important}" +
+  "details.cd-quote[open]>summary .cd-quote-show,details.cd-quote:not([open])>summary .cd-quote-hide{display:none!important}" +
+  "details.cd-quote>.cd-quote-body{margin-top:8px}";
 
 /**
  * The email as a whole HTML document, safe to serve under the original
@@ -232,7 +391,10 @@ const BASE_CSS =
 function sanitize(html, opts) {
   const o = opts || {};
   const p = instance();
-  state = { remote: o.remoteImages === true, cids: new Map(o.cids || []), remoteImages: 0, insecureImages: 0, missingCids: 0 };
+  // 1.20.11: `inline` (the desk conversation's variant): { collapseQuotes, selfHost, truncated }.
+  const inline = o.inline && typeof o.inline === "object" ? o.inline : null;
+  const selfHost = inline && typeof inline.selfHost === "string" ? inline.selfHost.toLowerCase() : "";
+  state = { remote: o.remoteImages === true, cids: new Map(o.cids || []), remoteImages: 0, insecureImages: 0, missingCids: 0, selfHost };
   try {
     const root = p.sanitize(String(html == null ? "" : html), {
       WHOLE_DOCUMENT: true,
@@ -259,7 +421,28 @@ function sanitize(html, opts) {
     head.insertBefore(base, head.firstChild);
     head.insertBefore(referrer, head.firstChild);
     head.insertBefore(charset, head.firstChild);
-    return { ok: true, html: `<!doctype html>\n${root.outerHTML}`, remoteImages: state.remoteImages, insecureImages: state.insecureImages, missingCids: state.missingCids };
+    let quoted = false;
+    if (inline) {
+      let body = root.querySelector("body");
+      if (!body) {
+        body = doc.createElement("body");
+        root.appendChild(body);
+      }
+      if (inline.collapseQuotes === true) quoted = foldQuotes(doc, body);
+      const own = doc.createElement("style");
+      own.textContent = INLINE_CSS;
+      base.after(own);
+      // What the desk reads from the frame (it is same-origin): the sender cannot write a meta element.
+      const mark = doc.createElement("meta");
+      mark.setAttribute("name", "compass-email");
+      mark.setAttribute("content", "ok");
+      mark.setAttribute("data-remote-images", String(state.remoteImages));
+      mark.setAttribute("data-insecure-images", String(state.insecureImages));
+      mark.setAttribute("data-quoted", quoted ? "1" : "0");
+      mark.setAttribute("data-truncated", inline.truncated === true ? "1" : "0");
+      referrer.after(mark);
+    }
+    return { ok: true, html: `<!doctype html>\n${root.outerHTML}`, remoteImages: state.remoteImages, insecureImages: state.insecureImages, missingCids: state.missingCids, quoted };
   } catch {
     // A stack the parser or the sanitiser could not climb, or anything else: refused, never half-shown.
     return { ok: false, reason: "too_complex" };

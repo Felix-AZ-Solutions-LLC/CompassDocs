@@ -4,13 +4,15 @@
 // reaches one agent, and where. Cards: push on this device and the
 // agent's devices; what reaches you where (events × Push / Email / Bell);
 // new tickets per team; quiet hours; preview and sound; Install Desk.
+// 1.20.11: Emails in the conversation (formatted or plain text, the same
+// default the conversation's Plain text switch remembers).
 // The header's Pause menu holds push and email for an hour, until 08:00
 // tomorrow or until resumed. Every switch saves at once through PUT
 // /api/helpdesk/me/notification-prefs (like Account → Notifications) and
 // rolls back with the server's sentence when refused.
 
 import { useCallback, useRef, useState } from "react";
-import { BellOff, BellRing, Clock, Eye, Moon, Pause, Play, Users, Volume2 } from "lucide-react";
+import { BellOff, BellRing, Clock, Eye, MailOpen, Moon, Pause, Play, Users, Volume2 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
@@ -34,6 +36,7 @@ import {
 import type { HdPushDevice } from "@/lib/helpdesk/push-shared";
 import type { HdEffectiveMatrix, HdNotifyView as NotificationView } from "@/lib/helpdesk/notify-prefs";
 import { sendJson } from "../api";
+import { rememberEmailView } from "../ticket/email-view";
 import { InstallDeskCard } from "../pwa/InstallDesk";
 import { DevicesCard } from "./DevicesCard";
 
@@ -47,6 +50,7 @@ type Patch = {
   sound?: boolean;
   pause?: HdPauseRequest;
   auto_follow?: boolean;
+  email_view?: HdNotifyPrefs["email_view"];
 };
 
 const DAY_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -115,6 +119,11 @@ export function NotificationSettings({ initial, devices: initialDevices }: { ini
         <FollowingCard prefs={prefs} onChange={(on) =>
           save({ auto_follow: on }, (v) => ({ ...v, prefs: { ...v.prefs, auto_follow: on } }))
         } />
+        <EmailViewCard prefs={prefs} onChange={(v) => {
+          // The conversation uses it from now on, in this tab too.
+          rememberEmailView(v, false);
+          void save({ email_view: v }, (cur) => ({ ...cur, prefs: { ...cur.prefs, email_view: v } }));
+        }} />
         <QuietHoursCard prefs={prefs} timezone={view.timezone} onChange={(q) =>
           save({ quiet: q }, (v) => {
             v.prefs.quiet = { ...v.prefs.quiet, ...q };
@@ -408,6 +417,31 @@ function FollowingCard({ prefs, onChange }: { prefs: HdNotifyPrefs; onChange: (o
         checked={prefs.auto_follow !== false}
         onChange={onChange}
       />
+    </Card>
+  );
+}
+
+// --- Emails in the conversation (1.20.11) -------------------------------------------
+
+function EmailViewCard({ prefs, onChange }: { prefs: HdNotifyPrefs; onChange: (v: HdNotifyPrefs["email_view"]) => void }) {
+  return (
+    <Card id="emails" className="scroll-mt-6" title="Emails in the conversation" icon={<MailOpen />} description="How messages that came in by email show on a ticket.">
+      <p id="email-view-label" className="mb-1 text-xs font-medium text-slate-500">
+        Show emails
+      </p>
+      <Segmented
+        label="Show emails"
+        value={prefs.email_view ?? "formatted"}
+        onChange={(v) => onChange(v)}
+        options={[
+          { value: "formatted", label: "Formatted" },
+          { value: "plain", label: "Plain text" },
+        ]}
+        className="flex-wrap"
+      />
+      <p className="mt-1 text-xs text-slate-500">
+        Formatted shows each email as it was sent. Switching one message on a ticket changes this too.
+      </p>
     </Card>
   );
 }

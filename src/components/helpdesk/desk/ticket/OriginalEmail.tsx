@@ -1,8 +1,9 @@
 "use client";
 
-// "View original" (1.20.8): an emailed message as its sender saw it. The
-// control is a quiet icon button on the message card (only on a message
-// whose email had an HTML part, only in the desk's ticket pane); it opens a
+// "View original" (1.20.8): an emailed message as its sender saw it. 1.20.11:
+// the conversation shows the email in place (./InlineEmail), and this dialog
+// is its "Open in a window" control (a quiet AppWindow icon button beside the
+// Plain text switch): the roomy view, and where Print is. It opened a
 // dialog rather than expanding in place because emails are laid out for
 // their own width (a 600px newsletter table), carry their own colours, and
 // can be long: the conversation column is too narrow for them, and an
@@ -28,22 +29,6 @@ import { HD_ORIGINAL_COPY, type HdOriginalInfo } from "@/lib/helpdesk/email-html
 import { HD_ORIGINAL_PRINT_COPY, originalPrintHref } from "@/lib/helpdesk/email-html-print-shared";
 import type { HdMessage } from "@/lib/helpdesk/types";
 import { getJson } from "../api";
-
-/** The quiet control on a message card. */
-export function ViewOriginalButton({ onOpen }: { onOpen: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      aria-label={HD_ORIGINAL_COPY.control}
-      data-tt={HD_ORIGINAL_COPY.control}
-      data-testid="view-original"
-      className={iconButtonClass("quiet", "sm", "print:hidden")}
-    >
-      <MailOpen className="h-4 w-4" aria-hidden />
-    </button>
-  );
-}
 
 export function OriginalEmailDialog({ message, onClose }: { message: HdMessage | null; onClose: () => void }) {
   const titleId = useId();
