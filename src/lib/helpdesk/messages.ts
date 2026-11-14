@@ -36,7 +36,9 @@ export async function listMessages(ticketId: number, opts: { includeInternal?: b
                         WHERE mm.user_id = m.author_id
                         ORDER BY (mm.team_id IS NOT DISTINCT FROM t.team_id) DESC, tm.position, tm.id LIMIT 1) END AS author_team_name,
             -- 1.19.4 (C6, lib/helpdesk/share-schema): a feature's own timeline marker, internal lines only.
-            CASE WHEN m.kind = 'internal' THEN m.event END AS event
+            CASE WHEN m.kind = 'internal' THEN m.event END AS event,
+            -- 1.20.8 (lib/helpdesk/email-html): the email's HTML part is kept ("View original"); never the HTML itself here.
+            EXISTS (SELECT 1 FROM hd_message_html h WHERE h.message_id = m.id) AS has_original_html
        FROM hd_messages m JOIN hd_tickets t ON t.id = m.ticket_id
       WHERE m.ticket_id = $1 ${opts.includeInternal === false ? "AND m.kind <> 'internal'" : ""}
       ORDER BY m.created_at, m.id LIMIT ${MESSAGE_LIMITS.page}`,

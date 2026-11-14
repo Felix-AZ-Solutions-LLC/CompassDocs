@@ -51,6 +51,7 @@ import { HD_SOLVE_REQUIREMENTS_SCHEMA } from "../src/lib/helpdesk/solve-requirem
 import { HD_CATEGORIES_SCHEMA } from "../src/lib/helpdesk/categories-schema";
 import { HD_DESK_CALENDAR_SCHEMA } from "../src/lib/helpdesk/desk-calendar-schema";
 import { HD_CUSTOM_FIELDS_SCHEMA } from "../src/lib/helpdesk/custom-fields-schema";
+import { HD_EMAIL_HTML_SCHEMA } from "../src/lib/helpdesk/email-html-schema";
 
 /** The schema blocks db.ts interpolates into SCHEMA_SQL (1.19.0). */
 const INTERPOLATED: Record<string, string> = {
@@ -94,6 +95,7 @@ const INTERPOLATED: Record<string, string> = {
   HD_CATEGORIES_SCHEMA,
   HD_DESK_CALENDAR_SCHEMA,
   HD_CUSTOM_FIELDS_SCHEMA,
+  HD_EMAIL_HTML_SCHEMA,
 };
 
 const COLUMN_PREDICATE = (table: string, column: string) =>

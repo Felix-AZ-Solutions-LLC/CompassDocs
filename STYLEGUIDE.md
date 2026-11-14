@@ -2827,6 +2827,22 @@ open in its own tab beside CompassDocs. Components live in
   newbie's held reply carries J's `ReviewStateChip`. Bodies are
   `MarkdownView` at `text-sm`, `headingOffset={2}`. Attachments link to
   `/api/helpdesk/attachments/[id]`, images with a thumbnail.
+- **View original** (1.20.8, `ticket/OriginalEmail`): a message whose email
+  had an HTML part carries one quiet icon button at the right of its
+  header row (`MailOpen`, `iconButtonClass("quiet", "sm")`, `data-tt` and
+  `aria-label` "View original"), in the ticket pane only. It opens a
+  `Modal` (`max-w-4xl`), never an in-place expander: an email is laid out
+  for its own width and colours, and the thread stays as it was. The email
+  is a sandboxed `<iframe>` (no `allow-scripts`, no `allow-same-origin`)
+  on a **white paper surface in both themes**: literal `bg-white` with a
+  `border-slate-200` edge, like an email preview; the sender's email is
+  never inverted or restyled for dark mode. Above it, one neutral bar
+  (`bg-slate-50`, `ImageOff`) "Remote images are hidden." with a
+  `secondary` `sm` **Show images**, for that message only and never
+  remembered; a truncated email adds a `notice-warn` line. The footer says
+  replies are still plain text and offers **Back to the conversation**
+  beside the close button. The card's text body stays the default view
+  everywhere; Get help, the portal and the print page never show it.
 - **The composer**: a `Segmented size="sm"` (Reply to {first name} |
   Internal note), never hand-rolled tabs; the box turns amber in note
   mode. Macro (`Zap`) and Article (`BookOpen`) are `secondary` `sm`
@@ -3004,6 +3020,32 @@ Personal and team queue views (1.19.1, mock-up #1). Components live in
 - **A filtered list** shows the drill-down strip with "Filtered: {summary}"
   (Reports' keeps "Filtered from Reports") and a **Save view** link button
   (`BookmarkPlus`) before Clear.
+- **Custom field conditions** (1.20.8, `views/CustomFieldConditions`): the
+  Filter dialog's **Custom fields** block under its grid, in the dialog's
+  label tier. One row per condition in a bordered `divide-y` list: the
+  field's label (`text-sm font-medium`, "(archived)" after an archived one
+  plus a muted line that the view still uses it) and a quiet `X` (`data-tt`
+  "Remove", `aria-label` "Remove {label} from the filter"), then the
+  condition: a pick-one field is its options and **Not filled in** as
+  native checkboxes in a bordered wrapping box (no condition menu, "is any
+  of" above it); every other kind is a `Select` of the conditions that fit
+  it (`CF_OP_CHOICES`) beside its value control (a text, number or date
+  `TextInput`, or the request form's people picker). **Add a custom
+  field…** is a `Select` of the live fields not used yet; archived fields
+  are never offered. One muted sentence says every condition must match
+  and that a field (and "not filled in") only covers its own teams. An
+  unfinished row says what is missing inline (`text-xs text-red-600`) once
+  Show list is pressed. On the list, the conditions leave the strip's
+  one-line summary and sit under it as **chips** (`chipClass("neutral")`,
+  "Device type: Laptop, Phone") with the CC chip's round quiet `X`, a link
+  to the list without that condition.
+- **Export CSV** (1.20.8, `views/ExportCsvButton`): a quiet `Download`
+  icon button between Filter and Sort (`data-tt` "Export CSV",
+  `aria-label` "Export these tickets as CSV"), only for `tickets.export`.
+  It exports the whole list, not the page; a list over the cap asks first
+  with a plain `confirmDialog` ("Export the first 10,000 tickets?", the
+  list's size and what to do, **Export 10,000**). Done is a toast with the
+  count; a refusal is a toast with the server's sentence.
 - **Save this view** is a `Modal`: `Bookmark` title, one muted sentence
   ("Saved views sit under Views with their own count. Filters: Contains
   "VPN" · Created in the last 7 days · Not solved."), the Name field, and

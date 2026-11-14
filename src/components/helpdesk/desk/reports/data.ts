@@ -162,7 +162,8 @@ export async function downloadTimeCsv(url: string): Promise<void> {
   await saveDownload(res, "helpdesk-time.csv");
 }
 
-async function saveDownload(res: Response, fallback: string): Promise<void> {
+/** Save a CSV response as a file (also the queue's Export CSV, 1.20.8). */
+export async function saveDownload(res: Response, fallback: string): Promise<void> {
   const blob = await res.blob();
   const name = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ?? fallback;
   const url = URL.createObjectURL(blob);

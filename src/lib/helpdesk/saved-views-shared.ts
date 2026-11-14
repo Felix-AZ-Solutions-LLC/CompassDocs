@@ -6,6 +6,7 @@
 // (owner_id) or shared with a team (team_id).
 
 import { HD_PRIORITY_LABEL, HD_STATUS_LABEL, type HdPriority, type HdStatus } from "./types";
+import { cfSummaryParts, isCfFilterKey, type HdCfFilterField } from "./custom-field-filters-shared";
 
 export const SAVED_VIEW_NAME_MAX = 60;
 /** Per person (personal views) and per team (team views). */
@@ -60,9 +61,16 @@ export function createdWithinLabel(days: string | number): string {
 /**
  * The filters in words, for the Save dialog and the filter strip:
  * 'Contains "VPN" · Created this week · Not solved'. Team names come from
- * `teams` (the desk counts' list); unknown ids read "team 3".
+ * `teams` (the desk counts' list); unknown ids read "team 3". 1.20.8:
+ * custom field conditions read "Device type: Laptop, Phone" with the
+ * desk's `fields` (and `names` for "A person").
  */
-export function filterSummary(f: HdViewFilters, teams: { team_id?: number; id?: number; name: string }[] = []): string {
+export function filterSummary(
+  f: HdViewFilters,
+  teams: { team_id?: number; id?: number; name: string }[] = [],
+  fields?: HdCfFilterField[],
+  names?: Map<number, string>
+): string {
   const teamName = (id: string) => teams.find((t) => String(t.team_id ?? t.id) === id)?.name ?? `team ${id}`;
   const parts: string[] = [];
   const view = f.view ?? "";
@@ -90,6 +98,7 @@ export function filterSummary(f: HdViewFilters, teams: { team_id?: number; id?: 
   for (const k of ["request_type", "channel", "category", "subcategory", "department", "office", "integration", "requester", "requester_email"]) {
     if (f[k]) parts.push(`${k.replace(/_/g, " ")} ${f[k].replace(/_/g, " ")}`);
   }
+  if (Object.keys(f).some(isCfFilterKey)) parts.push(...cfSummaryParts(f, fields, names));
   if (!parts.length) return view === "all" ? "Every ticket" : "All open";
   return parts.join(" · ");
 }

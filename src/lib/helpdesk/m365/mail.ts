@@ -1080,7 +1080,8 @@ async function inboxFolderId(c: M365Config, mb: MbRow): Promise<string> {
 async function fetchFiles(c: M365Config, mb: MbRow, id: string, tolerant: boolean, missing: string[]): Promise<InboundFile[]> {
   const { INBOUND_LIMITS } = await import("../inbound");
   const base = `${who(mb)}/messages/${encodeURIComponent(id)}/attachments`;
-  const list = await graph<{ value?: unknown[] }>(creds(c), { path: `${base}?$select=id,name,contentType,size,isInline&$top=30`, prefer: [IMMUTABLE], what: "read a message's attachments" });
+  // 1.20.8: contentId too, so an inline picture is drawn where the HTML names it ("View original", lib/helpdesk/email-html).
+  const list = await graph<{ value?: unknown[] }>(creds(c), { path: `${base}?$select=id,name,contentType,size,isInline,contentId&$top=30`, prefer: [IMMUTABLE], what: "read a message's attachments" });
   const files: InboundFile[] = [];
   let total = 0;
   for (const raw of (Array.isArray(list.value) ? list.value : []).slice(0, 30)) {
@@ -1119,7 +1120,8 @@ async function fetchFiles(c: M365Config, mb: MbRow, id: string, tolerant: boolea
       } else throw e;
     }
     total += data.length;
-    files.push({ name, type, data });
+    const contentId = str(a.contentId).trim().replace(/^<|>$/g, "").slice(0, 500);
+    files.push({ name, type, data, ...(contentId ? { contentId } : {}) });
   }
   return files;
 }

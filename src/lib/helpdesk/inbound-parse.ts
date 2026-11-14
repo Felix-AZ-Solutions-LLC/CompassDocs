@@ -7,28 +7,32 @@
 // fields:
 //   generic   JSON { from, to, cc, subject, text, html, message_id,
 //             in_reply_to, references, headers, attachments: [{ filename,
-//             content_type, content (base64) }], calendar (1.20.6: a
-//             meeting invite's text/calendar part, as text) }
+//             content_type, content (base64), content_id (1.20.8) }],
+//             calendar (1.20.6: a meeting invite's text/calendar part, as
+//             text) }
 //   postmark  Postmark's inbound webhook JSON (FromFull, ToFull, TextBody,
 //             HtmlBody, Headers [{Name, Value}], Attachments [{Name,
-//             Content, ContentType}])
+//             Content, ContentType, ContentID}])
 //   sendgrid  SendGrid Inbound Parse, multipart/form-data, NOT the "raw"
 //             option (from, to, cc, subject, text, html, headers, envelope,
-//             attachment-info, files attachment1..N)
+//             attachment-info (with each file's content-id), files
+//             attachment1..N)
 //   mailgun   a Mailgun route's forward(), multipart/form-data or urlencoded
 //             (sender, from, recipient, subject, body-plain, body-html,
 //             stripped-text, Message-Id, In-Reply-To, References,
-//             message-headers, files attachment-1..N)
+//             message-headers, content-id-map, files attachment-1..N)
 //
-// The email's HTML is never stored or rendered: it is walked as a tree and
-// written out as text (lists, line breaks and link targets kept, scripts,
-// styles and images dropped), then escaped so the desk's markdown renderer
-// shows it as the characters it is. A reply's quoted history is cut off
-// before it reaches the ticket.
+// The message body is never the email's HTML: the HTML is walked as a tree
+// and written out as text (lists, line breaks and link targets kept,
+// scripts, styles and images dropped), then escaped so the desk's markdown
+// renderer shows it as the characters it is. A reply's quoted history is cut
+// off before it reaches the ticket. (1.20.8: the HTML part itself is kept
+// apart, untouched, for "View original": lib/helpdesk/email-html.)
 
 import { unified } from "unified";
 import rehypeParse from "rehype-parse";
 import { scanAddresses } from "./mailboxes-shared";
+import { linearHtmlText, scanHtml } from "./html-scan";
 
 export const INBOUND_PROVIDERS = ["generic", "postmark", "sendgrid", "mailgun"] as const;
 export type InboundProvider = (typeof INBOUND_PROVIDERS)[number];
@@ -43,6 +47,8 @@ export interface InboundFile {
   /** What the provider claimed; never trusted for serving (lib/helpdesk/inbound decides the type). */
   type: string;
   data: Buffer;
+  /** 1.20.8: the part's Content-ID, without angle brackets, when the provider gives it (an inline picture the HTML names as cid:…). */
+  contentId?: string;
 }
 
 export interface InboundEmail {
@@ -210,6 +216,12 @@ function b64(v: unknown): Buffer {
   }
 }
 
+/** A Content-ID as { contentId } (angle brackets off, capped), or nothing. */
+function contentIdOf(v: unknown): { contentId?: string } {
+  const s = str(v).trim().replace(/^<|>$/g, "").trim().slice(0, 500);
+  return s ? { contentId: s } : {};
+}
+
 function finish(e: Omit<InboundEmail, "subject"> & { subject: string }): InboundEmail {
   return {
     ...e,
@@ -246,6 +258,7 @@ export function parseGeneric(body: Record<string, unknown>): InboundEmail {
           name: str(a.filename ?? a.name),
           type: str(a.content_type ?? a.type ?? a.contentType),
           data: b64(a.content ?? a.data),
+          ...contentIdOf(a.content_id ?? a.contentId ?? a.cid),
         }))
     : [];
   // 1.20.6: a meeting invite's text/calendar part, sent as `calendar` (the iCalendar text): read like an .ics attachment.
@@ -284,7 +297,7 @@ export function parsePostmark(body: Record<string, unknown>): InboundEmail {
   const list = (full: unknown, plain: unknown) =>
     Array.isArray(full) ? (full as Record<string, unknown>[]).map(fromObject).filter((a) => a.email) : parseAddressList(plain);
   const files: InboundFile[] = Array.isArray(body.Attachments)
-    ? (body.Attachments as Record<string, unknown>[]).map((a) => ({ name: str(a.Name), type: str(a.ContentType), data: b64(a.Content) }))
+    ? (body.Attachments as Record<string, unknown>[]).map((a) => ({ name: str(a.Name), type: str(a.ContentType), data: b64(a.Content), ...contentIdOf(a.ContentID) }))
     : [];
   return finish({
     provider: "postmark",
@@ -332,7 +345,7 @@ export async function parseSendgrid(form: FormData): Promise<InboundEmail> {
   } catch {
     /* no envelope */
   }
-  let info: Record<string, { filename?: string; name?: string; type?: string }> = {};
+  let info: Record<string, { filename?: string; name?: string; type?: string; "content-id"?: string }> = {};
   try {
     info = JSON.parse(formStr(form, "attachment-info") || "{}");
   } catch {
@@ -342,7 +355,7 @@ export async function parseSendgrid(form: FormData): Promise<InboundEmail> {
   const names = Object.keys(info).length ? Object.keys(info) : Array.from({ length: Math.min(count, 50) }, (_, i) => `attachment${i + 1}`);
   const files = (await formFiles(form, names)).map((f, i) => {
     const meta = info[names[i]] ?? {};
-    return { ...f, name: meta.filename || meta.name || f.name, type: meta.type || f.type };
+    return { ...f, name: meta.filename || meta.name || f.name, type: meta.type || f.type, ...contentIdOf(meta["content-id"]) };
   });
   return finish({
     provider: "sendgrid",
@@ -381,6 +394,19 @@ export async function parseMailgun(form: FormData): Promise<InboundEmail> {
   const headers = listToMap(headerList);
   const count = Math.min(Number(formStr(form, "attachment-count")) || 0, 50);
   const files = await formFiles(form, Array.from({ length: count }, (_, i) => `attachment-${i + 1}`));
+  // 1.20.8: content-id-map {"<cid>": "attachment-N"} names the inline pictures.
+  try {
+    const map = JSON.parse(formStr(form, "content-id-map") || "{}");
+    if (map && typeof map === "object" && !Array.isArray(map)) {
+      for (const [cid, field] of Object.entries(map as Record<string, unknown>).slice(0, 100)) {
+        const n = String(field).match(/^attachment-(\d{1,3})$/);
+        const f = n ? files[Number(n[1]) - 1] : undefined;
+        if (f) Object.assign(f, contentIdOf(cid));
+      }
+    }
+  } catch {
+    /* no map */
+  }
   return finish({
     provider: "mailgun",
     from: parseAddress(formStr(form, "from") || formStr(form, "sender")),
@@ -560,33 +586,62 @@ function isQuoteContainer(node: HastNode): boolean {
   return false;
 }
 
+/** 1.20.8 (security review): at most this much of an email's HTML is read for its text (the rest is left out). */
+export const INBOUND_MAX_HTML_FOR_TEXT = 1024 * 1024;
+
 /**
  * The text of an HTML email. Nothing of the markup survives: blocks become
  * line breaks, list items "- ", a link "label (https://…)" when its target
  * is http(s) or mailto and differs from its label. `dropQuotes` also leaves
  * out the quoted history the common clients wrap in a marked container.
+ *
+ * 1.20.8 (security review): bounded. Only the first 1 MB is read; it is
+ * measured first in one linear pass (lib/helpdesk/html-scan), and HTML with
+ * too many elements or attributes, or nested too deep for the parser to
+ * read in bounded time, is turned into text without a parser
+ * (linearHtmlText: no quote cutting then). The text is written out in
+ * pieces, never re-read from the end of a growing string.
  */
 export function htmlToText(html: string, opts: { dropQuotes?: boolean } = {}): string {
+  const input = html.length > INBOUND_MAX_HTML_FOR_TEXT ? html.slice(0, INBOUND_MAX_HTML_FOR_TEXT) : html;
+  if (scanHtml(input).over) return linearHtmlText(input);
   let tree: HastNode;
   try {
-    tree = unified().use(rehypeParse, { fragment: false }).parse(html.slice(0, 2_000_000)) as unknown as HastNode;
+    tree = unified().use(rehypeParse, { fragment: false }).parse(input) as unknown as HastNode;
   } catch {
-    return "";
+    return linearHtmlText(input);
   }
-  let out = "";
+  // The text so far, in pieces; `tail` holds its last characters (all the walk ever looks back at).
+  const parts: string[] = [];
+  let tail = "";
+  const put = (v: string) => {
+    if (!v) return;
+    parts.push(v);
+    tail = (tail + v).slice(-8);
+  };
+  const empty = () => parts.length === 0;
+  const endsWith = (c: string) => tail.endsWith(c);
   const nl = (n: number) => {
-    const trailing = out.match(/\n*$/)?.[0].length ?? 0;
-    if (out.length === 0) return;
-    if (trailing < n) out += "\n".repeat(n - trailing);
+    if (empty()) return;
+    const trailing = tail.length - tail.replace(/\n+$/, "").length;
+    if (trailing < n) put("\n".repeat(n - trailing));
+  };
+  const trimSpaces = () => {
+    while (parts.length && parts[parts.length - 1].endsWith(" ")) {
+      const last = parts[parts.length - 1].replace(/ +$/, "");
+      if (last) parts[parts.length - 1] = last;
+      else parts.pop();
+      tail = parts.length ? parts.slice(-4).join("").slice(-8) : "";
+    }
   };
   const walk = (node: HastNode, pre: boolean) => {
     if (node.type === "text") {
       const v = node.value ?? "";
-      if (pre) out += v;
+      if (pre) put(v);
       else {
         const collapsed = v.replace(/[ \t\r\n\f ]+/g, (m) => (m.includes(" ") ? " " : " "));
-        if (collapsed === " " && (out.endsWith(" ") || out.endsWith("\n") || out === "")) return;
-        out += out.endsWith("\n") || out.endsWith(" ") || out === "" ? collapsed.replace(/^ /, "") : collapsed;
+        if (collapsed === " " && (endsWith(" ") || endsWith("\n") || empty())) return;
+        put(endsWith("\n") || endsWith(" ") || empty() ? collapsed.replace(/^ /, "") : collapsed);
       }
       return;
     }
@@ -598,13 +653,13 @@ export function htmlToText(html: string, opts: { dropQuotes?: boolean } = {}): s
     if (SKIP.has(tag)) return;
     if (opts.dropQuotes && isQuoteContainer(node)) return;
     if (tag === "br") {
-      out = out.replace(/ +$/, "");
-      out += "\n";
+      trimSpaces();
+      put("\n");
       return;
     }
     if (tag === "hr") {
       nl(2);
-      out += "---";
+      put("---");
       nl(2);
       return;
     }
@@ -612,10 +667,10 @@ export function htmlToText(html: string, opts: { dropQuotes?: boolean } = {}): s
     if (block) nl(tag === "p" || /^h\d$/.test(tag) || tag === "blockquote" || tag === "pre" || tag === "table" || tag === "ul" || tag === "ol" ? 2 : 1);
     if (tag === "li") {
       nl(1);
-      out += "- ";
+      put("- ");
     }
     if (tag === "td" || tag === "th") {
-      if (!out.endsWith("\n") && out !== "") out += " | ";
+      if (!endsWith("\n") && !empty()) put(" | ");
     }
     const isPre = pre || tag === "pre";
     for (const c of node.children ?? []) walk(c, isPre);
@@ -624,13 +679,14 @@ export function htmlToText(html: string, opts: { dropQuotes?: boolean } = {}): s
       if (/^(https?:|mailto:)/i.test(href)) {
         const label = textOf(node).trim();
         const target = href.replace(/^mailto:/i, "");
-        if (target && label !== target && label !== href) out += ` (${href.replace(/^mailto:/i, "")})`;
+        if (target && label !== target && label !== href) put(` (${href.replace(/^mailto:/i, "")})`);
       }
     }
     if (block) nl(tag === "p" || /^h\d$/.test(tag) || tag === "blockquote" || tag === "pre" || tag === "table" || tag === "ul" || tag === "ol" ? 2 : 1);
   };
   walk(tree, false);
-  return out
+  return parts
+    .join("")
     .split("\n")
     .map((l) => l.replace(/[ \t]+$/g, ""))
     .join("\n")

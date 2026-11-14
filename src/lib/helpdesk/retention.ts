@@ -423,6 +423,8 @@ export async function anonymiseTicketTx(client: PoolClient, ticketId: number, no
   await (await import("./desk-calendar")).anonymiseEventTx(client, ticketId);
   // 1.20.6: custom field values the same way: free text and people go, choices, numbers, dates and ticks stay (lib/helpdesk/custom-fields).
   await (await import("./custom-fields")).anonymiseCustomValuesTx(client, ticketId);
+  // 1.20.8: the original HTML of every emailed message goes with the text (lib/helpdesk/email-html).
+  await (await import("./email-html")).anonymiseOriginalHtmlTx(client, ticketId);
   // 1.19.2: an incident's own ticket: its updates, title and their audit copies (agent W1, lib/helpdesk/incidents).
   await (await import("./incidents")).anonymiseIncidentTx(client, ticketId, ANONYMISED_SUBJECT);
   // 1.19.3: which device the requester had is theirs too: the asset links go (lib/helpdesk/assets).
@@ -707,6 +709,9 @@ export async function anonymiseRemovedAccountTx(client: PoolClient, userId: numb
   const opt = await optional(client);
   const s = await getRetentionSettings();
   if (!s.anonymise_on_account_removal) return { result: null, files };
+  // 1.20.8 (security review): the original emails of every ticket they asked, were copied on or wrote on, which may
+  // quote them, before the CC rows and authors below are cleared (lib/helpdesk/email-html).
+  await (await import("./email-html")).dropOriginalHtmlForPersonTx(client, userId, email, { ccs: opt.has("hd_ticket_ccs") });
   const own = await hq<{ id: number }>(
     `WITH mine AS (
        SELECT id FROM hd_tickets
@@ -749,6 +754,8 @@ export async function anonymiseRemovedAccountTx(client: PoolClient, userId: numb
   if (mids.length) {
     const f = await client.query<{ stored_name: string }>("DELETE FROM hd_attachments WHERE message_id = ANY($1::int[]) RETURNING stored_name", [mids]);
     files.push(...f.rows.map((r) => r.stored_name));
+    // 1.20.8: and the original HTML of those messages (lib/helpdesk/email-html).
+    await (await import("./email-html")).dropOriginalHtmlTx(client, mids);
   }
   if (copied.length) {
     await client.query(
@@ -843,7 +850,17 @@ export interface HdPersonalExport {
     closed_at: string | null;
     answers: { question: string; answer: string }[];
     /** Their own requests: the public conversation. Otherwise: only their own public messages. */
-    conversation: { from: string; at: string; text: string; files: string[]; from_request?: number }[];
+    conversation: {
+      from: string;
+      at: string;
+      text: string;
+      files: string[];
+      from_request?: number;
+      /** 1.20.8: a message they sent by email: its HTML part as it arrived (lib/helpdesk/email-html). Never on someone else's message. */
+      original_html?: string;
+      /** 1.20.8: only the first 1 MB of that email was kept. */
+      original_html_truncated?: boolean;
+    }[];
     /** 1.19.3: the assets linked to their own request, tag and name only (lib/helpdesk/assets). */
     assets?: { tag: string; name: string }[];
     /** 1.20.6: the Public custom fields of their own request that have a value (lib/helpdesk/custom-fields). Never an agent-only field. */
@@ -928,6 +945,8 @@ export async function personalHelpdeskExport(userId: number): Promise<HdPersonal
     [tickets.map((t) => t.id), own.map((t) => t.number)]
   );
   const mine = (m: (typeof msgs)[number]) => m.author_id === userId || (email !== "" && (m.author_email ?? "").toLowerCase() === email);
+  // 1.20.8: the original HTML of the emails they sent themselves (lib/helpdesk/email-html), as it arrived. Never anyone else's.
+  const originals = await (await import("./email-html")).originalHtmlFor(msgs.filter(mine).map((m) => m.id));
   const used = new Set<number>();
   const conversationOf = (t: (typeof tickets)[number]) => {
     const list = msgs.filter((m) =>
@@ -943,6 +962,7 @@ export async function personalHelpdeskExport(userId: number): Promise<HdPersonal
       text: m.body,
       files: (Array.isArray(m.attachments) ? m.attachments : []).map((a) => String(a?.filename ?? "")).filter(Boolean),
       ...(m.merged_from !== null && m.ticket_id !== t.id ? { from_request: Number(m.merged_from) } : {}),
+      ...(originals.has(m.id) ? { original_html: originals.get(m.id)!.html, ...(originals.get(m.id)!.truncated ? { original_html_truncated: true } : {}) } : {}),
     }));
   };
   // Their own requests first, so a merged conversation is listed under the request it came from.

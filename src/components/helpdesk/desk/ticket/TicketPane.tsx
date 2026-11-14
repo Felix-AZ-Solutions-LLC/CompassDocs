@@ -370,7 +370,7 @@ export function TicketPane({ number }: { number: number }) {
             {can && <IncidentPanel number={t.number} refreshKey={t.updated_at} onChanged={() => void load(true).then(refreshQueue)} />}
             {/* Checklists (1.19.2, agent W3); refreshed as the timeline moves. */}
             {can && <TicketChecklists number={t.number} refreshKey={d.messages.length} />}
-            <Conversation messages={d.messages} requesterId={t.requester_id} meId={me.id} ticketNumber={t.number} origins={d.merge?.message_origins} />
+            <Conversation messages={d.messages} requesterId={t.requester_id} meId={me.id} ticketNumber={t.number} origins={d.merge?.message_origins} originals={can} />
             {can && !merged && <ClaudeDraftCard number={t.number} onUse={(body) => composer.current?.fill(body)} />}
             {can && merged ? (
               <MergedComposerLock d={d} />

@@ -37,6 +37,9 @@ import { IncidentsNav } from "../incidents/IncidentsNav";
 import { TeamStatusBanner } from "../team-status/TeamStatusBanner";
 import { RecycleBinNav } from "../recycle-bin/RecycleBinNav";
 import { filterSummary } from "@/lib/helpdesk/saved-views-shared";
+import { useDeskFilterFields, useFilterPeopleNames } from "../custom-fields/filters";
+import { ExportCsvButton } from "../views/ExportCsvButton";
+import { CustomFieldChips, withoutCustom } from "../views/CustomFieldChips";
 
 interface QueueCtx {
   rows: HdTicketListRow[] | null;
@@ -61,6 +64,8 @@ export function QueueLayout({ children }: { children: ReactNode }) {
   const binPage = (usePathname() ?? "").startsWith("/desk/recycle-bin");
   const { counts, refresh: refreshCounts } = useDeskCounts();
   const [rows, setRows] = useState<HdTicketListRow[] | null>(null);
+  // 1.20.8: every ticket the list holds (all pages), for Export CSV's cap question.
+  const [total, setTotal] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [newOpen, setNewOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -70,6 +75,9 @@ export function QueueLayout({ children }: { children: ReactNode }) {
   const savedView = sel.saved ? sv.list?.views.find((v) => v.id === sel.saved) : undefined;
   const listQs = sel.saved ? savedApiQs(sel, sv.list?.views) : apiQs(sel);
   const savedGone = !!sel.saved && !!sv.list && !listQs;
+  // 1.20.8: custom field conditions as chips under the filter strip.
+  const cfFields = useDeskFilterFields();
+  const cfNames = useFilterPeopleNames(sel.drill, cfFields);
 
   const load = useCallback(() => {
     if (!listQs) {
@@ -79,6 +87,8 @@ export function QueueLayout({ children }: { children: ReactNode }) {
     getJson(`/api/helpdesk/tickets?${listQs}`, "Couldn't load the tickets.")
       .then((d) => {
         setRows(listOf<HdTicketListRow>(d, "tickets", "rows"));
+        const n = (d as { total?: unknown } | null)?.total;
+        setTotal(typeof n === "number" ? n : null);
         setError("");
       })
       .catch((e: Error) => setError(e.message));
@@ -224,6 +234,7 @@ export function QueueLayout({ children }: { children: ReactNode }) {
             <QueueTitle title={title} count={rows?.length} viewLinks={viewLinks} />
             <div className="ml-auto flex items-center gap-1">
               <EditViewButton sv={sv} sel={sel} />
+              <ExportCsvButton listQs={listQs} total={total} />
               <PickMenu
                 label="Sort"
                 value={sel.sort}
@@ -254,23 +265,29 @@ export function QueueLayout({ children }: { children: ReactNode }) {
             </div>
           </div>
           {sel.drill && (
-            <div className="flex items-center gap-2 border-b border-compass-200 bg-compass-50/70 px-3 py-2 text-xs text-slate-700">
-              <Filter className="h-3.5 w-3.5 shrink-0 text-compass-600" aria-hidden />
-              <span className="min-w-0 flex-1 truncate">
-                {sel.origin === "filter" ? (
-                  <>
-                    Filtered: <span className="font-medium">{filterSummary(sel.drill, counts?.teams ?? [])}</span>
-                  </>
-                ) : (
-                  <>
-                    Filtered from Reports: <span className="font-medium">{drillSummary(sel.drill, counts?.teams ?? [])}</span>
-                  </>
-                )}
-              </span>
-              <SaveViewButton sv={sv} sel={sel} />
-              <Link href="/desk" className="link shrink-0 font-medium">
-                Clear
-              </Link>
+            <div className="border-b border-compass-200 bg-compass-50/70 text-xs text-slate-700">
+              <div className="flex items-center gap-2 px-3 py-2">
+                <Filter className="h-3.5 w-3.5 shrink-0 text-compass-600" aria-hidden />
+                <span className="min-w-0 flex-1 truncate">
+                  {sel.origin === "filter" ? (
+                    <>
+                      Filtered: <span className="font-medium">{filterSummary(withoutCustom(sel.drill), counts?.teams ?? [])}</span>
+                    </>
+                  ) : (
+                    <>
+                      Filtered from Reports: <span className="font-medium">{drillSummary(sel.drill, counts?.teams ?? [])}</span>
+                    </>
+                  )}
+                </span>
+                <SaveViewButton sv={sv} sel={sel} />
+                <Link href="/desk" className="link shrink-0 font-medium">
+                  Clear
+                </Link>
+              </div>
+              {/* 1.20.8: custom field conditions as chips under the line (../views/CustomFieldChips). */}
+              {sel.origin === "filter" && (
+                <CustomFieldChips sel={sel} fields={cfFields} names={cfNames} basePath={selected ? `/desk/tickets/${selected}` : "/desk"} />
+              )}
             </div>
           )}
           {/* A followed Status page service in trouble (1.19.2, agent W6, ../team-status). */}

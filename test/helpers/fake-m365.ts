@@ -51,6 +51,8 @@ export interface FakeAttachment {
   contentType: string;
   data: Buffer;
   isInline?: boolean;
+  /** Graph's contentId (an inline picture the HTML names as cid:…). */
+  contentId?: string;
   /** "#microsoft.graph.itemAttachment" for an attached message. */
   odataType?: string;
   /** Claim this size instead of the real one. */
@@ -632,7 +634,7 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
       if (tail === "/attachments" && method === "GET") {
         if (fake.fail.attachments) return send(res, fake.fail.attachments, gerr("ErrorInternalServerError", "Try again."));
         return send(res, 200, {
-          value: m.attachments.map((a) => ({ "@odata.type": a.odataType ?? "#microsoft.graph.fileAttachment", id: a.id, name: a.name, contentType: a.contentType, size: a.size ?? a.data.length, isInline: a.isInline === true })),
+          value: m.attachments.map((a) => ({ "@odata.type": a.odataType ?? "#microsoft.graph.fileAttachment", id: a.id, name: a.name, contentType: a.contentType, size: a.size ?? a.data.length, isInline: a.isInline === true, ...(a.contentId && (!select || select.includes("contentId")) ? { contentId: a.contentId } : {}) })),
         });
       }
       const att = tail.match(/^\/attachments\/([^/]+)\/\$value$/);

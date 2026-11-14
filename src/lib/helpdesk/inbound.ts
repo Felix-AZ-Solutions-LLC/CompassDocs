@@ -49,7 +49,11 @@
 //      own); the ones not added are listed in a note on the ticket.
 //
 // The body is text only: the text part, or the HTML part walked into text,
-// escaped as markdown (lib/helpdesk/inbound-parse). Server-only.
+// escaped as markdown (lib/helpdesk/inbound-parse). 1.20.8: the HTML part
+// itself is kept beside the message as it arrived, quoted history and
+// forwarded content included, for the desk's "View original"
+// (lib/helpdesk/email-html), with its inline pictures mapped to the
+// attachments stored from the same email. Server-only.
 
 import "server-only";
 import { timingSafeEqual } from "node:crypto";
@@ -565,7 +569,7 @@ export async function processInboundEmail(
             logEvent("info", "helpdesk.inbound_merge_retry", { ticket: t.number, from: email.from.email });
             return processInboundEmail(email, { ...opts, outsideSenders, trustUnverified, mergeRetry: true });
           }
-          if (r) await storeAttachments(email, t.id, r.message.id, author.id);
+          if (r) await keepFromEmail(email, t.id, r.message.id, author.id);
           // 1.20.6: the invite it carried updates or cancels the ticket's event, or fills it in when there is none.
           if (r && invite) await calendar.applyInviteToTicket(t.id, invite, { name: author.name }, { origin: opts.origin });
           // 1.19.4 (C7): binned between the lookup and the append (addMessage found no live row): a new ticket below.
@@ -614,7 +618,7 @@ export async function processInboundEmail(
       { origin: opts.origin }
     );
     const first = await hqOne<{ id: number }>("SELECT id FROM hd_messages WHERE ticket_id = $1 AND kind <> 'system' ORDER BY created_at, id LIMIT 1", [ticket.id]);
-    if (first) await storeAttachments(email, ticket.id, first.id, null);
+    if (first) await keepFromEmail(email, ticket.id, first.id, null);
     return reply(200, { ok: true, outcome: "follow_up", ticket: ticket.number });
   }
   if (!sender && !outsideSenders) {
@@ -673,7 +677,7 @@ export async function processInboundEmail(
     "SELECT id FROM hd_messages WHERE ticket_id = $1 AND kind <> 'system' ORDER BY created_at, id LIMIT 1",
     [ticket.id]
   );
-  if (first) await storeAttachments(email, ticket.id, first.id, author.id);
+  if (first) await keepFromEmail(email, ticket.id, first.id, author.id);
   // 1.20.6: a meeting invite fills in the ticket's event (lib/helpdesk/desk-calendar applyInviteToTicket; never throws).
   if (invite) await calendar.applyInviteToTicket(ticket.id, invite, { name: author.name }, { origin: opts.origin });
   // The mail's Cc become the request's CCs (1.19.1, agent V3), only when the
@@ -697,9 +701,20 @@ export async function processInboundEmail(
   return reply(200, { ok: true, outcome: followUpOf !== null ? "follow_up" : "created", ticket: ticket.number });
 }
 
-/** Save the attachments that pass, bind them to the message, and note the ones that did not. */
-async function storeAttachments(email: InboundEmail, ticketId: number, messageId: number, userId: number | null): Promise<void> {
-  if (!email.files.length) return;
+/** 1.20.8: the email's attachments, then its HTML part with its inline pictures mapped to them (lib/helpdesk/email-html). */
+async function keepFromEmail(email: InboundEmail, ticketId: number, messageId: number, userId: number | null): Promise<void> {
+  const cids = await storeAttachments(email, ticketId, messageId, userId);
+  if (email.html.trim()) await (await import("./email-html")).storeOriginalHtml(messageId, email, cids);
+}
+
+/**
+ * Save the attachments that pass, bind them to the message, and note the
+ * ones that did not. Answers the Content-IDs of the stored ones (1.20.8:
+ * the inline pictures "View original" draws).
+ */
+async function storeAttachments(email: InboundEmail, ticketId: number, messageId: number, userId: number | null): Promise<Map<string, number>> {
+  const cids = new Map<string, number>();
+  if (!email.files.length) return cids;
   const plan = planAttachments(email.files);
   const refused = [...plan.refused];
   const saved: number[] = [];
@@ -708,6 +723,7 @@ async function storeAttachments(email: InboundEmail, ticketId: number, messageId
     try {
       const att = await store.save({ buf: a.file.data, filename: a.name, mime: a.mime, ticketId, userId });
       saved.push(att.id);
+      if (a.file.contentId) cids.set(a.file.contentId, att.id);
     } catch (e) {
       refused.push(`${a.name} (${e instanceof Error ? e.message : "could not be stored"})`);
     }
@@ -731,4 +747,5 @@ async function storeAttachments(email: InboundEmail, ticketId: number, messageId
       `${refused.length === 1 ? "1 attachment was" : `${refused.length} attachments were`} not added from the email:\n\n${list}`
     );
   }
+  return cids;
 }

@@ -6,6 +6,7 @@
 
 import { CircleAlert, CircleCheck, CirclePause, Inbox, List, UserRound, Workflow, type LucideIcon } from "lucide-react";
 import type { HdNamedView, HdTicketSort } from "@/lib/helpdesk/types";
+import { isCfFilterKey, CF_FILTER_MAX, CF_VALUE_MAX } from "@/lib/helpdesk/custom-field-filters-shared";
 
 export const VIEWS: { key: HdNamedView; label: string; icon: LucideIcon; alarm?: boolean }[] = [
   { key: "mine", label: "My open", icon: UserRound },
@@ -86,6 +87,12 @@ export function readSel(sp: URLSearchParams | null): QueueSel {
   for (const k of DRILL_KEYS) {
     const v = sp?.get(k);
     if (v) drill[k] = v.slice(0, k === "requester_email" ? 320 : 80);
+  }
+  // 1.20.8: custom field conditions (cf.<key>, lib/helpdesk/custom-field-filters) from the Filter dialog.
+  let custom = 0;
+  for (const [k, v] of sp ?? []) {
+    if (!isCfFilterKey(k) || !v || k in drill || ++custom > CF_FILTER_MAX) continue;
+    drill[k] = v.slice(0, CF_VALUE_MAX);
   }
   const origin = sp?.get("from") === "filter" ? "filter" : "reports";
   const saved = Number(sp?.get("saved"));

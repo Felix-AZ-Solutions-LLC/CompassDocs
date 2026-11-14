@@ -226,6 +226,8 @@ describe("style drift guard", () => {
       "components/dashboard/QuickLinksClient.tsx",
       "components/NewsletterPeople.tsx",
       "components/EmailTemplate.tsx",
+      // 1.20.8: "View original": the email's white paper, in both themes.
+      "components/helpdesk/desk/ticket/OriginalEmail.tsx",
     ];
     const hits = offenders(/\bbg-white\b(?!\/)/, (file) => !ALLOW.some((a) => file.endsWith(a)));
     assert.deepEqual(hits, [], `bg-white on a themed surface half-flips in dark mode — use bg-surface:\n${hits.join("\n")}`);
