@@ -203,12 +203,12 @@ before(async () => {
 });
 
 after(async () => {
-  await pool().query("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = $2", [docIds, readerId]);
+  await fixtureQuery("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = $2", [docIds, readerId]);
   await pool().query("DELETE FROM ack_decisions WHERE document_id = ANY($1) OR document_title LIKE $2", [docIds, `${STAMP}%`]);
   await pool().query("DELETE FROM ack_notices WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM ack_outbox WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM audit_log WHERE action = 'ack.recert' AND target_id = ANY($1)", [docIds.map(String)]);
-  await pool().query("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
+  await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM users WHERE id = $1", [readerId]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
 });
@@ -744,7 +744,7 @@ describe("the reminder sweep (E2)", () => {
       author: "test",
     });
     await switchOn(doc.id, { editDefault: null, recertMonths: null });
-    await pool().query("DELETE FROM policy_assignments WHERE document_id = $1", [doc.id]);
+    await fixtureQuery("DELETE FROM policy_assignments WHERE document_id = $1", [doc.id]);
     docIds.push(doc.id);
     e2Docs.push(doc.id);
     return doc.id;
@@ -839,10 +839,10 @@ describe("the reminder sweep (E2)", () => {
 
   after(async () => {
     await pool().query("DELETE FROM audit_log WHERE action IN ('ack.reminder_auto', 'ack.escalated') AND target_id = ANY($1)", [e2Docs.map(String)]);
-    await pool().query("DELETE FROM acknowledgements WHERE user_id = ANY($1)", [userIds]);
+    await fixtureQuery("DELETE FROM acknowledgements WHERE user_id = ANY($1)", [userIds]);
     await pool().query("DELETE FROM groups WHERE id = ANY($1)", [[teamGroup, scopeGroup]]);
     // The documents (and their rows, outbox rows and notices) go with the file's after().
-    await pool().query("DELETE FROM policy_assignments WHERE user_id = ANY($1)", [userIds]);
+    await fixtureQuery("DELETE FROM policy_assignments WHERE user_id = ANY($1)", [userIds]);
     await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
     await pool().query("DELETE FROM spaces WHERE id = $1", [privateSpace]);
   });

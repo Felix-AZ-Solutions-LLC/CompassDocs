@@ -163,11 +163,11 @@ before(async () => {
 });
 
 after(async () => {
-  await pool().query("DELETE FROM acknowledgements WHERE document_id = ANY($1)", [docIds]);
+  await fixtureQuery("DELETE FROM acknowledgements WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM ack_notices WHERE document_id = ANY($1) OR user_id = ANY($2)", [docIds, userIds]);
   await pool().query("DELETE FROM ack_outbox WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM audit_log WHERE action = 'ack.reminder_sent' AND target_id = ANY($1)", [docIds.map(String)]);
-  await pool().query("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
+  await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
   if (roleId) await pool().query("DELETE FROM roles WHERE id = $1", [roleId]);
   await pool().query("DELETE FROM groups WHERE id = ANY($1)", [[groupId, otherGroupId, leadGroupId]]);

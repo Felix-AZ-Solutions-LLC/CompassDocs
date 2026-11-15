@@ -947,7 +947,7 @@ describe("the hourly safety net and the migration", () => {
     await recordAcknowledgement(id, people.carol, "", v1);
     const current = (await ackSummary(id)).current;
     assert.equal(current, 1);
-    await pool().query("DELETE FROM policy_assignments WHERE document_id = $1 AND user_id = $2", [id, people.carol]);
+    await fixtureQuery("DELETE FROM policy_assignments WHERE document_id = $1 AND user_id = $2", [id, people.carol]);
     await pool().query("DELETE FROM policy_settings WHERE document_id = $1", [id]);
     const healed = await reconcileAllPolicies({ documentIds: [id] });
     assert.equal(healed.added, 1);

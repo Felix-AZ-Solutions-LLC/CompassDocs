@@ -160,7 +160,7 @@ before(async () => {
 
 after(async () => {
   const userIds = [readerId, otherId, approverId];
-  await pool().query("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = ANY($2)", [
+  await fixtureQuery("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = ANY($2)", [
     docIds,
     userIds,
   ]);
@@ -173,7 +173,7 @@ after(async () => {
   await pool().query("DELETE FROM audit_log WHERE target_type = 'document' AND target_id = ANY($1::text[])", [
     docIds.map(String),
   ]);
-  await pool().query("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
+  await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
 });

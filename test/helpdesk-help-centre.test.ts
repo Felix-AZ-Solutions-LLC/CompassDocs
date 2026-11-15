@@ -334,7 +334,7 @@ after(async () => {
   if (handbookId) await pool().query("DELETE FROM handbooks WHERE id = $1", [handbookId]);
   await pool().query("DELETE FROM training_decks WHERE document_id = ANY($1)", [Object.values(doc)]);
   // Children before parents (parent_id is SET NULL, branch_of CASCADE).
-  await pool().query("DELETE FROM documents WHERE space_id = ANY($1)", [spaceIds]);
+  await fixtureQuery("DELETE FROM documents WHERE space_id = ANY($1)", [spaceIds]);
   await pool().query("DELETE FROM spaces WHERE id = ANY($1)", [spaceIds]);
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM hd_agent_roles WHERE user_id = ANY($1)", [userIds]);

@@ -221,7 +221,7 @@ async function assign(
 
 /** Nobody ever assigned this person the policy (a reconcile that ran may have; undo it for the fixture). */
 async function unassign(docId: number, userId: number): Promise<void> {
-  await pool().query("DELETE FROM policy_assignments WHERE document_id = $1 AND user_id = $2", [docId, userId]);
+  await fixtureQuery("DELETE FROM policy_assignments WHERE document_id = $1 AND user_id = $2", [docId, userId]);
 }
 
 /** The policy's own deadline rule (E1): days, or a fixed calendar day. */
@@ -333,7 +333,7 @@ after(async () => {
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM ack_notices WHERE document_id = ANY($1) OR document_title LIKE $2", [docIds, `${STAMP}%`]);
   await pool().query("DELETE FROM ack_outbox WHERE document_id = ANY($1)", [docIds]);
-  await pool().query("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = ANY($2)", [docIds, userIds]);
+  await fixtureQuery("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = ANY($2)", [docIds, userIds]);
   await pool().query("DELETE FROM ack_decisions WHERE document_id = ANY($1) OR document_title LIKE $2", [docIds, `${STAMP}%`]);
   await pool().query("DELETE FROM attested_texts WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM notifications WHERE user_id = ANY($1)", [userIds]);
@@ -343,7 +343,7 @@ after(async () => {
     docIds.map(String),
   ]);
   // policy_settings and policy_assignments cascade with the documents.
-  await pool().query("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
+  await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM groups WHERE id = $1", [groupId]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);

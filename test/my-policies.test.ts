@@ -110,13 +110,13 @@ before(async () => {
 after(async () => {
   // Only what this file made: its documents' rows, then its documents,
   // users and spaces (never a sweep by user id).
-  await pool().query("DELETE FROM acknowledgements WHERE document_id = ANY($1)", [docIds]);
+  await fixtureQuery("DELETE FROM acknowledgements WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM ack_decisions WHERE document_id = ANY($1) OR document_title LIKE $2", [
     docIds,
     `${STAMP}%`,
   ]);
   await pool().query("DELETE FROM ack_outbox WHERE document_id = ANY($1)", [docIds]);
-  await pool().query("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
+  await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM users WHERE id = ANY($1)", [[readerId, editorId]]);
   await pool().query("DELETE FROM spaces WHERE id = ANY($1)", [[spaceId, otherSpaceId, emptySpaceId]]);
 });

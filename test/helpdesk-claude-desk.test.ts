@@ -345,7 +345,7 @@ after(async () => {
   await pool().query("DELETE FROM hd_claude_chats WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM hd_claude_chat_tickets WHERE ticket_id = ANY($1)", [ticketIds]);
   await pool().query("DELETE FROM hd_tickets WHERE id = ANY($1) OR requester_id = ANY($2)", [ticketIds, userIds]);
-  await pool().query("DELETE FROM documents WHERE space_id = $1", [spaceId]);
+  await fixtureQuery("DELETE FROM documents WHERE space_id = $1", [spaceId]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
   await pool().query("DELETE FROM hd_teams WHERE id = ANY($1)", [[T1, T2, T3]]);
   await pool().query("DELETE FROM notifications WHERE user_id = ANY($1)", [userIds]);

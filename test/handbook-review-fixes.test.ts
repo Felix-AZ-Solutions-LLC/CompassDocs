@@ -338,7 +338,7 @@ after(async () => {
   ]);
   await pool().query("DELETE FROM handbooks WHERE id = ANY($1) OR title LIKE $2", [handbookIds, `${STAMP}%`]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = ANY($2)", [docIds, userIds]);
+  await fixtureQuery("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = ANY($2)", [docIds, userIds]);
   await pool().query("DELETE FROM ack_decisions WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM attested_texts WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM ack_outbox WHERE document_id = ANY($1)", [docIds]);
@@ -346,8 +346,8 @@ after(async () => {
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM audit_log WHERE target_type = 'handbook' AND target_id = ANY($1)", [handbookIds.map(String)]);
   await pool().query("DELETE FROM audit_log WHERE target_type = 'document' AND target_id = ANY($1)", [docIds.map(String)]);
-  await pool().query("DELETE FROM policy_assignments WHERE document_id = ANY($1) OR user_id = ANY($2)", [docIds, userIds]);
-  await pool().query("DELETE FROM documents WHERE id = ANY($1) OR space_id = ANY($2)", [docIds, Object.values(spaces)]);
+  await fixtureQuery("DELETE FROM policy_assignments WHERE document_id = ANY($1) OR user_id = ANY($2)", [docIds, userIds]);
+  await fixtureQuery("DELETE FROM documents WHERE id = ANY($1) OR space_id = ANY($2)", [docIds, Object.values(spaces)]);
   await pool().query("DELETE FROM role_assignments WHERE role_id = ANY($1) OR group_id = ANY($2) OR user_id = ANY($3)", [roles, groupIds, userIds]);
   for (const r of roles) await deleteRole(r);
   await pool().query("DELETE FROM group_members WHERE group_id = ANY($1)", [groupIds]);

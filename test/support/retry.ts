@@ -41,7 +41,15 @@ export function retryOnTeardownRace<T>(fn: () => Promise<T>, attempts = 6): Prom
   return retryWhen(isTeardownRace, fn, attempts);
 }
 
-/** pool().query with the deadlock retry, for fixture inserts. */
+/**
+ * pool().query with the deadlock retry, for fixture inserts, and for teardown
+ * deletes of rows another file's teardown reaches too: a policy whose
+ * audience is every account assigns (and records acknowledgements for) the
+ * other files' accounts, so one file deleting its documents (the cascade)
+ * and another deleting its accounts' rows can take the same rows in opposite
+ * orders (40P01). Deletes on documents, policy_assignments and
+ * acknowledgements go through here.
+ */
 export function fixtureQuery(sql: string, params: unknown[] = []) {
   return retryOnDeadlock(() => pool().query(sql, params));
 }

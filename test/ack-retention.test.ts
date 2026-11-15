@@ -91,13 +91,13 @@ describe("attestation retention", () => {
   });
 
   after(async () => {
-    await pool().query("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = ANY($2) OR document_title LIKE $3", [
+    await fixtureQuery("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = ANY($2) OR document_title LIKE $3", [
       docIds,
       userIds,
       `${STAMP}%`,
     ]);
     await pool().query("DELETE FROM attested_texts WHERE document_id = ANY($1)", [docIds]);
-    await pool().query("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
+    await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
     await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
     await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
   });

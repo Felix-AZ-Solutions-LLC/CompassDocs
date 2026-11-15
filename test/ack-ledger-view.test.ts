@@ -85,11 +85,11 @@ describe("the confirmation ledger (All confirmations view, ledger exports)", () 
   });
 
   after(async () => {
-    await pool().query("DELETE FROM acknowledgements WHERE document_id = $1 OR document_title = $2", [docId, title]);
+    await fixtureQuery("DELETE FROM acknowledgements WHERE document_id = $1 OR document_title = $2", [docId, title]);
     await pool().query("DELETE FROM attested_texts WHERE document_id = $1", [docId]);
     await pool().query("DELETE FROM ack_decisions WHERE document_id = $1", [docId]);
     await pool().query("DELETE FROM ack_outbox WHERE document_id = $1", [docId]);
-    await pool().query("DELETE FROM documents WHERE id = $1", [docId]);
+    await fixtureQuery("DELETE FROM documents WHERE id = $1", [docId]);
     await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
     await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
   });
