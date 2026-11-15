@@ -40,6 +40,7 @@ import { HD_CATEGORIES_SCHEMA } from "./helpdesk/categories-schema";
 import { HD_DESK_CALENDAR_SCHEMA } from "./helpdesk/desk-calendar-schema";
 import { HD_CUSTOM_FIELDS_SCHEMA } from "./helpdesk/custom-fields-schema";
 import { HD_EMAIL_HTML_SCHEMA } from "./helpdesk/email-html-schema";
+import { HD_LIVE_SCHEMA } from "./helpdesk/live-schema";
 import { createHash, randomBytes } from "node:crypto";
 import { SEED_SPACES, SEED_DOCS } from "./seed-data";
 import { hashPassword } from "./password";
@@ -2421,6 +2422,8 @@ const SCHEMA_SQL = `
   ${HD_CUSTOM_FIELDS_SCHEMA}
   -- An inbound email's original HTML beside its message (1.20.8, lib/helpdesk/email-html-schema; after hd_messages).
   ${HD_EMAIL_HTML_SCHEMA}
+  -- Live queue updates: the hd_tickets trigger that signals a change to the desk (1.20.19, lib/helpdesk/live-schema; after hd_tickets).
+  ${HD_LIVE_SCHEMA}
   --- end Helpdesk 1.19.0 ---------------------------------------------------
   ${EMAIL_PARTS_SCHEMA}
   ${NOTIFY_POLICY_SCHEMA}

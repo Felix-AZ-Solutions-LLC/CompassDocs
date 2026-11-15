@@ -4,6 +4,41 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.19] - 2026-11-15
+
+The queue updates live.
+
+### Added
+- **The queue updates live.** New and changed tickets show in the queue
+  within a couple of seconds, without a reload (before, the list refreshed
+  once a minute). A new ticket slides in at its place and is briefly
+  highlighted; one that is solved, reassigned or filtered out slides out;
+  one that changes place moves there. Your place is kept: if you have
+  scrolled, are selecting rows, or have a ticket open in the split view,
+  nothing moves under you, and tickets arriving above show a "1 new ticket
+  ↑" pill. With reduced motion the list updates without animation.
+- **Live counts.** My open, Unassigned, All open, Overdue, In a workflow,
+  Waiting, Solved this week, Reviews, saved views and team counts change
+  with the same signal, with a brief roll and pulse.
+
+### Security
+- **You only hear about tickets you can see.** The live signal carries no
+  ticket content and is limited to your teams and tickets you own; a
+  signed-out session or a removed agent stops receiving it within a minute.
+
+### Upgrading
+- **Nothing to run.** Small triggers on tickets are added on start. Each
+  server process keeps one extra database connection to listen for changes;
+  it checks itself every 45 seconds and the desk falls back to polling if it
+  stops working.
+- **Connection poolers.** A pooler in transaction mode (such as pgbouncer)
+  can't deliver the change notices, so the desk polls every 30 seconds
+  instead and logs why. Set `DATABASE_LISTEN_URL` to a direct or
+  session-mode connection to get live updates through a pooler.
+- **Proxies** should not buffer `/api/helpdesk/live` and should allow idle
+  connections of more than 25 seconds. After a deploy every desk tab reloads
+  its list once, spread out over a few seconds.
+
 ## [1.20.18] - 2026-11-15
 
 Pop out the reply.
