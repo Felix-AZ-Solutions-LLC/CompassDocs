@@ -300,7 +300,7 @@ after(async () => {
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1) OR target_label LIKE $2", [userIds, `%${STAMP}%`]);
   await pool().query("DELETE FROM notifications WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await mailLock?.release(email);
   await pool().end();
 });
@@ -1162,7 +1162,7 @@ describe("privacy and the rest of the helpdesk", () => {
       assert.deepEqual((await call(mineRoute.GET, req("/assets/mine", P.req.session))).body.assets, []);
       assert.equal(await assets.isRequesterAsset({ id: P.req.id }, own), false);
     } finally {
-      await pool().query("DELETE FROM users WHERE id = $1", [twin.rows[0].id]);
+      await fixtureQuery("DELETE FROM users WHERE id = $1", [twin.rows[0].id]);
     }
     assert.equal(await assets.isRequesterAsset({ id: P.req.id }, own), true, "confirmed and unique again: theirs");
   });

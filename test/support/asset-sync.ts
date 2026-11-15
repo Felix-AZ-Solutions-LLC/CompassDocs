@@ -29,11 +29,19 @@ export async function syncAlone(assets: AssetsModule, key: string, opts: { force
   }
 }
 
-/** assetsSweep() for a workspace whose one source is `key`, with the same rule. */
-export async function sweepAlone(assets: AssetsModule, key: string): Promise<SyncResult[]> {
-  for (let i = 0; ; i++) {
-    const r = await assets.assetsSweep();
-    if (r.length !== 1 || r[0].skipped !== "running" || (await assets.syncState(key)).running || i >= 200) return r;
-    await pause();
+/**
+ * assetsSweep() for a workspace whose sources are `keys`, in the sweep's
+ * order (Snipe-IT, then Intune). A source the sweep skipped as "running"
+ * while its own record is not live (another file's claim held the key) is
+ * synced again the way the sweep syncs it (not forced), so the answer is
+ * the sweep's as if nothing else were syncing.
+ */
+export async function sweepAlone(assets: AssetsModule, keys: string | string[]): Promise<SyncResult[]> {
+  const list = Array.isArray(keys) ? keys : [keys];
+  const r = await assets.assetsSweep();
+  if (r.length !== list.length) return r;
+  for (let i = 0; i < r.length; i++) {
+    if (r[i].skipped === "running" && !(await assets.syncState(list[i])).running) r[i] = await syncAlone(assets, list[i], {});
   }
+  return r;
 }

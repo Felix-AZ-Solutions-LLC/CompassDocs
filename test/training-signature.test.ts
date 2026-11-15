@@ -192,7 +192,7 @@ after(async () => {
   await pool().query("DELETE FROM training_assignments WHERE deck_id = $1", [deckId]);
   await pool().query("DELETE FROM training_decks WHERE id = $1", [deckId]);
   await fixtureQuery("DELETE FROM documents WHERE id = $1 OR space_id = $2", [docId, spaceId]);
-  await pool().query("DELETE FROM users WHERE id = $1", [traineeId]);
+  await fixtureQuery("DELETE FROM users WHERE id = $1", [traineeId]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
 });
 

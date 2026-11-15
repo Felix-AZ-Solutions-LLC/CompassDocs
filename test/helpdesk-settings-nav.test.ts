@@ -251,7 +251,7 @@ describe("the registry agrees with the page guards", () => {
   after(async () => {
     roles.setRoleMatrixForTests(null);
     await pool().query("DELETE FROM hd_agent_roles WHERE user_id = ANY($1)", [ids]);
-    await pool().query("DELETE FROM users WHERE id = ANY($1)", [ids]);
+    await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [ids]);
     await pool().end();
   });
 

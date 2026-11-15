@@ -30,6 +30,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Client } from "pg";
 import { pool, getSetting, setSetting } from "../src/lib/db";
+import { fixtureQuery } from "./support/retry";
 import {
   EMAIL_TEMPLATES,
   SAMPLE_VARS,
@@ -125,7 +126,7 @@ after(async () => {
   await pool().query("DELETE FROM email_template_parts WHERE event_key = ANY($1) OR id = ANY($2)", [events, createdParts]);
   await pool().query("DELETE FROM settings WHERE key = ANY($1)", [events.map((k) => `email_tpl_${k}`)]);
   await pool().query("DELETE FROM hd_teams WHERE id = $1", [teamId]);
-  if (userIds.length) await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  if (userIds.length) await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   if (personId) await pool().query("DELETE FROM directory_people WHERE id = $1", [personId]);
 });
 

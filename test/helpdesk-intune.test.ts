@@ -52,7 +52,7 @@ import { fakeHardware, fakePerson, fakeSnipeItTransport, startFakeSnipeIt, type 
 import { pool, getSetting, createSession } from "../src/lib/db";
 import { newToken } from "../src/lib/password";
 import { fixtureQuery } from "./support/retry";
-import { syncAlone } from "./support/asset-sync";
+import { syncAlone, sweepAlone } from "./support/asset-sync";
 
 let currentRequest: Request | null = null;
 
@@ -301,7 +301,7 @@ after(async () => {
   await pool().query("DELETE FROM hd_teams WHERE id = ANY($1)", [Object.values(T)]);
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1) OR target_label LIKE $2", [userIds, `%${STAMP}%`]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await mailLock?.release(email);
   await pool().end();
 });
@@ -1206,7 +1206,7 @@ describe("Intune: the tenant the credentials sign in to is the source (review: t
     graph.pageDelayMs = 0;
     intune.setIntunePagingForTests(null);
     await pool().query("DELETE FROM settings WHERE key = ANY($1)", [[`helpdesk_assets_sync:${SNIPE}`, `helpdesk_assets_sync:${INTUNE}`]]);
-    const r = await assets.assetsSweep();
+    const r = await sweepAlone(assets, [SNIPE, INTUNE]);
     assert.equal(r.length, 2, JSON.stringify(r));
     assert.ok(r.every((x) => x.ran && x.ok), JSON.stringify(r));
   });

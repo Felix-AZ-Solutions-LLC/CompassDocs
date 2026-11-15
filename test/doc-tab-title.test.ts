@@ -62,7 +62,7 @@ before(async () => {
 after(async () => {
   await fixtureQuery("DELETE FROM documents WHERE space_id = ANY($1)", [[ids.privateSpace, ids.openSpace]]);
   await pool().query("DELETE FROM groups WHERE id = $1", [ids.group]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [Object.values(people).map((p) => p.id)]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [Object.values(people).map((p) => p.id)]);
   await pool().query("DELETE FROM spaces WHERE id = ANY($1)", [[ids.privateSpace, ids.openSpace]]);
 });
 

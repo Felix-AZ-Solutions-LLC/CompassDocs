@@ -357,7 +357,7 @@ after(async () => {
   for (const r of roles) await deleteRole(r);
   await pool().query("DELETE FROM group_members WHERE group_id = ANY($1)", [groupIds]);
   await pool().query("DELETE FROM groups WHERE id = ANY($1)", [groupIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM spaces WHERE id = ANY($1)", [Object.values(spaces)]);
   await pool().end();
   await complianceLock?.release();

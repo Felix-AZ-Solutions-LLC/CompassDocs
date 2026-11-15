@@ -171,7 +171,7 @@ after(async () => {
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
   if (roleId) await pool().query("DELETE FROM roles WHERE id = $1", [roleId]);
   await pool().query("DELETE FROM groups WHERE id = ANY($1)", [[groupId, otherGroupId, leadGroupId]]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM spaces WHERE id = ANY($1)", [[visibleSpaceId, privateSpaceId]]);
   if (savedDefaults === undefined) await pool().query("DELETE FROM settings WHERE key = 'ack_defaults'");
   else await setSetting("ack_defaults", savedDefaults);

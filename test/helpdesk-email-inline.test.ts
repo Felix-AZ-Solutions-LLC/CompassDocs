@@ -350,7 +350,7 @@ after(async () => {
   await pool().query("DELETE FROM hd_agent_roles WHERE user_id = ANY($1)", [everyone]);
   await pool().query("DELETE FROM hd_notify_prefs WHERE user_id = ANY($1)", [everyone]);
   await pool().query("DELETE FROM roles WHERE id = ANY($1)", [roleIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [everyone]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [everyone]);
   await rm(uploads, { recursive: true, force: true });
   await mailLock?.release(email);
   await pool().end();

@@ -152,7 +152,7 @@ after(async () => {
   // files' fixtures); every title it writes carries this file's stamp.
   await pool().query("DELETE FROM notifications WHERE kind = 'ack_requested' AND title LIKE $1", [`%${STAMP}%`]);
   await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
   await complianceLock?.release();
 });

@@ -109,7 +109,7 @@ describe("attestation retention", () => {
     ]);
     await pool().query("DELETE FROM attested_texts WHERE document_id = ANY($1)", [docIds]);
     await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
-    await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+    await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
     await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
   });
 

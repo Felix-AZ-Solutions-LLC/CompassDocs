@@ -332,7 +332,7 @@ after(async () => {
   await fixtureQuery("DELETE FROM policy_assignments WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM group_members WHERE group_id = ANY($1)", [[groupId, ownGroupId]]);
   await pool().query("DELETE FROM groups WHERE id = ANY($1)", [[groupId, ownGroupId]]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM spaces WHERE id = ANY($1)", [[spaceId, closedSpaceId]]);
   if (uploadDirectory) await rm(uploadDirectory, { recursive: true, force: true });
   await complianceLock?.release();

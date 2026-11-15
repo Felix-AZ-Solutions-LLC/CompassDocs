@@ -312,7 +312,7 @@ after(async () => {
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [ids]);
   await pool().query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [ids]);
   await pool().query("DELETE FROM hd_agent_roles WHERE user_id = ANY($1)", [ids]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [ids]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [ids]);
   // The workspace's own send-from addresses, mailboxes and settings, as found.
   for (const b of savedSenders) {
     const cols = Object.keys(b);

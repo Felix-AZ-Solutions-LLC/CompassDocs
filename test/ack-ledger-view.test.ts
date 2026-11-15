@@ -101,7 +101,7 @@ describe("the confirmation ledger (All confirmations view, ledger exports)", () 
     await pool().query("DELETE FROM ack_decisions WHERE document_id = $1", [docId]);
     await pool().query("DELETE FROM ack_outbox WHERE document_id = $1", [docId]);
     await fixtureQuery("DELETE FROM documents WHERE id = $1", [docId]);
-    await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+    await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
     await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
   });
 

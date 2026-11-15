@@ -53,6 +53,7 @@ const edition = { present: true, features: ["sso"] };
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { pool, getSetting, setSetting, signInAccountFlags, signInCandidates } = require("../src/lib/db") as typeof import("../src/lib/db");
+const { fixtureQuery } = require("./support/retry") as typeof import("./support/retry");
 const routing = require("../src/lib/sign-in-routing") as typeof import("../src/lib/sign-in-routing");
 const auth = require("../src/lib/auth") as typeof import("../src/lib/auth");
 const { hashPassword } = require("../src/lib/password") as typeof import("../src/lib/password");
@@ -130,7 +131,7 @@ before(async () => {
 
 after(async () => {
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
 });
 
 describe("the providers a workspace offers", () => {

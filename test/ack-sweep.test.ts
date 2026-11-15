@@ -213,7 +213,7 @@ after(async () => {
   await pool().query("DELETE FROM ack_outbox WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM audit_log WHERE action = 'ack.recert' AND target_id = ANY($1)", [docIds.map(String)]);
   await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
-  await pool().query("DELETE FROM users WHERE id = $1", [readerId]);
+  await fixtureQuery("DELETE FROM users WHERE id = $1", [readerId]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
   await complianceLock?.release();
 });
@@ -840,7 +840,7 @@ describe("the reminder sweep (E2)", () => {
     await pool().query("DELETE FROM groups WHERE id = ANY($1)", [[teamGroup, scopeGroup]]);
     // The documents (and their rows, outbox rows and notices) go with the file's after().
     await fixtureQuery("DELETE FROM policy_assignments WHERE user_id = ANY($1)", [userIds]);
-    await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+    await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
     await pool().query("DELETE FROM spaces WHERE id = $1", [privateSpace]);
   });
 

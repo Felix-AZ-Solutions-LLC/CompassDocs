@@ -341,7 +341,7 @@ after(async () => {
   await pool().query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [personIds]);
   await pool().query("DELETE FROM roles WHERE id = ANY($1)", [roleIds]);
   const dps = await pool().query("SELECT directory_person_id AS id FROM users WHERE id = ANY($1) AND directory_person_id IS NOT NULL", [personIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [personIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [personIds]);
   await pool().query("DELETE FROM directory_people WHERE id = ANY($1)", [dps.rows.map((r) => r.id)]);
   await pool().query("DELETE FROM spaces WHERE id = ANY($1)", [spaceIds]);
   await rm(uploadDirectory, { recursive: true, force: true });

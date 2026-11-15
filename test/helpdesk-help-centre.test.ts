@@ -345,7 +345,7 @@ after(async () => {
   await pool().query("DELETE FROM hd_agent_roles WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await rm(uploadDirectory, { recursive: true, force: true });
   await mailLock?.release(email);
   await pool().end();

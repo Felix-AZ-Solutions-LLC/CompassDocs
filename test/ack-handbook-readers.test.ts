@@ -263,7 +263,7 @@ after(async () => {
   await pool().query("DELETE FROM group_leads WHERE group_id = ANY($1)", [[staffGroup, readersGroup]]);
   await pool().query("DELETE FROM group_members WHERE group_id = ANY($1)", [[staffGroup, readersGroup]]);
   await pool().query("DELETE FROM groups WHERE id = ANY($1)", [[staffGroup, readersGroup]]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
   await complianceLock?.release();
 });

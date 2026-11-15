@@ -473,7 +473,7 @@ describe("the per-person compliance record (F3)", () => {
     await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1)", [userIds]);
     await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
     if (roleIds.length) await pool().query("DELETE FROM roles WHERE id = ANY($1)", [roleIds]);
-    await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+    await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
     await pool().query("DELETE FROM groups WHERE id = ANY($1)", [groupIds]);
     await pool().query("DELETE FROM spaces WHERE id = ANY($1)", [[pubSpace, pub2Space, privSpace]]);
     if (savedDefaults === undefined) await pool().query("DELETE FROM settings WHERE key = 'ack_defaults'");

@@ -258,7 +258,7 @@ after(async () => {
   await pool().query("DELETE FROM ack_outbox WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM audit_log WHERE actor_id = $1", [adminId]);
   await fixtureQuery("DELETE FROM documents WHERE id = ANY($1) OR space_id = $2", [docIds, spaceId]);
-  await pool().query("DELETE FROM users WHERE id = $1", [adminId]);
+  await fixtureQuery("DELETE FROM users WHERE id = $1", [adminId]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
   await complianceLock?.release();
 });

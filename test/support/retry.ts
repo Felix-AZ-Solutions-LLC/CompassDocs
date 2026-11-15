@@ -47,8 +47,9 @@ export function retryOnTeardownRace<T>(fn: () => Promise<T>, attempts = 6): Prom
  * audience is every account assigns (and records acknowledgements for) the
  * other files' accounts, so one file deleting its documents (the cascade)
  * and another deleting its accounts' rows can take the same rows in opposite
- * orders (40P01). Deletes on documents, policy_assignments and
- * acknowledgements go through here.
+ * orders (40P01). Deletes on documents, policy_assignments,
+ * acknowledgements and users (whose cascade reaches the same rows) go
+ * through here.
  */
 export function fixtureQuery(sql: string, params: unknown[] = []) {
   return retryOnDeadlock(() => pool().query(sql, params));

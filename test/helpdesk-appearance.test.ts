@@ -200,7 +200,7 @@ after(async () => {
   await lock.end();
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1) OR target_id = ANY($2::text[])", [userIds, userIds.map(String)]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().end();
 });
 

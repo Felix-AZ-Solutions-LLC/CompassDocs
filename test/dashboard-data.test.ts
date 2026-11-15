@@ -92,7 +92,7 @@ after(async () => {
   await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [Object.values(docs)]);
   await pool().query("DELETE FROM status_services WHERE id = ANY($1)", [serviceIds]);
   await pool().query("DELETE FROM groups WHERE id = $1", [groupId]);
-  await pool().query("DELETE FROM users WHERE id = $1", [userId]);
+  await fixtureQuery("DELETE FROM users WHERE id = $1", [userId]);
   await pool().query("DELETE FROM spaces WHERE id = ANY($1)", [spaces]);
 });
 

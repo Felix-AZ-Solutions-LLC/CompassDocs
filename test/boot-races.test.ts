@@ -18,6 +18,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { Client, Pool } from "pg";
 import { getSetting, migrateLadderToAssignments, pool } from "../src/lib/db";
+import { fixtureQuery } from "./support/retry";
 
 const STAMP = `boot-race-${Date.now()}-${process.pid}`;
 
@@ -77,6 +78,6 @@ test("the ladder backfill skips a user another transaction is deleting, so the t
     await remover.end();
     booter.release();
     await pool().query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [ids]);
-    await pool().query("DELETE FROM users WHERE id = ANY($1)", [ids]);
+    await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [ids]);
   }
 });

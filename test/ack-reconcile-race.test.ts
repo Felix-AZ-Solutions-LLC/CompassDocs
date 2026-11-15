@@ -81,7 +81,7 @@ before(async () => {
 
 after(async () => {
   if (docIds.length) await fixtureQuery("DELETE FROM documents WHERE id = ANY($1::int[])", [docIds]);
-  if (userIds.length) await pool().query("DELETE FROM users WHERE id = ANY($1::int[])", [userIds]);
+  if (userIds.length) await fixtureQuery("DELETE FROM users WHERE id = ANY($1::int[])", [userIds]);
   if (spaceId) await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
   await pool().end();
   await complianceLock?.release();

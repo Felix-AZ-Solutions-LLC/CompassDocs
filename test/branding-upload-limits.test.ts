@@ -85,7 +85,7 @@ before(async () => {
 after(async () => {
   await pool().query("DELETE FROM sessions WHERE user_id = $1", [userId]);
   if (roleId) await pool().query("DELETE FROM roles WHERE id = $1", [roleId]);
-  await pool().query("DELETE FROM users WHERE id = $1", [userId]);
+  await fixtureQuery("DELETE FROM users WHERE id = $1", [userId]);
 });
 
 /** A body that notes whether anything asked for its bytes (highWaterMark 0: nothing is read ahead). */

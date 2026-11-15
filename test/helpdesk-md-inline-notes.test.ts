@@ -351,7 +351,7 @@ after(async () => {
   await pool().query("DELETE FROM notifications WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM audit_log WHERE target_type = 'helpdesk_ticket' AND target_id = ANY($1)", [all.map(String)]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await mailLock?.release(email);
   await pool().end();
 });

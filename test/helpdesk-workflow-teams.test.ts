@@ -238,7 +238,7 @@ after(async () => {
   await pool().query("DELETE FROM notifications WHERE user_id = ANY($1)", [personIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [personIds]);
   const dps = await pool().query("SELECT directory_person_id AS id FROM users WHERE id = ANY($1) AND directory_person_id IS NOT NULL", [personIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [personIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [personIds]);
   await pool().query("DELETE FROM directory_people WHERE id = ANY($1)", [dps.rows.map((r) => r.id)]);
   await mailLock?.release(email);
   await pool().end();

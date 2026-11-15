@@ -118,7 +118,7 @@ before(async () => {
 after(async () => {
   if (ticketIds.length) await pool().query("DELETE FROM hd_tickets WHERE id = ANY($1::int[])", [ticketIds]);
   await pool().query("DELETE FROM hd_teams WHERE id = $1", [teamId]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1::int[])", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1::int[])", [userIds]);
   rmSync(UPLOADS, { recursive: true, force: true });
   await pool().end();
 });

@@ -154,7 +154,7 @@ after(async () => {
   await pool().query("DELETE FROM hd_workflows WHERE id = ANY($1::int[])", [workflowIds]);
   await pool().query("DELETE FROM hd_teams WHERE id = $1", [teamId]);
   await pool().query("DELETE FROM groups WHERE id = $1", [groupId]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1::int[])", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1::int[])", [userIds]);
   await lockClient?.query("SELECT pg_advisory_unlock($1)", [SHORTCUTS_TEST_LOCK]);
   lockClient?.release();
   await pool().end();

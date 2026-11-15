@@ -253,7 +253,7 @@ after(async () => {
   await pool().query("DELETE FROM audit_log WHERE target_label LIKE $1 OR actor_id = ANY($2)", [`${STAMP}%`, userIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await rm(uploadDirectory, { recursive: true, force: true });
   await mailLock?.release(email);
   await pool().end();

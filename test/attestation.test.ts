@@ -51,7 +51,7 @@ before(async () => {
 });
 
 after(async () => {
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
 });
 
 describe("the name rule", () => {

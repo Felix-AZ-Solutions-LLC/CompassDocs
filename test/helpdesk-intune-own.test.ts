@@ -211,7 +211,7 @@ after(async () => {
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM hd_agent_roles WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().end();
 });
 

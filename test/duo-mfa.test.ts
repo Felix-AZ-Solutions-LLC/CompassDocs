@@ -71,6 +71,7 @@ const policy = require("../src/lib/duo-policy") as typeof import("../src/lib/duo
 const config = require("../src/lib/duo-config") as typeof import("../src/lib/duo-config");
 const duoClient = require("../src/lib/duo") as typeof import("../src/lib/duo");
 const db = require("../src/lib/db") as typeof import("../src/lib/db");
+const { fixtureQuery } = require("./support/retry") as typeof import("./support/retry");
 const auth = require("../src/lib/auth") as typeof import("../src/lib/auth");
 const apiAuth = require("../src/lib/api-auth") as typeof import("../src/lib/api-auth");
 const hdAccess = require("../src/lib/helpdesk/access") as typeof import("../src/lib/helpdesk/access");
@@ -484,7 +485,7 @@ after(async () => {
   await pool().query("DELETE FROM oauth_clients WHERE client_id = $1", [oauthClientId]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   delete process.env.COMPASSDOCS_DUO_TEST_API_BASE;
   delete process.env.COMPASSDOCS_DUO_DISABLED;
   await duo.close();

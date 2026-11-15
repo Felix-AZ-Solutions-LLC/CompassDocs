@@ -335,7 +335,7 @@ after(async () => {
   await pool().query("DELETE FROM roles WHERE id = $1", [roleAdmin]);
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1)", [ids]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [ids]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [ids]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [ids]);
   if (savedCards === undefined) await pool().query("DELETE FROM settings WHERE key = 'helpdesk_contact_cards'");
   else await setSetting("helpdesk_contact_cards", savedCards);
   if (lockClient) {

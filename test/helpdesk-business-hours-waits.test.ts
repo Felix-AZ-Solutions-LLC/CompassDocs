@@ -253,7 +253,7 @@ after(async () => {
   await pool().query("DELETE FROM hd_teams WHERE id = ANY($1::int[])", [[teamId, otherTeam]]);
   if (calId) await calendars.deleteCalendar(calId).catch(() => undefined);
   if (setId) await calendars.deleteHolidaySet(setId).catch(() => undefined);
-  if (userId) await pool().query("DELETE FROM users WHERE id = $1", [userId]);
+  if (userId) await fixtureQuery("DELETE FROM users WHERE id = $1", [userId]);
   await pool().end();
 });
 
