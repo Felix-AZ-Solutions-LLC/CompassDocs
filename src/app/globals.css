@@ -822,6 +822,16 @@ table {
   background: rgb(226 232 240 / 0.97);
   color: #0f172a;
 }
+/* Desk panes never scroll sideways (1.20.12; STYLEGUIDE §Helpdesk: the desk,
+ * "Desk panes own their scroll"). A resting bubble above is only invisible:
+ * centred and nowrap, on a control near a pane's right edge it made the pane
+ * tens of pixels wider than itself (the ticket at 390px, the queue's views,
+ * the reports' bars), so a trackpad or a swipe slid the pane sideways. Every
+ * desk scroll pane is overflow-y-auto; one that really scrolls both ways says
+ * overflow-x-auto as well and is left alone. */
+.desk-art .overflow-y-auto:not(.overflow-x-auto) {
+  overflow-x: hidden;
+}
 
 /* --- Keyboard focus (STYLEGUIDE §Focus) -----------------------------------
  * One indicator for the whole product. Unlayered so it beats the 80-odd

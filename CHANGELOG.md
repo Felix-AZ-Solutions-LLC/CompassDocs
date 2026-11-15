@@ -4,6 +4,33 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.12] - 2026-11-15
+
+Scrolling in the desk.
+
+### Fixed
+- **The conversation and the side panel scroll on their own.** On a ticket,
+  the conversation (messages and the reply box) and the side panel (Event,
+  Checklists, Time, Priority, Owner, Due and the rest) each have their own
+  scrollbar, and scrolling one never moves the other. The ticket's header
+  and requester strip stay where they are. On a phone, and in the split view
+  when there is no room for two columns, the ticket still scrolls as one
+  page.
+- **No scrolling past the end.** The desk could scroll on into empty space
+  below the last message, menu or field. Hidden screen-reader labels were
+  making the page much taller than the window; every pane now ends at its
+  content.
+- **No sideways slide.** Some panes could be nudged a little sideways by a
+  trackpad or a swipe. They no longer move.
+- **Page Down and Space work after a click.** Clicking in a ticket's
+  conversation or side panel lets the keyboard scroll it.
+- **Menus stay inside the side panel.** Menus such as Priority and Owner
+  were cut off at the side panel's edge; a menu now moves back inside the
+  area that would clip it, everywhere in the app.
+
+### Upgrading
+- **Nothing to run.** Layout changes only.
+
 ## [1.20.11] - 2026-11-15
 
 Incoming email shows as it was sent.
