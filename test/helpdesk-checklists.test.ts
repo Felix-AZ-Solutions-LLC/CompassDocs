@@ -445,7 +445,9 @@ describe("on a ticket", () => {
     assert.equal(out.checklists.length, 1);
     assert.equal(out.checklists[0].progress, "0 of 3 done");
     assert.equal(out.checklists[0].required_open, 1);
-    assert.deepEqual(out.checklists[0].items[0], { title: "Disable sign-in on the leaving date", done: false, required: true });
+    // 1.20.14 (additive): checklist and item ids, for hd_update_checklist.
+    assert.deepEqual(out.checklists[0].items[0], { id: out.checklists[0].items[0].id, title: "Disable sign-in on the leaving date", done: false, required: true });
+    assert.ok(Number.isInteger(out.checklists[0].id) && Number.isInteger(out.checklists[0].items[0].id));
     const upd = await hdTools.callHelpdeskTool(user, "hd_update_ticket", { number: t3.number, status: "solved" }, ctx);
     assert.equal(upd.isError, true);
     assert.match(upd.content[0].text, /^Finish the required checklist items first/);

@@ -37,6 +37,16 @@
 //               customers never read checklists: no requester route returns
 //               them and every timeline line is internal. The Claude
 //               connector's hd_read_ticket (agents) lists them.
+//   Claude      1.20.14: Claude drafts templates (saveTemplateDraft: a new
+//               unpublished template, or proposed changes kept in `draft`
+//               beside the live copy) and a person publishes them in Desk
+//               settings → Checklists. An unpublished template is in no
+//               picker, added by no request type and named by no workflow
+//               task. Ticking and adding on a ticket go through tickItemsAs
+//               and addChecklistAs, which the desk's routes and Claude's tools
+//               share: the same checks, timeline lines and audit rows, plus
+//               "via Claude" (connector) or "via Claude in the desk" (a card
+//               the agent applied).
 //
 // Server-only.
 
@@ -54,6 +64,7 @@ import {
   checkTemplateInput,
   checklistBlockMessage,
   CHECKLIST_LIMITS,
+  type HdChecklistDraftVia,
   type HdChecklistSource,
   type HdChecklistTemplate,
   type HdChecklistTemplateInput,
@@ -73,11 +84,19 @@ export class ChecklistError extends Error {
 export interface ChecklistActor {
   id: number | null;
   name: string;
+  /** 1.20.14: through the Claude connector ("mcp") or a Claude in the desk card ("claude_desk"); the timeline line says so. */
+  via?: HdChecklistDraftVia;
+}
+
+/** " via Claude" / " via Claude in the desk" after a timeline line, as lib/helpdesk/tickets marks ticket changes. */
+function viaSuffix(actor: ChecklistActor | null): string {
+  return actor?.via === "mcp" ? " via Claude" : actor?.via === "claude_desk" ? " via Claude in the desk" : "";
 }
 
 // --- Templates ------------------------------------------------------------------------
 
-const TEMPLATE_COLS = "id, name, items, request_type_ids, created_at, updated_at";
+// 1.20.14: published, draft and who asked for it (Claude's drafts).
+const TEMPLATE_COLS = "id, name, items, request_type_ids, created_at, updated_at, (published = 1) AS published, draft, draft_by_name, draft_at, draft_via";
 
 export async function listTemplates(): Promise<HdChecklistTemplate[]> {
   return hq<HdChecklistTemplate>(`SELECT ${TEMPLATE_COLS} FROM hd_checklist_templates ORDER BY lower(name), id`);
@@ -128,7 +147,8 @@ export async function listTemplateRows(): Promise<HdChecklistTemplateRow[]> {
     const added: string[] = [];
     for (const id of t.request_type_ids ?? []) {
       const n = typeName.get(id);
-      if (n) added.push(`Request type ${n}`);
+      // 1.20.14: an unpublished draft adds itself to nothing until a person publishes it.
+      if (n) added.push(t.published ? `Request type ${n}` : `Request type ${n} (once published)`);
     }
     for (const u of uses) {
       if (!u.draft && u.ids.includes(t.id)) {
@@ -170,22 +190,100 @@ export async function createTemplate(raw: unknown, actor: ChecklistActor): Promi
   ))!;
 }
 
-/** Update a template (name, items, request types). Tickets keep the copy they have. */
-export async function updateTemplate(id: number, raw: unknown): Promise<{ before: HdChecklistTemplate; after: HdChecklistTemplate } | undefined> {
+/**
+ * Update a template (name, items, request types). Tickets keep the copy they have.
+ * 1.20.14: a person's save of a published template also settles a pending
+ * Claude draft (the editor shows the draft, so saving is the review); an
+ * unpublished draft stays a draft unless `publish` is set, which makes it live.
+ */
+export async function updateTemplate(
+  id: number,
+  raw: unknown,
+  opts: { publish?: boolean } = {}
+): Promise<{ before: HdChecklistTemplate; after: HdChecklistTemplate } | undefined> {
   const before = await getTemplate(id);
   if (!before) return undefined;
   const r = (raw ?? {}) as Record<string, unknown>;
+  // A published template's pending draft is what the editor shows, so it is the base for fields not sent.
+  const base = before.published && before.draft ? before.draft : before;
   const input = checked({
-    name: r.name ?? before.name,
-    items: r.items ?? before.items,
-    request_type_ids: r.request_type_ids ?? before.request_type_ids,
+    name: r.name ?? base.name,
+    items: r.items ?? base.items,
+    request_type_ids: r.request_type_ids ?? base.request_type_ids,
   });
   await checkTemplateRefs(input);
+  const live = before.published || opts.publish === true;
   const after = await hqOne<HdChecklistTemplate>(
-    `UPDATE hd_checklist_templates SET name = $2, items = $3, request_type_ids = $4, updated_at = now() WHERE id = $1 RETURNING ${TEMPLATE_COLS}`,
-    [id, input.name, JSON.stringify(input.items), input.request_type_ids]
+    `UPDATE hd_checklist_templates SET name = $2, items = $3, request_type_ids = $4, updated_at = now(),
+            published = CASE WHEN $5 THEN 1 ELSE published END${
+              live ? ", draft = NULL, draft_by = NULL, draft_by_name = '', draft_at = NULL, draft_via = ''" : ""
+            }
+      WHERE id = $1 RETURNING ${TEMPLATE_COLS}`,
+    [id, input.name, JSON.stringify(input.items), input.request_type_ids, opts.publish === true]
   );
   return after ? { before, after } : undefined;
+}
+
+/**
+ * 1.20.14: save a checklist draft for a person to review (Claude's
+ * hd_draft_checklist and draft_checklist). Without `id`, a new template that
+ * is not published. With `id`: an unpublished draft is replaced; a published
+ * template keeps its live copy and gets the proposal in `draft` (replacing an
+ * earlier one). Fields not sent are taken from the current draft, else the
+ * live copy. The same checks and limits as Desk settings.
+ */
+export async function saveTemplateDraft(
+  raw: unknown,
+  actor: ChecklistActor & { via: HdChecklistDraftVia },
+  id?: number
+): Promise<{ template: HdChecklistTemplate; kind: "new" | "replaced" | "changes" }> {
+  const r = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
+  const meta = [actor.id, actor.name, actor.via];
+  if (id === undefined) {
+    const input = checked(r);
+    await checkTemplateRefs(input);
+    const n = await hqOne<{ n: number }>("SELECT count(*)::int AS n FROM hd_checklist_templates");
+    if ((n?.n ?? 0) >= CHECKLIST_LIMITS.templates) throw new ChecklistError(`The library holds up to ${CHECKLIST_LIMITS.templates} checklists. Ask an admin to delete one first.`, 409);
+    const t = await hqOne<HdChecklistTemplate>(
+      `INSERT INTO hd_checklist_templates (name, items, request_type_ids, created_by, published, draft_by, draft_by_name, draft_at, draft_via)
+       VALUES ($1, $2, $3, $4, 0, $4, $5, now(), $6) RETURNING ${TEMPLATE_COLS}`,
+      [input.name, JSON.stringify(input.items), input.request_type_ids, ...meta]
+    );
+    return { template: t!, kind: "new" };
+  }
+  const before = await getTemplate(id);
+  if (!before) throw new ChecklistError(`No checklist with id ${id}.`, 404);
+  const base = before.draft ?? before;
+  const input = checked({ name: r.name ?? base.name, items: r.items ?? base.items, request_type_ids: r.request_type_ids ?? base.request_type_ids });
+  await checkTemplateRefs(input);
+  if (!before.published) {
+    const t = await hqOne<HdChecklistTemplate>(
+      `UPDATE hd_checklist_templates SET name = $2, items = $3, request_type_ids = $4, updated_at = now(), draft_by = $5, draft_by_name = $6, draft_at = now(), draft_via = $7
+        WHERE id = $1 RETURNING ${TEMPLATE_COLS}`,
+      [id, input.name, JSON.stringify(input.items), input.request_type_ids, ...meta]
+    );
+    return { template: t!, kind: "replaced" };
+  }
+  const t = await hqOne<HdChecklistTemplate>(
+    `UPDATE hd_checklist_templates SET draft = $2, draft_by = $3, draft_by_name = $4, draft_at = now(), draft_via = $5 WHERE id = $1 RETURNING ${TEMPLATE_COLS}`,
+    [id, JSON.stringify(input), ...meta]
+  );
+  return { template: t!, kind: "changes" };
+}
+
+/** 1.20.14: check a new checklist as Desk settings would, without saving it (a Claude in the desk card before Save as draft). */
+export async function checkTemplateDraft(raw: unknown): Promise<HdChecklistTemplateInput> {
+  const input = checked(raw);
+  await checkTemplateRefs(input);
+  return input;
+}
+
+/** 1.20.14: drop the proposed changes on a published template (the live copy stays). Undefined when there is no such template or no draft. */
+export async function discardTemplateDraft(id: number): Promise<HdChecklistTemplate | undefined> {
+  const before = await getTemplate(id);
+  if (!before || !before.published || !before.draft) return undefined;
+  await hq("UPDATE hd_checklist_templates SET draft = NULL, draft_by = NULL, draft_by_name = '', draft_at = NULL, draft_via = '' WHERE id = $1", [id]);
+  return before;
 }
 
 /** Delete a template. Refused while a workflow task adds it (409). Tickets keep their copies. */
@@ -224,9 +322,11 @@ async function liveRunUse(id: number): Promise<string | null> {
 /** For lib/helpdesk/workflows checkWorkflowRefs: the checklists a task names exist. Null when fine. */
 export async function missingChecklistRef(ids: number[], taskTitle: string): Promise<string | null> {
   if (!ids.length) return null;
-  const found = await hq<{ id: number }>("SELECT id FROM hd_checklist_templates WHERE id = ANY($1::int[])", [ids]);
-  if (found.length === ids.length) return null;
-  return `"${taskTitle}" adds a checklist that no longer exists. Pick it again in the task's Checklists.`;
+  const found = await hq<{ id: number; published: number }>("SELECT id, published FROM hd_checklist_templates WHERE id = ANY($1::int[])", [ids]);
+  if (found.length !== ids.length) return `"${taskTitle}" adds a checklist that no longer exists. Pick it again in the task's Checklists.`;
+  // 1.20.14: a draft Claude saved is named by no task until a person publishes it.
+  if (found.some((f) => f.published !== 1)) return `"${taskTitle}" adds a checklist that is still a draft. Publish it in Desk settings → Checklists first, or pick another.`;
+  return null;
 }
 
 // --- On a ticket -------------------------------------------------------------------------
@@ -357,6 +457,11 @@ export async function addChecklistTx(
 ): Promise<{ checklist_id: number; name: string; already: boolean; full?: boolean } | undefined> {
   const tpl = await getTemplate(templateId, client);
   if (!tpl) return undefined;
+  // 1.20.14: a draft is added to nothing until a person publishes it (by hand: a sentence; automatically: as if gone).
+  if (!tpl.published) {
+    if (opts.source === "manual") throw new ChecklistError(`"${tpl.name}" is still a draft. Publish it in Desk settings → Checklists first.`, 409);
+    return undefined;
+  }
   const t = await hqOne<{ id: number; team_id: number | null }>("SELECT id, team_id FROM hd_tickets WHERE id = $1", [ticketId], client);
   if (!t) return undefined;
   const existing = await hq<{ id: number; template_id: number | null }>("SELECT id, template_id FROM hd_ticket_checklists WHERE ticket_id = $1", [ticketId], client);
@@ -389,7 +494,7 @@ export async function addChecklistTx(
     );
   }
   const by = mdInline(actor?.name) || opts.byLine || "Someone";
-  await timeline(client, ticketId, actor, `${by} added the checklist "${mdInline(tpl.name)}"`, now);
+  await timeline(client, ticketId, actor, `${by} added the checklist "${mdInline(tpl.name)}"${viaSuffix(actor)}`, now);
   return { checklist_id: c!.id, name: tpl.name, already: false };
 }
 
@@ -410,7 +515,7 @@ export async function addRequestTypeChecklists(ticketId: number): Promise<number
     [ticketId]
   );
   if (!t?.request_type_id) return 0;
-  const tpls = await hq<{ id: number }>("SELECT id FROM hd_checklist_templates WHERE $1 = ANY(request_type_ids) ORDER BY id", [t.request_type_id]);
+  const tpls = await hq<{ id: number }>("SELECT id FROM hd_checklist_templates WHERE $1 = ANY(request_type_ids) AND published = 1 ORDER BY id", [t.request_type_id]);
   if (!tpls.length) return 0;
   return withTx(async (client) => {
     let n = 0;
@@ -461,7 +566,7 @@ export async function setItemDone(
       "UPDATE hd_ticket_checklist_items SET done_at = $2, done_by = $3, done_by_name = $4 WHERE id = $1",
       done ? [itemId, now, actor.id, actor.name] : [itemId, null, null, ""]
     );
-    await timeline(client, ticketId, actor, `${mdInline(actor.name) || "Someone"} ${done ? "ticked" : "unticked"} "${mdInline(it.title)}" (${mdInline(it.checklist_name)})`, now);
+    await timeline(client, ticketId, actor, `${mdInline(actor.name) || "Someone"} ${done ? "ticked" : "unticked"} "${mdInline(it.title)}" (${mdInline(it.checklist_name)})${viaSuffix(actor)}`, now);
     const after = await itemOn(client, ticketId, itemId);
     return { item: itemOut(after!), checklist: it.checklist_name, changed: true };
   });
@@ -508,6 +613,88 @@ export async function removeChecklist(ticketId: number, checklistId: number, act
     await timeline(client, ticketId, actor, `${mdInline(actor.name) || "Someone"} removed the checklist "${mdInline(c.name)}"`, now);
     return { name: c.name, open_required: open?.n ?? 0 };
   });
+}
+
+// --- As an agent: the desk's routes and Claude's tools (1.20.14) ---------------------------
+
+/** Who acts (a session or a connector user): their own name is on the timeline and the audit row. */
+export type ChecklistAgent = { id: number; name?: string | null; username: string; role: import("../types").Role };
+type WorkedTicket = { id: number; number: number; subject: string; status: HdStatus; merged_into?: number | null };
+
+/** The audit marker of a change made through Claude, as the other Claude writes carry it. */
+function viaDetails(via?: HdChecklistDraftVia): Record<string, string> {
+  return via === "mcp" ? { via: "mcp" } : via === "claude_desk" ? { via: "claude_desk", via_label: "via Claude in the desk" } : {};
+}
+
+/**
+ * Tick or untick items on a ticket the caller works (they checked
+ * canWorkTicket, as loadTicketFor does): the desk's PATCH …/checklists/items/[id]
+ * and Claude's tools. Not on a merged or closed ticket (409). Several items are
+ * all checked to be on the ticket before any is changed. Each change is one
+ * timeline line and one audit row (helpdesk.checklist.item_ticked /
+ * item_unticked), marked via Claude when it came through Claude. Ticking never
+ * solves anything: the solve gate stays in updateTicket.
+ */
+export async function tickItemsAs(
+  user: ChecklistAgent,
+  t: WorkedTicket,
+  changes: { id: number; done: boolean }[],
+  opts: { ip: string | null; via?: HdChecklistDraftVia }
+): Promise<{ id: number; title: string; checklist: string; required: boolean; done: boolean; changed: boolean }[]> {
+  if (!checklistsEditable(t)) throw new ChecklistError("This ticket can't change any more.", 409);
+  if (changes.length > 1) {
+    const ids = [...new Set(changes.map((c) => c.id))];
+    const found = new Set((await hq<{ id: number }>("SELECT id FROM hd_ticket_checklist_items WHERE ticket_id = $1 AND id = ANY($2::int[])", [t.id, ids])).map((r) => r.id));
+    const missing = ids.filter((id) => !found.has(id));
+    if (missing.length) throw new ChecklistError(`${missing.length === 1 ? `Item ${missing[0]} isn't` : `Items ${missing.join(", ")} aren't`} on this ticket. Nothing was changed.`, 404);
+  }
+  const { audit, actorFrom } = await import("../audit");
+  const actor: ChecklistActor = { id: user.id, name: user.name || user.username, ...(opts.via ? { via: opts.via } : {}) };
+  const out = [];
+  for (const c of changes) {
+    const r = await setItemDone(t.id, c.id, c.done, actor);
+    if (r.changed) {
+      await audit({
+        actor: actorFrom({ id: user.id, name: user.name ?? "", username: user.username, role: user.role }),
+        action: c.done ? "helpdesk.checklist.item_ticked" : "helpdesk.checklist.item_unticked",
+        targetType: "helpdesk_ticket",
+        targetId: t.id,
+        targetLabel: `#${t.number} ${t.subject}`.slice(0, 200),
+        details: { number: t.number, item_id: c.id, title: r.item.title, checklist: r.checklist, required: r.item.required, ...viaDetails(opts.via) },
+        ip: opts.ip,
+      });
+    }
+    out.push({ id: c.id, title: r.item.title, checklist: r.checklist, required: r.item.required, done: r.item.done, changed: r.changed });
+  }
+  return out;
+}
+
+/**
+ * Add a library checklist to a ticket the caller works, by hand: the desk's
+ * POST …/checklists and Claude's tools. Not on a merged or closed ticket
+ * (409), not a draft, not twice, at most CHECKLIST_LIMITS.perTicket. A
+ * timeline line and helpdesk.checklist.added, marked via Claude when it came
+ * through Claude.
+ */
+export async function addChecklistAs(
+  user: ChecklistAgent,
+  t: WorkedTicket,
+  templateId: number,
+  opts: { ip: string | null; via?: HdChecklistDraftVia }
+): Promise<{ checklist_id: number; name: string }> {
+  if (!checklistsEditable(t)) throw new ChecklistError(t.merged_into ? "This ticket was merged. Add the checklist to the ticket it joined." : "This ticket is closed.", 409);
+  const r = await addChecklistToTicket(t.id, templateId, { id: user.id, name: user.name || user.username, ...(opts.via ? { via: opts.via } : {}) });
+  const { audit, actorFrom } = await import("../audit");
+  await audit({
+    actor: actorFrom({ id: user.id, name: user.name ?? "", username: user.username, role: user.role }),
+    action: "helpdesk.checklist.added",
+    targetType: "helpdesk_ticket",
+    targetId: t.id,
+    targetLabel: `#${t.number} ${t.subject}`.slice(0, 200),
+    details: { number: t.number, checklist_id: r.checklist_id, template_id: templateId, name: r.name, ...viaDetails(opts.via) },
+    ip: opts.ip,
+  });
+  return { checklist_id: r.checklist_id, name: r.name };
 }
 
 // --- Solving ---------------------------------------------------------------------------
@@ -583,14 +770,16 @@ export async function anonymiseChecklistsTx(client: HdQueryable, ticketId: numbe
   await client.query("DELETE FROM hd_ticket_checklists WHERE ticket_id = $1", [ticketId]);
 }
 
-/** hd_read_ticket (agents): the checklists in short. */
+/** hd_read_ticket (agents): the checklists in short. 1.20.14 (additive): ids, for hd_update_checklist. */
 export async function checklistsForMcp(ticketId: number) {
   const lists = await ticketChecklists(ticketId);
   return lists.map((c) => ({
+    id: c.id,
     name: c.name,
     progress: `${c.done} of ${c.total} done`,
     required_open: c.required_open,
     items: c.items.map((i) => ({
+      id: i.id,
       title: i.title,
       done: i.done,
       ...(i.required ? { required: true } : {}),
@@ -603,7 +792,10 @@ export async function checklistsForMcp(ticketId: number) {
 
 /** The templates an agent may add by hand (the ticket's picker, the workflow builder). */
 export async function templateOptions(): Promise<{ id: number; name: string; items: number; required: number }[]> {
-  return (await listTemplates()).map((t) => ({ id: t.id, name: t.name, items: t.items.length, required: t.items.filter((i) => i.required).length }));
+  // 1.20.14: published ones only; a draft is offered nowhere until a person publishes it.
+  return (await listTemplates())
+    .filter((t) => t.published)
+    .map((t) => ({ id: t.id, name: t.name, items: t.items.length, required: t.items.filter((i) => i.required).length }));
 }
 
 // --- The desk's view -----------------------------------------------------------------

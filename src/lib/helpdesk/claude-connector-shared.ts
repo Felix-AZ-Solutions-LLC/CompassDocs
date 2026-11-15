@@ -8,12 +8,13 @@
 //   read     find and read what the person can see, and summarise it
 //   notes    (default) also write: internal notes, reply drafts, the
 //            person's own requests and replies on them, and drafts of
-//            workflows, request types and macros
-//   update   also change tickets: status, priority, team, assignee, tags
+//            workflows, request types, macros and (1.20.14) checklists
+//   update   also change tickets: status, priority, team, assignee, tags,
+//            and (1.20.14) ticking checklist items and adding checklists
 //
 // Whatever the level, three things are never possible (no tool exists and
 // no setting adds one): sending a reply to a requester, deciding an
-// approval, and publishing a workflow, request type or macro.
+// approval, and publishing a workflow, request type, macro or checklist.
 
 export const HD_CLAUDE_KEY = "helpdesk_claude_connector";
 
@@ -37,14 +38,14 @@ export const HD_CLAUDE_LEVEL_LABEL: Record<HdClaudeLevel, string> = {
 export const HD_CLAUDE_LEVEL_HINT: Record<HdClaudeLevel, string> = {
   read: "Find and read requests and tickets the person can see, and summarise them.",
   notes: "Recommended. Drafts wait in the ticket for an agent to send or discard.",
-  update: "Status, priority, team, assignee and tags, within the person's role.",
+  update: "Status, priority, team, assignee, tags and checklist items, within the person's role.",
 };
 
 /** The never-list, word for word as Desk settings shows it. */
 export const HD_CLAUDE_NEVER: readonly string[] = [
   "Send a reply to a requester: Claude saves a draft and a person sends it.",
   "Approve or decline: Claude lists what's waiting and links to the approval.",
-  "Publish a workflow, request type or macro: Claude saves a draft for someone to publish.",
+  "Publish a workflow, request type, macro or checklist: Claude saves a draft for someone to publish.",
 ];
 
 /** Audit actions the connector writes (each row carries details.via = "mcp"). */
@@ -58,6 +59,12 @@ export const HD_CLAUDE_AUDIT_ACTIONS = [
   "helpdesk.workflow.updated",
   "helpdesk.request_type.created",
   "helpdesk.macro.created",
+  // 1.20.14: checklist drafts, ticks and checklists added on tickets.
+  "helpdesk.checklist_template.created",
+  "helpdesk.checklist_template.updated",
+  "helpdesk.checklist.item_ticked",
+  "helpdesk.checklist.item_unticked",
+  "helpdesk.checklist.added",
 ] as const;
 
 /** One line of "Recent activity via Claude". */
@@ -93,6 +100,21 @@ export function claudeActivitySummary(action: string, details: Record<string, un
       return name ? `Saved a request type draft: ${name}` : "Saved a request type draft";
     case "helpdesk.macro.created":
       return name ? `Saved a macro draft: ${name}` : "Saved a macro draft";
+    case "helpdesk.checklist_template.created":
+    case "helpdesk.checklist_template.updated":
+      return name ? `Saved a checklist draft: ${name}` : "Saved a checklist draft";
+    case "helpdesk.checklist.item_ticked": {
+      const title = typeof details?.title === "string" ? ` "${details.title}"` : " an item";
+      return n ? `Ticked${title} on ${n}` : `Ticked${title}`;
+    }
+    case "helpdesk.checklist.item_unticked": {
+      const title = typeof details?.title === "string" ? ` "${details.title}"` : " an item";
+      return n ? `Unticked${title} on ${n}` : `Unticked${title}`;
+    }
+    case "helpdesk.checklist.added": {
+      const list = typeof details?.name === "string" ? ` "${details.name}"` : "";
+      return n ? `Added the checklist${list} to ${n}` : `Added the checklist${list}`;
+    }
     default:
       return name || action;
   }

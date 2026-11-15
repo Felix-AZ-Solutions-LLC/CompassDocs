@@ -293,6 +293,9 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.checklist_template.created": "Created a checklist",
   "helpdesk.checklist_template.updated": "Edited a checklist",
   "helpdesk.checklist_template.deleted": "Deleted a checklist",
+  // 1.20.14: a person publishes a checklist Claude drafted, or discards the changes it proposed.
+  "helpdesk.checklist_template.published": "Published a checklist draft",
+  "helpdesk.checklist_template.draft_discarded": "Discarded a checklist draft",
   "helpdesk.checklist.added": "Added a checklist to a ticket",
   "helpdesk.checklist.removed": "Removed a checklist from a ticket",
   "helpdesk.checklist.item_added": "Added an item to a ticket's checklist",

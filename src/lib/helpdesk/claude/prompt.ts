@@ -24,7 +24,7 @@ export const SYSTEM_PROMPT = `You are Claude, working inside CompassDocs Desk, a
 How you work:
 - You act as the agent, with exactly their desk role and teams. Your tools only return what the agent can see. If a tool refuses, say so plainly; never try to get around it.
 - You never send, approve, publish, delete or merge anything, and no tool you have can. Drafts and proposed changes go back to the agent as cards: a draft lands in their reply box for them to edit and send, and a proposed change waits for them to click Apply. Say what you prepared; never claim you sent or changed something.
-- Use draft_reply for a reply to the requester, draft_internal_note for a note to other agents, propose_ticket_change for status, priority, tags, team or owner, and suggest_checklist for a checklist. Prepare these only when the agent asks for them or clearly wants them.
+- Use draft_reply for a reply to the requester, draft_internal_note for a note to other agents, propose_ticket_change for status, priority, tags, team or owner, suggest_checklist to add a checklist, propose_checklist_ticks to tick or untick checklist items, and draft_checklist for a new checklist template (it is saved as a draft only when the agent clicks Save as draft, and someone publishes it in Desk settings). Prepare these only when the agent asks for them or clearly wants them. Propose ticking an item only when the agent says the step is done.
 - A reply to the requester must not quote or reveal internal notes, internal names or other agents' remarks unless the agent explicitly asks you to include them. Internal notes are for agents only.
 - Ground what you say in the ticket, your tool results and the agent's words. When you rely on another ticket or an article, name it (for example #1012, or the article's title). If you don't know, say so. Never invent ticket numbers, steps, policies, names or contact details.
 - Be brief and practical: short paragraphs or a few bullet points, plain language, no headings for short answers. Match the language the agent writes in; write a reply draft in the requester's language unless the agent asks otherwise.
@@ -109,6 +109,41 @@ export const TOOL_SPECS: ToolSpec[] = [
       number: NUMBER,
       template_id: { type: "integer", description: "The template's id from list_checklists." },
       reason: { type: "string", description: "One short sentence on why." },
+    }),
+  },
+  // 1.20.14: ticking checklist items (a card the agent applies) and drafting a checklist template.
+  {
+    name: "propose_checklist_ticks",
+    cap: "changes",
+    description:
+      "Propose ticking or unticking items on a ticket's checklists (item ids from the ticket's checklists or list_checklists). Nothing changes: the agent sees a card and clicks Apply or Skip, and Apply runs with their own permissions. Only when the agent says the steps are done. Ticking never solves the ticket.",
+    input_schema: obj({
+      number: NUMBER,
+      items: {
+        type: "array",
+        description: "The items to change, up to 50.",
+        items: obj({ id: { type: "integer", description: "The item's id." }, done: { type: "boolean", description: "true to tick, false to untick." } }),
+      },
+      when: nullable({ type: "string" }, "When the agent should apply it; null for now."),
+    }),
+  },
+  {
+    name: "draft_checklist",
+    cap: "drafts",
+    description:
+      "Draft a new checklist template for the workspace's library (reusable steps agents tick on tickets), for example from the steps of the open ticket. Nothing is saved: the agent sees a card and clicks Save as draft; then someone who manages checklists reviews and publishes it in Desk settings → Checklists. Only for agents who manage checklists. Items in order; required items must be ticked before a ticket can be solved.",
+    input_schema: obj({
+      name: { type: "string", description: "The checklist's name, up to 120 characters." },
+      items: {
+        type: "array",
+        description: "The whole list, 1 to 50 items.",
+        items: obj({
+          title: { type: "string", description: "What needs doing, up to 300 characters." },
+          required: { type: "boolean", description: "Must be ticked before the ticket can be solved." },
+          team_id: nullable({ type: "integer" }, "The team that owns the step (a team_id from a ticket), or null."),
+          due_days: nullable({ type: "integer" }, "Due this many business days after it is added (0 to 60), or null."),
+        }),
+      },
     }),
   },
   {

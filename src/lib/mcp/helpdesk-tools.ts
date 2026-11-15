@@ -12,9 +12,11 @@
 //   - replies are DRAFTS ONLY. hd_draft_reply saves a draft the desk shows
 //     as "Draft from Claude"; no tool sends a public reply to a requester.
 //   - no tool approves or declines: hd_my_approvals returns approve_url.
-//   - nothing is published: workflows, request types and macros are saved
-//     as drafts (an unpublished workflow draft, a switched-off request type,
-//     a personal macro) for a person to publish in the app.
+//   - nothing is published: workflows, request types, macros and (1.20.14)
+//     checklists are saved as drafts (an unpublished workflow draft, a
+//     switched-off request type, a personal macro, an unpublished checklist
+//     or proposed changes beside the live one) for a person to publish in
+//     the app.
 // On top, Desk settings → Claude connector sets a workspace level (read /
 // notes / update, lib/helpdesk/claude-connector) that every write checks.
 //
@@ -85,7 +87,7 @@ const refuse = (text: string) => toolText(text, true);
 
 // --- Definitions -------------------------------------------------------------------
 
-type Side = "request" | "agent" | "reports" | "workflows" | "request_types" | "macros";
+type Side = "request" | "agent" | "reports" | "workflows" | "request_types" | "macros" | "checklists";
 
 interface HdToolDef {
   name: string;
@@ -200,7 +202,7 @@ export const HELPDESK_TOOL_DEFS: HdToolDef[] = [
     name: "hd_read_ticket",
     side: "agent",
     description:
-      "Helpdesk desk: the full ticket for an agent who works it: fields, reply and resolution targets, the whole conversation including internal notes, form answers, workflow progress and task hand-offs, the requester's contact card (directory visibility applies), agents it can be assigned to, any pending reply drafts, its checklists (required items must be ticked in the desk before it can be solved), its linked assets (devices from Snipe-IT or Microsoft Intune) and the custom fields of its team with their values (custom_fields; set them with hd_update_ticket).",
+      "Helpdesk desk: the full ticket for an agent who works it: fields, reply and resolution targets, the whole conversation including internal notes, form answers, workflow progress and task hand-offs, the requester's contact card (directory visibility applies), agents it can be assigned to, any pending reply drafts, its checklists with checklist and item ids (required items must be ticked before it can be solved; tick them with hd_update_checklist) and the library checklists that can be added (checklist_templates), its linked assets (devices from Snipe-IT or Microsoft Intune) and the custom fields of its team with their values (custom_fields; set them with hd_update_ticket).",
     inputSchema: obj({ number: NUMBER }, ["number"]),
   },
   {
@@ -254,6 +256,26 @@ export const HELPDESK_TOOL_DEFS: HdToolDef[] = [
           description:
             "The ticket's event on the desk's Calendar (hd_read_ticket shows it as event). An object sets or changes it: starts_at and ends_at as date-times with their zone (2026-11-20T14:00:00Z or with an offset), or all_day true with start_date and end_date (YYYY-MM-DD, the last day inclusive); place; setup_minutes (how long before the start setup must be ready). setup_complete true marks the setup done: only after the person confirms it is, because the ticket can't be solved until then. null removes the event.",
         },
+      },
+      ["number"]
+    ),
+  },
+  // 1.20.14: ticking and adding checklists on a ticket, as the agent would in the desk.
+  {
+    name: "hd_update_checklist",
+    side: "agent",
+    write: "update",
+    description:
+      "Helpdesk desk: tick or untick items on a ticket's checklists, or add a checklist from the library, exactly as the agent could in the desk (anyone who works the ticket; not on a closed or merged ticket). Item ids and checklist_templates come from hd_read_ticket. Several items in one call: all must be on the ticket or nothing changes. Tick an item only when the person confirms the step is really done: required items gate solving, and this never solves the ticket (use hd_update_ticket). The timeline shows each tick \"via Claude\".",
+    inputSchema: obj(
+      {
+        number: NUMBER,
+        items: {
+          type: "array",
+          description: "Items to change: [{ id, done }] with done true to tick and false to untick. Up to 50.",
+          items: obj({ id: { type: "number", description: "The item's id (hd_read_ticket → checklists[].items[].id)." }, done: { type: "boolean" } }, ["id", "done"]),
+        },
+        add_template_id: { type: "number", description: "A library checklist to add (hd_read_ticket → checklist_templates[].id). Added before any ticking." },
       },
       ["number"]
     ),
@@ -323,6 +345,39 @@ export const HELPDESK_TOOL_DEFS: HdToolDef[] = [
       ["title"]
     ),
   },
+  // 1.20.14: checklist templates (Desk settings → Checklists): read, and drafts a person publishes.
+  {
+    name: "hd_list_checklists",
+    side: "checklists",
+    description:
+      "Helpdesk admin: the checklist library (published ones and drafts waiting for review), with the teams and request types a checklist can name. Pass id for one checklist's items and request types in the shape hd_draft_checklist takes, and any draft waiting on it.",
+    inputSchema: obj({ id: { type: "number", description: "One checklist's id." } }),
+  },
+  {
+    name: "hd_draft_checklist",
+    side: "checklists",
+    write: "notes",
+    description:
+      "Helpdesk admin: draft a checklist template (a reusable list of steps agents tick on tickets), or propose changes to an existing one with id. Nothing goes live: a new one is saved unpublished (in no picker, added to nothing) and changes wait beside the live checklist, until a person reviews, edits and publishes them in Desk settings → Checklists (edit_url). Tell the person that. Items: {title, required?, team_id?, due_days?}; required items must be ticked before a ticket can be solved; due_days is 0 to 60 business days after the checklist is added. request_type_ids: request types that add it to every new request once published. Read hd_list_checklists first for ids.",
+    inputSchema: obj({
+      id: { type: "number", description: "An existing checklist to propose changes to. Omit to draft a new one." },
+      name: { type: "string", description: "Up to 120 characters. Needed for a new one." },
+      items: {
+        type: "array",
+        description: "The whole list, in order: 1 to 50 items. With id, omit to keep the current items.",
+        items: obj(
+          {
+            title: { type: "string", description: "What needs doing, up to 300 characters." },
+            required: { type: "boolean", description: "Must be ticked before the ticket can be solved." },
+            team_id: { type: ["number", "null"], description: "The team that owns the step (hd_list_checklists lists teams)." },
+            due_days: { type: ["number", "null"], description: "Due this many business days after the checklist is added (0 to 60)." },
+          },
+          ["title"]
+        ),
+      },
+      request_type_ids: { type: "array", items: { type: "number" }, description: "Request types that add it to every new request once it is published (hd_list_checklists lists them). Up to 50." },
+    }),
+  },
   {
     name: "hd_draft_macro",
     side: "macros",
@@ -365,6 +420,12 @@ async function onSide(user: User, side: Side): Promise<boolean> {
       return hdCan(user, "request_types.manage");
     case "macros":
       return hdCan(user, "macros.manage_personal");
+    case "checklists": {
+      // Desk settings → Checklists' own rule (lib/helpdesk/checklists-caps).
+      const { CHECKLIST_MANAGE_CAPS } = await import("../helpdesk/checklists-caps");
+      for (const c of CHECKLIST_MANAGE_CAPS) if (await hdCan(user, c)) return true;
+      return false;
+    }
   }
 }
 
@@ -520,6 +581,12 @@ export async function callHelpdeskTool(user: User, name: string, args: Args, ctx
         return await draftRequestType(user, a, ctx);
       case "hd_draft_macro":
         return await draftMacro(user, a, ctx);
+      case "hd_update_checklist":
+        return await updateChecklistTool(user, a, ctx);
+      case "hd_list_checklists":
+        return await listChecklistsTool(a, ctx);
+      case "hd_draft_checklist":
+        return await draftChecklist(user, a, ctx);
     }
   } catch (e) {
     if (e instanceof HdTicketError) return refuse(e.message);
@@ -841,6 +908,8 @@ async function readTicket(user: User, a: Args, ctx: Ctx) {
     tasks: d.children.map((c) => ({ number: c.number, subject: c.subject, status: c.status, team: c.team_name })),
     // 1.19.2: checklists (agents only; required items must be ticked before it can be solved; agent W3).
     checklists: await (await import("../helpdesk/checklists")).checklistsForMcp(t.id),
+    // 1.20.14 (additive): the library checklists an agent could add by hand now (hd_update_checklist add_template_id).
+    checklist_templates: await checklistTemplatesFor(t),
     // 1.20.5: the "Before you solve" answers kept on the ticket, and what a solve would still need (lib/helpdesk/solve-requirements).
     ...(await (await import("../helpdesk/solve-requirements")).solveRequirementsForMcp(t)),
     // 1.20.6: the ticket's event on the desk's Calendar, or null (lib/helpdesk/desk-calendar). While its setup is not complete the ticket can't be solved.
@@ -1200,5 +1269,149 @@ async function draftMacro(user: User, a: Args, ctx: Ctx) {
     saved: "draft (your personal macro)",
     note: "Only you see it. Share it with a team or everyone in Desk settings → Macros.",
     edit_url: `${ctx.origin}/desk/settings/macros`,
+  });
+}
+
+// --- Checklists (1.20.14) ----------------------------------------------------------------
+
+/** The library checklists that can be added to this ticket now (none on a closed or merged one, none it already has). */
+async function checklistTemplatesFor(t: HdTicket): Promise<{ id: number; name: string; items: number; required: number }[]> {
+  const cl = await import("../helpdesk/checklists");
+  if (!cl.checklistsEditable(t)) return [];
+  const [options, on] = await Promise.all([cl.templateOptions(), cl.ticketChecklists(t.id)]);
+  const have = new Set(on.map((c) => c.template_id));
+  return options.filter((o) => !have.has(o.id));
+}
+
+const CHECKLIST_BATCH = 50;
+
+async function updateChecklistTool(user: User, a: Args, ctx: Ctx) {
+  const found = await ticketFor(user, a.number, "work");
+  if (!found) return refuse(NOT_FOUND(a.number));
+  const t = found.t;
+  const posInt = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null);
+  let addId: number | null = null;
+  if (a.add_template_id !== undefined && a.add_template_id !== null) {
+    addId = posInt(a.add_template_id);
+    if (!addId) return refuse("add_template_id is a checklist id from hd_read_ticket's checklist_templates.");
+  }
+  const changes: { id: number; done: boolean }[] = [];
+  if (a.items !== undefined && a.items !== null) {
+    if (!Array.isArray(a.items)) return refuse("Send items as a list of { id, done }.");
+    if (a.items.length > CHECKLIST_BATCH) return refuse(`Up to ${CHECKLIST_BATCH} items in one call.`);
+    for (const [i, raw] of (a.items as unknown[]).entries()) {
+      const it = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+      const id = posInt(it?.id);
+      if (!it || !id || typeof it.done !== "boolean") return refuse(`Item ${i + 1} needs an id (from hd_read_ticket's checklists) and done true or false.`);
+      const twice = changes.find((c) => c.id === id);
+      if (twice && twice.done !== it.done) return refuse(`Item ${id} is asked to be both ticked and unticked. Send it once.`);
+      if (!twice) changes.push({ id, done: it.done });
+    }
+  }
+  if (!addId && !changes.length) return refuse("Say what to do: items to tick or untick ([{ id, done }]), or add_template_id. hd_read_ticket lists both.");
+  const cl = await import("../helpdesk/checklists");
+  // Ticking is open to anyone who works the ticket (the desk's rule); a closed or merged ticket can't change.
+  if (!cl.checklistsEditable(t)) return refuse(t.merged_into ? `#${t.number} was merged into another ticket, so its checklists can't change (409).` : `#${t.number} is closed, so its checklists can't change (409).`);
+  let added: { checklist_id: number; name: string } | null = null;
+  let ticked: Awaited<ReturnType<typeof cl.tickItemsAs>> = [];
+  try {
+    if (addId) {
+      if (!(await cl.templateOptions()).some((o) => o.id === addId)) return refuse(`No library checklist with id ${addId} that can be added. hd_read_ticket lists them under checklist_templates. Nothing was changed.`);
+      added = await cl.addChecklistAs(user, t, addId, { ip: ctx.ip, via: "mcp" });
+    }
+    if (changes.length) ticked = await cl.tickItemsAs(user, t, changes, { ip: ctx.ip, via: "mcp" });
+  } catch (e) {
+    if (e instanceof cl.ChecklistError) return refuse(`${e.message}${added ? ` The checklist "${added.name}" was added first.` : ""} (${e.status})`);
+    throw e;
+  }
+  const block = await cl.checklistSolveRefusal(t.id);
+  return toolJson({
+    number: t.number,
+    ...(added ? { added: { checklist_id: added.checklist_id, name: added.name } } : {}),
+    ...(ticked.length
+      ? { items: ticked.map((x) => ({ id: x.id, title: x.title, checklist: x.checklist, done: x.done, changed: x.changed, ...(x.required ? { required: true } : {}) })) }
+      : {}),
+    checklists: await cl.checklistsForMcp(t.id),
+    required_open: block ? block.open.map((o) => ({ id: o.id, title: o.title, checklist: o.checklist })) : [],
+    note: block ? "Required items are still open, so the ticket can't be solved yet." : "No required item is open. Solving is still done with hd_update_ticket, with the person's say-so.",
+    url: `${ctx.origin}/desk/tickets/${t.number}`,
+  });
+}
+
+const checklistsUrl = (ctx: Ctx, id?: number) => `${ctx.origin}/desk/settings/checklists${id ? `?id=${id}` : ""}`;
+
+function checklistStatus(t: { published: boolean; draft: unknown }): string {
+  return !t.published ? "draft (not published)" : t.draft ? "published, with changes waiting for review" : "published";
+}
+
+async function listChecklistsTool(a: Args, ctx: Ctx) {
+  const cl = await import("../helpdesk/checklists");
+  if (a.id !== undefined && a.id !== null) {
+    const id = Number(a.id);
+    const t = Number.isSafeInteger(id) && id > 0 ? await cl.getTemplate(id) : undefined;
+    if (!t) return refuse(`No checklist with id ${a.id}.`);
+    return toolJson({
+      id: t.id,
+      name: t.name,
+      status: checklistStatus(t),
+      items: t.items,
+      request_type_ids: t.request_type_ids,
+      draft: t.draft ? { ...t.draft, asked_by: t.draft_by_name, at: t.draft_at } : null,
+      edit_url: checklistsUrl(ctx, t.id),
+    });
+  }
+  const [rows, teams, types] = await Promise.all([
+    cl.listTemplateRows(),
+    (await import("../helpdesk/db-core")).hq<{ id: number; name: string }>("SELECT id, name FROM hd_teams ORDER BY position, lower(name), id"),
+    (await import("../helpdesk/db-core")).hq<{ id: number; title: string; active: number }>("SELECT id, title, active FROM hd_request_types ORDER BY position, lower(title), id"),
+  ]);
+  return toolJson({
+    checklists: rows.map((t) => ({
+      id: t.id,
+      name: t.name,
+      status: checklistStatus(t),
+      items: t.items.length,
+      required: t.items.filter((i) => i.required).length,
+      added_automatically_to: t.added_to,
+      used_on_tickets: t.used,
+    })),
+    teams,
+    request_types: types.map((r) => ({ id: r.id, title: r.title, switched_on: r.active === 1 })),
+    edit_url: checklistsUrl(ctx),
+  });
+}
+
+async function draftChecklist(user: User, a: Args, ctx: Ctx) {
+  const cl = await import("../helpdesk/checklists");
+  const input: Record<string, unknown> = {};
+  for (const k of ["name", "items", "request_type_ids"]) if (a[k] !== undefined) input[k] = a[k];
+  let id: number | undefined;
+  if (a.id !== undefined && a.id !== null) {
+    id = Number(a.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return refuse(`No checklist with id ${a.id}.`);
+  }
+  let r: Awaited<ReturnType<typeof cl.saveTemplateDraft>>;
+  try {
+    r = await cl.saveTemplateDraft(input, { id: user.id, name: user.name || user.username, via: "mcp" }, id);
+  } catch (e) {
+    if (e instanceof cl.ChecklistError) return refuse(`${e.message} Nothing was saved.`);
+    throw e;
+  }
+  const t = r.template;
+  const shape = t.draft ?? t;
+  const counts = { items: shape.items.length, required: shape.items.filter((i) => i.required).length, request_type_ids: shape.request_type_ids, draft: true };
+  if (r.kind === "new") await auditMcp(user, ctx, "helpdesk.checklist_template.created", { type: "helpdesk_checklist", id: t.id, label: t.name }, { ...counts, published: false });
+  else await auditMcp(user, ctx, "helpdesk.checklist_template.updated", { type: "helpdesk_checklist", id: t.id, label: t.name }, { changed: ["draft"], ...counts, published: t.published });
+  return toolJson({
+    id: t.id,
+    name: shape.name,
+    saved: r.kind === "changes" ? "draft of changes (the live checklist is unchanged)" : "draft (not published)",
+    published: t.published,
+    items: shape.items.length,
+    note:
+      r.kind === "changes"
+        ? "Tickets and request types keep using the live checklist. A person with checklist access reviews the changes and publishes or discards them in Desk settings → Checklists."
+        : "Nobody can add it to a ticket yet and nothing adds it automatically. A person with checklist access reviews it, edits it if needed and publishes it in Desk settings → Checklists.",
+    edit_url: checklistsUrl(ctx, t.id),
   });
 }

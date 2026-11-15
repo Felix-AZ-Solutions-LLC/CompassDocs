@@ -9,7 +9,10 @@ import { startFakeAnthropic, type FakeAnthropic } from "../test/support/fake-ant
 // prompts (c2) and Ctrl/⌘+J; the docked panel (c1): a streamed answer with
 // the tool activity line and source chips, a reply draft put in the reply
 // box, and the status card applied through the desk's own PATCH (audited
-// "via Claude in the desk"); the panel full screen at 390px.
+// "via Claude in the desk"); the panel full screen at 390px. 1.20.14: Claude
+// proposes ticking a checklist item and drafts a checklist; Apply ticks it
+// through the desk's route ("via Claude in the desk"), Save as draft keeps
+// the checklist unpublished in Desk settings → Checklists.
 //
 // NEVER the real API. The spec starts the fake Messages API
 // (test/support/fake-anthropic) on E2E_FAKE_ANTHROPIC_PORT (default 4917),
@@ -210,5 +213,67 @@ test.describe("claude in the desk (licensed, fake Messages API)", () => {
     expect(Math.round(boxSize?.width ?? 0)).toBe(390);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await shot(page, "c1-claude-panel-390");
+  });
+
+  test("checklists: Claude proposes a tick and drafts a checklist; Apply ticks it, Save as draft keeps it unpublished", async ({ page }) => {
+    test.setTimeout(300_000);
+    expect(number, "the c1 test made the ticket").toBeGreaterThan(0);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const tplName = `Laptop handover ${stamp}`;
+    const draftName = `Leaver kit ${stamp}`;
+    const tpl = await api(page, "/api/helpdesk/admin/checklists", { method: "POST", body: { name: tplName, items: [{ title: "Wipe the laptop", required: true }, { title: "Return the badge" }] } });
+    expect(tpl.status, JSON.stringify(tpl.body)).toBe(201);
+    const added = await api(page, `/api/helpdesk/tickets/${number}/checklists`, { method: "POST", body: { template_id: tpl.body.template.id } });
+    expect(added.status, JSON.stringify(added.body)).toBe(201);
+    const item = (added.body.checklists as { name: string; items: { id: number; title: string }[] }[]).find((c) => c.name === tplName)!.items[0];
+    try {
+      fake.queue(
+        {
+          content: [
+            { type: "tool_use", name: "propose_checklist_ticks", input: { number, items: [{ id: item.id, done: true }], when: null } },
+            {
+              type: "tool_use",
+              name: "draft_checklist",
+              input: { name: draftName, items: [{ title: "Disable sign-in", required: true, team_id: null, due_days: 0 }, { title: "Collect the laptop", required: false, team_id: null, due_days: 2 }] },
+            },
+          ],
+        },
+        { content: [{ type: "text", text: "I prepared the tick and a checklist draft. Apply or save them when you're ready." }] }
+      );
+      await page.goto(`/desk/tickets/${number}`);
+      await slow(page.getByRole("button", { name: "Claude", exact: true })).toBeVisible({ timeout: 120_000 });
+      await page.keyboard.press("Control+j");
+      const panel = page.getByRole("complementary", { name: "Claude" });
+      await expect(panel).toBeVisible();
+      // The ticket's chat is loaded again before asking (a question typed while it loads is not sent).
+      await slow(panel.getByText("Reply draft for Daniel", { exact: true })).toBeVisible();
+      const box = panel.getByLabel("Ask Claude");
+      await box.fill("The laptop is wiped. Tick it, and make a leaver checklist from this.");
+      await expect(box).toHaveValue(/laptop is wiped/);
+      await box.press("Enter");
+      const tick = panel.getByRole("region", { name: 'Tick "Wipe the laptop"' });
+      const draft = panel.getByRole("region", { name: `Checklist draft: ${draftName}` });
+      await slow(tick).toBeVisible();
+      await slow(draft).toBeVisible();
+      await expect(draft).toContainText("Disable sign-in");
+      await expect(draft.getByText("Required", { exact: true })).toBeVisible();
+      expect((await db.query("SELECT done_at FROM hd_ticket_checklist_items WHERE id = $1", [item.id])).rows[0].done_at, "not ticked before Apply").toBeNull();
+      await shot(page, "claude-checklist-cards-1440");
+
+      await tick.getByRole("button", { name: "Apply" }).click();
+      await slow(tick.getByText("Applied", { exact: true })).toBeVisible();
+      expect((await db.query("SELECT done_at FROM hd_ticket_checklist_items WHERE id = $1", [item.id])).rows[0].done_at).not.toBeNull();
+      const line = await db.query("SELECT body FROM hd_messages m JOIN hd_tickets t ON t.id = m.ticket_id WHERE t.number = $1 AND m.body LIKE '%ticked%' ORDER BY m.id DESC LIMIT 1", [number]);
+      expect(line.rows[0]?.body).toMatch(/ticked "Wipe the laptop" .* via Claude in the desk$/);
+
+      await draft.getByRole("button", { name: "Save as draft" }).click();
+      await slow(draft.getByText("Saved as draft", { exact: true })).toBeVisible();
+      await expect(draft.getByRole("link", { name: "Review in Checklists" })).toBeVisible();
+      const saved = await db.query("SELECT published, draft_via FROM hd_checklist_templates WHERE name = $1", [draftName]);
+      expect(saved.rows[0]).toEqual({ published: 0, draft_via: "claude_desk" });
+    } finally {
+      const list = await api(page, "/api/helpdesk/admin/checklists");
+      for (const t of list.body?.templates ?? []) if (String(t.name).includes(stamp)) await api(page, `/api/helpdesk/admin/checklists/${t.id}`, { method: "DELETE" });
+    }
   });
 });

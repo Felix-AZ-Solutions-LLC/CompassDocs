@@ -4,13 +4,19 @@
 //        Tickets keep their copies. Audited (helpdesk.checklist_template.deleted).
 // Helpdesk 1.19.2 (agent W3). Desk capability settings.manage, request_types.manage or
 // workflows.manage (lib/helpdesk/checklists-caps).
+// 1.20.14, drafts from Claude: PUT { …, publish: true } saves and publishes an unpublished
+//        draft (helpdesk.checklist_template.published). Saving a published checklist that has
+//        changes waiting publishes what the editor shows and clears the draft (also .published).
+//        PUT { discard_draft: true } drops the changes waiting on a published checklist
+//        (helpdesk.checklist_template.draft_discarded; 409 when there are none). An unpublished
+//        draft is discarded with DELETE.
 
 import { NextResponse } from "next/server";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { readJson } from "@/lib/helpdesk/access";
 import { hdAnyCapGate } from "@/lib/helpdesk/roles";
 import { notFound } from "@/lib/helpdesk/routes";
-import { ChecklistError, deleteTemplate, updateTemplate } from "@/lib/helpdesk/checklists";
+import { ChecklistError, deleteTemplate, discardTemplateDraft, getTemplate, updateTemplate } from "@/lib/helpdesk/checklists";
 import { CHECKLIST_MANAGE_CAPS } from "@/lib/helpdesk/checklists-caps";
 
 export const dynamic = "force-dynamic";
@@ -30,10 +36,42 @@ export async function PUT(req: Request, { params }: Ctx) {
   const b = await readJson(req, 64 * 1024);
   if (!b) return NextResponse.json({ error: "Send the checklist as JSON." }, { status: 400 });
   try {
-    const r = await updateTemplate(id, b);
+    if (b.discard_draft === true) {
+      const gone = await discardTemplateDraft(id);
+      if (!gone) return (await getTemplate(id)) ? NextResponse.json({ error: "There are no changes waiting on this checklist." }, { status: 409 }) : notFound();
+      await audit({
+        actor: actorFrom(gate),
+        action: "helpdesk.checklist_template.draft_discarded",
+        targetType: "helpdesk_checklist",
+        targetId: id,
+        targetLabel: gone.name,
+        details: { drafted_by: gone.draft_by_name, drafted_via: gone.draft_via },
+        ip: ipFrom(req),
+      });
+      return NextResponse.json({ template: await getTemplate(id) });
+    }
+    const r = await updateTemplate(id, b, { publish: b.publish === true });
     if (!r) return notFound();
     const changed = (["name", "items", "request_type_ids"] as const).filter((k) => JSON.stringify(r.before[k]) !== JSON.stringify(r.after[k]));
-    if (changed.length) {
+    // 1.20.14: a Claude draft made live (a new one published, or the changes waiting on a published one saved).
+    if ((!r.before.published && r.after.published) || (r.before.published && r.before.draft)) {
+      await audit({
+        actor: actorFrom(gate),
+        action: "helpdesk.checklist_template.published",
+        targetType: "helpdesk_checklist",
+        targetId: id,
+        targetLabel: r.after.name,
+        details: {
+          changed,
+          items: r.after.items.length,
+          required: r.after.items.filter((i) => i.required).length,
+          request_type_ids: r.after.request_type_ids,
+          drafted_by: r.before.draft_by_name,
+          drafted_via: r.before.draft_via,
+        },
+        ip: ipFrom(req),
+      });
+    } else if (changed.length) {
       await audit({
         actor: actorFrom(gate),
         action: "helpdesk.checklist_template.updated",

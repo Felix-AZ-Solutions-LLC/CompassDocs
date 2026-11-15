@@ -44,6 +44,27 @@ export interface HdChecklistTemplate {
   request_type_ids: number[];
   created_at: string;
   updated_at: string;
+  /**
+   * 1.20.14: false for a new template Claude drafted that nobody has
+   * published yet (in no picker, added by nothing). Every template made in
+   * Desk settings is published.
+   */
+  published: boolean;
+  /** 1.20.14: changes Claude proposed to a published template, waiting for a person; null when none. */
+  draft: HdChecklistTemplateInput | null;
+  /** Who asked Claude for the draft, and when ("" and null when there is none). */
+  draft_by_name: string;
+  draft_at: string | null;
+  /** "mcp" (the Claude connector) or "claude_desk" (Claude in the desk); "" when there is no draft. */
+  draft_via: string;
+}
+
+/** 1.20.14: where a draft came from. */
+export type HdChecklistDraftVia = "mcp" | "claude_desk";
+
+/** 1.20.14: does this template wait for a person (a new draft, or proposed changes)? */
+export function hasClaudeDraft(t: Pick<HdChecklistTemplate, "published" | "draft">): boolean {
+  return !t.published || !!t.draft;
 }
 
 /** A row of the settings list: what adds it automatically, and how often it was added. */

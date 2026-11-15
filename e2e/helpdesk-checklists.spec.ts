@@ -11,6 +11,12 @@ import { ADMIN, login, api } from "./helpers";
 // skips itself on 402. Everything it makes (a team, a template, a workflow,
 // tickets) is its own and is deleted afterwards.
 //
+// 1.20.14: a checklist drafted by Claude (saved as Claude in the desk's "Save
+// as draft" does) waits in the library as "Draft from Claude": the editor
+// shows the draft strip, the ticket's picker doesn't offer it, Publish makes
+// it live. Changes Claude proposed to a live checklist ("Changes from
+// Claude") are discarded, leaving the live one as it was.
+//
 // E2E_SHOTS=<dir> also saves light screenshots at 1440 of both screens.
 
 const slow = expect.configure({ timeout: 60_000 });
@@ -214,5 +220,55 @@ test.describe("checklists (licensed)", () => {
     const back = await api(page, `/api/helpdesk/admin/workflows/${id}`);
     const steps = (back.body.workflow ?? back.body).draft?.steps ?? [];
     expect(steps[0]?.checklist_ids).toEqual([tpl!.id]);
+  });
+
+  test("drafts from Claude: reviewed and published, or discarded, in Desk settings", async ({ page }) => {
+    test.setTimeout(300_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const draftName = `Starter kit ${stamp}`;
+    const made = await api(page, "/api/helpdesk/admin/checklists", {
+      method: "POST",
+      body: { draft: true, name: draftName, items: [{ title: "Order a laptop", required: true }, { title: "Create the accounts" }, { title: "Book a welcome call", due_days: 2 }] },
+    });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    const id = made.body.template.id as number;
+    expect(made.body.template.published).toBe(false);
+    // Not offered to agents while it is a draft.
+    const lib = await api(page, "/api/helpdesk/checklists");
+    expect((lib.body.templates as { id: number }[]).some((x) => x.id === id)).toBe(false);
+
+    await page.goto(`/desk/settings/checklists?id=${id}`);
+    await slow(page.getByRole("heading", { level: 1, name: "Checklists" })).toBeVisible({ timeout: 60_000 });
+    const row = page.getByRole("row").filter({ hasText: draftName });
+    await slow(row.getByText("Draft from Claude", { exact: true })).toBeVisible();
+    const editor = page.locator("#checklist-editor");
+    await slow(editor.getByRole("heading", { name: `Draft · ${draftName}` })).toBeVisible();
+    const strip = editor.getByRole("region", { name: "Draft from Claude" });
+    await expect(strip).toBeVisible();
+    await expect(strip).toContainText("not published");
+    await expect(strip).toContainText("Nobody can add it to a ticket");
+    await expect(editor.getByRole("textbox", { name: "Item 3", exact: true })).toHaveValue("Book a welcome call");
+    await expect(editor.getByRole("button", { name: "Discard draft" })).toBeVisible();
+    await expect(editor.getByRole("button", { name: "Save draft" })).toBeVisible();
+    await editor.getByRole("textbox", { name: "Item 2", exact: true }).fill("Create the accounts and the mailbox");
+    await editor.getByRole("button", { name: "Publish checklist" }).click();
+    await slow(page.getByText("Checklist published. Agents can add it now.")).toBeVisible();
+    await expect(row.getByText("Draft from Claude", { exact: true })).toHaveCount(0);
+    await expect(editor.getByRole("region", { name: "Draft from Claude" })).toHaveCount(0);
+    const live = await api(page, "/api/helpdesk/checklists");
+    expect((live.body.templates as { id: number; items: number }[]).find((x) => x.id === id)?.items).toBe(3);
+
+    // Changes proposed to the live checklist, then discarded.
+    const changes = await api(page, "/api/helpdesk/admin/checklists", { method: "POST", body: { draft: true, id, items: [{ title: "Order a laptop", required: true }] } });
+    expect(changes.status, JSON.stringify(changes.body)).toBe(200);
+    await page.reload();
+    await slow(row.getByText("Changes from Claude", { exact: true })).toBeVisible({ timeout: 60_000 });
+    const changed = page.locator("#checklist-editor").getByRole("region", { name: "Draft from Claude" });
+    await expect(changed).toContainText("Changes from Claude");
+    await expect(page.locator("#checklist-editor").getByRole("textbox", { name: "Item 2", exact: true })).toHaveCount(0);
+    await page.locator("#checklist-editor").getByRole("button", { name: "Discard changes" }).click();
+    await slow(page.getByText("Changes discarded. The published checklist is unchanged.")).toBeVisible();
+    await expect(row.getByText("Changes from Claude", { exact: true })).toHaveCount(0);
+    await expect(page.locator("#checklist-editor").getByRole("textbox", { name: "Item 3", exact: true })).toHaveValue("Book a welcome call");
   });
 });

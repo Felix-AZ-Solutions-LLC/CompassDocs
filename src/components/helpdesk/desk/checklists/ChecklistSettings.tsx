@@ -11,9 +11,17 @@
 // tasks add checklists from the workflow builder's Task step; those uses are
 // listed read-only. Tickets keep the copy they got: editing a template never
 // changes a ticket.
+//
+// 1.20.14: drafts from Claude. A new checklist Claude drafted is unpublished
+// (a "Draft from Claude" chip in the table): its editor opens with the dashed
+// draft strip and Discard draft / Save draft / Publish checklist. Changes
+// Claude proposed to a published checklist ("Changes from Claude") open in
+// the editor in place of the live copy, with Discard changes / Publish
+// changes; until then tickets and request types use the live copy.
+// ?id=<checklist> opens that checklist (the links Claude hands out).
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, GripVertical, ListChecks, Plus, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, GripVertical, ListChecks, Plus, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { Button, iconButtonClass } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { chipClass } from "@/components/Chip";
@@ -22,6 +30,7 @@ import { EmptyState, Field, SectionEmpty, Select, TextInput, Toggle } from "@/co
 import { MenuItem, Popover } from "@/components/Popover";
 import { PageHeader } from "@/components/PageHeader";
 import { PageContainer } from "@/components/PageWidth";
+import { RelativeTime } from "@/components/RelativeTime";
 import { LoadingRow } from "@/components/Spinner";
 import { Table, TABLE_HEAD_ROW, TD, TH } from "@/components/Table";
 import { confirmDialog } from "@/components/Dialog";
@@ -31,6 +40,7 @@ import {
   CHECKLIST_LIMITS,
   DUE_DAY_CHOICES,
   dueDaysLabel,
+  hasClaudeDraft,
   newItemKey,
   type HdChecklistTemplate,
   type HdChecklistTemplateItem,
@@ -62,7 +72,20 @@ export function ChecklistSettings() {
       .then((d) => {
         setView(d);
         setError("");
-        setChosen((c) => (c === null || (typeof c === "number" && !d.templates.some((t) => t.id === c)) ? d.templates[0]?.id ?? null : c));
+        // 1.20.14: ?id= opens that checklist (a link from Claude) on the first load.
+        let asked: number | null = null;
+        try {
+          asked = Number(new URLSearchParams(window.location.search).get("id")) || null;
+        } catch {
+          asked = null;
+        }
+        setChosen((c) =>
+          c === null && asked && d.templates.some((t) => t.id === asked)
+            ? asked
+            : c === null || (typeof c === "number" && !d.templates.some((t) => t.id === c))
+              ? d.templates[0]?.id ?? null
+              : c
+        );
       })
       .catch((e: Error) => setError(e.message));
   useEffect(() => void load(), []);
@@ -73,7 +96,7 @@ export function ChecklistSettings() {
   }
 
   const current = typeof chosen === "number" ? view?.templates.find((t) => t.id === chosen) ?? null : null;
-  const editorKey = chosen === "new" ? "new" : current ? `t${current.id}-${current.updated_at}` : "none";
+  const editorKey = chosen === "new" ? "new" : current ? `t${current.id}-${current.updated_at}-${current.draft_at ?? ""}-${current.published}` : "none";
 
   return (
     <PageContainer>
@@ -129,6 +152,11 @@ export function ChecklistSettings() {
                         className="block w-full min-w-0 text-left after:absolute after:inset-0 focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-compass-500"
                       >
                         <span className="block truncate font-semibold text-slate-900">{t.name}</span>
+                        {hasClaudeDraft(t) && (
+                          <span className="mt-1 block">
+                            <span className={chipClass("accent", "sm")}>{t.published ? "Changes from Claude" : "Draft from Claude"}</span>
+                          </span>
+                        )}
                         <span className="mt-0.5 block text-xs text-slate-500 sm:hidden">
                           {t.items.length} items · {usedLabel(t.used)}
                         </span>
@@ -187,8 +215,11 @@ function Editor({
   onDeleted: () => void;
   onCancelNew: () => void;
 }) {
+  // 1.20.14: changes Claude proposed are what the editor shows; publishing them is saving.
+  const shown = template?.draft ?? template;
+  const claude = template && hasClaudeDraft(template) ? template : null;
   const [draft, setDraft] = useState<Draft>(() =>
-    template ? { name: template.name, items: template.items.map((i) => ({ ...i })), request_type_ids: [...template.request_type_ids] } : EMPTY
+    shown ? { name: shown.name, items: shown.items.map((i) => ({ ...i })), request_type_ids: [...shown.request_type_ids] } : EMPTY
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -223,9 +254,9 @@ function Editor({
   };
   const removeItem = (key: string) => change({ ...draft, items: draft.items.filter((i) => i.key !== key) });
 
-  async function save() {
+  async function save(publish = false) {
     setError("");
-    const body = { ...draft, name: draft.name.trim(), items: draft.items.filter((i) => i.title.trim()) };
+    const body = { ...draft, name: draft.name.trim(), items: draft.items.filter((i) => i.title.trim()), ...(publish ? { publish: true } : {}) };
     if (!body.name) return setError("Give the checklist a name.");
     if (!body.items.length) return setError("Add at least one item.");
     setBusy(true);
@@ -234,7 +265,18 @@ function Editor({
         ? await sendJson<{ template: HdChecklistTemplate }>(`/api/helpdesk/admin/checklists/${template.id}`, "PUT", body, "Couldn't save the checklist.")
         : await sendJson<{ template: HdChecklistTemplate }>("/api/helpdesk/admin/checklists", "POST", body, "Couldn't create the checklist.");
       markClean(JSON.stringify(draft));
-      toast("ok", template ? "Checklist saved. Tickets keep the copy they already have." : "Checklist created.");
+      toast(
+        "ok",
+        claude && !claude.published
+          ? publish
+            ? "Checklist published. Agents can add it now."
+            : "Draft saved. It stays unpublished."
+          : claude
+            ? "Changes published. Tickets keep the copy they already have."
+            : template
+              ? "Checklist saved. Tickets keep the copy they already have."
+              : "Checklist created."
+      );
       onSaved(r.template);
     } catch (e) {
       setError((e as Error).message);
@@ -245,20 +287,41 @@ function Editor({
 
   async function remove() {
     if (!template) return onCancelNew();
-    const ok = await confirmDialog({
-      title: `Delete ${template.name}?`,
-      body: "Tickets that already have it keep their copy. Request types stop adding it.",
-      confirmLabel: "Delete checklist",
-      danger: true,
-    });
+    const unpublished = !template.published;
+    const ok = await confirmDialog(
+      unpublished
+        ? { title: `Discard the draft ${template.name}?`, body: "It was never published, so no ticket has it.", confirmLabel: "Discard draft", danger: true }
+        : {
+            title: `Delete ${template.name}?`,
+            body: "Tickets that already have it keep their copy. Request types stop adding it.",
+            confirmLabel: "Delete checklist",
+            danger: true,
+          }
+    );
     if (ok !== true) return;
     try {
-      await sendJson(`/api/helpdesk/admin/checklists/${template.id}`, "DELETE", undefined, "Couldn't delete the checklist.");
+      await sendJson(`/api/helpdesk/admin/checklists/${template.id}`, "DELETE", undefined, unpublished ? "Couldn't discard the draft." : "Couldn't delete the checklist.");
       markClean(JSON.stringify(draft));
-      toast("ok", "Checklist deleted.");
+      toast("ok", unpublished ? "Draft discarded." : "Checklist deleted.");
       onDeleted();
     } catch (e) {
       toast("error", (e as Error).message);
+    }
+  }
+
+  /** 1.20.14: drop the changes Claude proposed; the published checklist stays as it is. */
+  async function discardChanges() {
+    if (!template) return;
+    setBusy(true);
+    try {
+      const r = await sendJson<{ template: HdChecklistTemplate }>(`/api/helpdesk/admin/checklists/${template.id}`, "PUT", { discard_draft: true }, "Couldn't discard the changes.");
+      markClean(JSON.stringify(draft));
+      toast("ok", "Changes discarded. The published checklist is unchanged.");
+      onSaved(r.template);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -267,8 +330,31 @@ function Editor({
   return (
     <Card id="checklist-editor" className="mt-4 scroll-mt-4">
       <h2 id="checklist-editor-h" className={EYEBROW_TEXT}>
-        {template ? `Editing · ${template.name}` : "New checklist"}
+        {template ? `${claude && !claude.published ? "Draft" : "Editing"} · ${template.name}` : "New checklist"}
       </h2>
+      {claude && (
+        <section
+          aria-label="Draft from Claude"
+          className="mt-3 rounded-xl border-[1.5px] border-dashed border-compass-300 bg-compass-50 p-3 dark:border-compass-500/50 dark:bg-compass-500/10"
+        >
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-slate-900 text-slate-50" aria-hidden>
+              <Bot className="h-4 w-4" />
+            </span>
+            <span className="text-sm font-semibold text-slate-900">{claude.published ? "Changes from Claude" : "Draft from Claude"}</span>
+            <span className="text-xs text-slate-500">
+              {claude.draft_by_name ? `asked by ${claude.draft_by_name} · ` : ""}
+              {claude.draft_at && <RelativeTime value={claude.draft_at} />}
+              {claude.draft_at ? " · " : ""}not published
+            </span>
+          </div>
+          <p className="mt-1.5 text-sm text-slate-700 sm:pl-9">
+            {claude.published
+              ? "Review the changes below. Tickets and request types use the published checklist until you publish them."
+              : "Review it below. Nobody can add it to a ticket and nothing adds it automatically until you publish it."}
+          </p>
+        </section>
+      )}
       <div className="mt-3 max-w-md">
         <Field label="Name">
           <TextInput value={draft.name} maxLength={CHECKLIST_LIMITS.name} onChange={(e) => change({ ...draft, name: e.target.value })} placeholder="Leaver: IT" />
@@ -388,12 +474,32 @@ function Editor({
       {error && <p className="notice-error mt-4 rounded-lg border px-3 py-2 text-sm" role="alert">{error}</p>}
       <div className="mt-5 flex flex-wrap items-center justify-end gap-2 print:hidden">
         <Button variant="ghost" icon={<Trash2 />} className="mr-auto hover-danger" onClick={remove}>
-          {template ? "Delete" : "Cancel"}
+          {claude && !claude.published ? "Discard draft" : template ? "Delete" : "Cancel"}
         </Button>
         {dirty && <span className="text-sm text-amber-700 dark:text-amber-300">Unsaved changes</span>}
-        <Button busy={busy} onClick={save}>
-          {template ? "Save checklist" : "Create checklist"}
-        </Button>
+        {claude && !claude.published ? (
+          <>
+            <Button variant="secondary" busy={busy} onClick={() => save(false)}>
+              Save draft
+            </Button>
+            <Button busy={busy} onClick={() => save(true)}>
+              Publish checklist
+            </Button>
+          </>
+        ) : claude ? (
+          <>
+            <Button variant="secondary" busy={busy} onClick={discardChanges}>
+              Discard changes
+            </Button>
+            <Button busy={busy} onClick={() => save(false)}>
+              Publish changes
+            </Button>
+          </>
+        ) : (
+          <Button busy={busy} onClick={() => save(false)}>
+            {template ? "Save checklist" : "Create checklist"}
+          </Button>
+        )}
       </div>
     </Card>
   );
