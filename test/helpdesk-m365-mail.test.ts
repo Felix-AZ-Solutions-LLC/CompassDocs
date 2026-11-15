@@ -2774,7 +2774,11 @@ describe("permissions on every new route", () => {
     h.set("cookie", `compass_session=${who.session}`);
     return new Request(r.url, { method: r.method, headers: h, body: r.method === "GET" || r.method === "DELETE" ? undefined : r.body, duplex: "half" } as RequestInit);
   };
-  const snapshot = async () => JSON.stringify([await m365.m365MailView(), await getSetting(KEY), (await pool().query("SELECT id, address, graph_id FROM hd_m365_mailboxes ORDER BY id")).rows]);
+  // Background work from earlier tests (an outbound send retrying, a poll)
+  // may still stamp its own times while this runs; the routes under test
+  // must change nothing else, so those timestamps are left out.
+  const settled = (v: unknown) => JSON.parse(JSON.stringify(v), (k, x) => (/^(send_error_at|last_\w+_at)$/.test(k) ? undefined : x));
+  const snapshot = async () => JSON.stringify([settled(await m365.m365MailView()), await getSetting(KEY), (await pool().query("SELECT id, address, graph_id FROM hd_m365_mailboxes ORDER BY id")).rows]);
 
   test("no session: 401. A requester, an agent: 403. Unlicensed: 402. Nothing changes.", async () => {
     const before = await snapshot();
