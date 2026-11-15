@@ -63,12 +63,16 @@ export async function POST(req: Request, ctx: Ctx) {
     });
   } catch (e) {
     // Something may already be written (a reply before a failed field change): the card stays used.
-    if (e instanceof HdTicketError) return NextResponse.json({ error: e.message }, { status: e.status });
+    if (e instanceof HdTicketError) return NextResponse.json({ error: e.message, ...e.extra }, { status: e.status });
     throw e;
   }
   if (!r.ok) {
     if (card) await releaseMacroCard(gate.id, card.id);
-    return NextResponse.json({ error: r.error, ...(r.missing ? { missing: r.missing } : {}), ...(r.newer ? { newer: r.newer } : {}) }, { status: r.status });
+    return NextResponse.json(
+      // 1.20.20: a reply lock's refusal carries its code and holder, as every send path's does.
+      { error: r.error, ...(r.missing ? { missing: r.missing } : {}), ...(r.newer ? { newer: r.newer } : {}), ...(r.code ? { code: r.code, holder: r.holder } : {}) },
+      { status: r.status }
+    );
   }
   return NextResponse.json(r.result);
 }

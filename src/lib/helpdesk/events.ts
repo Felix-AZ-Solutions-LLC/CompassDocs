@@ -45,7 +45,7 @@ async function rules(event: "ticket_created" | "ticket_updated" | "requester_mes
   if (ctx.fromAutomation) return;
   await safely(`automations.${event}`, async () => {
     const { runAutomations } = await import("./automations");
-    await runAutomations(event, ticketId);
+    await runAutomations(event, ticketId, { triggeredBy: ctx.actorId ?? null }); // 1.20.20: for the reply lock
   });
 }
 

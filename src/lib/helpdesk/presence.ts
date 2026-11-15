@@ -17,7 +17,7 @@
 
 import "server-only";
 import { NextResponse } from "next/server";
-import { hq } from "./db-core";
+import { hq, withTx } from "./db-core";
 import {
   COLLISION_ERROR,
   NEWER_BODY_MAX,
@@ -29,24 +29,44 @@ import {
   type HdPresenceState,
 } from "./presence-shared";
 
-/** Record a heartbeat: the person has the ticket open in `state`. */
-export async function touchPresence(ticketId: number, userId: number, state: HdPresenceState): Promise<void> {
+/**
+ * Record a heartbeat: the person has the ticket open in `state`. 1.20.20:
+ * from browser tab `tabId` (kept in `tabs` with when it last beat), so one
+ * tab's leave does not end presence while another tab still has it open.
+ */
+export async function touchPresence(ticketId: number, userId: number, state: HdPresenceState, tabId = ""): Promise<void> {
   await hq(
-    `INSERT INTO hd_ticket_presence (ticket_id, user_id, state, seen_at, since)
-     VALUES ($1, $2, $3, now(), now())
+    `INSERT INTO hd_ticket_presence (ticket_id, user_id, state, seen_at, since, tabs)
+     VALUES ($1, $2, $3, now(), now(), CASE WHEN $5::text = '' THEN '{}'::jsonb ELSE jsonb_build_object($5::text, extract(epoch from now())::bigint) END)
      ON CONFLICT (ticket_id, user_id) DO UPDATE
        SET since = CASE WHEN hd_ticket_presence.state = EXCLUDED.state
                          AND hd_ticket_presence.seen_at > now() - make_interval(secs => $4)
                         THEN hd_ticket_presence.since ELSE now() END,
            state = EXCLUDED.state,
-           seen_at = now()`,
-    [ticketId, userId, state, PRESENCE_TTL_SECONDS]
+           seen_at = now(),
+           tabs = CASE WHEN $5::text = '' THEN hd_ticket_presence.tabs ELSE hd_ticket_presence.tabs || EXCLUDED.tabs END`,
+    [ticketId, userId, state, PRESENCE_TTL_SECONDS, tabId]
   );
 }
 
-/** The person closed the ticket (or the tab). */
-export async function leavePresence(ticketId: number, userId: number): Promise<void> {
-  await hq("DELETE FROM hd_ticket_presence WHERE ticket_id = $1 AND user_id = $2", [ticketId, userId]);
+/**
+ * The person closed the ticket (or the tab). 1.20.20: with `tabId`, that tab
+ * leaves; the row goes only when no other tab of theirs beat within the TTL.
+ * Without (older clients), the row goes.
+ */
+export async function leavePresence(ticketId: number, userId: number, tabId = ""): Promise<void> {
+  if (!tabId) {
+    await hq("DELETE FROM hd_ticket_presence WHERE ticket_id = $1 AND user_id = $2", [ticketId, userId]);
+    return;
+  }
+  await withTx(async (c) => {
+    await c.query("UPDATE hd_ticket_presence SET tabs = tabs - $3::text WHERE ticket_id = $1 AND user_id = $2", [ticketId, userId, tabId]);
+    await c.query(
+      `DELETE FROM hd_ticket_presence WHERE ticket_id = $1 AND user_id = $2
+         AND NOT EXISTS (SELECT 1 FROM jsonb_each_text(tabs) e WHERE e.value::bigint > extract(epoch from now())::bigint - $3)`,
+      [ticketId, userId, PRESENCE_TTL_SECONDS]
+    );
+  });
 }
 
 /** Everyone else seen on the ticket within the TTL, replying first, then the longest there. */

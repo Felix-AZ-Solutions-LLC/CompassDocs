@@ -15,7 +15,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Check, ClipboardCheck, Pencil, Undo2 } from "lucide-react";
 import { Button } from "@/components/Button";
 import { Chip } from "@/components/Chip";
-import { formDialog } from "@/components/Dialog";
+import { confirmDialog, formDialog } from "@/components/Dialog";
 import { EmptyState, Field, Textarea } from "@/components/form";
 import { PageHeader } from "@/components/PageHeader";
 import { PageContainer } from "@/components/PageWidth";
@@ -24,7 +24,7 @@ import { LoadingRow } from "@/components/Spinner";
 import { toast } from "@/components/Toasts";
 import { UserAvatar } from "@/components/UserAvatar";
 import type { HdPendingReview } from "@/lib/helpdesk/roles-shared";
-import { getJson, sendJson } from "../api";
+import { ApiError, getJson, sendJson } from "../api";
 
 export function ReviewPanel({ withHeader = true, onCountChange }: { withHeader?: boolean; onCountChange?: (n: number) => void }) {
   const [reviews, setReviews] = useState<HdPendingReview[] | null>(null);
@@ -85,13 +85,20 @@ function ReviewCard({ review, onDone }: { review: HdPendingReview; onDone: () =>
   const [busy, setBusy] = useState(false);
   const headingId = `review-${review.message_id}`;
 
-  async function decide(payload: { decision: "approve" | "return"; edited_body?: string; note?: string }, ok: string) {
+  async function decide(payload: { decision: "approve" | "return"; edited_body?: string; note?: string; force?: boolean }, ok: string) {
     setBusy(true);
     try {
       await sendJson(`/api/helpdesk/reviews/${review.message_id}`, "POST", payload, "Couldn't save the review.");
       toast("ok", ok);
       onDone();
     } catch (e) {
+      // 1.20.20: someone replied after this was written (the send guard's warning): ask, then send anyway.
+      if (e instanceof ApiError && e.code === "collision" && !payload.force) {
+        setBusy(false);
+        const go = await confirmDialog({ title: e.message, body: "Read the conversation first so the requester doesn't get two different answers.", confirmLabel: "Send anyway" });
+        if (go === true) return decide({ ...payload, force: true }, ok);
+        return;
+      }
       toast("error", (e as Error).message);
     } finally {
       setBusy(false);

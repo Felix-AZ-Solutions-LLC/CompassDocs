@@ -13,6 +13,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import type { HdCounts } from "@/lib/helpdesk/types";
 import { getJson } from "./api";
 import { useLiveSignal } from "./live";
+import { pokeQueueReplyLocks, pokeReplyLock } from "./reply-lock/reply-lock";
 
 export const DeskCountsContext = createContext<{ counts: HdCounts | null; refresh: () => void; live?: number }>({
   counts: null,
@@ -57,6 +58,9 @@ export function useCountsPoll(enabled: boolean) {
   useLiveSignal(enabled, () => {
     refresh();
     setLive((n) => n + 1);
+    // 1.20.20: a reply lock taken, moved or gone signals too (lib/helpdesk/reply-lock-schema): fetch the locks now.
+    pokeReplyLock();
+    pokeQueueReplyLocks();
   });
 
   useEffect(() => {

@@ -104,6 +104,8 @@ export const HD_CAPABILITIES = {
   "tickets.reply_needs_review": { section: "replies", label: "Reply after review", hint: "Public replies wait for a team lead to approve them" },
   "tickets.internal_note": { section: "replies", label: "Add internal notes", hint: "Notes only agents see" },
   "replies.review": { section: "replies", label: "Review newbies' replies", hint: "Approve, edit or return replies held for review" },
+  // 1.20.20 (lib/helpdesk/reply-lock): move a ticket's reply lock to themselves. Checked on the ticket's team.
+  "replies.take_over": { section: "replies", label: "Take over a reply", hint: "Take the reply on a ticket someone else is answering; their text is kept for them" },
   "macros.use": { section: "macros", label: "Use macros", hint: "Apply macros, which can also change the ticket. Canned responses (text only) need no capability" },
   "macros.manage_personal": { section: "macros", label: "Personal macros and canned responses", hint: "Create and edit their own, which only they see" },
   "macros.manage_team": { section: "macros", label: "Team macros and canned responses", hint: "Create and edit those shared with their teams" },
@@ -156,6 +158,7 @@ export const HD_CAP_SCOPE: Partial<Record<HdCap, HdCap>> = {
   "tickets.reply_needs_review": "tickets.view_all",
   "tickets.internal_note": "tickets.view_all",
   "replies.review": "tickets.view_all",
+  "replies.take_over": "tickets.view_all",
   "macros.use": "tickets.view_all",
   "macros.manage_team": "macros.manage_all",
   "reports.team": "reports.all",
@@ -198,6 +201,7 @@ const TEAM_LEAD: HdCap[] = [
   "agents.manage_team",
   "tickets.sla_override",
   "incidents.manage",
+  "replies.take_over",
 ];
 const MANAGER: HdCap[] = [
   ...TEAM_LEAD,
@@ -250,8 +254,8 @@ export type HdRoleOverrides = Partial<Record<Exclude<HdRole, "admin">, HdCap[]>>
  * The lift is worked out on every read from the stored lists, so it never
  * comes back once an admin has saved the matrix (v 2).
  */
-export const HD_MATRIX_VERSION = 3;
-export const HD_CAPS_SINCE: Partial<Record<HdCap, number>> = { "tickets.merge": 2, "tickets.bulk": 2, "incidents.link": 3, "incidents.manage": 3 };
+export const HD_MATRIX_VERSION = 4;
+export const HD_CAPS_SINCE: Partial<Record<HdCap, number>> = { "tickets.merge": 2, "tickets.bulk": 2, "incidents.link": 3, "incidents.manage": 3, "replies.take_over": 4 };
 
 /** What a role customised before a capability existed must hold for it to be lifted on: every one of `all`, at least one of `any`. */
 export const HD_CAPS_SINCE_NEEDS: Partial<Record<HdCap, { all?: readonly HdCap[]; any?: readonly HdCap[] }>> = {
@@ -263,6 +267,8 @@ export const HD_CAPS_SINCE_NEEDS: Partial<Record<HdCap, { all?: readonly HdCap[]
   // 1.19.2: an incident's updates are public replies, and solving it solves tickets.
   "incidents.link": { all: ["tickets.change_status"] },
   "incidents.manage": { all: ["tickets.change_status", "tickets.reply_public"] },
+  // 1.20.20: taking over a reply is for those who reply.
+  "replies.take_over": { all: ["tickets.reply_public"] },
 };
 
 function liftable(cap: HdCap, held: readonly HdCap[]): boolean {

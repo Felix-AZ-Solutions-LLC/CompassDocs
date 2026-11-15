@@ -36,6 +36,7 @@ import {
   List,
   ListChecks,
   ListOrdered,
+  LockKeyhole,
   MailPlus,
   Mail,
   MessageCircle,
@@ -181,6 +182,14 @@ export const DESK_SETTINGS_GROUPS: DeskSettingsGroup[] = [
           { href: `${S}/custom-fields`, label: "Custom fields", icon: TextCursorInput, caps: ADMIN_CAPS, keywords: "custom fields extra fields attributes per team public agent only" },
           { href: `${S}/checklists`, label: "Checklists", icon: ListChecks, caps: CHECKLIST_MANAGE_CAPS, keywords: "checklists steps tasks to-do required items" },
           { href: `${S}/before-you-solve`, label: "Before you solve", icon: ClipboardCheck, caps: ADMIN_CAPS, keywords: "before you solve solve requirements closing fields required mandatory resolution" },
+        ] },
+      // 1.20.20: the reply lock (lib/helpdesk/reply-lock).
+      { key: "reply-lock", label: "Reply lock", icon: LockKeyhole, tabs: false, description: "One agent at a time writes a ticket's reply. Others see who, and can still add notes.", keywords: "reply lock collision collisions takeover take over locked replying at once two agents same ticket double reply", pages: [
+          { href: `${S}/reply-lock`, label: "Reply lock", icon: LockKeyhole, caps: ADMIN_CAPS, topics: [
+              { anchor: "reply-lock", label: "Reply lock", keywords: "lock collision reply lock takeover take over on off" },
+              { anchor: "reply-lock-idle", label: "When a lock lets go", keywords: "idle timeout minutes release expire away" },
+              { anchor: "reply-lock-now", label: "Replies being written now", keywords: "release locks held stuck hoarding release all who is replying" },
+            ] },
         ] },
       { key: "reply-targets", label: "Reply targets", icon: Clock, tabs: true, description: "Targets for each priority, and the office hours and holidays they are counted in.", keywords: "sla service level reply targets response time resolution due dates business hours calendars", pages: [
           { href: `${S}/sla`, label: "Targets", icon: Clock, caps: ["sla.manage"], keywords: "sla service level agreement reply targets first response resolution due dates due times breach priority", topics: [

@@ -47,6 +47,10 @@ import { askBeforeYouSolve, type SolveExtras } from "../solve/BeforeYouSolve";
 // Security review fixes: drafts and the hand-off carry the agent's id; a send carries its idempotency key.
 import { clearHandoff, newSendId, readDraft, readHandoff, writeDraft, writeHandoff } from "../popout/reply-popout";
 import { ApiError } from "../api";
+// 1.20.20: the reply lock (lib/helpdesk/reply-lock): one agent at a time writes the public reply.
+import { handOffReplyLock, lastReplyTouch, moveReplyLock, pokeReplyLock, useComposerReplyLock } from "../reply-lock/reply-lock";
+import { deskTabId, newDeskTabId } from "../reply-lock/tab";
+import { ReplyLockBar, ReplyLockMine } from "../reply-lock/ReplyLock";
 
 export type ComposerMode = "public" | "internal";
 
@@ -155,6 +159,9 @@ export const Composer = forwardRef<
   const [macroOpen, setMacroOpen] = useState(false);
   const [articleOpen, setArticleOpen] = useState(false);
   const [thenOpen, setThenOpen] = useState(false);
+  // 1.20.20: the first change to the Reply box takes the reply lock; someone else's makes the box read-only.
+  const lock = useComposerReplyLock(number, mode === "public", !!text.trim());
+  const lockRO = mode === "public" && lock.lockedByOther;
   const area = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const macroBtn = useRef<HTMLButtonElement>(null);
@@ -192,13 +199,24 @@ export const Composer = forwardRef<
     setUploadError("");
   }, [number, mode]);
 
+  // 1.20.20: the reply lock's tabs in the hand-off record (the pop-out's and the pane's), kept as they were handed over.
+  const lockTabs = useRef({ tab: start?.lock_tab ?? null, home: start?.lock_home ?? null });
+  const lockFields = () => ({ lock_tab: lockTabs.current.tab, lock_home: lockTabs.current.home, lock_at: lastReplyTouch(number) || start?.lock_at || null });
+  // 1.20.20: the reply came back to the pane (brought or taken back): its lock comes back to this tab with it.
+  useEffect(() => {
+    if ((handoff === "take" || handoff === "peek") && start?.lock_tab) void moveReplyLock(number, start.lock_tab, deskTabId());
+    // At mount only, as the hand-off is read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // 1.20.18: the pop-out keeps its hand-off record current, so a reload or a close hands back what is here now.
   const sentOut = useRef(false);
   const persist = () => {
-    if (handoff === "keep" && !sentOut.current) writeHandoff(uid, number, { mode, files, macro, send_id: sendId.current });
+    if (handoff === "keep" && !sentOut.current) writeHandoff(uid, number, { mode, files, macro, send_id: sendId.current, ...lockFields() });
   };
   useEffect(() => {
-    if (handoff === "keep" && !sentOut.current) writeHandoff(uid, number, { mode, files, macro, send_id: sendId.current });
+    if (handoff === "keep" && !sentOut.current) writeHandoff(uid, number, { mode, files, macro, send_id: sendId.current, ...lockFields() });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handoff, uid, number, mode, files, macro]);
 
   // 1.20.18: what is in progress (a send with its solve questions, an upload), for the pop-out.
@@ -209,8 +227,14 @@ export const Composer = forwardRef<
   function popOut() {
     if (!onPopOut || busy || uploading > 0 || disabled) return;
     writeDraft(uid, number, mode, text);
-    writeHandoff(uid, number, { mode, files, macro, send_id: sendId.current });
-    onPopOut();
+    // 1.20.20: the reply lock goes with the reply. The pop-out's tab id is minted here and handed to it in the hand-off
+    // record (never the address); the lock moves to it before the window opens and comes back if the window is blocked.
+    const popTab = newDeskTabId();
+    const home = deskTabId();
+    lockTabs.current = { tab: popTab, home };
+    writeHandoff(uid, number, { mode, files, macro, send_id: sendId.current, lock_tab: popTab, lock_home: home, lock_at: lastReplyTouch(number) || null });
+    const moving = lock.mine ? handOffReplyLock(number, popTab) : null;
+    if (!onPopOut() && moving) void moving.then((moved) => moved && moveReplyLock(number, popTab, home));
   }
 
   useImperativeHandle(ref, () => ({
@@ -228,6 +252,7 @@ export const Composer = forwardRef<
       const had = mode === target ? text : readDraft(uid, number, target);
       const next = mergeDraft(had, draft, replace);
       writeDraft(uid, number, target, next);
+      if (target === "public") lock.touch(!!next.trim());
       if (mode === target) setText(next);
       else {
         filled.current = next;
@@ -246,6 +271,7 @@ export const Composer = forwardRef<
       noteTyping(number); // "is replying" for the others (1.19.1)
       onTyping?.();
     }
+    if (mode === "public") lock.touch(!!v.trim());
   }
 
   function insertAtCursor(snippet: string) {
@@ -328,6 +354,7 @@ export const Composer = forwardRef<
 
   async function sendOnce(then: HdStatus | null, force = false, askedAgain = false) {
     setThenOpen(false);
+    if (mode === "public" && lock.lockedByOther) return;
     if (!text.trim() || busy || uploading) {
       if (!text.trim()) area.current?.focus();
       return;
@@ -390,6 +417,7 @@ export const Composer = forwardRef<
       );
       clearTyping(number);
       sendId.current = null;
+      if (mode === "public") lock.sent();
       // 1.20.18: the same send had already gone through (from the other window): nothing was posted twice.
       if (sent?.duplicate) toast("ok", mode === "public" ? "This reply was already sent." : "This note was already added.");
       else toast("ok", mode === "public" ? (forReview ? "Sent for review. A lead checks it before it goes out." : "Reply sent.") : "Note added.");
@@ -408,6 +436,7 @@ export const Composer = forwardRef<
       setMacro(null);
       onSent({ macro: used, status, mode, review: mode === "public" && forReview, warning: sent?.status_unchanged || undefined });
     } catch (err) {
+      pokeReplyLock(number); // 1.20.20: a 409 "Sam Lee is replying" shows the lock at once
       if (err instanceof CollisionError) {
         setCollision({ newer: err.newer, then });
         onNewer?.();
@@ -453,6 +482,7 @@ export const Composer = forwardRef<
         />
         {internal && <span className="text-xs text-slate-500">Only agents see notes.</span>}
         {!internal && forReview && <span className="text-xs text-slate-500">A lead reviews your reply before it goes out.</span>}
+        {!internal && lock.mine && <ReplyLockMine lock={lock} />}
         {/* 1.20.18: Pop out, desktop widths only (a new window means nothing on a phone). */}
         {onPopOut && (
           <span className="ml-auto hidden sm:inline-flex print:hidden">
@@ -471,6 +501,7 @@ export const Composer = forwardRef<
           </span>
         )}
       </div>
+      {!internal && <ReplyLockBar lock={lock} text={text} onTaken={() => requestAnimationFrame(() => area.current?.focus())} />}
       <textarea
         ref={area}
         value={text}
@@ -485,6 +516,8 @@ export const Composer = forwardRef<
           }
         }}
         disabled={disabled}
+        readOnly={lockRO}
+        onFocus={() => !internal && lock.touch(false)}
         aria-label={internal ? "Internal note" : "Reply"}
         placeholder={internal ? "Write a note for the team… / for a macro, ; for a canned response, [[ for an article" : "Write a reply… / for a macro, ; for a canned response, [[ for an article"}
         rows={4}
@@ -537,6 +570,7 @@ export const Composer = forwardRef<
             type="button"
             aria-haspopup="dialog"
             aria-expanded={macroOpen}
+            disabled={lockRO}
             onClick={() => setMacroOpen((o) => !o)}
             className={buttonClass("secondary", "sm")}
           >
@@ -563,13 +597,14 @@ export const Composer = forwardRef<
             }}
           />
         </div>
-        <CannedButton picker={canned} disabled={disabled} />
+        <CannedButton picker={canned} disabled={disabled || lockRO} />
         <div className="relative">
           <button
             ref={articleBtn}
             type="button"
             aria-haspopup="dialog"
             aria-expanded={articleOpen}
+            disabled={lockRO}
             onClick={() => setArticleOpen((o) => !o)}
             className={buttonClass("secondary", "sm")}
           >
@@ -590,8 +625,11 @@ export const Composer = forwardRef<
         <input ref={fileInput} type="file" multiple className="sr-only" tabIndex={-1} onChange={(e) => upload(e.target.files)} aria-hidden />
         <button
           type="button"
-          onClick={() => fileInput.current?.click()}
-          disabled={files.length >= MAX_FILES}
+          onClick={() => {
+            if (!internal) lock.touch(true);
+            fileInput.current?.click();
+          }}
+          disabled={files.length >= MAX_FILES || lockRO}
           aria-label="Attach files"
           data-tt="Attach files"
           className={iconButtonClass("bordered", "sm")}
@@ -602,7 +640,7 @@ export const Composer = forwardRef<
           <button
             type="button"
             onClick={() => send(null)}
-            disabled={busy || uploading > 0 || disabled}
+            disabled={busy || uploading > 0 || disabled || lockRO}
             aria-busy={busy || undefined}
             className={buttonClass("primary", "sm", "rounded-r-none")}
           >
@@ -613,7 +651,7 @@ export const Composer = forwardRef<
             ref={thenBtn}
             type="button"
             onClick={() => setThenOpen((o) => !o)}
-            disabled={busy || uploading > 0 || disabled}
+            disabled={busy || uploading > 0 || disabled || lockRO}
             aria-haspopup="menu"
             aria-expanded={thenOpen}
             aria-label={`${sendLabel} and set the status`}
