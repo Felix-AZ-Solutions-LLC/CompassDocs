@@ -16,7 +16,7 @@
 import "./support/ee-stub";
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
-import type { PoolClient } from "pg";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import JSZip from "jszip";
 import {
   pool,
@@ -152,7 +152,11 @@ async function unzip(buffer: Buffer): Promise<{ zip: JSZip; names: string[]; tex
   };
 }
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings, and one describe changes them (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   const sp = await fixtureQuery(
     `INSERT INTO spaces (name, slug, icon, description, visibility) VALUES ($1, $2, '📁', '', 'private') RETURNING id`,
@@ -228,6 +232,7 @@ after(async () => {
   await fixtureQuery("DELETE FROM groups WHERE id = ANY($1)", [[groupId, ...extraGroupIds]]);
   await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await fixtureQuery("DELETE FROM spaces WHERE id = $1", [spaceId]);
+  await complianceLock?.release();
 });
 
 describe("the snapshot text", () => {
@@ -627,15 +632,11 @@ describe("the monthly claim and the retirement snapshot", () => {
 });
 
 describe("the programme report", () => {
-  const SETTINGS_LOCK = 728342;
-  let lockClient: PoolClient | null = null;
   const saved = new Map<string, string | undefined>();
   const KEYS = ["ack_report", "ack_report_week"];
 
   before(async () => {
-    const client = await pool().connect();
-    await client.query("SELECT pg_advisory_lock($1)", [SETTINGS_LOCK]);
-    lockClient = client;
+    await complianceLock!.exclusive();
     for (const key of KEYS) saved.set(key, await getSetting(key));
   });
 
@@ -645,10 +646,7 @@ describe("the programme report", () => {
       if (v === undefined) await pool().query("DELETE FROM settings WHERE key = $1", [key]);
       else await setSetting(key, v);
     }
-    if (lockClient) {
-      await lockClient.query("SELECT pg_advisory_unlock($1)", [SETTINGS_LOCK]).catch(() => {});
-      lockClient.release();
-    }
+    await complianceLock?.shared();
   });
 
   test("the summary's bullets and counts, and the period windows", async () => {

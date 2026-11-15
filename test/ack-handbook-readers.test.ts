@@ -27,6 +27,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import Module from "node:module";
 import path from "node:path";
 
@@ -178,7 +179,11 @@ async function clearOutbox(): Promise<void> {
 
 const drain = (mailer: Mailer) => deliverAckNotices({ origin: ORIGIN, mailer, limit: 50, documentIds: docIds, heartbeatEvery: 1 });
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   spaceName = `Handbook Readers ${STAMP}`;
   const sp = await fixtureQuery(
@@ -260,6 +265,7 @@ after(async () => {
   await pool().query("DELETE FROM groups WHERE id = ANY($1)", [[staffGroup, readersGroup]]);
   await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
+  await complianceLock?.release();
 });
 
 describe("handbook-only readers (1.18.3)", () => {

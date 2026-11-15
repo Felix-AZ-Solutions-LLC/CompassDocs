@@ -34,6 +34,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import Module from "node:module";
 import path from "node:path";
 import {
@@ -293,7 +294,11 @@ async function hooked<T>(write: () => Promise<T>, repeat: (result: T) => Promise
   return result;
 }
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   const spaces = await fixtureQuery(
     `INSERT INTO spaces (name, slug, icon, description, visibility) VALUES
@@ -336,6 +341,7 @@ after(async () => {
   await fixtureQuery("DELETE FROM groups WHERE id = ANY($1)", [[g1, g2, g3]]);
   await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await fixtureQuery("DELETE FROM spaces WHERE id = ANY($1)", [[spaceA, spaceP, spaceW]]);
+  await complianceLock?.release();
 });
 
 describe("sanitizeRules", () => {

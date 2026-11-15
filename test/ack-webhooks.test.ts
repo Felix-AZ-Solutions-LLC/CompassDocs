@@ -21,6 +21,7 @@
 import { edition } from "./support/ee-stub";
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import Module from "node:module";
 import path from "node:path";
 import {
@@ -238,7 +239,11 @@ async function hook(tag: string, events: string[], opts: { spaceIds?: number[]; 
 
 const D = sweepDefaults({ remind_before_days: 3, remind_every_days: 7, escalate_after_days: 7, nudge_every_days: 0, overdue_grace_days: 0 });
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   const sp = await fixtureQuery(
     "INSERT INTO spaces (name, slug, icon, description, visibility) VALUES ($1, $2, '📁', '', 'private') RETURNING id",
@@ -283,6 +288,7 @@ after(async () => {
   await fixtureQuery("DELETE FROM groups WHERE id = $1", [group]);
   await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await fixtureQuery("DELETE FROM spaces WHERE id = ANY($1)", [[spaceP, spaceQ]]);
+  await complianceLock?.release();
 });
 
 // --- The sentences (lib/webhooks describe) ------------------------------------------------

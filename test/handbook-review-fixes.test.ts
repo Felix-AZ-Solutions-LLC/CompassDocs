@@ -24,6 +24,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import Module from "node:module";
 import path from "node:path";
 import {
@@ -268,7 +269,11 @@ async function rowOf(docId: number, who: string) {
   ).rows[0];
 }
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   const space = async (key: string) => {
     const r = await fixtureQuery(
@@ -355,6 +360,7 @@ after(async () => {
   await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM spaces WHERE id = ANY($1)", [Object.values(spaces)]);
   await pool().end();
+  await complianceLock?.release();
 });
 
 // --- A1 ------------------------------------------------------------------------------

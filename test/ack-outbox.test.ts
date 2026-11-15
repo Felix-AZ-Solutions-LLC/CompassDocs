@@ -14,6 +14,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import {
   pool,
   getSetting,
@@ -122,7 +123,11 @@ async function auditRows(action: string, docId: number): Promise<{ actor_name: s
   return r.rows;
 }
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   const sp = await fixtureQuery(
     `INSERT INTO spaces (name, slug, icon, description, visibility) VALUES ($1, $2, '📁', '', 'internal') RETURNING id`,
@@ -149,6 +154,7 @@ after(async () => {
   await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
+  await complianceLock?.release();
 });
 
 describe("the notice outbox", () => {

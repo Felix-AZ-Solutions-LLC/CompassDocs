@@ -9,6 +9,7 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import { pool, createDocument, setAckRequired, reconcilePoliciesForUser, reconcilePolicyAssignments } from "../src/lib/db";
 import { fixtureQuery } from "./support/retry";
 
@@ -66,7 +67,11 @@ async function removeWhile<T>(userId: number, run: () => Promise<T>): Promise<T>
   }
 }
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   const s = await pool().query<{ id: number }>(
     `INSERT INTO spaces (name, slug, icon, description, visibility) VALUES ($1, $2, '📁', '', 'private') RETURNING id`,
     [`Ack race ${STAMP}`, STAMP]
@@ -79,6 +84,7 @@ after(async () => {
   if (userIds.length) await pool().query("DELETE FROM users WHERE id = ANY($1::int[])", [userIds]);
   if (spaceId) await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
   await pool().end();
+  await complianceLock?.release();
 });
 
 test("switching a policy on while a member's account is removed enrols the others and skips the removed one", async () => {

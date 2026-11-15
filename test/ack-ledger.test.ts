@@ -9,6 +9,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import { createHash } from "node:crypto";
 import {
   pool,
@@ -84,7 +85,11 @@ const marker = (id: number) =>
     .query("SELECT ack_revision_at::text AS at, ack_version_id FROM documents WHERE id = $1", [id])
     .then((r) => r.rows[0]);
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   const sp = await fixtureQuery(
     `INSERT INTO spaces (name, slug, icon, description, visibility) VALUES ($1, $2, '📁', '', 'internal') RETURNING id`,
@@ -131,6 +136,7 @@ after(async () => {
   await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
+  await complianceLock?.release();
 });
 
 describe("the decision ledger", () => {

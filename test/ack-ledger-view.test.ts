@@ -8,6 +8,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import { fixtureQuery } from "./support/retry";
 import {
   pool,
@@ -54,6 +55,16 @@ async function newVersion(content: string): Promise<number> {
   );
   return r.rows[0].id;
 }
+
+let complianceLock: ComplianceSettingsLock | null = null;
+
+// Its policies read the workspace's compliance settings (test/support/compliance-lock).
+before(async () => {
+  complianceLock = await holdComplianceSettings();
+});
+after(async () => {
+  await complianceLock?.release();
+});
 
 describe("the confirmation ledger (All confirmations view, ledger exports)", () => {
   before(async () => {

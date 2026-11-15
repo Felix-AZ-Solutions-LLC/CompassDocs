@@ -12,6 +12,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import { asScope } from "../src/lib/space-scope";
 import {
   pool,
@@ -193,7 +194,11 @@ const auditRows = async (action: string, docId: number) =>
     )
   ).rows;
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   // A private space granted to one group holding only this file's people:
   // another file's account hooks (a new account, a re-enabled one) cannot
@@ -244,6 +249,7 @@ after(async () => {
   await pool().query("DELETE FROM groups WHERE id = $1", [groupId]);
   await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
+  await complianceLock?.release();
 });
 
 describe("exemptions", () => {

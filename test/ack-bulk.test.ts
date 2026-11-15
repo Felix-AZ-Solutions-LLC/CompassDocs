@@ -19,6 +19,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import Module from "node:module";
 import path from "node:path";
 import {
@@ -291,7 +292,11 @@ async function summaries(action: string) {
 
 const ymdIn = (days: number) => new Date(Date.now() + days * DAY).toISOString().slice(0, 10);
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   lib = await import("../src/lib/ack-bulk");
   compliance = await import("../src/lib/compliance");
@@ -378,6 +383,7 @@ after(async () => {
   await fixtureQuery("DELETE FROM groups WHERE id = ANY($1)", [[groupId, group2Id]]);
   await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await fixtureQuery("DELETE FROM spaces WHERE id = ANY($1)", [[spaceId, space2Id]]);
+  await complianceLock?.release();
 });
 
 // --- The rules (pure) -------------------------------------------------------------

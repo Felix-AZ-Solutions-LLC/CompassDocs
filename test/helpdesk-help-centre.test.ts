@@ -28,6 +28,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
@@ -244,7 +245,11 @@ async function call(handler: (req: Request, c: any) => Promise<Response>, url: s
 
 let mailLock: WorkspaceMailLock | null = null;
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
   mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
@@ -344,6 +349,7 @@ after(async () => {
   await rm(uploadDirectory, { recursive: true, force: true });
   await mailLock?.release(email);
   await pool().end();
+  await complianceLock?.release();
 });
 
 // --- The rule ---------------------------------------------------------------------------

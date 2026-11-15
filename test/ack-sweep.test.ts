@@ -15,7 +15,7 @@
 import "./support/ee-stub";
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
-import type { PoolClient } from "pg";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import { edition } from "./support/ee-stub";
 import {
   pool,
@@ -188,7 +188,11 @@ async function withRowHeld<T>(id: number, run: () => Promise<T>, label: string):
   }
 }
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings, and one describe changes them (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   const sp = await fixtureQuery(
     `INSERT INTO spaces (name, slug, icon, description, visibility) VALUES ($1, $2, '📁', '', 'internal') RETURNING id`,
@@ -211,6 +215,7 @@ after(async () => {
   await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM users WHERE id = $1", [readerId]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
+  await complianceLock?.release();
 });
 
 describe("the re-confirmation sweep", () => {
@@ -487,24 +492,16 @@ describe("the stored next date", () => {
 });
 
 describe("the workspace default interval on the first switch-on", () => {
-  /** The advisory lock the settings-touching describes share with test/compliance-settings.test.ts. */
-  const SETTINGS_LOCK = 728342;
-  let lockClient: PoolClient | null = null;
   let savedDefaults: string | undefined;
 
   before(async () => {
-    const client = await pool().connect();
-    await client.query("SELECT pg_advisory_lock($1)", [SETTINGS_LOCK]);
-    lockClient = client;
+    await complianceLock!.exclusive();
     savedDefaults = await getSetting("ack_defaults");
   });
   after(async () => {
     if (savedDefaults === undefined) await pool().query("DELETE FROM settings WHERE key = 'ack_defaults'");
     else await setSetting("ack_defaults", savedDefaults);
-    if (lockClient) {
-      await lockClient.query("SELECT pg_advisory_unlock($1)", [SETTINGS_LOCK]).catch(() => {});
-      lockClient.release();
-    }
+    await complianceLock?.shared();
   });
 
   async function newPolicy(title: string): Promise<number> {
