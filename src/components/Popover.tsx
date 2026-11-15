@@ -21,6 +21,124 @@ import { visibleBox } from "./TooltipPlacer";
 
 /** How close to a clipping edge a panel may sit. */
 const EDGE = 4;
+/** The inline styles placePanel may set (cleared before each placing). */
+const PLACED = ["translate", "max-width", "max-height", "overflow-y", "position", "top", "bottom", "left", "right", "margin-top", "margin-bottom"];
+
+/**
+ * Where an open panel goes (1.20.12). It always shows whole and next to its trigger:
+ *
+ *  - Anchored (the documented case: the parent is `relative`): it hangs from the parent as its
+ *    classes say. If it would run past the bottom (or top) of what clips it (a scrolling pane, the
+ *    viewport) it opens on the other side when there is more room there; one that crosses a side
+ *    edge slides back inside, as a data-tt bubble does (TooltipPlacer), never wider than the box.
+ *  - Floating: when the parent is not positioned (a row's actions in a table), or the anchored
+ *    panel cannot show whole inside what clips it (a short table's sideways-scroll wrapper), it
+ *    becomes position: fixed at its trigger, flipped or capped (scrolling inside) to fit the
+ *    viewport, and follows the trigger while anything scrolls. Before, such a panel hung from a
+ *    far ancestor; in the desk that was the page, which then scrolled to show it.
+ *
+ * Returns the cleanup for the floating case.
+ */
+function placePanel(el: HTMLElement, trigger: HTMLElement | null, align: "start" | "end", side: "bottom" | "top"): (() => void) | undefined {
+  const anchor = el.parentElement;
+  if (!anchor) return;
+  for (const p of PLACED) el.style.removeProperty(p);
+  const gap = parseFloat(getComputedStyle(el)[side === "top" ? "marginBottom" : "marginTop"]) || 4;
+  if (el.offsetParent === anchor && placeAnchored(el, anchor, side, gap)) return;
+  for (const p of PLACED) el.style.removeProperty(p);
+  const at = trigger && anchor.contains(trigger) ? trigger : anchor;
+  const place = () => placeFloating(el, at, align, side, gap);
+  place();
+  let raf = 0;
+  const again = (e: Event) => {
+    if (e.target instanceof Node && el.contains(e.target)) return;
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(place);
+  };
+  window.addEventListener("scroll", again, true);
+  window.addEventListener("resize", again);
+  return () => {
+    cancelAnimationFrame(raf);
+    window.removeEventListener("scroll", again, true);
+    window.removeEventListener("resize", again);
+    for (const p of PLACED) el.style.removeProperty(p);
+  };
+}
+
+/** Anchored placing; false when the panel cannot show whole inside what clips it. */
+function placeAnchored(el: HTMLElement, anchor: HTMLElement, side: "bottom" | "top", gap: number): boolean {
+  const box = visibleBox(anchor);
+  // Sideways: never wider than the box, slid back inside it.
+  const room = box.right - box.left - 2 * EDGE;
+  let r = el.getBoundingClientRect();
+  if (room > 0 && r.width > room) {
+    el.style.maxWidth = `${Math.floor(room)}px`;
+    r = el.getBoundingClientRect();
+  }
+  let shift = 0;
+  if (r.right > box.right - EDGE) shift = box.right - EDGE - r.right;
+  if (r.left + shift < box.left + EDGE) shift = box.left + EDGE - r.left;
+  if (Math.abs(shift) >= 1) {
+    // On top of any translate the caller's classes give it (a centred panel's -translate-x-1/2).
+    const given = getComputedStyle(el).translate;
+    const [x = "0px", ...rest] = given === "none" ? [] : given.split(" ");
+    el.style.translate = [`calc(${x} + ${Math.round(shift)}px)`, ...(rest.length ? rest : ["0px"])].join(" ");
+  }
+  // Up and down: the side it was asked for, else the other one if it fits there.
+  const a = anchor.getBoundingClientRect();
+  const below = box.bottom - EDGE - a.bottom - gap;
+  const above = a.top - gap - (box.top + EDGE);
+  const h = r.height;
+  if (h <= (side === "top" ? above : below)) return true;
+  if (h > (side === "top" ? below : above)) return false;
+  if (side === "top") {
+    el.style.bottom = "auto";
+    el.style.top = "100%";
+    el.style.marginBottom = "0px";
+    el.style.marginTop = `${gap}px`;
+  } else {
+    el.style.top = "auto";
+    el.style.bottom = "100%";
+    el.style.marginTop = "0px";
+    el.style.marginBottom = `${gap}px`;
+  }
+  return true;
+}
+
+/** Floating placing: fixed at the trigger, inside the viewport. */
+function placeFloating(el: HTMLElement, at: HTMLElement, align: "start" | "end", side: "bottom" | "top", gap: number) {
+  const vw = document.documentElement.clientWidth;
+  const vh = window.innerHeight;
+  Object.assign(el.style, { position: "fixed", right: "auto", bottom: "auto", marginTop: "0px", marginBottom: "0px", translate: "none" });
+  el.style.removeProperty("max-height");
+  el.style.removeProperty("overflow-y");
+  if (el.offsetWidth > vw - 2 * EDGE) el.style.maxWidth = `${vw - 2 * EDGE}px`;
+  const w = el.offsetWidth;
+  const h = el.offsetHeight;
+  const a = at.getBoundingClientRect();
+  const left = Math.min(Math.max(align === "end" ? a.right - w : a.left, EDGE), vw - EDGE - w);
+  const below = vh - EDGE - a.bottom - gap;
+  const above = a.top - gap - EDGE;
+  let down = side === "bottom";
+  if (down && h > below && above > below) down = false;
+  else if (!down && h > above && below > above) down = true;
+  const room = Math.max(down ? below : above, 48);
+  if (h > room) {
+    el.style.maxHeight = `${Math.floor(room)}px`;
+    el.style.overflowY = "auto";
+  }
+  const top = down ? a.bottom + gap : a.top - gap - Math.min(h, room);
+  el.style.left = `${Math.round(left)}px`;
+  el.style.top = `${Math.round(top)}px`;
+  // A transformed or filtered ancestor makes itself the fixed box: measure and correct.
+  const r = el.getBoundingClientRect();
+  const dx = left - r.left;
+  const dy = top - r.top;
+  if (Math.abs(dx) >= 1 || Math.abs(dy) >= 1) {
+    el.style.left = `${Math.round(left + dx)}px`;
+    el.style.top = `${Math.round(top + dy)}px`;
+  }
+}
 
 /**
  * The items arrows walk in a role="menu" panel: plain actions and the
@@ -60,31 +178,13 @@ export function Popover({
 }) {
   const panel = useRef<HTMLDivElement>(null);
 
-  // 1.20.12: a panel that would cross the side of a pane that clips it (the desk ticket's own
-  // scrolling side column is 15rem, an end-aligned w-60 menu hung past its left edge) slides back
-  // inside, as a data-tt bubble does (TooltipPlacer), and is never wider than that box. Measured
-  // once on open, before the menu moves focus into it (so focus never scrolls the pane sideways).
+  // 1.20.12: the panel is placed once it is open, before a menu moves focus into it (so focus
+  // never scrolls a pane): see placePanel below.
   useLayoutEffect(() => {
     const el = panel.current;
-    if (!open || !el?.parentElement) return;
-    el.style.removeProperty("translate");
-    el.style.removeProperty("max-width");
-    const box = visibleBox(el.parentElement);
-    const room = box.right - box.left - 2 * EDGE;
-    let r = el.getBoundingClientRect();
-    if (room > 0 && r.width > room) {
-      el.style.maxWidth = `${Math.floor(room)}px`;
-      r = el.getBoundingClientRect();
-    }
-    let shift = 0;
-    if (r.right > box.right - EDGE) shift = box.right - EDGE - r.right;
-    if (r.left + shift < box.left + EDGE) shift = box.left + EDGE - r.left;
-    if (Math.abs(shift) < 1) return;
-    // On top of any translate the caller's classes give it (a centred panel's -translate-x-1/2).
-    const given = getComputedStyle(el).translate;
-    const [x = "0px", ...rest] = given === "none" ? [] : given.split(" ");
-    el.style.translate = [`calc(${x} + ${Math.round(shift)}px)`, ...(rest.length ? rest : ["0px"])].join(" ");
-  }, [open]);
+    if (!open || !el) return;
+    return placePanel(el, triggerRef?.current ?? null, align, side);
+  }, [open, align, side, triggerRef]);
 
   useEffect(() => {
     if (!open) return;

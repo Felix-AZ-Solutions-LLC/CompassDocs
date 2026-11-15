@@ -302,6 +302,108 @@ test.describe("desk scroll areas (licensed)", () => {
     await page.keyboard.press("Escape");
   });
 
+  /** The open menu is whole on screen and inside the box of every pane that clips it. */
+  async function menuFits(menu: ReturnType<Page["getByRole"]>) {
+    return menu.evaluate((m) => {
+      const r = m.getBoundingClientRect();
+      const box = { top: 0, left: 0, right: document.documentElement.clientWidth, bottom: window.innerHeight };
+      if (getComputedStyle(m).position !== "fixed") {
+        for (let p = m.parentElement; p && p !== document.body; p = p.parentElement) {
+          const cs = getComputedStyle(p);
+          if (!/auto|scroll|hidden|clip/.test(`${cs.overflowX} ${cs.overflowY}`)) continue;
+          const b = p.getBoundingClientRect();
+          box.top = Math.max(box.top, b.top);
+          box.left = Math.max(box.left, b.left);
+          box.right = Math.min(box.right, b.right);
+          box.bottom = Math.min(box.bottom, b.bottom);
+        }
+      }
+      const fits = r.top >= box.top - 1 && r.bottom <= box.bottom + 1 && r.left >= box.left - 1 && r.right <= box.right + 1;
+      return { fits, menu: [r.top, r.bottom, r.left, r.right].map(Math.round), box: [box.top, box.bottom, box.left, box.right].map(Math.round) };
+    });
+  }
+
+  test("the side column's lowest menu opens whole on screen and its last choice is clickable", async ({ page }) => {
+    await openTicket(page, 1440, 900);
+    const side = page.locator(SIDE);
+    await side.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    const trigger = side.locator("button[aria-haspopup=menu]:visible").last();
+    await expect(trigger).toBeVisible();
+    await trigger.click();
+    const menu = side.getByRole("menu");
+    await expect(menu).toBeVisible();
+    const fit = await menuFits(menu);
+    expect(fit.fits, JSON.stringify(fit)).toBe(true);
+    const last = menu.locator('[role^="menuitem"]:not([disabled])').last();
+    await last.click({ timeout: 10_000 });
+    await expect(menu).toHaveCount(0);
+    expect(await page.evaluate(() => document.scrollingElement!.scrollTop)).toBe(0);
+  });
+
+  test.describe("a row menu at the end of a long settings list", () => {
+    let parentId = 0;
+    test.beforeAll(async ({ browser }) => {
+      if (!ticket) return;
+      const page = await browser.newPage();
+      await login(page, ADMIN);
+      const p = await api(page, "/api/helpdesk/admin/categories", { method: "POST", body: { name: `E2E Scroll ${stamp}` } });
+      expect(p.status, JSON.stringify(p.body)).toBe(201);
+      parentId = p.body.category.id;
+      for (let i = 1; i <= 24; i++) {
+        const s = await api(page, "/api/helpdesk/admin/categories", { method: "POST", body: { name: `Scroll sub ${String(i).padStart(2, "0")} ${stamp}`, parent_id: parentId } });
+        expect(s.status, JSON.stringify(s.body)).toBe(201);
+      }
+      await page.close();
+    });
+    test.afterAll(async ({ browser }) => {
+      if (!parentId) return;
+      const page = await browser.newPage();
+      await login(page, ADMIN);
+      const list = await api(page, "/api/helpdesk/admin/categories");
+      const mine = (list.body?.categories ?? []).find((c: { id: number }) => c.id === parentId);
+      for (const s of mine?.subcategories ?? []) await api(page, `/api/helpdesk/admin/categories/${s.id}`, { method: "DELETE" });
+      await api(page, `/api/helpdesk/admin/categories/${parentId}`, { method: "DELETE" });
+      await page.close();
+    });
+
+    for (const [w, h] of [
+      [1440, 900],
+      [1280, 720],
+    ]) {
+      test(`at ${w}x${h} it opens whole on screen and its last item is clickable`, async ({ page }) => {
+        await page.setViewportSize({ width: w, height: h });
+        await page.goto("/desk/settings/categories");
+        const lastName = `Scroll sub 24 ${stamp}`;
+        const more = page.getByRole("button", { name: `More actions for ${lastName}` });
+        await expect(more).toBeAttached({ timeout: 60_000 });
+        // Scroll the settings pane to its very end: the row sits at the bottom of the screen.
+        await more.evaluate((b) => {
+          for (let p = b.parentElement; p; p = p.parentElement)
+            if (/(auto|scroll)/.test(getComputedStyle(p).overflowY) && p.scrollHeight > p.clientHeight) {
+              p.scrollTop = p.scrollHeight;
+              break;
+            }
+        });
+        const rb = (await more.boundingBox())!;
+        expect(rb.y + rb.height, "the row is near the bottom of the screen").toBeGreaterThan(h - 200);
+        await more.click();
+        const menu = page.getByRole("menu", { name: `Actions for ${lastName}` });
+        await expect(menu).toBeVisible();
+        const fit = await menuFits(menu);
+        expect(fit.fits, JSON.stringify(fit)).toBe(true);
+        // The last item (Delete) takes a click without any scrolling, and asks first.
+        const last = menu.getByRole("menuitem").last();
+        await expect(last).toHaveText(/Delete/);
+        await last.click({ timeout: 10_000 });
+        const dialog = page.getByRole("dialog");
+        await expect(dialog).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expect(dialog).toHaveCount(0);
+        expect(await page.evaluate(() => document.scrollingElement!.scrollTop)).toBe(0);
+      });
+    }
+  });
+
   test("other desk pages: the page never scrolls and no pane ends in blank space", async ({ page }) => {
     for (const [w, h] of [
       [1440, 900],

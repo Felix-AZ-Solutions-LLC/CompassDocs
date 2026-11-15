@@ -1894,10 +1894,16 @@ per-route variants:
   overlay stack, focus back to the trigger. The trigger carries
   `aria-expanded` and `aria-haspopup`. Never hand-roll an `absolute …
   shadow-lg` panel (a guard test fails the build).
-  A panel that would cross the side of a pane that clips it (a scrolling
-  column, the viewport) slides back inside on open and is never wider than
-  that box (1.20.12, the same measure as §Tooltips' bubbles), so `align`
-  says where it hangs from and the pane's edge still wins.
+  An open panel always shows whole beside its trigger (1.20.12,
+  `placePanel`): one that would run past the bottom of what clips it (a
+  scrolling pane, the viewport) opens upward when there is more room there;
+  one that crosses a side edge slides back inside and is never wider than
+  that box (the same measure as §Tooltips' bubbles). When the parent is not
+  `relative` (a row's actions in a table) or the panel cannot show whole in
+  its pane (a short table's sideways-scroll wrapper), it floats: `position:
+  fixed` at its trigger, flipped or capped to the viewport, following the
+  trigger as anything scrolls. Never count on the page scrolling to reach a
+  menu: in the desk the page does not scroll.
 - **A picker menu** (one choice among a few, 1.18.0: `FindModeMenu`) is a
   `Popover role="menu"` whose rows are `role="menuitemradio"` with
   `aria-checked` on the chosen one, never `menuitem` plus an sr-only
