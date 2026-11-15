@@ -418,6 +418,26 @@ export interface HdAutomation {
   created_at: string;
   updated_at: string;
   last_run_at: string | null;
+  /**
+   * 1.20.16: drafts from Claude (lib/helpdesk/automations). False for a new
+   * rule Claude drafted that nobody has published (saved off; never runs).
+   * Optional for rows built elsewhere; the routes always send them.
+   */
+  published?: boolean;
+  /** Changes Claude proposed to a published rule, waiting beside it; null when none. */
+  draft?: HdAutomationDraft | null;
+  draft_by_name?: string;
+  draft_at?: string | null;
+  /** "mcp" | "claude_desk" | "". */
+  draft_via?: string;
+}
+
+/** 1.20.16: what an automation draft holds (never on/off: only a person switches a rule on). */
+export interface HdAutomationDraft {
+  name: string;
+  event: HdAutomationEvent;
+  conditions: HdAutomationConditions;
+  actions: HdAutomationActions;
 }
 
 // --- Workflows (agent B) -------------------------------------------------------

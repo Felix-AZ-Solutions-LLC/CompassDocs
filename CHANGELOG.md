@@ -4,6 +4,61 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.16] - 2026-11-15
+
+Claude drafts categories, automations and recurring tickets.
+
+### Added
+- **Claude drafts automation rules.** Through the Claude connector
+  (`hd_list_automations`, `hd_draft_automation`) or a draft card in Claude
+  in the desk, Claude can write a new rule or propose changes to an existing
+  one. A new rule is saved switched off; proposed changes wait beside the
+  live rule, which keeps running unchanged.
+- **Claude drafts recurring tickets.** `hd_list_recurring` and
+  `hd_draft_recurring` work the same way: a new schedule is saved paused and
+  opens nothing; changes wait beside the live schedule.
+- **Claude drafts changes to the category list.** `hd_list_categories` and
+  `hd_draft_categories` propose new categories and sub-categories and
+  renames. Claude never deletes or merges. Pickers, rules and the API keep
+  using the live list until the changes are published; publishing a rename
+  updates tickets, request types, rules and saved views, as a rename on the
+  settings page does.
+- **Review before anything changes.** Drafts show on the Categories,
+  Automations and Recurring tickets tabs as "Draft from Claude" or "Changes
+  from Claude", with **Publish**, **Save draft** and **Discard**. A rule's
+  review shows "What this rule will do": every trigger, condition and
+  action, including who is assigned or notified and which macro reply is
+  sent.
+
+### Changed
+- **Rules assign and notify desk agents only.** "Assign to" and "notify one
+  person" must be active desk agents, on the settings page and through
+  Claude.
+- **The automation editor shows every action.** An assignee picker, a named
+  person under Notify, and a shared macro by name even when you can't manage
+  it.
+
+### Fixed
+- **No more gaps on the Desk settings overview.** The group cards now stack
+  in columns, so a short card no longer leaves empty space under it.
+
+### Security
+- **Publishing is explicit and checks what you reviewed.** A draft is
+  published only from its review, and only if it is the draft you looked at,
+  the live rule or schedule hasn't been edited since Claude drafted it, and
+  the categories it renames still have the names you saw. Category renames
+  and rule edits no longer race each other.
+
+### Upgrading
+- **Nothing to run.** New columns on automations and recurring tickets and a
+  category draft table are added on start; every existing rule and schedule
+  stays published and unchanged. Draft tools need the connector's "notes"
+  level or above; in Claude in the desk they follow the "Draft replies and
+  internal notes" switch, and only for people who can manage that setting.
+- **Rules that assign or notify someone who isn't a desk agent keep
+  running,** but must be changed to a desk agent before they can be saved
+  again.
+
 ## [1.20.15] - 2026-11-15
 
 Claude works with macros.

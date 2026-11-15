@@ -8,14 +8,18 @@
 //   read     find and read what the person can see, and summarise it
 //   notes    (default) also write: internal notes, reply drafts, the
 //            person's own requests and replies on them, and drafts of
-//            workflows, request types, macros and (1.20.14) checklists
+//            workflows, request types, macros, (1.20.14) checklists and
+//            (1.20.16) category list changes, automations and recurring
+//            tickets (a new rule saved off, a new schedule saved paused)
 //   update   also change tickets: status, priority, team, assignee, tags,
 //            and (1.20.14) ticking checklist items and adding checklists,
 //            and (1.20.15) applying macros (a macro's reply becomes a draft)
 //
 // Whatever the level, three things are never possible (no tool exists and
 // no setting adds one): sending a reply to a requester, deciding an
-// approval, and publishing a workflow, request type, macro or checklist.
+// approval, and publishing a workflow, request type, macro, checklist,
+// (1.20.16) category change, automation or recurring ticket. No tool
+// switches a rule or a schedule on, deletes or merges anything.
 
 export const HD_CLAUDE_KEY = "helpdesk_claude_connector";
 
@@ -46,7 +50,7 @@ export const HD_CLAUDE_LEVEL_HINT: Record<HdClaudeLevel, string> = {
 export const HD_CLAUDE_NEVER: readonly string[] = [
   "Send a reply to a requester, a macro's reply included: Claude saves a draft and a person sends it.",
   "Approve or decline: Claude lists what's waiting and links to the approval.",
-  "Publish a workflow, request type, macro or checklist: Claude saves a draft for someone to publish.",
+  "Publish a workflow, request type, macro, checklist, category change, automation or recurring ticket: Claude saves a draft for someone to publish, and never switches a rule or schedule on.",
 ];
 
 /** Audit actions the connector writes (each row carries details.via = "mcp"). */
@@ -68,6 +72,13 @@ export const HD_CLAUDE_AUDIT_ACTIONS = [
   "helpdesk.checklist.added",
   // 1.20.15: a macro applied (its reply saved as a draft).
   "helpdesk.macro.applied",
+  // 1.20.16: drafts of category list changes, automations and recurring tickets.
+  "helpdesk.category_draft.created",
+  "helpdesk.category_draft.updated",
+  "helpdesk.automation.created",
+  "helpdesk.automation.updated",
+  "helpdesk.recurring.created",
+  "helpdesk.recurring.updated",
 ] as const;
 
 /** One line of "Recent activity via Claude". */
@@ -123,6 +134,17 @@ export function claudeActivitySummary(action: string, details: Record<string, un
       const draft = details?.reply === "draft" ? " (reply saved as a draft)" : "";
       return n ? `Applied the macro${macro} to ${n}${draft}` : `Applied the macro${macro}${draft}`;
     }
+    case "helpdesk.category_draft.created":
+    case "helpdesk.category_draft.updated": {
+      const c = typeof details?.changes === "number" ? details.changes : 0;
+      return c ? `Saved a draft of ${c} category ${c === 1 ? "change" : "changes"}` : "Saved a draft of category changes";
+    }
+    case "helpdesk.automation.created":
+    case "helpdesk.automation.updated":
+      return name ? `Saved an automation draft: ${name}` : "Saved an automation draft";
+    case "helpdesk.recurring.created":
+    case "helpdesk.recurring.updated":
+      return name ? `Saved a recurring ticket draft: ${name}` : "Saved a recurring ticket draft";
     default:
       return name || action;
   }

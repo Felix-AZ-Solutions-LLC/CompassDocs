@@ -2229,6 +2229,18 @@ const SCHEMA_SQL = `
     last_run_at timestamptz
   );
   CREATE INDEX IF NOT EXISTS idx_hd_automations_event ON hd_automations(event, position) WHERE active = 1;
+  -- 1.20.16: drafts from Claude (lib/helpdesk/automations saveAutomationDraft). published = 0 is a
+  -- new rule Claude drafted (saved switched off; never runs until a person publishes it); on a
+  -- published rule, draft holds proposed changes ({ name, event, conditions, actions }) while the
+  -- live rule keeps running unchanged. Existing rules: published = 1, no draft.
+  ALTER TABLE hd_automations ADD COLUMN IF NOT EXISTS published integer NOT NULL DEFAULT 1;
+  ALTER TABLE hd_automations ADD COLUMN IF NOT EXISTS draft jsonb;
+  ALTER TABLE hd_automations ADD COLUMN IF NOT EXISTS draft_by integer REFERENCES users(id) ON DELETE SET NULL;
+  ALTER TABLE hd_automations ADD COLUMN IF NOT EXISTS draft_by_name text NOT NULL DEFAULT '';
+  ALTER TABLE hd_automations ADD COLUMN IF NOT EXISTS draft_at timestamptz;
+  ALTER TABLE hd_automations ADD COLUMN IF NOT EXISTS draft_via text NOT NULL DEFAULT '';
+  -- 1.20.16 review fix: the live rule's updated_at when Claude's changes were drafted (publishing them refuses a rule edited since).
+  ALTER TABLE hd_automations ADD COLUMN IF NOT EXISTS draft_base_at timestamptz;
   -- A run pins its workflow's version; current holds the runtime cursor and
   -- the definition snapshot taken at start (lib/helpdesk/engine).
   CREATE TABLE IF NOT EXISTS hd_workflow_runs (

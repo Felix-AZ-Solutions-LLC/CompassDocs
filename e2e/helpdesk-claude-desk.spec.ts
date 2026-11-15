@@ -14,7 +14,10 @@ import { startFakeAnthropic, type FakeAnthropic } from "../test/support/fake-ant
 // through the desk's route ("via Claude in the desk"), Save as draft keeps
 // the checklist unpublished in Desk settings → Checklists. 1.20.15: Claude
 // proposes a macro; the card says what it will do; Apply applies it through
-// the desk's own macro route ("via Claude in the desk", audited).
+// the desk's own macro route ("via Claude in the desk", audited). 1.20.16:
+// Claude drafts an automation, a recurring ticket and category changes; the
+// cards say what each draft does; Save as draft keeps the automation off and
+// unpublished (it opens with the draft strip in Desk settings → Automations).
 //
 // NEVER the real API. The spec starts the fake Messages API
 // (test/support/fake-anthropic) on E2E_FAKE_ANTHROPIC_PORT (default 4917),
@@ -356,6 +359,115 @@ test.describe("claude in the desk (licensed, fake Messages API)", () => {
       expect(applies.rows[0].n).toBe(1);
     } finally {
       await api(page, `/api/helpdesk/admin/macros/${macroId}`, { method: "DELETE" });
+    }
+  });
+  test("settings drafts: Claude drafts an automation, a schedule and category changes; Save as draft keeps the rule off", async ({ page, browser }) => {
+    test.setTimeout(300_000);
+    expect(number, "the c1 test made the ticket").toBeGreaterThan(0);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const rule = `Printer tickets ${stamp}`;
+    const sched = `Printer toner check ${stamp}`;
+    const cat = `Printers ${stamp}`;
+    try {
+      fake.queue(
+        {
+          content: [
+            {
+              type: "tool_use",
+              name: "draft_automation",
+              input: {
+                id: 0,
+                name: rule,
+                event: "ticket_created",
+                conditions: { team_ids: [], categories: [], subcategories: [], priorities: [], request_type_ids: [], sources: [], keywords: ["printer", "toner"] },
+                actions: { team_id: teamId, assignee_id: 0, priority: "high", status: "", category: "", subcategory: "", tags_add: ["printer"], internal_note: "", macro_id: 0, notify: "" },
+              },
+            },
+            {
+              type: "tool_use",
+              name: "draft_recurring",
+              input: {
+                id: 0,
+                team_id: teamId,
+                subject: `${sched}: {{month}}`,
+                body: "Check toner levels on every floor.",
+                priority: "normal",
+                request_type_id: 0,
+                assignee_id: 0,
+                due_business_days: 2,
+                pattern: { kind: "monthly", time: "09:00", days: [], mode: "nth_weekday", nth: 1, weekday: 1, day: 1, months: [], unit: "weeks", every: 1, start: "2026-01-01" },
+                holiday_rule: "next_working_day",
+                timezone: "Europe/London",
+              },
+            },
+            { type: "tool_use", name: "draft_categories", input: { changes: [{ kind: "add_category", id: 0, category: "", name: cat, subcategories: ["Toner", "Paper jam"] }] } },
+          ],
+        },
+        { content: [{ type: "text", text: "I drafted a rule, a monthly toner check and a Printers category. Save them as drafts and someone publishes them." }] }
+      );
+      await page.goto(`/desk/tickets/${number}`);
+      await slow(page.getByRole("button", { name: "Claude", exact: true })).toBeVisible({ timeout: 120_000 });
+      await page.keyboard.press("Control+j");
+      const panel = page.getByRole("complementary", { name: "Claude" });
+      await expect(panel).toBeVisible();
+      await slow(panel.getByText("Reply draft for Daniel", { exact: true })).toBeVisible();
+      const box = panel.getByLabel("Ask Claude");
+      await box.fill("Printer tickets keep coming. Set up a rule, a monthly toner check and a category for them.");
+      await expect(box).toHaveValue(/Printer tickets/);
+      await box.press("Enter");
+      const ruleCard = panel.getByRole("region", { name: `Automation draft: ${rule}` });
+      const schedCard = panel.getByRole("region", { name: `Recurring ticket draft: ${sched}` });
+      const catCard = panel.getByRole("region", { name: "Category change" });
+      await slow(ruleCard).toBeVisible();
+      await slow(schedCard).toBeVisible();
+      await slow(catCard).toBeVisible();
+      await expect(ruleCard.getByText("When a ticket is created", { exact: true })).toBeVisible();
+      await expect(ruleCard.getByText('If it mentions "printer" or "toner"', { exact: true })).toBeVisible();
+      await expect(ruleCard.getByText(/^Then move it to .*, set the priority to High, add the tag printer$/)).toBeVisible();
+      await expect(catCard.getByText(`Add the category "${cat}" with Toner, Paper jam`, { exact: true })).toBeVisible();
+      await expect(schedCard).toContainText("Due in 2 business days");
+      expect((await db.query("SELECT 1 FROM hd_automations WHERE name = $1", [rule])).rowCount, "nothing saved before Save as draft").toBe(0);
+      await ruleCard.scrollIntoViewIfNeeded();
+      await shot(page, "claude-settings-draft-cards-1440");
+      if (SHOTS) {
+        const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, baseURL: test.info().project.use.baseURL });
+        const small = await ctx.newPage();
+        await login(small, ADMIN);
+        await small.goto(`/desk/tickets/${number}`);
+        await slow(small.getByRole("button", { name: "Claude", exact: true })).toBeVisible({ timeout: 120_000 });
+        await small.keyboard.press("Control+j");
+        const smallCard = small.getByRole("complementary", { name: "Claude" }).getByRole("region", { name: `Automation draft: ${rule}` });
+        await slow(smallCard).toBeVisible();
+        await smallCard.scrollIntoViewIfNeeded();
+        expect(await small.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+        await small.addStyleTag({ content: "nextjs-portal{display:none!important}" }).catch(() => {});
+        await small.screenshot({ path: `${SHOTS}/claude-settings-draft-cards-390-light.png` });
+        await ctx.close();
+      }
+
+      await ruleCard.getByRole("button", { name: "Save as draft" }).click();
+      await slow(ruleCard.getByText("Saved as draft", { exact: true })).toBeVisible();
+      await expect(ruleCard.getByRole("link", { name: "Review in Automations" })).toBeVisible();
+      const row = (await db.query("SELECT id, active, published, draft_via FROM hd_automations WHERE name = $1", [rule])).rows[0];
+      expect({ active: row.active, published: row.published, draft_via: row.draft_via }).toEqual({ active: 0, published: 0, draft_via: "claude_desk" });
+      await schedCard.getByRole("button", { name: "Skip" }).click();
+      await slow(schedCard.getByText("Skipped", { exact: true })).toBeVisible();
+      await catCard.getByRole("button", { name: "Skip" }).click();
+      expect((await db.query("SELECT 1 FROM hd_recurring WHERE subject LIKE $1", [`${sched}%`])).rowCount).toBe(0);
+
+      // The review in Desk settings: off, Draft from Claude, Publish switches it on.
+      await page.goto(`/desk/settings/automations?id=${row.id}`);
+      const dialog = page.getByRole("dialog");
+      await slow(dialog.getByRole("region", { name: "Draft from Claude" })).toBeVisible({ timeout: 60_000 });
+      await expect(dialog.getByRole("button", { name: "Publish rule" })).toBeVisible();
+      await dialog.getByRole("button", { name: "Close" }).click();
+      const listRow = page.getByRole("listitem").filter({ hasText: rule });
+      await expect(listRow.getByText("Draft from Claude", { exact: true })).toBeVisible();
+      await expect(listRow.getByRole("button", { name: /^Turn on/ })).toHaveCount(0);
+    } finally {
+      await db.query("DELETE FROM hd_automations WHERE name = $1", [rule]);
+      await db.query("DELETE FROM hd_recurring WHERE subject LIKE $1", [`${sched}%`]);
+      await db.query("DELETE FROM hd_category_draft WHERE changes::text LIKE $1", [`%${stamp}%`]);
     }
   });
 });

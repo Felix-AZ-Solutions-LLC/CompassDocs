@@ -3,10 +3,11 @@
 //                                                scheduled runs are unchanged → { ticket: { number } }.
 //                                                Body { request_id? } makes a retried click one ticket.
 // Helpdesk 1.19.1 (agent V8). Same gate as the schedule. Audited helpdesk.recurring.run.
+// 1.20.16: a draft from Claude opens nothing (409) until a person publishes it.
 
 import { NextResponse } from "next/server";
 import { hdAnyCapGate } from "@/lib/helpdesk/roles";
-import { auditRecurring, canManageRecurringTeam, getRecurring, openRecurringNow } from "@/lib/helpdesk/recurring";
+import { RecurringDraftError, auditRecurring, canManageRecurringTeam, getRecurring, openRecurringNow } from "@/lib/helpdesk/recurring";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const s = Number.isInteger(id) && id > 0 && id < 2 ** 31 ? await getRecurring(id) : undefined;
   if (!s || !(await canManageRecurringTeam(gate, s.team_id))) return NextResponse.json({ error: "Not found." }, { status: 404 });
   const body = (await req.json().catch(() => ({}))) as { request_id?: unknown };
-  const row = await openRecurringNow(s.id, { id: gate.id, name: gate.name || gate.username }, typeof body.request_id === "string" ? body.request_id : undefined);
+  if (s.published === false) return NextResponse.json({ error: "This schedule is a draft from Claude. Publish it first." }, { status: 409 });
+  let row;
+  try {
+    row = await openRecurringNow(s.id, { id: gate.id, name: gate.name || gate.username }, typeof body.request_id === "string" ? body.request_id : undefined);
+  } catch (e) {
+    if (e instanceof RecurringDraftError) return NextResponse.json({ error: e.message }, { status: e.status });
+    throw e;
+  }
   if (!row) return NextResponse.json({ error: "That ticket was already opened." }, { status: 409 });
   await auditRecurring(req, gate, "helpdesk.recurring.run", s.id, row.subject, { ticket: row.number, via: "open_now" });
   return NextResponse.json({ ticket: { number: row.number, subject: row.subject } }, { status: 201 });

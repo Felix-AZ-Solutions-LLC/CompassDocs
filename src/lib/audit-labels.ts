@@ -205,6 +205,9 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.automation.updated": "Edited helpdesk rule",
   "helpdesk.automation.deleted": "Deleted helpdesk rule",
   "helpdesk.automation.reordered": "Reordered helpdesk rules",
+  // 1.20.16: a person publishes a rule Claude drafted, or discards the changes it proposed.
+  "helpdesk.automation.published": "Published an automation draft",
+  "helpdesk.automation.draft_discarded": "Discarded an automation draft",
   "helpdesk.macro.created": "Created macro",
   "helpdesk.macro.updated": "Edited macro",
   "helpdesk.macro.deleted": "Deleted macro",
@@ -284,6 +287,9 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.recurring.updated": "Edited a recurring ticket schedule",
   "helpdesk.recurring.deleted": "Deleted a recurring ticket schedule",
   "helpdesk.recurring.run": "Opened a recurring ticket",
+  // 1.20.16: a person publishes a schedule Claude drafted, or discards the changes it proposed.
+  "helpdesk.recurring.published": "Published a recurring ticket draft",
+  "helpdesk.recurring.draft_discarded": "Discarded a recurring ticket draft",
   "helpdesk.time.logged": "Logged time on a ticket",
   "helpdesk.time.edited": "Edited logged time",
   "helpdesk.time.deleted": "Deleted logged time",
@@ -316,6 +322,11 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.category.merged": "Merged a ticket category into another",
   "helpdesk.category.deleted": "Deleted a ticket category",
   "helpdesk.category.adopted": "Added the categories already in use to the list",
+  // 1.20.16: changes to the list Claude proposed, and a person publishing or discarding them.
+  "helpdesk.category_draft.created": "Saved a draft of category changes",
+  "helpdesk.category_draft.updated": "Edited a draft of category changes",
+  "helpdesk.category_draft.published": "Published a draft of category changes",
+  "helpdesk.category_draft.draft_discarded": "Discarded a draft of category changes",
   // The event calendar (1.20.6, lib/helpdesk/desk-calendar): reminder settings and private feed links. Details name the
   // link's owner and scope, never its address.
   "helpdesk.calendar.settings_updated": "Changed the event calendar settings",

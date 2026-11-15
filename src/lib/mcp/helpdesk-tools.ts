@@ -19,7 +19,11 @@
 //     checklists are saved as drafts (an unpublished workflow draft, a
 //     switched-off request type, a personal macro, an unpublished checklist
 //     or proposed changes beside the live one) for a person to publish in
-//     the app.
+//     the app. 1.20.16: so are category list changes (a draft beside the
+//     list), automations (a new rule saved off, or changes beside a running
+//     one) and recurring tickets (a new schedule saved paused, or changes
+//     beside a live one); no tool switches a rule or a schedule on, deletes
+//     or merges anything.
 // On top, Desk settings → Claude connector sets a workspace level (read /
 // notes / update, lib/helpdesk/claude-connector) that every write checks.
 //
@@ -90,7 +94,7 @@ const refuse = (text: string) => toolText(text, true);
 
 // --- Definitions -------------------------------------------------------------------
 
-type Side = "request" | "agent" | "reports" | "workflows" | "request_types" | "macros" | "checklists" | "macro_use";
+type Side = "request" | "agent" | "reports" | "workflows" | "request_types" | "macros" | "checklists" | "macro_use" | "categories" | "automations" | "recurring";
 
 interface HdToolDef {
   name: string;
@@ -415,6 +419,91 @@ export const HELPDESK_TOOL_DEFS: HdToolDef[] = [
       request_type_ids: { type: "array", items: { type: "number" }, description: "Request types that add it to every new request once it is published (hd_list_checklists lists them). Up to 50." },
     }),
   },
+  // 1.20.16: categories, automations and recurring tickets: read, and drafts a person publishes in Desk settings.
+  {
+    name: "hd_list_categories",
+    side: "agent",
+    description:
+      "Helpdesk: the categories and sub-categories agents pick on a ticket (Desk settings → Categories), with ids; archived ones are marked and can't be set. For people who manage the list, also the changes Claude proposed that wait for review (draft). Use the names with hd_update_ticket; use the ids with hd_draft_categories.",
+    inputSchema: obj({}),
+  },
+  {
+    name: "hd_draft_categories",
+    side: "categories",
+    write: "notes",
+    description:
+      "Helpdesk admin: propose changes to the category list: add a category (with sub-categories), add a sub-category, rename a category or sub-category. Nothing changes now: the changes wait beside the list (added to any draft already waiting) until a person reviews and publishes them in Desk settings → Categories (edit_url). Tell the person that. A rename, once published, renames it on every ticket that has it. Claude can't delete, archive or merge categories. changes: [{kind:\"add_category\", name, subcategories?:[names]}, {kind:\"add_subcategory\", category (a name on the list) or category_id, name}, {kind:\"rename\", id (hd_list_categories), to}]. Up to 50.",
+    inputSchema: obj(
+      {
+        changes: {
+          type: "array",
+          description: "The changes, in order. Up to 50.",
+          items: obj(
+            {
+              kind: { type: "string", enum: ["add_category", "add_subcategory", "rename"] },
+              name: { type: "string", description: "add_category / add_subcategory: the new name (up to 80 characters)." },
+              subcategories: { type: "array", items: { type: "string" }, description: "add_category: its sub-categories." },
+              category: { type: "string", description: "add_subcategory: the category it goes under, by name." },
+              category_id: { type: "number", description: "add_subcategory: the category it goes under, by id." },
+              id: { type: "number", description: "rename: the category or sub-category's id." },
+              to: { type: "string", description: "rename: the new name." },
+            },
+            ["kind"]
+          ),
+        },
+      },
+      ["changes"]
+    ),
+  },
+  {
+    name: "hd_list_automations",
+    side: "automations",
+    description:
+      "Helpdesk admin: the automations (When / If / Then rules, Desk settings → Automations) in run order, each in plain words with whether it is on, off, a draft from Claude, or has changes waiting. Pass id for one rule in the shape hd_draft_automation takes, and any draft waiting on it.",
+    inputSchema: obj({ id: { type: "number", description: "One rule's id." } }),
+  },
+  {
+    name: "hd_draft_automation",
+    side: "automations",
+    write: "notes",
+    description:
+      "Helpdesk admin: draft an automation rule, or propose changes to an existing one with id. Nothing runs: a new rule is saved switched OFF and marked Draft from Claude; changes wait beside the rule, which keeps running unchanged, until a person reviews and publishes them in Desk settings → Automations (edit_url). Tell the person that; only a person can switch a rule on. event: ticket_created | ticket_updated | requester_message | sla_nearing | sla_breached. conditions (all optional, every list must match): {team_ids, categories (names from hd_list_categories), subcategories:[{category, subcategory}], priorities, request_type_ids, sources, keywords}. actions (at least one): {team_id, assignee_id, priority, status, category, subcategory, tags_add, internal_note, macro_id (a shared macro), notify: \"assignee\"|\"team\"|{user_id}}. With id, fields not sent are kept.",
+    inputSchema: obj({
+      id: { type: "number", description: "An existing rule to propose changes to. Omit to draft a new one." },
+      name: { type: "string", description: "Up to 120 characters. Needed for a new rule." },
+      event: { type: "string", enum: ["ticket_created", "ticket_updated", "requester_message", "sla_nearing", "sla_breached"] },
+      conditions: { type: "object", description: "When it applies (see above). {} = every ticket." },
+      actions: { type: "object", description: "What it does (see above)." },
+    }),
+  },
+  {
+    name: "hd_list_recurring",
+    side: "recurring",
+    description:
+      "Helpdesk admin: the recurring tickets (schedules that open a ticket by themselves, Desk settings → Recurring tickets) of the teams the person manages, each in plain words with its next run and whether it is on, paused, a draft from Claude or has changes waiting; also the teams they may schedule for and the request types. Pass id for one schedule in the shape hd_draft_recurring takes, and any draft waiting on it.",
+    inputSchema: obj({ id: { type: "number", description: "One schedule's id." } }),
+  },
+  {
+    name: "hd_draft_recurring",
+    side: "recurring",
+    write: "notes",
+    description:
+      "Helpdesk admin: draft a recurring ticket schedule, or propose changes to an existing one with id. Nothing opens: a new schedule is saved PAUSED and marked Draft from Claude; changes wait beside the schedule, which keeps running unchanged, until a person reviews and publishes them in Desk settings → Recurring tickets (edit_url). Tell the person that; only a person can switch a schedule on. Fields: team_id (a team they manage), subject and body ({{month}} {{date}} {{week}} {{team}} placeholders), priority, request_type_id, assign_mode (team_rules | user) with assignee_id, due_business_days (1 to 60), pattern ({kind:\"daily\",time:\"09:00\"} | {kind:\"weekly\",days:[1..7],time} | {kind:\"monthly\",mode:\"nth_weekday\",nth:1..4|-1,weekday:1..7,months:[],time} | {kind:\"monthly\",mode:\"day\",day:1..31,months:[],time} | {kind:\"interval\",unit:\"days\"|\"weeks\",every,start:\"YYYY-MM-DD\",time}), holiday_rule (next_working_day | skip | same_day), timezone (empty = the team calendar's). With id, fields not sent are kept.",
+    inputSchema: obj({
+      id: { type: "number", description: "An existing schedule to propose changes to. Omit to draft a new one." },
+      team_id: { type: "number" },
+      subject: { type: "string" },
+      body: { type: "string" },
+      priority: { type: "string", enum: ["low", "normal", "high", "urgent"] },
+      request_type_id: { type: ["number", "null"] },
+      assign_mode: { type: "string", enum: ["team_rules", "user"] },
+      assignee_id: { type: ["number", "null"] },
+      due_business_days: { type: ["number", "null"] },
+      pattern: { type: "object" },
+      holiday_rule: { type: "string", enum: ["next_working_day", "skip", "same_day"] },
+      timezone: { type: "string" },
+    }),
+  },
   {
     name: "hd_draft_macro",
     side: "macros",
@@ -466,6 +555,13 @@ async function onSide(user: User, side: Side): Promise<boolean> {
     case "macro_use":
       // 1.20.15: an agent who holds Use macros somewhere (the desk's macro route's gate).
       return (await isAgent(user)) && hdCan(user, "macros.use");
+    // 1.20.16: Desk settings' own rule for each page.
+    case "categories":
+      return hdCan(user, "settings.manage");
+    case "automations":
+      return hdCan(user, "automations.manage");
+    case "recurring":
+      return (await hdCan(user, "settings.manage")) || (await hdCan(user, "agents.manage_team"));
   }
 }
 
@@ -631,6 +727,18 @@ export async function callHelpdeskTool(user: User, name: string, args: Args, ctx
         return await listMacrosTool(user, a, ctx);
       case "hd_apply_macro":
         return await applyMacroTool(user, a, ctx);
+      case "hd_list_categories":
+        return await listCategoriesTool(user, ctx);
+      case "hd_draft_categories":
+        return await draftCategoriesTool(user, a, ctx);
+      case "hd_list_automations":
+        return await listAutomationsTool(a, ctx);
+      case "hd_draft_automation":
+        return await draftAutomationTool(user, a, ctx);
+      case "hd_list_recurring":
+        return await listRecurringTool(user, a, ctx);
+      case "hd_draft_recurring":
+        return await draftRecurringTool(user, a, ctx);
     }
   } catch (e) {
     if (e instanceof HdTicketError) return refuse(e.message);
@@ -1565,5 +1673,212 @@ async function applyMacroTool(user: User, a: Args, ctx: Ctx) {
     tags: fresh?.tags ?? [],
     note: notes.join(" "),
     url: `${ctx.origin}/desk/tickets/${n}`,
+  });
+}
+
+// --- Categories, automations and recurring tickets (1.20.16) --------------------------------------
+// Read, and drafts a person publishes (lib/helpdesk/category-drafts, automations, recurring; the
+// model of 1.20.14's checklist drafts). Validation is Desk settings' own; nothing goes live, is
+// switched on, deleted or merged here.
+
+const settingsUrl = (ctx: Ctx, page: "categories" | "automations" | "recurring", id?: number) => `${ctx.origin}/desk/settings/${page}${id ? `?id=${id}` : ""}`;
+
+function draftStatus(t: { published?: boolean; draft?: unknown }, live: string): string {
+  return t.published === false ? "draft from Claude (not published)" : t.draft ? `${live}, with changes from Claude waiting for review` : live;
+}
+
+async function listCategoriesTool(user: User, ctx: Ctx) {
+  const { categoryTree } = await import("../helpdesk/categories");
+  const tree = await categoryTree();
+  const manages = await hdCan(user, "settings.manage");
+  const out: Record<string, unknown> = {
+    categories: tree.map((c) => ({
+      id: c.id,
+      name: c.name,
+      ...(c.archived ? { archived: true } : {}),
+      subcategories: c.subcategories.map((x) => ({ id: x.id, name: x.name, ...(x.archived ? { archived: true } : {}) })),
+    })),
+    note: "Archived entries stay on old tickets and can't be set. Only listed names can be set on a ticket.",
+  };
+  if (manages) {
+    const { getCategoryDraft } = await import("../helpdesk/category-drafts");
+    const { categoryChangeLine } = await import("../helpdesk/category-drafts-shared");
+    const d = await getCategoryDraft();
+    out.draft = d ? { changes: d.changes.map(categoryChangeLine), asked_by: d.draft_by_name, at: d.draft_at, status: "waiting for review (not published)" } : null;
+    out.edit_url = settingsUrl(ctx, "categories");
+  }
+  return toolJson(out);
+}
+
+async function draftCategoriesTool(user: User, a: Args, ctx: Ctx) {
+  const { HdCategoryError } = await import("../helpdesk/categories");
+  const { saveCategoryDraft } = await import("../helpdesk/category-drafts");
+  const { categoryChangeLine, CATEGORY_DRAFT_LIMITS } = await import("../helpdesk/category-drafts-shared");
+  if (!Array.isArray(a.changes) || a.changes.length > CATEGORY_DRAFT_LIMITS.changes) {
+    return refuse(`Send the changes as a list of up to ${CATEGORY_DRAFT_LIMITS.changes}. Nothing was saved.`);
+  }
+  let r: Awaited<ReturnType<typeof saveCategoryDraft>>;
+  try {
+    r = await saveCategoryDraft(a.changes, { id: user.id, name: user.name || user.username, via: "mcp" });
+  } catch (e) {
+    if (e instanceof HdCategoryError) return refuse(`${e.message} Nothing was saved.`);
+    throw e;
+  }
+  await auditMcp(user, ctx, r.kind === "new" ? "helpdesk.category_draft.created" : "helpdesk.category_draft.updated", { type: "helpdesk_category", id: null, label: "Category list changes" }, {
+    changes: r.draft.changes.length,
+    draft: true,
+  });
+  return toolJson({
+    saved: "draft of changes (the category list is unchanged)",
+    changes: r.draft.changes.map(categoryChangeLine),
+    note: "Agents keep picking from the list as it is. A person who manages categories reviews the changes, edits them if needed and publishes or discards them in Desk settings → Categories. A published rename renames it on every ticket that has it.",
+    edit_url: settingsUrl(ctx, "categories"),
+  });
+}
+
+const AUTOMATION_LIST_MAX = 200;
+
+async function listAutomationsTool(a: Args, ctx: Ctx) {
+  const au = await import("../helpdesk/automations");
+  if (a.id !== undefined && a.id !== null) {
+    const id = Number(a.id);
+    const r = Number.isSafeInteger(id) && id > 0 ? await au.getAutomation(id) : undefined;
+    if (!r) return refuse(`No automation with id ${a.id}.`);
+    const words = await au.automationInWords(r);
+    return toolJson({
+      id: r.id,
+      name: r.name,
+      status: draftStatus(r, r.active ? "on" : "off"),
+      event: r.event,
+      conditions: r.conditions,
+      actions: r.actions,
+      in_words: words,
+      draft: r.draft ? { ...r.draft, in_words: await au.automationInWords(r.draft), asked_by: r.draft_by_name, at: r.draft_at } : null,
+      edit_url: settingsUrl(ctx, "automations", r.id),
+    });
+  }
+  const rules = (await au.listAutomations()).slice(0, AUTOMATION_LIST_MAX);
+  // Review fix: one batch of name lookups for every rule (not a handful of queries per rule).
+  const words = await au.automationsInWords(rules);
+  const out = rules.map((r, i) => ({ id: r.id, order: i + 1, name: r.name, status: draftStatus(r, r.active ? "on" : "off"), when: words[i].when, if: words[i].if, then: words[i].then }));
+  return toolJson({ automations: out, note: "Rules run in this order, first to last, on each event.", edit_url: settingsUrl(ctx, "automations") });
+}
+
+async function draftAutomationTool(user: User, a: Args, ctx: Ctx) {
+  const au = await import("../helpdesk/automations");
+  const input: Record<string, unknown> = {};
+  for (const k of ["name", "event", "conditions", "actions"]) if (a[k] !== undefined) input[k] = a[k];
+  let id: number | undefined;
+  if (a.id !== undefined && a.id !== null) {
+    id = Number(a.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return refuse(`No automation with id ${a.id}.`);
+  }
+  let r: Awaited<ReturnType<typeof au.saveAutomationDraft>>;
+  try {
+    r = await au.saveAutomationDraft(input, { id: user.id, name: user.name || user.username, via: "mcp" }, id);
+  } catch (e) {
+    if (e instanceof au.AutomationDraftError) return refuse(`${e.message} Nothing was saved.`);
+    throw e;
+  }
+  const rule = r.automation;
+  const shape = rule.draft ?? rule;
+  const details = { event: shape.event, conditions: shape.conditions, actions: Object.keys(shape.actions ?? {}), draft: true };
+  if (r.kind === "new") await auditMcp(user, ctx, "helpdesk.automation.created", { type: "helpdesk_automation", id: rule.id, label: rule.name }, { ...details, active: 0, published: false });
+  else await auditMcp(user, ctx, "helpdesk.automation.updated", { type: "helpdesk_automation", id: rule.id, label: rule.name }, { changed: ["draft"], ...details, published: rule.published });
+  const words = await au.automationInWords(shape);
+  return toolJson({
+    id: rule.id,
+    name: shape.name,
+    saved: r.kind === "changes" ? "draft of changes (the live rule keeps running unchanged)" : "draft (switched off, not published)",
+    published: rule.published,
+    active: rule.active === 1,
+    in_words: words,
+    note:
+      r.kind === "changes"
+        ? "The rule keeps running as it is. A person who manages automations reviews the changes and publishes or discards them in Desk settings → Automations."
+        : "It is off and never runs until a person who manages automations reviews it and publishes it in Desk settings → Automations, which switches it on.",
+    edit_url: settingsUrl(ctx, "automations", rule.id),
+  });
+}
+
+const RECURRING_LIST_MAX = 200;
+
+async function listRecurringTool(user: User, a: Args, ctx: Ctx) {
+  const rc = await import("../helpdesk/recurring");
+  const { patternSummary } = await import("../helpdesk/recurring-shared");
+  const su = toSessionUser(user);
+  if (a.id !== undefined && a.id !== null) {
+    const id = Number(a.id);
+    const s = Number.isSafeInteger(id) && id > 0 && id < 2 ** 31 ? await rc.getRecurring(id) : undefined;
+    if (!s || !(await rc.canManageRecurringTeam(su, s.team_id))) return refuse(`No recurring ticket with id ${a.id} that you manage.`);
+    return toolJson({
+      id: s.id,
+      status: draftStatus(s, s.enabled ? "on" : "paused"),
+      ...rc.draftOfSchedule(s),
+      in_words: await rc.recurringInWords(rc.draftOfSchedule(s)),
+      next_run_at: s.next_run_at,
+      draft: s.draft ? { ...s.draft, in_words: await rc.recurringInWords(s.draft), asked_by: s.draft_by_name, at: s.draft_at } : null,
+      edit_url: settingsUrl(ctx, "recurring", s.id),
+    });
+  }
+  const [all, teams] = await Promise.all([rc.canManageAllRecurring(su), rc.recurringTeams(su)]);
+  const schedules = (await rc.listRecurring(all ? "all" : teams.map((t) => t.id))).slice(0, RECURRING_LIST_MAX);
+  const types = await (await import("../helpdesk/db-core")).hq<{ id: number; title: string; team_id: number | null }>("SELECT id, title, team_id FROM hd_request_types ORDER BY position, title");
+  return toolJson({
+    recurring: schedules.map((s) => ({
+      id: s.id,
+      subject: s.subject,
+      team: s.team_name,
+      repeats: patternSummary(s.pattern),
+      status: draftStatus(s, s.enabled ? "on" : "paused"),
+      next_run_at: s.enabled ? s.next_run_at : null,
+    })),
+    teams: teams.map((t) => ({ id: t.id, name: t.name, timezone: t.timezone, members: t.members })),
+    request_types: types,
+    edit_url: settingsUrl(ctx, "recurring"),
+  });
+}
+
+async function draftRecurringTool(user: User, a: Args, ctx: Ctx) {
+  const rc = await import("../helpdesk/recurring");
+  const su = toSessionUser(user);
+  const input: Record<string, unknown> = {};
+  for (const k of ["team_id", "subject", "body", "priority", "request_type_id", "assign_mode", "assignee_id", "due_business_days", "pattern", "holiday_rule", "timezone"]) {
+    if (a[k] !== undefined) input[k] = a[k];
+  }
+  let live: import("../helpdesk/recurring-shared").HdRecurring | undefined;
+  let id: number | undefined;
+  if (a.id !== undefined && a.id !== null) {
+    id = Number(a.id);
+    live = Number.isSafeInteger(id) && id > 0 && id < 2 ** 31 ? await rc.getRecurring(id) : undefined;
+    if (!live || !(await rc.canManageRecurringTeam(su, live.team_id))) return refuse(`No recurring ticket with id ${a.id} that you manage. Nothing was saved.`);
+  }
+  let r: Awaited<ReturnType<typeof rc.saveRecurringDraft>>;
+  try {
+    const draft = await rc.checkRecurringDraft(input, live ? live.draft ?? rc.draftOfSchedule(live) : undefined);
+    if (!(await rc.canManageRecurringTeam(su, draft.team_id))) return refuse("You can only schedule tickets for teams you lead (403). Nothing was saved.");
+    r = await rc.saveRecurringDraft(draft, { id: user.id, name: user.name || user.username, via: "mcp" }, id);
+  } catch (e) {
+    if (e instanceof rc.RecurringDraftError) return refuse(`${e.message} Nothing was saved.`);
+    throw e;
+  }
+  const s = r.schedule;
+  const shape = s.draft ?? rc.draftOfSchedule(s);
+  const { scheduleTitle } = await import("../helpdesk/recurring-shared");
+  const details = { team_id: shape.team_id, pattern: shape.pattern, draft: true };
+  if (r.kind === "new") await auditMcp(user, ctx, "helpdesk.recurring.created", { type: "helpdesk_recurring", id: s.id, label: scheduleTitle(shape.subject) }, { ...details, enabled: false, published: false });
+  else await auditMcp(user, ctx, "helpdesk.recurring.updated", { type: "helpdesk_recurring", id: s.id, label: scheduleTitle(s.subject) }, { changed: ["draft"], ...details, published: s.published });
+  return toolJson({
+    id: s.id,
+    subject: shape.subject,
+    saved: r.kind === "changes" ? "draft of changes (the live schedule keeps running unchanged)" : "draft (paused, not published)",
+    published: s.published,
+    enabled: s.enabled,
+    in_words: await rc.recurringInWords(shape),
+    note:
+      r.kind === "changes"
+        ? "The schedule keeps opening tickets as it is. A person who manages it reviews the changes and publishes or discards them in Desk settings → Recurring tickets."
+        : "It is paused and opens no ticket until a person who manages the team's schedules reviews it and publishes it in Desk settings → Recurring tickets, which switches it on.",
+    edit_url: settingsUrl(ctx, "recurring", s.id),
   });
 }

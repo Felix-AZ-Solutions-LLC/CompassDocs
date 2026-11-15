@@ -6,6 +6,8 @@
 //        `parent_id` makes it a sub-category of that category. 409 for a name its level already has
 //        (whatever its case) and at the limit. Audited (helpdesk.category.created).
 // Helpdesk 1.20.6: Desk settings → Categories (lib/helpdesk/categories). Desk capability settings.manage.
+// 1.20.16 (additive): GET also answers `draft`, the changes Claude proposed to the list (or null);
+//        they are reviewed and published at /api/helpdesk/admin/categories/draft.
 
 import { NextResponse } from "next/server";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
@@ -13,13 +15,14 @@ import { readJson } from "@/lib/helpdesk/access";
 import { hdCapGate } from "@/lib/helpdesk/roles";
 import { HdCategoryError, createCategory, listCategoriesAdmin } from "@/lib/helpdesk/categories";
 import { CATEGORY_LIMITS } from "@/lib/helpdesk/categories-shared";
+import { getCategoryDraft } from "@/lib/helpdesk/category-drafts";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const gate = await hdCapGate("settings.manage");
   if (gate instanceof NextResponse) return gate;
-  return NextResponse.json({ categories: await listCategoriesAdmin(), limits: CATEGORY_LIMITS });
+  return NextResponse.json({ categories: await listCategoriesAdmin(), limits: CATEGORY_LIMITS, draft: await getCategoryDraft() });
 }
 
 export async function POST(req: Request) {

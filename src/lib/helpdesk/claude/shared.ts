@@ -50,7 +50,7 @@ export const CLAUDE_DESK_CAP_HINT: Record<ClaudeDeskCap, string> = {
   search: "To find what fixed the same problem before.",
   web: "Only the sites you list.",
   changes: "Status, priority, tags, team, checklist ticks and macros, applied only when the agent clicks Apply.",
-  drafts: "Put in the agent's reply box, or saved as a checklist draft for someone to publish. A person always sends and publishes.",
+  drafts: "Put in the agent's reply box, or saved as a draft of a checklist, category change, automation or recurring ticket for someone to publish. A person always sends and publishes.",
 };
 
 export function webHint(domains: readonly string[]): string {
@@ -250,7 +250,7 @@ export interface ClaudeDraftCard {
 export interface ClaudeChangeCard {
   id: number;
   kind: "change";
-  /** Absent: a field change. (1.20.15: "macro" is ClaudeMacroCard.) */
+  /** Absent: a field change. (1.20.15: "macro" is ClaudeMacroCard; 1.20.16: "settings_draft" is ClaudeSettingsDraftCard.) */
   action?: undefined;
   number: number;
   /** The desk PATCH body (status, priority, tags, team_id, assignee_id). */
@@ -328,7 +328,42 @@ export interface ClaudeMacroCard {
   state: "offered" | "applied" | "skipped";
 }
 
-export type ClaudeCard = ClaudeDraftCard | ClaudeChangeCard | ClaudeChecklistCard | ClaudeChecklistTickCard | ClaudeChecklistDraftCard | ClaudeMacroCard;
+/** 1.20.16: what a settings draft card drafts. */
+export type ClaudeSettingsDraftTarget = "categories" | "automation" | "recurring";
+
+/**
+ * 1.20.16: a draft for Desk settings (category list changes, an automation, a recurring
+ * schedule). Save as draft sends only the card's id to the desk's own settings route, which
+ * saves the card's content as a draft (unpublished, switched off or paused) for someone with
+ * the matching access to publish. Stored as kind "change".
+ */
+export interface ClaudeSettingsDraftCard {
+  id: number;
+  kind: "change";
+  action: "settings_draft";
+  target: ClaudeSettingsDraftTarget;
+  /** The rule or schedule the changes are for; null for a new one (and for categories). */
+  target_id: number | null;
+  /** The ticket open when it was drafted, if any (for the history). */
+  number: number | null;
+  /** What is saved, as Desk settings checked it. */
+  draft: Record<string, unknown>;
+  /** "Automation draft: VPN to Network", "Category changes", "Recurring ticket draft: …". */
+  title: string;
+  hint: string;
+  /** The draft in plain words, one line each. */
+  lines: string[];
+  state: "offered" | "applied" | "skipped";
+}
+
+/** Where a settings draft is reviewed (the Save as draft chip's link). */
+export const SETTINGS_DRAFT_HREF: Record<ClaudeSettingsDraftTarget, { href: string; label: string }> = {
+  categories: { href: "/desk/settings/categories", label: "Review in Categories" },
+  automation: { href: "/desk/settings/automations", label: "Review in Automations" },
+  recurring: { href: "/desk/settings/recurring", label: "Review in Recurring tickets" },
+};
+
+export type ClaudeCard = ClaudeDraftCard | ClaudeChangeCard | ClaudeChecklistCard | ClaudeChecklistTickCard | ClaudeChecklistDraftCard | ClaudeMacroCard | ClaudeSettingsDraftCard;
 
 /** One server-sent event of a chat turn (data: JSON). */
 export type ClaudeStreamEvent =

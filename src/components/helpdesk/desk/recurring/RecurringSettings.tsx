@@ -10,6 +10,14 @@
 // holidays applied. Open one now saves first when there are changes.
 // A team lead sees and schedules for their own teams; settings.manage for
 // every team (the API checks the same).
+//
+// 1.20.16: drafts from Claude. A new schedule Claude drafted is paused and
+// unpublished (a "Draft from Claude" chip): its editor opens with the dashed
+// draft strip and Discard draft / Save draft / Publish schedule (publishing
+// switches it on); no Open one now. Changes Claude proposed to a live
+// schedule ("Changes from Claude") open in the editor in place of the live
+// one, with Discard changes / Publish changes; until then it runs as it is.
+// ?id=<schedule> opens that schedule (the links Claude hands out), as ?schedule= does.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -40,6 +48,8 @@ import {
   type RecurringPattern,
 } from "@/lib/helpdesk/recurring-shared";
 import { getJson, itemOf, listOf, sendJson } from "../api";
+import { draftChipLabel, waitsForReview } from "@/lib/helpdesk/claude-drafts-shared";
+import { ClaudeDraftStrip } from "../settings/ClaudeDraftStrip";
 
 interface TeamOption {
   id: number;
@@ -229,7 +239,7 @@ export function RecurringSettings() {
   );
   useEffect(() => void load(), [load]);
 
-  const param = sp?.get("schedule") ?? "";
+  const param = sp?.get("schedule") ?? sp?.get("id") ?? "";
   const isNew = param === "new";
   const chosenId = isNew ? null : Number(param) || schedules?.[0]?.id || null;
   const chosen = schedules?.find((s) => s.id === chosenId) ?? null;
@@ -241,7 +251,7 @@ export function RecurringSettings() {
     }
   };
 
-  const editorKey = isNew ? "new" : chosen ? `s${chosen.id}-${chosen.updated_at}` : "none";
+  const editorKey = isNew ? "new" : chosen ? `s${chosen.id}-${chosen.updated_at}-${chosen.draft_at ?? ""}-${chosen.published}` : "none";
 
   return (
     <PageContainer>
@@ -304,6 +314,11 @@ export function RecurringSettings() {
                             className="block w-full min-w-0 text-left after:absolute after:inset-0 focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-compass-500"
                           >
                             <span className="block truncate font-semibold text-slate-900">{scheduleTitle(s.subject)}</span>
+                            {draftChipLabel({ published: s.published !== false, draft: s.draft }) && (
+                              <span className="mt-1 block">
+                                <span className={chipClass("accent", "sm")}>{draftChipLabel({ published: s.published !== false, draft: s.draft })}</span>
+                              </span>
+                            )}
                             <span className="mt-0.5 block truncate text-xs text-slate-500">
                               {s.team_name} · {patternSummary(s.pattern)}
                             </span>
@@ -362,8 +377,13 @@ function Editor({
   onSaved: (s: HdRecurring) => void;
   onDeleted: () => void;
 }) {
-  const [d, setD] = useState<Draft>(() => (schedule ? draftOf(schedule) : blankDraft(teams[0])));
-  const [busy, setBusy] = useState<"" | "save" | "run" | "delete">("");
+  // 1.20.16: a new draft, or changes waiting beside a live schedule; the editor shows the draft.
+  const claude = schedule && waitsForReview({ published: schedule.published !== false, draft: schedule.draft }) ? schedule : null;
+  const changesWaiting = !!claude && claude.published !== false;
+  const [d, setD] = useState<Draft>(() =>
+    schedule ? draftOf(changesWaiting && schedule.draft ? { ...schedule, ...schedule.draft } : schedule) : blankDraft(teams[0])
+  );
+  const [busy, setBusy] = useState<"" | "save" | "run" | "delete" | "publish" | "discard">("");
   const [tried, setTried] = useState(false);
   const [preview, setPreview] = useState<{ items: HdRecurringPreviewItem[]; error: string } | null>(null);
   const snap = JSON.stringify(d);
@@ -402,17 +422,37 @@ function Editor({
     return () => clearTimeout(t);
   }, [d.team_id, pattern, d.holiday_rule, d.timezone]);
 
-  async function save(): Promise<HdRecurring | null> {
+  async function save(publish = false): Promise<HdRecurring | null> {
     setTried(true);
     if (!d.subject.trim() || (d.assign_mode === "user" && !d.assignee_id) || (d.kind === "weekly" && !d.days.length) || (d.kind === "monthly" && d.someMonths && !d.months.length)) return null;
-    setBusy("save");
+    setBusy(publish ? "publish" : "save");
     try {
+      // 1.20.16: publishing names the draft this editor showed (draft_at); a newer one is refused (409), never published unseen.
+      // A new draft stays paused when saved, and is switched on when published.
+      const body = claude
+        ? changesWaiting
+          ? { ...bodyOf(d), publish_draft: true, draft_at: claude.draft_at }
+          : publish
+            ? { ...bodyOf(d), enabled: true, publish: true, draft_at: claude.draft_at }
+            : { ...bodyOf(d), enabled: false }
+        : bodyOf(d);
       const r = schedule
-        ? await sendJson(`/api/helpdesk/admin/recurring/${schedule.id}`, "PATCH", bodyOf(d), "Couldn't save the schedule.")
-        : await sendJson("/api/helpdesk/admin/recurring", "POST", bodyOf(d), "Couldn't save the schedule.");
+        ? await sendJson(`/api/helpdesk/admin/recurring/${schedule.id}`, "PATCH", body, "Couldn't save the schedule.")
+        : await sendJson("/api/helpdesk/admin/recurring", "POST", body, "Couldn't save the schedule.");
       const saved = itemOf<HdRecurring>(r, "schedule");
       markClean();
-      toast("ok", schedule ? "Schedule saved." : "Schedule created.");
+      toast(
+        "ok",
+        claude
+          ? changesWaiting
+            ? "Changes published. The schedule runs with them now."
+            : publish
+              ? "Schedule published and switched on."
+              : "Draft saved. It stays paused."
+          : schedule
+            ? "Schedule saved."
+            : "Schedule created."
+      );
       return saved;
     } catch (e) {
       toast("error", (e as Error).message);
@@ -445,20 +485,41 @@ function Editor({
     }
   }
 
+  /** 1.20.16: drop the changes Claude proposed; the live schedule stays as it is. */
+  async function discardChanges() {
+    if (!claude) return;
+    setBusy("discard");
+    try {
+      const r = await sendJson(`/api/helpdesk/admin/recurring/${claude.id}`, "PATCH", { discard_draft: true, draft_at: claude.draft_at }, "Couldn't discard the changes.");
+      markClean();
+      toast("ok", "Changes discarded. The schedule runs as it did.");
+      onSaved(itemOf<HdRecurring>(r, "schedule"));
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function remove() {
     if (!schedule) return;
-    const ok = await confirmDialog({
-      title: `Delete ${scheduleTitle(schedule.subject)}?`,
-      body: "No more tickets open from this schedule. Tickets it already opened stay as they are.",
-      confirmLabel: "Delete schedule",
-      danger: true,
-    });
+    const unpublished = schedule.published === false;
+    const ok = await confirmDialog(
+      unpublished
+        ? { title: `Discard the draft ${scheduleTitle(schedule.subject)}?`, body: "It was never published, so it opened no tickets.", confirmLabel: "Discard draft", danger: true }
+        : {
+            title: `Delete ${scheduleTitle(schedule.subject)}?`,
+            body: "No more tickets open from this schedule. Tickets it already opened stay as they are.",
+            confirmLabel: "Delete schedule",
+            danger: true,
+          }
+    );
     if (ok !== true) return;
     setBusy("delete");
     try {
       await sendJson(`/api/helpdesk/admin/recurring/${schedule.id}`, "DELETE", undefined, "Couldn't delete the schedule.");
       markClean();
-      toast("ok", "Schedule deleted.");
+      toast("ok", unpublished ? "Draft discarded." : "Schedule deleted.");
       onDeleted();
     } catch (e) {
       toast("error", (e as Error).message);
@@ -478,6 +539,13 @@ function Editor({
       aria-label={schedule ? `Edit ${scheduleTitle(schedule.subject)}` : "New schedule"}
       className={`${CARD_CLASS} scroll-mt-4 p-4 sm:p-5`}
     >
+      {claude && (
+        <ClaudeDraftStrip changes={changesWaiting} askedBy={claude.draft_by_name ?? ""} at={claude.draft_at ?? null} className="mb-4">
+          {changesWaiting
+            ? "Review the changes below. The schedule keeps opening tickets as it is until you publish them."
+            : "Review it below. It is paused and opens no ticket until you publish it. Publishing switches it on."}
+        </ClaudeDraftStrip>
+      )}
       <div className="space-y-4">
         <Field label="Subject" error={subjectError} help={`Placeholders: ${RECURRING_PLACEHOLDERS.join(" ")}`}>
           <TextInput value={d.subject} maxLength={300} onChange={(e) => set({ subject: e.target.value })} placeholder="Monthly backup restore test: {{month}}" />
@@ -751,29 +819,78 @@ function Editor({
             </Select>
           </Field>
         </div>
-        <Toggle label="Schedule is on" help="Paused schedules keep their settings and open nothing." checked={d.enabled} onChange={(v) => set({ enabled: v })} />
+        {/* A new draft stays paused until it is published (only a person switches it on). */}
+        {!(claude && !changesWaiting) && (
+          <Toggle label="Schedule is on" help="Paused schedules keep their settings and open nothing." checked={d.enabled} onChange={(v) => set({ enabled: v })} />
+        )}
       </div>
 
       <div className="mt-5 flex flex-wrap items-center justify-end gap-2 print:hidden">
         {schedule && (
           <Button variant="ghost" icon={<Trash2 />} onClick={remove} busy={busy === "delete"} className="mr-auto hover-danger">
-            Delete
+            {schedule.published === false ? "Discard draft" : "Delete"}
           </Button>
         )}
         {dirty && <span className="text-xs text-amber-600">Unsaved changes</span>}
-        <Button variant="secondary" onClick={runNow} busy={busy === "run"} disabled={busy !== ""}>
-          Open one now
-        </Button>
-        <Button
-          onClick={async () => {
-            const s = await save();
-            if (s) onSaved(s);
-          }}
-          busy={busy === "save"}
-          disabled={busy !== ""}
-        >
-          Save
-        </Button>
+        {claude ? (
+          changesWaiting ? (
+            <>
+              <Button variant="secondary" onClick={discardChanges} busy={busy === "discard"} disabled={busy !== ""}>
+                Discard changes
+              </Button>
+              <Button
+                onClick={async () => {
+                  const s = await save(true);
+                  if (s) onSaved(s);
+                }}
+                busy={busy === "publish"}
+                disabled={busy !== ""}
+              >
+                Publish changes
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  const s = await save(false);
+                  if (s) onSaved(s);
+                }}
+                busy={busy === "save"}
+                disabled={busy !== ""}
+              >
+                Save draft
+              </Button>
+              <Button
+                onClick={async () => {
+                  const s = await save(true);
+                  if (s) onSaved(s);
+                }}
+                busy={busy === "publish"}
+                disabled={busy !== ""}
+              >
+                Publish schedule
+              </Button>
+            </>
+          )
+        ) : (
+          <>
+            <Button variant="secondary" onClick={runNow} busy={busy === "run"} disabled={busy !== ""}>
+              Open one now
+            </Button>
+            <Button
+              onClick={async () => {
+                const s = await save();
+                if (s) onSaved(s);
+              }}
+              busy={busy === "save"}
+              disabled={busy !== ""}
+            >
+              Save
+            </Button>
+          </>
+        )}
       </div>
     </section>
   );

@@ -25,7 +25,7 @@ How you work:
 - You act as the agent, with exactly their desk role and teams. Your tools only return what the agent can see. If a tool refuses, say so plainly; never try to get around it.
 - You never send, approve, publish, delete or merge anything, and no tool you have can. Drafts and proposed changes go back to the agent as cards: a draft lands in their reply box for them to edit and send, and a proposed change waits for them to click Apply. Say what you prepared; never claim you sent or changed something.
 - A macro is a saved reply and set of ticket changes the workspace already uses. propose_macro offers one, for the ticket the agent has open, on a card that says what it will do, including any reply it would send as the agent; only the agent's Apply runs it, with their own permissions. Find macros with list_macros; never describe a macro's reply as your own words.
-- Use draft_reply for a reply to the requester, draft_internal_note for a note to other agents, propose_ticket_change for status, priority, tags, team or owner, suggest_checklist to add a checklist, propose_checklist_ticks to tick or untick checklist items, propose_macro to apply a macro, and draft_checklist for a new checklist template (it is saved as a draft only when the agent clicks Save as draft, and someone publishes it in Desk settings). Prepare these only when the agent asks for them or clearly wants them. Propose ticking an item only when the agent says the step is done.
+- Use draft_reply for a reply to the requester, draft_internal_note for a note to other agents, propose_ticket_change for status, priority, tags, team or owner, suggest_checklist to add a checklist, propose_checklist_ticks to tick or untick checklist items, propose_macro to apply a macro, draft_checklist for a new checklist template, and draft_categories, draft_automation or draft_recurring for changes to the category list, an automation rule or a recurring ticket (each is saved as a draft only when the agent clicks Save as draft, and someone publishes it in Desk settings; a drafted rule stays off and a drafted schedule stays paused until then). Prepare these only when the agent asks for them or clearly wants them. Propose ticking an item only when the agent says the step is done.
 - A reply to the requester must not quote or reveal internal notes, internal names or other agents' remarks unless the agent explicitly asks you to include them. Internal notes are for agents only.
 - Ground what you say in the ticket, your tool results and the agent's words. When you rely on another ticket or an article, name it (for example #1012, or the article's title). If you don't know, say so. Never invent ticket numbers, steps, policies, names or contact details.
 - Be brief and practical: short paragraphs or a few bullet points, plain language, no headings for short answers. Match the language the agent writes in; write a reply draft in the requester's language unless the agent asks otherwise.
@@ -163,6 +163,100 @@ export const TOOL_SPECS: ToolSpec[] = [
     input_schema: obj({
       number: NUMBER,
       macro_id: { type: "integer", description: "The macro's id from list_macros." },
+    }),
+  },
+  // 1.20.16: drafts for Desk settings (category list changes, automations, recurring tickets). Save as
+  // draft on the card keeps each unpublished, off or paused for someone with access to publish.
+  {
+    name: "list_desk_settings",
+    cap: "drafts",
+    description:
+      "Read the workspace's categories, automation rules or recurring tickets as Desk settings shows them to the agent (only what their desk role manages; categories for any agent), with ids and each in plain words. Call this before draft_categories, draft_automation or draft_recurring. id 0 for the whole list, or one rule's or schedule's id for its full shape and any draft waiting.",
+    input_schema: obj({
+      what: { type: "string", enum: ["categories", "automations", "recurring"] },
+      id: { type: "integer", description: "0 for the list, or an automation's or schedule's id." },
+    }),
+  },
+  {
+    name: "draft_categories",
+    cap: "drafts",
+    description:
+      "Propose changes to the category list: add a category with sub-categories, add a sub-category to a category on the list, or rename one. Nothing changes: the agent sees a card and clicks Save as draft; then someone who manages categories reviews and publishes it in Desk settings → Categories (a published rename renames it on every ticket). Never deletes, archives or merges. Only for agents who manage settings.",
+    input_schema: obj({
+      changes: {
+        type: "array",
+        description: "The changes in order, 1 to 50.",
+        items: obj({
+          kind: { type: "string", enum: ["add_category", "add_subcategory", "rename"] },
+          id: { type: "integer", description: "rename: the entry's id from list_desk_settings; 0 otherwise." },
+          category: { type: "string", description: "add_subcategory: the category it goes under, by name; empty otherwise." },
+          name: { type: "string", description: "The new name (the added one, or what to rename it to), up to 80 characters." },
+          subcategories: { type: "array", items: { type: "string" }, description: "add_category: its sub-categories; empty otherwise." },
+        }),
+      },
+    }),
+  },
+  {
+    name: "draft_automation",
+    cap: "drafts",
+    description:
+      "Draft an automation rule (When an event, If the ticket matches, Then do things), or the whole rule as it should become for an existing one (id from list_desk_settings). Nothing runs: the agent sees a card and clicks Save as draft; a new rule is saved switched off, changes wait beside the running rule, until someone who manages automations publishes them in Desk settings → Automations. Empty lists, empty strings and 0 mean not used. At least one action. Only for agents who manage automations.",
+    input_schema: obj({
+      id: { type: "integer", description: "0 for a new rule, or the rule's id to propose changes to it." },
+      name: { type: "string", description: "Up to 120 characters." },
+      event: { type: "string", enum: ["ticket_created", "ticket_updated", "requester_message", "sla_nearing", "sla_breached"] },
+      conditions: obj({
+        team_ids: { type: "array", items: { type: "integer" } },
+        categories: { type: "array", items: { type: "string" }, description: "Category names from the list." },
+        subcategories: { type: "array", items: obj({ category: { type: "string" }, subcategory: { type: "string" } }) },
+        priorities: { type: "array", items: { type: "string", enum: ["low", "normal", "high", "urgent"] } },
+        request_type_ids: { type: "array", items: { type: "integer" } },
+        sources: { type: "array", items: { type: "string" }, description: "portal, email, chat, phone, api, …" },
+        keywords: { type: "array", items: { type: "string" }, description: "Whole words in the subject or first message." },
+      }),
+      actions: obj({
+        team_id: { type: "integer" },
+        assignee_id: { type: "integer" },
+        priority: { type: "string", enum: ["", "low", "normal", "high", "urgent"] },
+        status: { type: "string", enum: ["", "open", "pending", "on_hold", "solved", "closed"] },
+        category: { type: "string" },
+        subcategory: { type: "string" },
+        tags_add: { type: "array", items: { type: "string" } },
+        internal_note: { type: "string" },
+        macro_id: { type: "integer", description: "A shared macro's id." },
+        notify: { type: "string", enum: ["", "assignee", "team"] },
+      }),
+    }),
+  },
+  {
+    name: "draft_recurring",
+    cap: "drafts",
+    description:
+      "Draft a recurring ticket (a schedule that opens a ticket by itself, for checks and maintenance), or the whole schedule as it should become for an existing one (id from list_desk_settings). Nothing opens: the agent sees a card and clicks Save as draft; a new schedule is saved paused, changes wait beside the live one, until someone who manages the team's schedules publishes them in Desk settings → Recurring tickets. Placeholders in subject and body: {{month}} {{date}} {{week}} {{team}}. Only for agents who manage that team's schedules.",
+    input_schema: obj({
+      id: { type: "integer", description: "0 for a new schedule, or its id to propose changes." },
+      team_id: { type: "integer" },
+      subject: { type: "string" },
+      body: { type: "string", description: "The ticket's opening message; may be empty." },
+      priority: { type: "string", enum: ["low", "normal", "high", "urgent"] },
+      request_type_id: { type: "integer", description: "0 for none." },
+      assignee_id: { type: "integer", description: "0: the team's assignment rules; else a team member's user id." },
+      due_business_days: { type: "integer", description: "0 for no due date; else 1 to 60." },
+      pattern: obj({
+        kind: { type: "string", enum: ["daily", "weekly", "monthly", "interval"] },
+        time: { type: "string", description: "HH:MM, 24-hour." },
+        days: { type: "array", items: { type: "integer" }, description: "weekly: ISO weekdays, 1 Monday to 7 Sunday." },
+        mode: { type: "string", enum: ["nth_weekday", "day"], description: "monthly: the nth weekday, or a day of the month." },
+        nth: { type: "integer", description: "monthly nth_weekday: 1 to 4, or -1 for the last." },
+        weekday: { type: "integer", description: "monthly nth_weekday: 1 Monday to 7 Sunday." },
+        day: { type: "integer", description: "monthly day: 1 to 31." },
+        months: { type: "array", items: { type: "integer" }, description: "monthly: only these months (1 to 12); empty for every month." },
+        unit: { type: "string", enum: ["days", "weeks"], description: "interval." },
+        every: { type: "integer", description: "interval: every this many days or weeks." },
+        start: { type: "string", description: "interval: the first date, YYYY-MM-DD." },
+      }),
+      holiday_rule: { type: "string", enum: ["next_working_day", "skip", "same_day"] },
+      timezone: { type: "string", description: "An IANA zone, or empty for the team calendar's." },
     }),
   },
   {

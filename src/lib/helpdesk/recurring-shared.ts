@@ -70,6 +70,33 @@ export interface HdRecurring {
   created_by: number | null;
   created_at: string;
   updated_at: string;
+  /**
+   * 1.20.16: drafts from Claude (lib/helpdesk/recurring). False for a new
+   * schedule Claude drafted that nobody has published (saved paused; opens
+   * nothing). Optional for rows built elsewhere; the routes always send them.
+   */
+  published?: boolean;
+  /** Changes Claude proposed to a published schedule, waiting beside it; null when none. */
+  draft?: HdRecurringDraft | null;
+  draft_by_name?: string;
+  draft_at?: string | null;
+  /** "mcp" | "claude_desk" | "". */
+  draft_via?: string;
+}
+
+/** 1.20.16: what a recurring draft holds: the schedule's fields, never on or off (only a person switches one on). */
+export interface HdRecurringDraft {
+  team_id: number;
+  subject: string;
+  body: string;
+  priority: string;
+  request_type_id: number | null;
+  assign_mode: HdRecurringAssignMode;
+  assignee_id: number | null;
+  due_business_days: number | null;
+  pattern: RecurringPattern;
+  holiday_rule: HdHolidayRule;
+  timezone: string;
 }
 
 /** A run the preview shows: when, and what a holiday did. */

@@ -122,10 +122,14 @@ interface AutomationRow {
   name: string;
   conditions: { categories?: string[]; subcategories?: { category: string; subcategory: string }[] } & Record<string, unknown>;
   actions: { category?: string; subcategory?: string } & Record<string, unknown>;
+  /** 1.20.16: changes Claude proposed to the rule (lib/helpdesk/automations), which carry names too. */
+  draft?: { conditions?: AutomationRow["conditions"]; actions?: AutomationRow["actions"] } & Record<string, unknown> | null;
 }
 
-async function automationRows(client?: HdQueryable): Promise<AutomationRow[]> {
-  return hq<AutomationRow>("SELECT id, name, conditions, actions FROM hd_automations ORDER BY position, id", [], client);
+async function automationRows(client?: HdQueryable, lock = false): Promise<AutomationRow[]> {
+  // 1.20.16 review fix: a rewrite locks the rules it reads (a publish or a draft saved at the same moment
+  // is either before it, and rewritten, or after it, and sees the new name), never writes back a stale copy.
+  return hq<AutomationRow>(`SELECT id, name, conditions, actions, draft FROM hd_automations ORDER BY position, id${lock ? " FOR UPDATE" : ""}`, [], client);
 }
 
 const pairKey = (category: string, subcategory: string) => `${categoryKey(category)}\u0000${categoryKey(subcategory)}`;
@@ -359,28 +363,92 @@ export async function createCategory(input: { name: unknown; parent_id?: unknown
   if (problem) throw new HdCategoryError(problem);
   return withTx(async (client) => {
     await client.query(LOCK_SQL);
-    const all = await rows(client);
-    let parent: Row | undefined;
-    if (parentId !== null) {
-      parent = all.find((r) => r.id === parentId);
-      if (!parent || parent.parent_id !== null) throw new HdCategoryError("That category does not exist.", 404);
-    }
-    const level = all.filter((r) => r.parent_id === parentId);
-    if (level.some((r) => categoryKey(r.name) === categoryKey(name))) {
-      throw new HdCategoryError(parent ? `${parent.name} already has a sub-category called "${name}".` : `There is already a category called "${name}".`, 409);
-    }
-    const max = parent ? CATEGORY_LIMITS.subcategories : CATEGORY_LIMITS.categories;
-    if (level.length >= max) throw new HdCategoryError(parent ? `A category holds up to ${max} sub-categories.` : `The list holds up to ${max} categories.`, 409);
-    const position = level.reduce((m, r) => Math.max(m, r.position), 0) + 1;
-    const made = (
-      await hq<Row>(
-        "INSERT INTO hd_categories (parent_id, name, position, created_by) VALUES ($1, $2, $3, $4) RETURNING id, parent_id, name, position, archived_at",
-        [parentId, name, position, actor.id],
-        client
-      )
-    )[0];
-    return { id: made.id, name: made.name, parent: parent ? { id: parent.id, name: parent.name } : null };
+    return insertEntryTx(client, parentId, name, actor.id);
   });
+}
+
+/**
+ * Add one entry inside the caller's transaction, which holds the list's lock
+ * (createCategory, and 1.20.16's publishing of a Claude draft). The name is clean and checked.
+ */
+export async function insertEntryTx(client: HdQueryable, parentId: number | null, name: string, actorId: number | null): Promise<CategoryChange> {
+  const all = await rows(client);
+  let parent: Row | undefined;
+  if (parentId !== null) {
+    parent = all.find((r) => r.id === parentId);
+    if (!parent || parent.parent_id !== null) throw new HdCategoryError("That category does not exist.", 404);
+  }
+  const level = all.filter((r) => r.parent_id === parentId);
+  if (level.some((r) => categoryKey(r.name) === categoryKey(name))) {
+    throw new HdCategoryError(parent ? `${parent.name} already has a sub-category called "${name}".` : `There is already a category called "${name}".`, 409);
+  }
+  const max = parent ? CATEGORY_LIMITS.subcategories : CATEGORY_LIMITS.categories;
+  if (level.length >= max) throw new HdCategoryError(parent ? `A category holds up to ${max} sub-categories.` : `The list holds up to ${max} categories.`, 409);
+  const position = level.reduce((m, r) => Math.max(m, r.position), 0) + 1;
+  const made = (
+    await hq<Row>(
+      "INSERT INTO hd_categories (parent_id, name, position, created_by) VALUES ($1, $2, $3, $4) RETURNING id, parent_id, name, position, archived_at",
+      [parentId, name, position, actorId],
+      client
+    )
+  )[0];
+  return { id: made.id, name: made.name, parent: parent ? { id: parent.id, name: parent.name } : null };
+}
+
+/** 1.20.16: run `fn` in a transaction that holds the list's lock (lib/helpdesk/category-drafts). */
+export async function withCategoryListLock<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  await categoriesReady();
+  return withTx(async (client) => {
+    await client.query(LOCK_SQL);
+    return fn(client);
+  });
+}
+
+/** One rule's conditions and actions with the names `map` changes; null when nothing changes. */
+function rewriteRule(
+  conditionsIn: AutomationRow["conditions"],
+  actionsIn: AutomationRow["actions"],
+  map: (category: string, subcategory: string) => { category: string; subcategory: string } | null
+): { conditions: AutomationRow["conditions"]; actions: AutomationRow["actions"] } | null {
+  let touched = false;
+  const actions = { ...actionsIn };
+  if (typeof actions.category === "string" && actions.category) {
+    const to = map(actions.category, typeof actions.subcategory === "string" ? actions.subcategory : "");
+    if (to) {
+      actions.category = to.category;
+      if (to.subcategory) actions.subcategory = to.subcategory;
+      else delete actions.subcategory;
+      touched = true;
+    }
+  }
+  const conditions = { ...conditionsIn };
+  const cats: string[] = [];
+  const pairs: { category: string; subcategory: string }[] = [];
+  const addCat = (c: string) => {
+    if (!cats.some((x) => categoryKey(x) === categoryKey(c))) cats.push(c);
+  };
+  const addPair = (c: string, s: string) => {
+    if (!pairs.some((x) => pairKey(x.category, x.subcategory) === pairKey(c, s))) pairs.push({ category: c, subcategory: s });
+  };
+  for (const c of conditions.categories ?? []) {
+    const to = map(c, "");
+    if (to) touched = true;
+    if (to?.subcategory) addPair(to.category, to.subcategory);
+    else addCat(to?.category ?? c);
+  }
+  for (const p of conditions.subcategories ?? []) {
+    const to = map(p.category, p.subcategory);
+    if (to) touched = true;
+    const next = to ?? p;
+    if (next.subcategory) addPair(next.category, next.subcategory);
+    else addCat(next.category);
+  }
+  if (!touched) return null;
+  if (cats.length) conditions.categories = cats;
+  else delete conditions.categories;
+  if (pairs.length) conditions.subcategories = pairs;
+  else delete conditions.subcategories;
+  return { conditions, actions };
 }
 
 /** Replace a name wherever a rule, a saved view or a report filter carries it. */
@@ -389,51 +457,25 @@ async function rewriteCarriers(
   /** Maps a (category, sub-category) as carried to what it becomes; null = leave it. `subcategory` '' = the category alone. */
   map: (category: string, subcategory: string) => { category: string; subcategory: string } | null
 ): Promise<void> {
-  // Automations: the action's category and sub-category, the conditions' lists.
-  for (const a of await automationRows(client)) {
-    let touched = false;
-    const actions = { ...a.actions };
-    if (typeof actions.category === "string" && actions.category) {
-      const to = map(actions.category, typeof actions.subcategory === "string" ? actions.subcategory : "");
-      if (to) {
-        actions.category = to.category;
-        if (to.subcategory) actions.subcategory = to.subcategory;
-        else delete actions.subcategory;
-        touched = true;
-      }
+  // Automations: the action's category and sub-category, the conditions' lists (1.20.16: and a draft's).
+  for (const a of await automationRows(client, true)) {
+    const live = rewriteRule(a.conditions, a.actions, map);
+    // The rename is not a person's edit of the rule: changes Claude drafted against it stay publishable
+    // (draft_base_at follows updated_at when it was current). The right-hand side reads the old row.
+    if (live) {
+      await client.query(
+        `UPDATE hd_automations SET conditions = $2, actions = $3, updated_at = now(),
+                draft_base_at = CASE WHEN draft_base_at IS NOT NULL AND draft_base_at >= updated_at THEN now() ELSE draft_base_at END
+          WHERE id = $1`,
+        [a.id, JSON.stringify(live.conditions), JSON.stringify(live.actions)]
+      );
     }
-    const conditions = { ...a.conditions };
-    const cats: string[] = [];
-    const pairs: { category: string; subcategory: string }[] = [];
-    const addCat = (c: string) => {
-      if (!cats.some((x) => categoryKey(x) === categoryKey(c))) cats.push(c);
-    };
-    const addPair = (c: string, s: string) => {
-      if (!pairs.some((x) => pairKey(x.category, x.subcategory) === pairKey(c, s))) pairs.push({ category: c, subcategory: s });
-    };
-    for (const c of conditions.categories ?? []) {
-      const to = map(c, "");
-      if (to) touched = true;
-      if (to?.subcategory) addPair(to.category, to.subcategory);
-      else addCat(to?.category ?? c);
-    }
-    for (const p of conditions.subcategories ?? []) {
-      const to = map(p.category, p.subcategory);
-      if (to) touched = true;
-      const next = to ?? p;
-      if (next.subcategory) addPair(next.category, next.subcategory);
-      else addCat(next.category);
-    }
-    if (!touched) continue;
-    if (cats.length) conditions.categories = cats;
-    else delete conditions.categories;
-    if (pairs.length) conditions.subcategories = pairs;
-    else delete conditions.subcategories;
-    await client.query("UPDATE hd_automations SET conditions = $2, actions = $3, updated_at = now() WHERE id = $1", [a.id, JSON.stringify(conditions), JSON.stringify(actions)]);
+    const d = a.draft ? rewriteRule(a.draft.conditions ?? {}, a.draft.actions ?? {}, map) : null;
+    if (d) await client.query("UPDATE hd_automations SET draft = $2 WHERE id = $1", [a.id, JSON.stringify({ ...a.draft, conditions: d.conditions, actions: d.actions })]);
   }
   // Saved views: filters.category, and filters.subcategory ("Category › Sub-category", or a bare sub-category).
   const views = await hq<{ id: number; filters: Record<string, string> }>(
-    "SELECT id, filters FROM hd_saved_views WHERE filters ? 'category' OR filters ? 'subcategory'",
+    "SELECT id, filters FROM hd_saved_views WHERE filters ? 'category' OR filters ? 'subcategory' FOR UPDATE",
     [],
     client
   );
@@ -473,7 +515,7 @@ async function rewriteCarriers(
   }
   // Report dashboards: the category filter of the dashboard and of each widget (a list of names).
   const boards = await hq<{ id: number; layout: { filters?: { category?: unknown }; widgets?: { filters?: { category?: unknown } }[] } }>(
-    "SELECT id, layout FROM hd_dashboards WHERE layout::text LIKE '%\"category\"%'",
+    "SELECT id, layout FROM hd_dashboards WHERE layout::text LIKE '%\"category\"%' FOR UPDATE",
     [],
     client
   );
@@ -514,42 +556,51 @@ export async function renameCategory(id: number, rawName: unknown): Promise<Rena
   const name = cleanCategoryName(rawName);
   return withTx(async (client) => {
     await client.query(LOCK_SQL);
-    const before = await entry(client, id);
-    if (!before) return undefined;
-    const problem = categoryNameProblem(name, noun(before));
-    if (problem) throw new HdCategoryError(problem);
-    if (name === before.name) return { before: changeOf(before), after: changeOf(before), tickets: 0 };
-    const clash = await hqOne<{ id: number }>(
-      "SELECT id FROM hd_categories WHERE COALESCE(parent_id, 0) = $1 AND lower(name) = lower($2) AND id <> $3",
-      [before.parent_id ?? 0, name, id],
-      client
-    );
-    if (clash) {
-      throw new HdCategoryError(
-        before.parent_id
-          ? `${before.parent_name} already has a sub-category called "${name}". Use Merge into… to bring the two together.`
-          : `There is already a category called "${name}". Use Merge into… to bring the two together.`,
-        409
-      );
-    }
-    await client.query("UPDATE hd_categories SET name = $2, updated_at = now() WHERE id = $1", [id, name]);
-    let tickets = 0;
-    if (before.parent_id === null) {
-      for (const table of ["hd_tickets", "hd_request_types"]) {
-        const r = await client.query(`UPDATE ${table} SET category = $2 WHERE lower(category) = lower($1)`, [before.name, name]);
-        if (table === "hd_tickets") tickets = r.rowCount ?? 0;
-      }
-      await rewriteCarriers(client, (c, s) => (categoryKey(c) === categoryKey(before.name) ? { category: name, subcategory: s } : null));
-    } else {
-      const parent = before.parent_name ?? "";
-      for (const table of ["hd_tickets", "hd_request_types"]) {
-        const r = await client.query(`UPDATE ${table} SET subcategory = $3 WHERE lower(category) = lower($1) AND lower(subcategory) = lower($2)`, [parent, before.name, name]);
-        if (table === "hd_tickets") tickets = r.rowCount ?? 0;
-      }
-      await rewriteCarriers(client, (c, s) => (pairKey(c, s) === pairKey(parent, before.name) ? { category: c, subcategory: name } : null));
-    }
-    return { before: changeOf(before), after: { ...changeOf(before), name }, tickets };
+    return renameEntryTx(client, id, name);
   });
+}
+
+/**
+ * Rename one entry inside the caller's transaction, which holds the list's
+ * lock (renameCategory, and 1.20.16's publishing of a Claude draft): the
+ * same checks and the same rewrite of every carrier.
+ */
+export async function renameEntryTx(client: PoolClient, id: number, name: string): Promise<RenameResult | undefined> {
+  const before = await entry(client, id);
+  if (!before) return undefined;
+  const problem = categoryNameProblem(name, noun(before));
+  if (problem) throw new HdCategoryError(problem);
+  if (name === before.name) return { before: changeOf(before), after: changeOf(before), tickets: 0 };
+  const clash = await hqOne<{ id: number }>(
+    "SELECT id FROM hd_categories WHERE COALESCE(parent_id, 0) = $1 AND lower(name) = lower($2) AND id <> $3",
+    [before.parent_id ?? 0, name, id],
+    client
+  );
+  if (clash) {
+    throw new HdCategoryError(
+      before.parent_id
+        ? `${before.parent_name} already has a sub-category called "${name}". Use Merge into… to bring the two together.`
+        : `There is already a category called "${name}". Use Merge into… to bring the two together.`,
+      409
+    );
+  }
+  await client.query("UPDATE hd_categories SET name = $2, updated_at = now() WHERE id = $1", [id, name]);
+  let tickets = 0;
+  if (before.parent_id === null) {
+    for (const table of ["hd_tickets", "hd_request_types"]) {
+      const r = await client.query(`UPDATE ${table} SET category = $2 WHERE lower(category) = lower($1)`, [before.name, name]);
+      if (table === "hd_tickets") tickets = r.rowCount ?? 0;
+    }
+    await rewriteCarriers(client, (c, s) => (categoryKey(c) === categoryKey(before.name) ? { category: name, subcategory: s } : null));
+  } else {
+    const parent = before.parent_name ?? "";
+    for (const table of ["hd_tickets", "hd_request_types"]) {
+      const r = await client.query(`UPDATE ${table} SET subcategory = $3 WHERE lower(category) = lower($1) AND lower(subcategory) = lower($2)`, [parent, before.name, name]);
+      if (table === "hd_tickets") tickets = r.rowCount ?? 0;
+    }
+    await rewriteCarriers(client, (c, s) => (pairKey(c, s) === pairKey(parent, before.name) ? { category: c, subcategory: name } : null));
+  }
+  return { before: changeOf(before), after: { ...changeOf(before), name }, tickets };
 }
 
 /** Archive (hide from pickers) or restore an entry. */

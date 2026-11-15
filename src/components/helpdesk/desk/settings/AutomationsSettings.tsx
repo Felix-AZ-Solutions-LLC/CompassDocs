@@ -5,12 +5,24 @@
 // Move up / Move down, Edit… and Delete…; New rule opens the editor in a
 // dialog. Conditions are all optional (none = every ticket); a rule needs
 // at least one action.
+//
+// 1.20.16: drafts from Claude. A new rule Claude drafted is off and
+// unpublished (a "Draft from Claude" chip, no Turn on): its dialog opens with
+// the dashed draft strip and Discard draft / Save draft / Publish rule
+// (publishing switches it on). Changes Claude proposed to a running rule
+// ("Changes from Claude") open in the dialog in place of the live rule, with
+// Discard changes / Publish changes; until then the rule runs as it is.
+// ?id=<rule> opens that rule (the links Claude hands out).
+// Review fixes: the dialog shows and edits every action a rule can carry
+// (Assign to, Notify one person by name, a shared macro by name even when the
+// reviewer can't manage it), and a draft's strip lists "What this rule will
+// do" from the server's plain words (every trigger, condition and action).
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Bot, Pencil, Plus, Trash2, X } from "lucide-react";
 import { Button, iconButtonClass } from "@/components/Button";
 import { Card } from "@/components/Card";
-import { Chip } from "@/components/Chip";
+import { Chip, chipClass } from "@/components/Chip";
 import { EmptyState, Field, FormError, Select, TextInput, Textarea } from "@/components/form";
 import { Modal } from "@/components/Modal";
 import { PageHeader } from "@/components/PageHeader";
@@ -39,6 +51,12 @@ import { useRequestTypes, useTeams } from "../admin-data";
 import { categoryLabel } from "@/lib/helpdesk/categories-shared";
 import { CategoryChecks, type CategoryPairs } from "../categories/CategoryChecks";
 import { CategoryFields } from "../categories/CategoryFields";
+import { draftChipLabel, waitsForReview } from "@/lib/helpdesk/claude-drafts-shared";
+import { ClaudeDraftStrip } from "./ClaudeDraftStrip";
+
+/** 1.20.16: a rule as GET lists it, with its plain words (and its draft's). */
+type RuleWords = { when: string; if: string[]; then: string[] };
+type RuleRow = HdAutomation & { in_words?: RuleWords; draft_in_words?: RuleWords | null };
 
 const EVENT_FALLBACK: Record<HdAutomationEvent, string> = {
   ticket_created: "A ticket is created",
@@ -49,19 +67,41 @@ const EVENT_FALLBACK: Record<HdAutomationEvent, string> = {
 };
 
 export function AutomationsSettings() {
-  const [rows, setRows] = useState<HdAutomation[] | null>(null);
+  const [rows, setRows] = useState<RuleRow[] | null>(null);
   const [events, setEvents] = useState<Record<string, string>>(EVENT_FALLBACK);
+  // 1.20.16 review fix: who a rule may assign or notify (desk agents), and the names of the macros rules send.
+  const [people, setPeople] = useState<{ id: number; name: string }[]>([]);
+  const [ruleMacros, setRuleMacros] = useState<{ id: number; title: string; shared: boolean }[]>([]);
   const [error, setError] = useState("");
-  const [editing, setEditing] = useState<HdAutomation | "new" | null>(null);
+  const [editing, setEditing] = useState<RuleRow | "new" | null>(null);
   const [busy, setBusy] = useState(false);
+  const asked = useRef(false);
   const { teams } = useTeams();
   const { types } = useRequestTypes();
 
   const load = () =>
-    getJson<{ automations: HdAutomation[]; events?: Record<string, string> }>("/api/helpdesk/admin/automations", "Couldn't load the automations.")
+    getJson<{ automations: RuleRow[]; events?: Record<string, string>; people?: { id: number; name: string }[]; macros?: { id: number; title: string; shared: boolean }[] }>(
+      "/api/helpdesk/admin/automations",
+      "Couldn't load the automations."
+    )
       .then((d) => {
-        setRows(listOf<HdAutomation>(d, "automations"));
+        const list = listOf<RuleRow>(d, "automations");
+        setRows(list);
         if (d.events) setEvents(d.events);
+        setPeople(Array.isArray(d.people) ? d.people : []);
+        setRuleMacros(Array.isArray(d.macros) ? d.macros : []);
+        // 1.20.16: ?id= opens that rule (a link from Claude) on the first load.
+        if (!asked.current) {
+          asked.current = true;
+          let id: number | null = null;
+          try {
+            id = Number(new URLSearchParams(window.location.search).get("id")) || null;
+          } catch {
+            id = null;
+          }
+          const hit = id ? list.find((r) => r.id === id) : undefined;
+          if (hit) setEditing(hit);
+        }
       })
       .catch((e: Error) => setError(e.message));
   useEffect(() => void load(), []);
@@ -87,7 +127,7 @@ export function AutomationsSettings() {
     setBusy(true);
     try {
       const d = await sendJson<{ automations: HdAutomation[] }>("/api/helpdesk/admin/automations/reorder", "POST", { ids }, "Couldn't change the order.");
-      setRows(listOf<HdAutomation>(d, "automations"));
+      setRows(listOf<RuleRow>(d, "automations"));
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
@@ -158,16 +198,27 @@ export function AutomationsSettings() {
                   <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-900">
                     {a.name}
                     {!a.active && <Chip tone="neutral" size="sm">Off</Chip>}
+                    {draftChipLabel({ published: a.published !== false, draft: a.draft }) && (
+                      <span className={chipClass("accent", "sm")}>{draftChipLabel({ published: a.published !== false, draft: a.draft })}</span>
+                    )}
                   </p>
                   <p className="mt-0.5 text-xs text-slate-500">
                     When {(events[a.event] ?? a.event).charAt(0).toLowerCase() + (events[a.event] ?? a.event).slice(1)}. {summary(a)}
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                  <Button variant="secondary" size="sm" onClick={() => toggle(a)}>
-                    {a.active ? "Turn off" : "Turn on"}
-                    <span className="sr-only"> {a.name}</span>
-                  </Button>
+                  {a.published === false ? (
+                    // Only a person's publish switches a draft on (the dialog's Publish rule).
+                    <Button variant="secondary" size="sm" onClick={() => setEditing(a)}>
+                      Review
+                      <span className="sr-only"> {a.name}</span>
+                    </Button>
+                  ) : (
+                    <Button variant="secondary" size="sm" onClick={() => toggle(a)}>
+                      {a.active ? "Turn off" : "Turn on"}
+                      <span className="sr-only"> {a.name}</span>
+                    </Button>
+                  )}
                   <button type="button" disabled={busy || i === 0} onClick={() => move(i, -1)} aria-label={`Move ${a.name} up`} data-tt="Move up" className={iconButtonClass("quiet", "sm")}>
                     <ArrowUp aria-hidden />
                   </button>
@@ -191,6 +242,8 @@ export function AutomationsSettings() {
         events={events}
         teams={(teams ?? []).map((t) => ({ id: t.id, name: t.name }))}
         types={(types ?? []).map((t) => ({ id: t.id, name: t.title }))}
+        people={people}
+        ruleMacros={ruleMacros}
         onClose={() => setEditing(null)}
         onSaved={() => {
           setEditing(null);
@@ -208,13 +261,17 @@ function RuleDialog({
   events,
   teams,
   types,
+  people,
+  ruleMacros,
   onClose,
   onSaved,
 }: {
-  rule: HdAutomation | "new" | null;
+  rule: RuleRow | "new" | null;
   events: Record<string, string>;
   teams: { id: number; name: string }[];
   types: { id: number; name: string }[];
+  people: { id: number; name: string }[];
+  ruleMacros: { id: number; title: string; shared: boolean }[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -232,9 +289,13 @@ function RuleDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  // 1.20.16: a new draft, or changes waiting beside a running rule; the dialog shows the draft.
+  const claude = existing && waitsForReview({ published: existing.published !== false, draft: existing.draft }) ? existing : null;
+  const changesWaiting = !!claude && claude.published !== false;
+
   useEffect(() => {
     if (!rule) return;
-    const r = rule === "new" ? null : rule;
+    const r = rule === "new" ? null : rule.published !== false && rule.draft ? { ...rule, ...rule.draft } : rule;
     setName(r?.name ?? "");
     setEvent(r?.event ?? "ticket_created");
     setC(r?.conditions ?? {});
@@ -257,6 +318,15 @@ function RuleDialog({
     actions: Object.keys(actions).length === 0 ? "Choose at least one thing for the rule to do." : undefined,
   };
 
+  // Which submit button was used (a ref: the form's submit runs before a state update would show).
+  const mode = useRef<"save" | "publish">("save");
+  const form = useRef<HTMLFormElement>(null);
+  /** Publish is never the form's default (Enter saves a draft at most). */
+  const publish = () => {
+    mode.current = "publish";
+    form.current?.requestSubmit();
+  };
+
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setTried(true);
@@ -274,9 +344,47 @@ function RuleDialog({
     setError("");
     try {
       const payload = { name: name.trim(), event, conditions, actions };
-      if (existing) await sendJson(`/api/helpdesk/admin/automations/${existing.id}`, "PATCH", payload, "Couldn't save the rule.");
+      // 1.20.16: publishing names the draft this dialog showed (draft_at); a newer one is refused (409), never published unseen.
+      const publishing = mode.current === "publish" && claude ? (changesWaiting ? { publish_draft: true, draft_at: claude.draft_at } : { publish: true, draft_at: claude.draft_at }) : {};
+      if (existing) await sendJson(`/api/helpdesk/admin/automations/${existing.id}`, "PATCH", { ...payload, ...publishing }, "Couldn't save the rule.");
       else await sendJson("/api/helpdesk/admin/automations", "POST", { ...payload, active: 1 }, "Couldn't create the rule.");
-      toast("ok", existing ? "Rule saved." : "Rule created.");
+      toast(
+        "ok",
+        claude
+          ? mode.current === "publish"
+            ? changesWaiting
+              ? "Changes published. The rule runs with them now."
+              : "Rule published and switched on."
+            : "Draft saved. It stays off."
+          : existing
+            ? "Rule saved."
+            : "Rule created."
+      );
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** 1.20.16: drop a new draft (DELETE) or the changes waiting (the running rule stays). */
+  async function discard() {
+    if (!claude) return;
+    if (!changesWaiting) {
+      const ok = await confirmDialog({ title: `Discard the draft ${claude.name}?`, body: "It was never published, so it never ran.", confirmLabel: "Discard draft", danger: true });
+      if (ok !== true) return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      if (changesWaiting) {
+        await sendJson(`/api/helpdesk/admin/automations/${claude.id}`, "PATCH", { discard_draft: true, draft_at: claude.draft_at }, "Couldn't discard the changes.");
+        toast("ok", "Changes discarded. The rule runs as it did.");
+      } else {
+        await sendJson(`/api/helpdesk/admin/automations/${claude.id}`, "DELETE", undefined, "Couldn't discard the draft.");
+        toast("ok", "Draft discarded.");
+      }
       onSaved();
     } catch (err) {
       setError((err as Error).message);
@@ -289,15 +397,26 @@ function RuleDialog({
 
   return (
     <Modal open={!!rule} onClose={onClose} labelledBy={titleId} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-slate-200 bg-surface p-5 shadow-modal">
-      <form onSubmit={save} noValidate>
+      <form ref={form} onSubmit={save} noValidate>
         <div className="flex items-start justify-between gap-3">
           <h2 id={titleId} className="text-base font-semibold text-slate-900">
-            {existing ? `Edit ${existing.name}` : "New rule"}
+            {existing ? `${claude && !changesWaiting ? "Draft" : "Edit"} ${existing.name}` : "New rule"}
           </h2>
           <button type="button" onClick={onClose} aria-label="Close" data-tt="Close" className={iconButtonClass("quiet", "sm", "-mr-1 -mt-1")}>
             <X aria-hidden />
           </button>
         </div>
+        {claude && (
+          <ClaudeDraftStrip changes={changesWaiting} askedBy={claude.draft_by_name ?? ""} at={claude.draft_at ?? null} className="mt-3">
+            <p>
+              {changesWaiting
+                ? "Review the changes below. The rule keeps running as it is until you publish them."
+                : "Review it below. It is off and runs on no ticket until you publish it. Publishing switches it on."}
+            </p>
+            {/* Review fix: everything Claude's draft would do, read-only, before the editable form. */}
+            {(changesWaiting ? claude.draft_in_words : claude.in_words) && <RuleSummary words={(changesWaiting ? claude.draft_in_words : claude.in_words)!} />}
+          </ClaudeDraftStrip>
+        )}
         <div className="mt-4 space-y-4">
           <Field label="Name" error={tried ? errs.name : undefined}>
             <TextInput value={name} onChange={(e) => setName(e.target.value)} maxLength={120} placeholder="VPN and network" />
@@ -380,16 +499,43 @@ function RuleDialog({
                       {m.title}
                     </option>
                   ))}
+                  {/* Review fix: a rule's macro is shown by name even when it isn't one this person manages. */}
+                  {x.macro_id && !macros.some((m) => m.id === x.macro_id) && (
+                    <option value={x.macro_id}>{ruleMacros.find((m) => m.id === x.macro_id)?.title ?? `Macro ${x.macro_id}`}</option>
+                  )}
+                </Select>
+              </Field>
+              <Field label="Assign to">
+                <Select value={x.assignee_id ?? ""} onChange={(e) => setX({ ...x, assignee_id: e.target.value ? Number(e.target.value) : undefined })}>
+                  <option value="">Leave as it is</option>
+                  {people.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                  {x.assignee_id && !people.some((p) => p.id === x.assignee_id) && <option value={x.assignee_id}>{`Not on the desk (person ${x.assignee_id})`}</option>}
                 </Select>
               </Field>
               <Field label="Notify">
                 <Select
-                  value={typeof x.notify === "string" ? x.notify : ""}
-                  onChange={(e) => setX({ ...x, notify: (e.target.value || undefined) as "assignee" | "team" | undefined })}
+                  value={typeof x.notify === "string" ? x.notify : x.notify ? `user:${x.notify.user_id}` : ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setX({ ...x, notify: v.startsWith("user:") ? { user_id: Number(v.slice(5)) } : ((v || undefined) as "assignee" | "team" | undefined) });
+                  }}
                 >
                   <option value="">Nobody</option>
                   <option value="assignee">The owner</option>
                   <option value="team">The team</option>
+                  {/* Review fix: one person, by name. */}
+                  {people.map((p) => (
+                    <option key={p.id} value={`user:${p.id}`}>
+                      {p.name}
+                    </option>
+                  ))}
+                  {typeof x.notify === "object" && x.notify && !people.some((p) => typeof x.notify === "object" && p.id === x.notify.user_id) && (
+                    <option value={`user:${x.notify.user_id}`}>{`Not on the desk (person ${x.notify.user_id})`}</option>
+                  )}
                 </Select>
               </Field>
               <Field label="Add an internal note" className="sm:col-span-2">
@@ -404,16 +550,63 @@ function RuleDialog({
           </fieldset>
           <FormError>{error}</FormError>
         </div>
-        <div className="mt-5 flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" busy={busy}>
-            {existing ? "Save rule" : "Create rule"}
-          </Button>
-        </div>
+        {claude ? (
+          <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+            {changesWaiting ? (
+              <>
+                <Button variant="ghost" className="mr-auto" onClick={onClose}>
+                  Cancel
+                </Button>
+                <Button variant="secondary" busy={busy} onClick={discard}>
+                  Discard changes
+                </Button>
+                <Button busy={busy} onClick={() => publish()}>
+                  Publish changes
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="ghost" icon={<Trash2 />} className="mr-auto hover-danger" busy={busy} onClick={discard}>
+                  Discard draft
+                </Button>
+                <Button type="submit" variant="secondary" busy={busy} onClick={() => (mode.current = "save")}>
+                  Save draft
+                </Button>
+                <Button busy={busy} onClick={() => publish()}>
+                  Publish rule
+                </Button>
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="mt-5 flex justify-end gap-2">
+            <Button variant="secondary" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" busy={busy} onClick={() => (mode.current = "save")}>
+              {existing ? "Save rule" : "Create rule"}
+            </Button>
+          </div>
+        )}
       </form>
     </Modal>
+  );
+}
+
+/** 1.20.16 review fix: a rule in plain words (When, If, Then), read-only, as the server describes it. */
+function RuleSummary({ words }: { words: RuleWords }) {
+  const lower = (t: string) => t.charAt(0).toLowerCase() + t.slice(1);
+  return (
+    <div className="mt-2 rounded-lg border border-slate-200 bg-surface px-3 py-2" data-testid="rule-summary">
+      <p className="text-xs font-semibold text-slate-700">What this rule will do</p>
+      <ul aria-label="What this rule will do" className="mt-1 space-y-0.5 text-xs text-slate-700">
+        <li>When {lower(words.when)}</li>
+        <li>If {words.if.join(", and ")}</li>
+        {words.then.map((t, i) => (
+          <li key={i}>{i === 0 ? "Then " : "and "}{t}</li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

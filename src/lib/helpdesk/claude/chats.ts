@@ -391,5 +391,38 @@ export async function claimMacroCard(
 
 /** 1.20.15: the apply was refused and wrote nothing, so the claimed card is offered again. */
 export async function releaseMacroCard(userId: number, cardId: number): Promise<void> {
+  await releaseClaimedCard(userId, cardId);
+}
+
+/**
+ * 1.20.16: a claimed card whose action was refused and wrote nothing is offered again (shared by
+ * the macro cards and the settings draft cards).
+ */
+export async function releaseClaimedCard(userId: number, cardId: number): Promise<void> {
   await hq("UPDATE hd_claude_cards SET state = 'offered', decided_at = NULL WHERE id = $1 AND user_id = $2 AND state = 'applied'", [cardId, userId]);
+}
+
+/**
+ * 1.20.16: Save as draft on a Claude in the desk settings draft card (categories, an automation, a
+ * recurring ticket), the macro card's pattern: the desk's settings route claims the card in one
+ * statement before it saves anything: one of this agent's settings draft cards, still offered, for
+ * this kind of setting (and, when it is on a ticket, not one in the recycle bin) becomes "applied"
+ * and its payload (the draft it showed) comes back. A second click, a replay or a concurrent request
+ * finds it taken: one card, one draft. Undefined when there is no such card.
+ */
+export async function claimSettingsDraftCard(
+  userId: number,
+  rawCardId: unknown,
+  target: "categories" | "automation" | "recurring"
+): Promise<{ id: number; ticket_id: number | null; payload: Record<string, any> } | undefined> {
+  const cardId = typeof rawCardId === "number" && Number.isInteger(rawCardId) && rawCardId > 0 && rawCardId < 2 ** 31 ? rawCardId : null;
+  if (!cardId) return undefined;
+  return hqOne<{ id: number; ticket_id: number | null; payload: Record<string, any> }>(
+    `UPDATE hd_claude_cards c SET state = 'applied', decided_at = now()
+      WHERE c.id = $1 AND c.user_id = $2 AND c.kind = 'change' AND c.state = 'offered'
+        AND c.payload->>'action' = 'settings_draft' AND c.payload->>'target' = $3
+        AND (c.ticket_id IS NULL OR EXISTS (SELECT 1 FROM hd_tickets t WHERE t.id = c.ticket_id AND t.deleted_at IS NULL))
+      RETURNING c.id, c.ticket_id, c.payload`,
+    [cardId, userId, target]
+  );
 }
