@@ -389,6 +389,57 @@ export async function claimMacroCard(
   );
 }
 
+/**
+ * Apply on a Claude in the desk ticket-change card (propose_ticket_change: status, priority,
+ * tags, team, owner). The desk's ticket PATCH keeps "via Claude in the desk" only for a real
+ * card, the 1.20.14 checklist rule with 1.20.15's claim: one of this agent's change cards, still
+ * offered, on this ticket (not in the recycle bin), whose proposed change is exactly the
+ * request's field changes (`patch`, from validateTicketPatch; the tag list compared as a set).
+ * The card becomes "applied" in one statement, so it labels one change however often it is
+ * sent. Undefined when there is no such card: the PATCH is then the agent's own change.
+ */
+export async function claimChangeCard(
+  userId: number,
+  rawCardId: unknown,
+  want: { ticketId: number; patch: Record<string, unknown> }
+): Promise<{ id: number; payload: Record<string, any> } | undefined> {
+  const cardId = typeof rawCardId === "number" && Number.isInteger(rawCardId) && rawCardId > 0 && rawCardId < 2 ** 31 ? rawCardId : null;
+  if (!cardId) return undefined;
+  const c = await hqOne<{ payload: Record<string, any> }>(
+    `SELECT c.payload FROM hd_claude_cards c
+      WHERE c.id = $1 AND c.user_id = $2 AND c.kind = 'change' AND c.state = 'offered' AND c.ticket_id = $3
+        AND c.payload->>'action' IS NULL`,
+    [cardId, userId, want.ticketId]
+  );
+  const proposed = c?.payload?.patch;
+  if (!proposed || typeof proposed !== "object" || Array.isArray(proposed) || !Object.keys(proposed).length) return undefined;
+  if (stable(changeShape(proposed)) !== stable(changeShape(want.patch))) return undefined;
+  // The claim itself: only one request turns this offered card into an applied one.
+  return hqOne<{ id: number; payload: Record<string, any> }>(
+    `UPDATE hd_claude_cards c SET state = 'applied', decided_at = now()
+      WHERE c.id = $1 AND c.user_id = $2 AND c.kind = 'change' AND c.state = 'offered' AND c.ticket_id = $3
+        AND c.payload->>'action' IS NULL
+        AND EXISTS (SELECT 1 FROM hd_tickets t WHERE t.id = c.ticket_id AND t.deleted_at IS NULL)
+      RETURNING c.id, c.payload`,
+    [cardId, userId, want.ticketId]
+  );
+}
+
+/** A ticket change for comparison: undefined keys dropped, the tag list sorted (the order is not a change). */
+function changeShape(p: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(p)) {
+    if (v === undefined) continue;
+    out[k] = k === "tags" && Array.isArray(v) ? [...v].map(String).sort() : v;
+  }
+  return out;
+}
+
+/** The ticket PATCH was refused and wrote nothing, so the claimed change card is offered again. */
+export async function releaseChangeCard(userId: number, cardId: number): Promise<void> {
+  await releaseClaimedCard(userId, cardId);
+}
+
 /** 1.20.15: the apply was refused and wrote nothing, so the claimed card is offered again. */
 export async function releaseMacroCard(userId: number, cardId: number): Promise<void> {
   await releaseClaimedCard(userId, cardId);

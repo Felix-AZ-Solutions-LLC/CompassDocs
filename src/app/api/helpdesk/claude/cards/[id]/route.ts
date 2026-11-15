@@ -3,8 +3,10 @@
 // Helpdesk 1.20.0, Claude in the desk: record what the agent did with one of
 // their cards (a draft or a proposed change). It writes nothing to the
 // ticket: Apply has already gone through the desk's own route (PATCH
-// /api/helpdesk/tickets/[number] or its checklists, with via "claude_desk",
-// which audits the change "via Claude in the desk"); a draft went into the
+// /api/helpdesk/tickets/[number] or its checklists, with the card's
+// card_id, which audits the change "via Claude in the desk" only for this
+// agent's offered card; 1.20.17: the ticket PATCH also claims a matching
+// change card, so it is decided there and answers 404 here); a draft went into the
 // agent's own reply box. Only the agent's own offered cards change, never one
 // on a ticket in the recycle bin (404 otherwise). Audited as
 // helpdesk.claude.card { card_id, kind, state, number }.

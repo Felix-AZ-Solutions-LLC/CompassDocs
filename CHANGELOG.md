@@ -4,6 +4,20 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Security
+- **"Via Claude in the desk" on ticket changes needs a real card.** The
+  ticket update route used to label a status, priority, team, owner or tag
+  change "via Claude in the desk" for any request that asked for it, so any
+  agent could put Claude's name on their own change. Apply on a change card
+  now sends the card's id, and the label is kept only if that card is one
+  Claude offered you on this ticket, hasn't been used or skipped, and
+  proposes exactly the change being saved. The card is marked applied at
+  the same time, so it labels one change. Any other request is saved as the
+  agent's own change, without the label. This is the check checklist cards
+  got in 1.20.14.
+
 ## [1.20.16] - 2026-11-15
 
 Claude drafts categories, automations and recurring tickets.

@@ -113,7 +113,7 @@ export function TicketPane({ number }: { number: number }) {
 
   // Returns whether the change went through (1.20.0: Claude's Apply cards read it).
   const patch = useCallback(
-    async (p: HdTicketPatch & { via?: "claude_desk" }, ok?: string): Promise<boolean> => {
+    async (p: HdTicketPatch & { card_id?: number }, ok?: string): Promise<boolean> => {
       // 1.19.3: a linked asset may log a maintenance record once solved (lib/helpdesk/assets); cancelling keeps it open.
       let maintenance: MaintenancePlan | null = null;
       if (p.status === "solved") {
@@ -178,7 +178,7 @@ export function TicketPane({ number }: { number: number }) {
           number: d.ticket.number,
           subject: d.ticket.subject,
           fill: (text, mode, replace) => composer.current?.fill(text, mode, replace),
-          apply: (p) => patch(p as HdTicketPatch & { via?: "claude_desk" }),
+          apply: (p) => patch(p as HdTicketPatch & { card_id?: number }),
           reload: () => void load(true),
         }
       : null

@@ -12,8 +12,15 @@
 // default, one with no team, one of their teams'; any with tickets.view_all), else 403; an
 // agents-only timeline line; audited (helpdesk.ticket.mailbox_changed). Stored only once the
 // whole request has passed its checks and the other fields are saved.
-// 1.20.0: `via: "claude_desk"` in the body marks a change applied from a Claude in the desk
-// card; it is audited (helpdesk.ticket.updated, via "claude_desk") and changes no rule.
+// 1.20.0: Apply on a Claude in the desk change card is audited (helpdesk.ticket.updated, via
+// "claude_desk") and its timeline lines end "via Claude in the desk"; it changes no rule.
+// 1.20.17 (security): only with `card_id` naming a real card (lib/helpdesk/claude/chats
+// claimChangeCard, the 1.20.14 checklist rule): one of this agent's change cards, still offered,
+// on this ticket, proposing exactly the field changes sent (status, priority, tags, team, owner;
+// no other field, no "Answer from"). The card is claimed (applied) before the change is saved
+// and offered again if the change is refused; helpdesk.claude.card records the decision. A bare
+// `via`, or a card that doesn't match or was already used, is ignored: the change is saved as
+// the agent's own, without the label.
 // 1.20.5: `solve_answers` ({ "<closing field key>": value, … }, or "<set id>:<key>" for one set) goes with a
 // change that solves the ticket ("Before you solve", lib/helpdesk/solve-requirements): the answers are stored in
 // the same transaction as the solve and ignored on any other change. A ticket that still needs something answers
@@ -97,27 +104,62 @@ export async function PATCH(req: Request, { params }: Ctx) {
     const missing = await validateTaskSolve(found.ticket.id);
     if (missing) return NextResponse.json(missing, { status: 409 });
   }
+  // 1.20.17: "via Claude in the desk" only from a real card, claimed here after every check above
+  // (a bare `via` is ignored). No card: the agent's own change, saved all the same.
+  let card: { id: number } | undefined;
+  if (b.card_id !== undefined && b.card_id !== null && b.mailbox_id === undefined) {
+    const { claimChangeCard } = await import("@/lib/helpdesk/claude/chats");
+    card = await claimChangeCard(gate.id, b.card_id, { ticketId: found.ticket.id, patch: patch as Record<string, unknown> });
+  }
+  const releaseCard = async () => {
+    if (!card) return;
+    const { releaseChangeCard } = await import("@/lib/helpdesk/claude/chats");
+    await releaseChangeCard(gate.id, card.id);
+  };
+  let r: Awaited<ReturnType<typeof updateTicket>>;
   try {
-    // 1.20.0: Apply on a Claude in the desk card sends via "claude_desk": the same checks, the
-    // timeline says "via Claude in the desk", and the change is audited with that via.
-    const viaClaude = b.via === "claude_desk";
-    const r = await updateTicket(
+    r = await updateTicket(
       found.ticket.id,
       patch,
-      { id: gate.id, name: gate.name || gate.username, role: gate.role, ...(viaClaude ? { via: "claude_desk" as const } : {}) },
+      { id: gate.id, name: gate.name || gate.username, role: gate.role, ...(card ? { via: "claude_desk" as const } : {}) },
       { origin: originOf(req) },
       // 1.20.6: `setup_complete: true` with a solve marks the event's setup in the same transaction ("Before you solve"'s tick box).
       { solveAnswers: b.solve_answers, setupComplete: b.setup_complete === true }
     );
-    if (!r) return notFound();
-    if (viaClaude && r.changed.length) {
+  } catch (e) {
+    // A refusal (HdTicketError, inside updateTicket's transaction) wrote nothing, so the card is
+    // offered again. Anything else may have failed after the commit: the card stays used.
+    // 1.20.5: a "Before you solve" refusal also carries its code and what is missing (e.extra).
+    if (e instanceof HdTicketError) {
+      await releaseCard();
+      return NextResponse.json({ error: e.message, ...e.extra }, { status: e.status });
+    }
+    throw e;
+  }
+  if (!r) {
+    await releaseCard();
+    return notFound();
+  }
+  try {
+    if (card) {
+      await audit({
+        actor: actorFrom(gate),
+        action: "helpdesk.claude.card",
+        targetType: "helpdesk_ticket",
+        targetId: r.ticket.id,
+        targetLabel: `#${r.ticket.number}`,
+        details: { card_id: card.id, kind: "change", state: "applied", number: r.ticket.number, via: "claude_desk" },
+        ip: ipFrom(req),
+      });
+    }
+    if (card && r.changed.length) {
       await audit({
         actor: actorFrom(gate),
         action: "helpdesk.ticket.updated",
         targetType: "helpdesk_ticket",
         targetId: r.ticket.id,
         targetLabel: `#${r.ticket.number} ${r.ticket.subject}`.slice(0, 200),
-        details: { number: r.ticket.number, changed: r.changed, via: "claude_desk", via_label: "via Claude in the desk" },
+        details: { number: r.ticket.number, changed: r.changed, card_id: card.id, via: "claude_desk", via_label: "via Claude in the desk" },
         ip: ipFrom(req),
       });
     }

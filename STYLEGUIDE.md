@@ -4137,7 +4137,8 @@ settings page, the server and the tests read the same words.
     ("After you send the reply.") and primary `sm` **Apply** with secondary
     `sm` **Skip**; once decided, an `ok` chip "Applied" or a `neutral` chip
     "Skipped". Apply goes through the ticket pane's own patch (the desk's
-    PATCH with `via: "claude_desk"`), so every desk rule and prompt applies.
+    PATCH with the card's `card_id`, which keeps "via Claude in the desk" only
+    for that card's exact change), so every desk rule and prompt applies.
     Solving or closing another ticket from a card is refused with the toast
     "Open #N to solve it there.": the solve flow (time, maintenance,
     required checklist items) runs in the open ticket.

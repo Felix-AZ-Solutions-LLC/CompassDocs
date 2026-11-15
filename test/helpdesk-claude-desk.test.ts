@@ -252,6 +252,12 @@ const deskRequests = () => fake.requests.filter((r) => Array.isArray(r.body?.too
 const lastDesk = () => deskRequests()[deskRequests().length - 1];
 const toolResultsOf = (body: any) => (body.messages as any[]).flatMap((m) => (Array.isArray(m.content) ? m.content : [])).filter((b: any) => b.type === "tool_result");
 const ticketRow = async (id: number) => (await pool().query("SELECT status, priority, tags, team_id FROM hd_tickets WHERE id = $1", [id])).rows[0];
+const cardState = async (id: number) => (await pool().query("SELECT state FROM hd_claude_cards WHERE id = $1", [id])).rows[0]?.state as string | undefined;
+/** A ticket-change card as propose_ticket_change offers it, in a chat of `who`'s own. */
+async function offerChange(who: string, t: { id: number; number: number }, patch: Record<string, unknown>): Promise<number> {
+  const chat = await pool().query("INSERT INTO hd_claude_chats (user_id, ticket_id, title) VALUES ($1, $2, $3) RETURNING id", [P[who].id, t.id, `change ${STAMP}`]);
+  return chats.createCard({ chatId: chat.rows[0].id, userId: P[who].id, ticketId: t.id, kind: "change", payload: { number: t.number, patch, title: "Change", hint: "" } });
+}
 const messageCount = async (id: number) => Number((await pool().query("SELECT count(*) AS n FROM hd_messages WHERE ticket_id = $1", [id])).rows[0].n);
 
 before(async () => {
@@ -648,17 +654,21 @@ describe("Claude in the desk: proposals and drafts", () => {
     assert.equal(change.title, "Set status to Waiting on requester");
     assert.equal(change.hint, "After you send the reply.");
     assert.equal((await ticketRow(tk.vpn.id)).status, "open", "not applied yet");
-    // Apply: the desk's own route, the agent's session.
-    const applied = await call(ticketRoute.PATCH, "agent", `/api/helpdesk/tickets/${tk.vpn.number}`, "PATCH", { ...change.patch, via: "claude_desk" }, { number: String(tk.vpn.number) });
+    // Apply: the desk's own route, the agent's session, with the card's id (1.20.17).
+    const applied = await call(ticketRoute.PATCH, "agent", `/api/helpdesk/tickets/${tk.vpn.number}`, "PATCH", { ...change.patch, card_id: change.id }, { number: String(tk.vpn.number) });
     assert.equal(applied.status, 200, JSON.stringify(applied.body));
     assert.equal((await ticketRow(tk.vpn.id)).status, "pending");
     const audit = await pool().query("SELECT details FROM audit_log WHERE action = 'helpdesk.ticket.updated' AND actor_id = $1 AND target_id = $2", [P.agent.id, String(tk.vpn.id)]);
     assert.equal(audit.rows[0]?.details.via, "claude_desk");
     assert.equal(audit.rows[0]?.details.via_label, "via Claude in the desk");
+    assert.equal(audit.rows[0]?.details.card_id, change.id);
     const line = await pool().query("SELECT body FROM hd_messages WHERE ticket_id = $1 AND via = 'system' ORDER BY id DESC LIMIT 1", [tk.vpn.id]);
     assert.match(line.rows[0].body, /via Claude in the desk$/);
-    const decided = await call(cardRoute.POST, "agent", `/api/helpdesk/claude/cards/${change.id}`, "POST", { state: "applied" }, { id: String(change.id) });
-    assert.equal(decided.status, 200);
+    // The PATCH claimed the card and recorded the decision; the panel's own record then finds it decided.
+    assert.equal(await cardState(change.id), "applied");
+    const decision = await pool().query("SELECT details FROM audit_log WHERE action = 'helpdesk.claude.card' AND actor_id = $1 AND details->>'card_id' = $2", [P.agent.id, String(change.id)]);
+    assert.deepEqual(decision.rows.map((x) => x.details.state), ["applied"]);
+    assert.equal((await call(cardRoute.POST, "agent", `/api/helpdesk/claude/cards/${change.id}`, "POST", { state: "applied" }, { id: String(change.id) })).status, 404);
     // Someone else's card, or a decided one, is not theirs to decide.
     assert.equal((await call(cardRoute.POST, "agent2", `/api/helpdesk/claude/cards/${draft.id}`, "POST", { state: "skipped" }, { id: String(draft.id) })).status, 404);
     assert.equal((await call(cardRoute.POST, "agent", `/api/helpdesk/claude/cards/${change.id}`, "POST", { state: "skipped" }, { id: String(change.id) })).status, 404);
@@ -666,6 +676,102 @@ describe("Claude in the desk: proposals and drafts", () => {
     const refused = await call(ticketRoute.PATCH, "newbie", `/api/helpdesk/tickets/${tk.vpn.number}`, "PATCH", { team_id: T2, via: "claude_desk" }, { number: String(tk.vpn.number) });
     assert.equal(refused.status, 403);
     await pool().query("UPDATE hd_tickets SET status = 'open' WHERE id = $1", [tk.vpn.id]);
+  });
+
+  test("only the agent's own offered card for exactly that change keeps \"via Claude in the desk\" (1.20.17)", async () => {
+    const t = await newTicket("viaCard", "Docking station has no display", T1, "The dock shows nothing on the second screen.");
+    const patchAs = (who: string, body: Record<string, unknown>) => call(ticketRoute.PATCH, who, `/api/helpdesk/tickets/${t.number}`, "PATCH", body, { number: String(t.number) });
+    const viaAudits = async () =>
+      (await pool().query("SELECT details FROM audit_log WHERE action = 'helpdesk.ticket.updated' AND target_id = $1 AND details->>'via' = 'claude_desk' ORDER BY id", [String(t.id)])).rows.map((x) => x.details);
+    const lastLine = async () => (await pool().query("SELECT body FROM hd_messages WHERE ticket_id = $1 AND via = 'system' ORDER BY id DESC LIMIT 1", [t.id])).rows[0]?.body as string;
+    const reset = () => pool().query("UPDATE hd_tickets SET status = 'open', priority = 'normal', tags = '{}' WHERE id = $1", [t.id]);
+
+    // A forged via, with no card: the change is the agent's own.
+    let r = await patchAs("agent", { priority: "high", via: "claude_desk" });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal((await ticketRow(t.id)).priority, "high");
+    assert.doesNotMatch(await lastLine(), /via Claude/);
+    assert.deepEqual(await viaAudits(), []);
+    // A card id that is not a card (or not a sane id): the same.
+    for (const card_id of [987654321, 2 ** 40, "1", -3]) {
+      r = await patchAs("agent", { priority: "urgent", via: "claude_desk", card_id });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.doesNotMatch(await lastLine(), /via Claude/);
+      await reset();
+    }
+    assert.deepEqual(await viaAudits(), []);
+
+    // A real card, but the request asks for more, or something else: the agent's own change; the card stays offered.
+    const pending = await offerChange("agent", t, { status: "pending" });
+    for (const body of [
+      { status: "pending", priority: "urgent" },
+      { status: "on_hold" },
+      { status: "pending", subject: `${STAMP} Docking station renamed` },
+      { status: "pending", mailbox_id: null },
+    ]) {
+      r = await patchAs("agent", { ...body, via: "claude_desk", card_id: pending });
+      assert.equal(r.status, 200, `${JSON.stringify(body)} → ${JSON.stringify(r.body)}`);
+      assert.doesNotMatch(await lastLine(), /via Claude/, JSON.stringify(body));
+      assert.equal(await cardState(pending), "offered", JSON.stringify(body));
+      await reset();
+    }
+    // Someone else's card for this change, or this agent's card for another ticket: ignored too.
+    const theirs = await offerChange("agent2", t, { status: "pending" });
+    const elsewhere = await offerChange("agent", tk.vpn2, { status: "pending" });
+    for (const card_id of [theirs, elsewhere]) {
+      r = await patchAs("agent", { status: "pending", card_id });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.doesNotMatch(await lastLine(), /via Claude/);
+      assert.equal(await cardState(card_id), "offered");
+      await reset();
+    }
+    // A skipped card is decided: ignored.
+    const skipped = await offerChange("agent", t, { status: "pending" });
+    assert.equal((await call(cardRoute.POST, "agent", `/api/helpdesk/claude/cards/${skipped}`, "POST", { state: "skipped" }, { id: String(skipped) })).status, 200);
+    r = await patchAs("agent", { status: "pending", card_id: skipped });
+    assert.equal(r.status, 200);
+    assert.doesNotMatch(await lastLine(), /via Claude/);
+    assert.equal(await cardState(skipped), "skipped");
+    await reset();
+    assert.deepEqual(await viaAudits(), []);
+
+    // The real card for exactly this change (the tag list in any order): labelled, audited with the card, and claimed.
+    const real = await offerChange("agent", t, { status: "pending", tags: ["dock", "display"] });
+    const lastId = Number((await pool().query("SELECT coalesce(max(id), 0) AS id FROM hd_messages WHERE ticket_id = $1", [t.id])).rows[0].id);
+    r = await patchAs("agent", { tags: ["display", "dock"], status: "pending", card_id: real });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual([...r.body.changed].sort(), ["status", "tags"]);
+    const after = await ticketRow(t.id);
+    assert.equal(after.status, "pending");
+    assert.deepEqual([...after.tags].sort(), ["display", "dock"]);
+    const lines = (await pool().query("SELECT body FROM hd_messages WHERE ticket_id = $1 AND via = 'system' AND id > $2", [t.id, lastId])).rows;
+    assert.ok(lines.length >= 1 && lines.every((x) => x.body.endsWith(" via Claude in the desk")), JSON.stringify(lines));
+    const audits = await viaAudits();
+    assert.equal(audits.length, 1);
+    assert.equal(audits[0].card_id, real);
+    assert.equal(audits[0].via_label, "via Claude in the desk");
+    assert.equal(await cardState(real), "applied");
+
+    // The same card again: used, so the next change is the agent's own.
+    await reset();
+    r = await patchAs("agent", { status: "pending", tags: ["dock", "display"], card_id: real });
+    assert.equal(r.status, 200);
+    assert.equal((await ticketRow(t.id)).status, "pending", "the agent's change still goes through");
+    assert.doesNotMatch(await lastLine(), /via Claude/);
+    assert.equal((await viaAudits()).length, 1);
+
+    // A change refused inside the save (the desk admin assigning a team member whose account isn't
+    // active: past the capability check, then refused by the transaction) writes nothing and gives the card back.
+    await reset();
+    const gone = await person("gone", "Gale Gone");
+    await member(T1, gone.id);
+    await pool().query("UPDATE users SET status = 'disabled' WHERE id = $1", [gone.id]);
+    const toGone = await offerChange("dadmin", t, { assignee_id: gone.id });
+    r = await patchAs("dadmin", { assignee_id: gone.id, card_id: toGone });
+    assert.equal(r.status, 400, JSON.stringify(r.body));
+    assert.match(r.body.error, /not an agent of this ticket's team/);
+    assert.equal(await cardState(toGone), "offered");
+    assert.equal((await viaAudits()).length, 1);
   });
 });
 

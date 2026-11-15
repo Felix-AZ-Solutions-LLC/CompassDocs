@@ -18,6 +18,9 @@
 // ticket): Save as draft sends only the card's id to the desk's own settings
 // route, which claims the card and saves its content unpublished, switched
 // off or paused for someone with access to publish in Desk settings.
+// 1.20.17: a ticket-change card's Apply sends the card's id with its change
+// (no bare `via`): the desk's PATCH keeps "via Claude in the desk" only for
+// this agent's offered card proposing exactly that change, and claims it.
 // History per ticket (the history menu: earlier chats, New chat). Screen
 // readers hear the answer once it is complete (role="log", aria-busy while
 // streaming); focus starts in the question box and returns to the opener.
@@ -329,10 +332,11 @@ export function ClaudePanel() {
             toast("error", `Open #${card.number} to solve it there.`);
             return;
           }
+          // The card's id (1.20.17): the PATCH keeps "via Claude in the desk" only for this card's exact change, and claims it.
           const ok =
             ticket && ticket.number === card.number
-              ? await ticket.apply({ ...card.patch, via: "claude_desk" })
-              : await sendJson(`/api/helpdesk/tickets/${card.number}`, "PATCH", { ...card.patch, via: "claude_desk" }, "Couldn't apply the change.").then(
+              ? await ticket.apply({ ...card.patch, card_id: card.id })
+              : await sendJson(`/api/helpdesk/tickets/${card.number}`, "PATCH", { ...card.patch, card_id: card.id }, "Couldn't apply the change.").then(
                   () => true,
                   (e: Error) => {
                     toast("error", e.message);
@@ -360,6 +364,8 @@ export function ClaudePanel() {
         }
       }
       // A saved settings draft's card was already claimed by the settings route; Skip is recorded here.
+      // An applied change card is normally claimed by the ticket PATCH already (this then answers 404,
+      // ignored); when the PATCH didn't take it (the solve dialog added fields), the decision is recorded here.
       if (card.kind === "checklist" || (card.kind === "change" && !(card.action === "settings_draft" && how === "applied"))) {
         await sendJson(`/api/helpdesk/claude/cards/${card.id}`, "POST", { state: how }).catch(() => {});
       }
