@@ -586,8 +586,11 @@ describe("review fixes", () => {
         // both are read again back to back; a concurrent change does not.
         let still = true;
         for (let i = 0; i < 3 && still; i++) {
+          // Re-read the agent itself too (desk role, teams), not just the workspace role.
+          const fresh = (await rolesAgents.listDeskAgents()).find((x) => x.user_id === a.user_id);
+          if (!fresh) { still = false; break; }
           const role = (await pool().query("SELECT role FROM users WHERE id = $1", [a.user_id])).rows[0]?.role;
-          const [b, o] = [(await share.canWorkMany([a], ticket)).get(a.user_id), await access.canWorkTicket({ id: a.user_id, role }, ticket)];
+          const [b, o] = [(await share.canWorkMany([fresh], ticket)).get(a.user_id), await access.canWorkTicket({ id: a.user_id, role }, ticket)];
           still = b !== o;
           if (!still) break;
           await new Promise((r) => setTimeout(r, 200));
