@@ -169,7 +169,7 @@ test.describe("claude in the desk (licensed, fake Messages API)", () => {
     const panel = page.getByRole("complementary", { name: "Claude" });
     await expect(panel).toBeVisible();
     await slow(panel.getByText("Searched solved tickets", { exact: true })).toBeVisible();
-    await slow(panel.getByRole("log").getByText(/couldn't find an earlier ticket|times in the last month/)).toBeVisible();
+    await slow(panel.getByRole("log").getByText(/couldn't find an earlier ticket|times? in the last month/)).toBeVisible();
     const sent = fake.requests.filter((r) => Array.isArray(r.body?.tools));
     expect(sent.length).toBeGreaterThan(0);
     expect(sent[0].body.output_config).toEqual({ effort: "high" });

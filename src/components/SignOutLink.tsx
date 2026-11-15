@@ -6,6 +6,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { forgetDeskOnSignOut } from "./helpdesk/desk/popout/reply-popout";
 
 export function SignOutLink({ className = "link text-sm" }: { className?: string }) {
   const router = useRouter();
@@ -16,6 +17,8 @@ export function SignOutLink({ className = "link text-sm" }: { className?: string
       disabled={busy}
       onClick={async () => {
         setBusy(true);
+        // 1.20.18: reply pop-outs close and this browser keeps no desk drafts or hand-offs (a shared computer).
+        forgetDeskOnSignOut();
         await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
         router.push("/login");
         router.refresh();

@@ -117,6 +117,17 @@ const nextConfig = {
         source: "/((?!addin).*)",
         headers: [...base, { key: "Content-Security-Policy", value: mainCsp }],
       },
+      // 1.20.18 (the reply pop-out's security review): the desk keeps any window it opens away from other
+      // sites. A desk page that opens a same-origin desk window (the reply pop-out, the print page) keeps its
+      // handle on it; once such a window goes to another site, neither side can reach the other.
+      {
+        source: "/desk",
+        headers: [{ key: "Cross-Origin-Opener-Policy", value: "same-origin" }],
+      },
+      {
+        source: "/desk/:path*",
+        headers: [{ key: "Cross-Origin-Opener-Policy", value: "same-origin" }],
+      },
       // Last so its Content-Security-Policy overrides the general rule above.
       {
         source: "/oauth/authorize",

@@ -75,6 +75,8 @@ export async function sweepPresence(now: Date = new Date()): Promise<number> {
     "DELETE FROM hd_ticket_presence WHERE seen_at < $1::timestamptz - make_interval(secs => $2) RETURNING ticket_id",
     [now.toISOString(), PRESENCE_SWEEP_SECONDS]
   );
+  // 1.20.18: and the send guard's day-old idempotency keys (lib/helpdesk/send-once).
+  await (await import("./send-once")).sweepSendIds(now);
   return rows.length;
 }
 

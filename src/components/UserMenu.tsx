@@ -7,6 +7,7 @@ import { ThemeToggle } from "./ThemeToggle";
 import { UserAvatar } from "./UserAvatar";
 import { ROLE_LABEL } from "@/lib/types";
 import type { SessionUser } from "@/lib/types";
+import { forgetDeskOnSignOut } from "./helpdesk/desk/popout/reply-popout";
 
 // Sidebar footer: one identity link (avatar + name + role → Manage account)
 // plus the theme toggle and sign out. It used to offer three tab stops to the
@@ -18,6 +19,8 @@ export function UserMenu({ user, collapsed = false }: { user: SessionUser; colla
   const display = user.name || user.username;
 
   async function logout() {
+    // 1.20.18: reply pop-outs close and this browser keeps no desk drafts or hand-offs (a shared computer).
+    forgetDeskOnSignOut();
     await fetch("/api/auth/logout", { method: "POST" });
     router.push("/login");
     router.refresh();

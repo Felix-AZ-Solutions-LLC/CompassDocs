@@ -13,6 +13,11 @@
 //   status. A ticket that would still need something answers 409 { error, code:
 //   "solve_requirements", missing } before anything is posted. A reply held for review changes no
 //   status, so it is never asked.
+//   1.20.18 (the reply pop-out's security review, lib/helpdesk/send-once): `client_send_id`, the
+//   composer's idempotency key for this send. A repeat of a send that went through answers
+//   200 { message, status, held, duplicate: true } and posts nothing; one still on its way
+//   answers 409 { code: "send_in_progress" }. `expect_user_id`: the agent the page was loaded
+//   for; anyone else signed in now answers 409 { code: "other_user" } and nothing is posted.
 // Helpdesk 1.19.0 (helpdesk.agent). 30 a minute per person.
 
 import { NextResponse } from "next/server";
@@ -24,6 +29,8 @@ import { badRequest, loadTicketFor, notFound, originOf, textField } from "@/lib/
 import { hdCan, HD_FORBIDDEN } from "@/lib/helpdesk/roles";
 import { collisionRefusal } from "@/lib/helpdesk/presence";
 import { mergedLock } from "@/lib/helpdesk/merge";
+import { claimSend, cleanSendId, completeSend, releaseSend, sentWith } from "@/lib/helpdesk/send-once";
+import { getMessage } from "@/lib/helpdesk/messages";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +46,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ number:
   if (locked) return NextResponse.json({ error: locked }, { status: 409 });
   const b = await readJson(req, 128 * 1024);
   if (!b) return badRequest("Send the message as JSON.");
+  // 1.20.18: a page loaded for one agent never sends as whoever is signed in now.
+  if (b.expect_user_id !== undefined && b.expect_user_id !== gate.id) {
+    return NextResponse.json({ error: "Someone else is signed in to this browser now. Nothing was sent.", code: "other_user" }, { status: 409 });
+  }
+  const sendId = cleanSendId(b.client_send_id);
+  if (sendId === "bad") return badRequest("client_send_id is 16 to 64 letters, digits, - or _.");
   if (b.kind !== "public" && b.kind !== "internal") return badRequest("A message is public or internal.");
   const body = textField(b.body, MESSAGE_LIMITS.body);
   if (body === null) return badRequest("The message is too long.");
@@ -51,6 +64,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ number:
       : (await hdCan(gate, "tickets.reply_public", { teamId })) || (await hdCan(gate, "tickets.reply_needs_review", { teamId }));
   if (!may || (b.then_status !== undefined && !(await hdCan(gate, "tickets.change_status", { teamId })))) {
     return NextResponse.json({ error: HD_FORBIDDEN }, { status: 403 });
+  }
+  // 1.20.18: this send already went through (same key): the first message, nothing posted again.
+  if (sendId) {
+    const prior = await sentWith(gate.id, t.id, sendId);
+    if (prior) return duplicateOf(prior, t.status);
   }
   // A workflow task asks for its required hand-off before "Send and mark
   // solved" (as PATCH does; the core refuses it too): nothing is posted.
@@ -111,25 +129,48 @@ export async function POST(req: Request, { params }: { params: Promise<{ number:
       if (needs) return NextResponse.json({ error: needs.error, code: needs.code, missing: needs.missing }, { status: needs.status });
     }
   }
+  // 1.20.18: claim the key before anything is written, so two requests with it can't both post.
+  if (sendId) {
+    const claim = await claimSend(gate.id, t.id, sendId);
+    if (!claim.claimed) {
+      if (claim.messageId) return duplicateOf(claim.messageId, t.status);
+      return NextResponse.json({ error: "This reply is still being sent.", code: "send_in_progress" }, { status: 409 });
+    }
+  }
+  // Narrowed values for the inner post().
+  const me = gate;
+  const bb = b;
+  const text = body;
+  const kind: "public" | "internal" = b.kind;
+  let posted = false;
+  try {
+    const r = await post();
+    posted = r.status === 201;
+    return r;
+  } finally {
+    if (sendId && !posted) await releaseSend(gate.id, t.id, sendId);
+  }
+
+  async function post(): Promise<NextResponse> {
   // 1.19.1 collision warning (lib/helpdesk/presence): someone else's newer
   // message since expect_last_message_id → 409 { newer }, unless force.
-  const collided = await collisionRefusal(t.id, gate.id, b);
+  const collided = await collisionRefusal(t.id, me.id, bb);
   if (collided) return collided;
-  const attachments = await pendingAttachments(b.attachments, { userId: gate.id, ticketId: t.id });
+  const attachments = await pendingAttachments(bb.attachments, { userId: me.id, ticketId: t.id });
   if (!attachments) return badRequest("One of the files is not available. Upload it again.");
-  if (!body && !attachments.length) return badRequest("Write a message.");
+  if (!text && !attachments.length) return badRequest("Write a message.");
   let res: Awaited<ReturnType<typeof addMessage>>;
   try {
     res = await addMessage(
       t.id,
       {
-        kind: b.kind,
-        body,
-        author: { id: gate.id, name: gate.name || gate.username, email: gate.email },
+        kind,
+        body: text,
+        author: { id: me.id, name: me.name || me.username, email: me.email },
         via: "desk",
         asRequester: false,
         attachments,
-        then_status: b.then_status as never,
+        then_status: bb.then_status as never,
         solve,
       },
       { origin: originOf(req) }
@@ -140,9 +181,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ number:
     throw e;
   }
   if (!res) return notFound();
-  if (attachments.length) await attachToMessage(attachments.map((a) => a.id), t.id, res.message.id, { userId: gate.id });
+  if (attachments.length) await attachToMessage(attachments.map((a) => a.id), t.id, res.message.id, { userId: me.id });
+  if (sendId) await completeSend(me.id, t.id, sendId, res.message.id);
   return NextResponse.json(
     { message: res.message, status: res.status, held: res.held, ...(res.status_unchanged ? { status_unchanged: res.status_unchanged } : {}) },
     { status: 201 }
   );
+  }
+}
+
+/** 1.20.18: the answer to a repeat of a send that went through: the first message, nothing posted. */
+async function duplicateOf(messageId: number, status: string): Promise<NextResponse> {
+  const message = await getMessage(messageId);
+  return NextResponse.json({ message: message ?? { id: messageId }, status, held: message?.review_state === "pending", duplicate: true }, { status: 200 });
 }

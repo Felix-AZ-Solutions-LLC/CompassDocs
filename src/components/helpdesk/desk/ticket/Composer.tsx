@@ -10,10 +10,16 @@
 // (Waiting on requester, On hold, Solved). Ctrl/⌘+Enter sends. An unsent
 // draft is kept per ticket in this browser, so switching tickets loses
 // nothing.
+//
+// 1.20.18: Pop out (Shift+O) moves the reply into a window of its own
+// (/desk/tickets/[number]/reply, ../popout). The text travels in the same
+// draft; the message type, uploaded files and the picked macro travel in the
+// pop-out's hand-off record (`handoff`: the pane takes it back, the pop-out
+// keeps it current).
 
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { replyLabel } from "@/lib/helpdesk/ccs-shared";
-import { BookOpen, ChevronDown, Lock, Paperclip, Reply, X, Zap } from "lucide-react";
+import { BookOpen, ChevronDown, Lock, Paperclip, Reply, SquareArrowOutUpRight, X, Zap } from "lucide-react";
 import { buttonClass, iconButtonClass } from "@/components/Button";
 import { Popover, MenuItem } from "@/components/Popover";
 import { Segmented } from "@/components/Segmented";
@@ -37,6 +43,10 @@ import { mergeDraft } from "../claude/draft-fill";
 // 1.20.5: "Before you solve" (lib/helpdesk/solve-requirements).
 import { isSolveRequirementBlock } from "@/lib/helpdesk/solve-requirements-shared";
 import { askBeforeYouSolve, type SolveExtras } from "../solve/BeforeYouSolve";
+// 1.20.18: the reply pop-out's hand-off record (../popout/reply-popout).
+// Security review fixes: drafts and the hand-off carry the agent's id; a send carries its idempotency key.
+import { clearHandoff, newSendId, readDraft, readHandoff, writeDraft, writeHandoff } from "../popout/reply-popout";
+import { ApiError } from "../api";
 
 export type ComposerMode = "public" | "internal";
 
@@ -50,6 +60,10 @@ export interface ComposerHandle {
    * Claude draft still in that box unchanged is swapped for this one (a refined draft never stacks).
    */
   fill: (text: string, target?: ComposerMode, replace?: string | null) => void;
+  /** 1.20.18: Pop out (the pane's Shift+O); nothing happens without `onPopOut` or while sending or uploading. */
+  popOut: () => void;
+  /** 1.20.18: write the hand-off record now (the pop-out, on its way out). */
+  persist: () => void;
 }
 
 const THEN: { status: HdStatus; label: string }[] = [
@@ -61,24 +75,6 @@ const THEN: { status: HdStatus; label: string }[] = [
 const MAX_FILES = 10;
 const MAX_BYTES = 20 * 1024 * 1024;
 
-function draftKey(n: number, mode: ComposerMode) {
-  return `compass-desk-draft:${n}:${mode}`;
-}
-function readDraft(n: number, mode: ComposerMode): string {
-  try {
-    return localStorage.getItem(draftKey(n, mode)) ?? "";
-  } catch {
-    return "";
-  }
-}
-function writeDraft(n: number, mode: ComposerMode, text: string) {
-  try {
-    if (text) localStorage.setItem(draftKey(n, mode), text);
-    else localStorage.removeItem(draftKey(n, mode));
-  } catch {
-    /* private mode: no draft */
-  }
-}
 
 export const Composer = forwardRef<
   ComposerHandle,
@@ -88,8 +84,11 @@ export const Composer = forwardRef<
     requesterName: string;
     agentName: string;
     suggestions: HdSuggestedArticle[];
-    /** Called after a message is sent; `macro` carries field changes to apply. */
-    onSent: (opts: { macro: HdMacro | null; status: HdStatus | null }) => void;
+    /**
+     * Called after a message is sent; `macro` carries field changes to apply. 1.20.18: `mode`, whether it waits
+     * for review, and the server's note when the status stayed (the pop-out tells the desk window).
+     */
+    onSent: (opts: { macro: HdMacro | null; status: HdStatus | null; mode?: ComposerMode; review?: boolean; warning?: string }) => void;
     disabled?: boolean;
     /** A newbie's public replies wait for a lead's review before the requester sees them. */
     forReview?: boolean;
@@ -107,17 +106,52 @@ export const Composer = forwardRef<
     ccCount?: number;
     /** 1.20.5: a "Before you solve" requirement set matches this ticket (the ticket detail's before_solve). */
     beforeSolve?: boolean;
+    /**
+     * 1.20.18, the reply pop-out's hand-off record (message type, files, macro, the send's key): "take" starts from it
+     * and clears it (the pane, as the reply comes back), "peek" starts from it and leaves it (the pane, taken back from a
+     * pop-out that has not let go yet), "keep" starts from it and keeps it current until sent (the pop-out).
+     */
+    handoff?: "take" | "peek" | "keep";
+    /** 1.20.18: shows Pop out; opens the window (inside the click) and says whether it opened. */
+    onPopOut?: () => boolean;
+    /** 1.20.18: the agent typed (the pop-out relays it, so the desk window's presence says "replying" too). */
+    onTyping?: () => void;
+    /** 1.20.18: asked first thing on Send; an answer refuses the send with that message (the pop-out no longer owns the reply). */
+    canSend?: () => string | null;
+    /** 1.20.18: a send, an upload or a solve question is in progress (the pop-out won't give the reply back meanwhile). */
+    onBusy?: (busy: boolean) => void;
+    /** 1.20.18: the server refused the send for good (e.g. "other_user": someone else is signed in now). */
+    onRefused?: (code: string) => void;
   }
->(function Composer({ number, subject, requesterName, agentName, suggestions, onSent, disabled, forReview = false, allowNotes = true, defaultMode = "public", automated = false, latestMessageId, onNewer, ccCount = 0, beforeSolve = false }, ref) {
+>(function Composer({ number, subject, requesterName, agentName, suggestions, onSent, disabled, forReview = false, allowNotes = true, defaultMode = "public", automated = false, latestMessageId, onNewer, ccCount = 0, beforeSolve = false, handoff, onPopOut, onTyping, canSend, onBusy, onRefused }, ref) {
   const me = useDeskMe();
-  const [mode, setMode] = useState<ComposerMode>(defaultMode);
-  useEffect(() => setMode(allowNotes ? defaultMode : "public"), [number, defaultMode, allowNotes]);
+  const uid = me.id;
+  // 1.20.18: a reply handed over from the other window starts where it was left (read once, at mount).
+  const [start] = useState(() => (handoff ? readHandoff(uid, number) : null));
+  // 1.20.18: this send's idempotency key, kept (and handed over) until the send goes through.
+  const sendId = useRef<string | null>(start?.send_id ?? null);
+  const [mode, setMode] = useState<ComposerMode>(() =>
+    start && (start.mode === "public" || allowNotes) ? start.mode : allowNotes ? defaultMode : "public"
+  );
+  // A new ticket (or a change of role) resets the message type; the first run keeps the hand-off's.
+  const modeKey = useRef(`${number}:${defaultMode}:${allowNotes}`);
+  useEffect(() => {
+    const k = `${number}:${defaultMode}:${allowNotes}`;
+    if (modeKey.current === k) return;
+    modeKey.current = k;
+    setMode(allowNotes ? defaultMode : "public");
+  }, [number, defaultMode, allowNotes]);
+  useEffect(() => {
+    if (handoff === "take" && start) clearHandoff(uid, number);
+    // Read once at mount: later tickets in the same pane start fresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [text, setText] = useState("");
-  const [files, setFiles] = useState<HdAttachment[]>([]);
+  const [files, setFiles] = useState<HdAttachment[]>(() => start?.files ?? []);
   const [uploading, setUploading] = useState(0);
   const [uploadError, setUploadError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [macro, setMacro] = useState<HdMacro | null>(null);
+  const [macro, setMacro] = useState<HdMacro | null>(() => start?.macro ?? null);
   const [macroOpen, setMacroOpen] = useState(false);
   const [articleOpen, setArticleOpen] = useState(false);
   const [thenOpen, setThenOpen] = useState(false);
@@ -145,14 +179,39 @@ export const Composer = forwardRef<
     } else if (baseline.current === null) baseline.current = latestMessageId ?? 0;
   }, [text, number, latestMessageId]);
 
-  // A new ticket (or a mode switch) loads its own draft.
+  // A new ticket (or a mode switch) loads its own draft. 1.20.18: the first run keeps the hand-off's files and macro.
+  const draftKeyNow = useRef(`${number}:${mode}`);
   useEffect(() => {
-    setText(filled.current ?? readDraft(number, mode));
+    setText(filled.current ?? readDraft(uid, number, mode));
     filled.current = null;
+    const k = `${number}:${mode}`;
+    if (draftKeyNow.current === k) return;
+    draftKeyNow.current = k;
     setFiles([]);
     setMacro(null);
     setUploadError("");
   }, [number, mode]);
+
+  // 1.20.18: the pop-out keeps its hand-off record current, so a reload or a close hands back what is here now.
+  const sentOut = useRef(false);
+  const persist = () => {
+    if (handoff === "keep" && !sentOut.current) writeHandoff(uid, number, { mode, files, macro, send_id: sendId.current });
+  };
+  useEffect(() => {
+    if (handoff === "keep" && !sentOut.current) writeHandoff(uid, number, { mode, files, macro, send_id: sendId.current });
+  }, [handoff, uid, number, mode, files, macro]);
+
+  // 1.20.18: what is in progress (a send with its solve questions, an upload), for the pop-out.
+  const [phase, setPhase] = useState(0);
+  useEffect(() => onBusy?.(phase > 0 || uploading > 0), [phase, uploading, onBusy]);
+
+  /** 1.20.18: Pop out. The text is already in the draft; the rest goes in the hand-off record first. */
+  function popOut() {
+    if (!onPopOut || busy || uploading > 0 || disabled) return;
+    writeDraft(uid, number, mode, text);
+    writeHandoff(uid, number, { mode, files, macro, send_id: sendId.current });
+    onPopOut();
+  }
 
   useImperativeHandle(ref, () => ({
     focus(next) {
@@ -166,9 +225,9 @@ export const Composer = forwardRef<
       // A note needs the note capability; without it a note draft is not put anywhere.
       if (target === "internal" && !allowNotes) return;
       // What the agent already wrote in that box stays, above the draft; an earlier Claude draft is replaced.
-      const had = mode === target ? text : readDraft(number, target);
+      const had = mode === target ? text : readDraft(uid, number, target);
       const next = mergeDraft(had, draft, replace);
-      writeDraft(number, target, next);
+      writeDraft(uid, number, target, next);
       if (mode === target) setText(next);
       else {
         filled.current = next;
@@ -176,12 +235,17 @@ export const Composer = forwardRef<
       }
       requestAnimationFrame(() => area.current?.focus());
     },
+    popOut,
+    persist,
   }));
 
   function change(v: string) {
     setText(v);
-    writeDraft(number, mode, v);
-    if (v.trim()) noteTyping(number); // "is replying" for the others (1.19.1)
+    writeDraft(uid, number, mode, v);
+    if (v.trim()) {
+      noteTyping(number); // "is replying" for the others (1.19.1)
+      onTyping?.();
+    }
   }
 
   function insertAtCursor(snippet: string) {
@@ -252,10 +316,26 @@ export const Composer = forwardRef<
   // 1.20.5: what the "Before you solve" dialog collected for this send's solve (solve/BeforeYouSolve).
   const solveExtras = useRef<SolveExtras | null>(null);
 
+  /** 1.20.18: one send (its solve questions, the POST, a retry) counts as in progress from start to end. */
   async function send(then: HdStatus | null, force = false, askedAgain = false) {
+    setPhase((p) => p + 1);
+    try {
+      await sendOnce(then, force, askedAgain);
+    } finally {
+      setPhase((p) => p - 1);
+    }
+  }
+
+  async function sendOnce(then: HdStatus | null, force = false, askedAgain = false) {
     setThenOpen(false);
     if (!text.trim() || busy || uploading) {
       if (!text.trim()) area.current?.focus();
+      return;
+    }
+    // 1.20.18: the pop-out checks it still owns the reply before anything is asked or sent.
+    const refused = canSend?.() ?? null;
+    if (refused) {
+      toast("error", refused);
       return;
     }
     const status = then ?? (mode === "public" && macro?.actions.status ? macro.actions.status : null);
@@ -279,10 +359,21 @@ export const Composer = forwardRef<
       if (extra === false) return;
       solveExtras.current = extra;
     }
+    // Asked again after the solve questions: the desk may have taken the reply back meanwhile.
+    const late = canSend?.() ?? null;
+    if (late) {
+      toast("error", late);
+      return;
+    }
+    // 1.20.18: the key stays the same for every try of this send, here or in the other window (hand-off).
+    if (!sendId.current) {
+      sendId.current = newSendId();
+      persist();
+    }
     setBusy(true);
     try {
       // The send guard (1.19.1): postGuarded throws CollisionError on a 409 { newer }.
-      const sent = await postGuarded<{ status_unchanged?: string }>(
+      const sent = await postGuarded<{ status_unchanged?: string; duplicate?: boolean }>(
         `/api/helpdesk/tickets/${number}/messages`,
         {
           kind: mode,
@@ -292,22 +383,30 @@ export const Composer = forwardRef<
           ...(status === "solved" && solveExtras.current ? { solve_answers: solveExtras.current.solve_answers, solve_fields: solveExtras.current.solve_fields } : {}),
           ...(latestMessageId !== undefined ? { expect_last_message_id: baseline.current ?? latestMessageId } : {}),
           ...(force ? { force: true } : {}),
+          client_send_id: sendId.current,
+          expect_user_id: uid,
         },
         mode === "public" ? "Couldn't send the reply." : "Couldn't add the note."
       );
       clearTyping(number);
-      toast("ok", mode === "public" ? (forReview ? "Sent for review. A lead checks it before it goes out." : "Reply sent.") : "Note added.");
+      sendId.current = null;
+      // 1.20.18: the same send had already gone through (from the other window): nothing was posted twice.
+      if (sent?.duplicate) toast("ok", mode === "public" ? "This reply was already sent." : "This note was already added.");
+      else toast("ok", mode === "public" ? (forReview ? "Sent for review. A lead checks it before it goes out." : "Reply sent.") : "Note added.");
       // 1.19.2: sent, but a required checklist item was unticked meanwhile, so the status stayed (agent W3).
       if (sent?.status_unchanged) toast("error", `Sent, but the status didn't change. ${sent.status_unchanged}`);
       else if (status === "solved" && maintenancePlan.current) void logMaintenanceAfterSolve(number, maintenancePlan.current);
       maintenancePlan.current = null;
       solveExtras.current = null;
-      writeDraft(number, mode, "");
+      writeDraft(uid, number, mode, "");
+      // 1.20.18: nothing is left to hand back once sent.
+      if (handoff === "keep") sentOut.current = true;
+      clearHandoff(uid, number);
       setText("");
       setFiles([]);
       const used = macro;
       setMacro(null);
-      onSent({ macro: used, status });
+      onSent({ macro: used, status, mode, review: mode === "public" && forReview, warning: sent?.status_unchanged || undefined });
     } catch (err) {
       if (err instanceof CollisionError) {
         setCollision({ newer: err.newer, then });
@@ -318,10 +417,14 @@ export const Composer = forwardRef<
         const extra = await askBeforeYouSolve(number, { force: true, reply: publicReply, subject });
         if (extra) {
           solveExtras.current = extra;
-          return send(then, force, true);
+          return sendOnce(then, force, true);
         }
         if (extra === null) toast("error", (err as Error).message);
-      } else toast("error", (err as Error).message);
+      } else {
+        toast("error", (err as Error).message);
+        // 1.20.18: someone else is signed in now: this page's reply is not theirs to send.
+        if (err instanceof ApiError && err.code === "other_user") onRefused?.(err.code);
+      }
     } finally {
       setBusy(false);
     }
@@ -350,6 +453,23 @@ export const Composer = forwardRef<
         />
         {internal && <span className="text-xs text-slate-500">Only agents see notes.</span>}
         {!internal && forReview && <span className="text-xs text-slate-500">A lead reviews your reply before it goes out.</span>}
+        {/* 1.20.18: Pop out, desktop widths only (a new window means nothing on a phone). */}
+        {onPopOut && (
+          <span className="ml-auto hidden sm:inline-flex print:hidden">
+            <button
+              type="button"
+              onClick={popOut}
+              disabled={busy || uploading > 0 || disabled}
+              aria-label="Pop out the reply"
+              aria-keyshortcuts="Shift+O"
+              data-tt="Pop out (Shift+O)"
+              data-tt-align="end"
+              className={iconButtonClass("quiet", "sm")}
+            >
+              <SquareArrowOutUpRight aria-hidden />
+            </button>
+          </span>
+        )}
       </div>
       <textarea
         ref={area}

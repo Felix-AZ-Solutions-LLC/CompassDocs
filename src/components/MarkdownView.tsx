@@ -11,7 +11,7 @@ import { rehypeRewriteUrls, type UrlRewrite } from "@/lib/md-url-rewrite";
 import { CodeBlock } from "./CodeBlock";
 import { EmailTemplate } from "./EmailTemplate";
 import { DocImage } from "./DocImage";
-import { DocLink } from "./DocLink";
+import { DocLink, externalHost } from "./DocLink";
 import {
   MermaidBlock,
   PlantUmlBlock,
@@ -153,8 +153,11 @@ export function MarkdownView({
   // CTA buttons keep their own styling. The one component inline mode maps.
   const a: Components["a"] = ({ href, children, className }) => {
     if (className?.includes("email-btn")) {
+      // 1.20.18 (security review): a button to another site opens in a new tab with no way back to this page
+      // (rel="noopener noreferrer"), as every other outside link here does.
+      const outside = !!externalHost(href);
       return (
-        <a href={href} className={className}>
+        <a href={href} className={className} {...(outside ? { target: "_blank", rel: "noopener noreferrer" } : {})}>
           {children}
         </a>
       );
