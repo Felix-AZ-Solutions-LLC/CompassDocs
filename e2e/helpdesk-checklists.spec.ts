@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { Client } from "pg";
 import { ADMIN, login, api } from "./helpers";
 
 // Checklists (1.19.2, agent W3; mock-ups c1 and c2). Desk settings →
@@ -10,6 +11,12 @@ import { ADMIN, login, api } from "./helpers";
 // build asserts the licence gate; the licensed flow runs on the EE rig and
 // skips itself on 402. Everything it makes (a team, a template, a workflow,
 // tickets) is its own and is deleted afterwards.
+//
+// 1.20.14: a checklist drafted by Claude (saved as Claude in the desk's "Save
+// as draft" does) waits in the library as "Draft from Claude": the editor
+// shows the draft strip, the ticket's picker doesn't offer it, Publish makes
+// it live. Changes Claude proposed to a live checklist ("Changes from
+// Claude") are discarded, leaving the live one as it was.
 //
 // E2E_SHOTS=<dir> also saves light screenshots at 1440 of both screens.
 
@@ -214,5 +221,64 @@ test.describe("checklists (licensed)", () => {
     const back = await api(page, `/api/helpdesk/admin/workflows/${id}`);
     const steps = (back.body.workflow ?? back.body).draft?.steps ?? [];
     expect(steps[0]?.checklist_ids).toEqual([tpl!.id]);
+  });
+
+  test("drafts from Claude: reviewed and published, or discarded, in Desk settings", async ({ page }) => {
+    test.setTimeout(300_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const draftName = `Starter kit ${stamp}`;
+    // The drafts are saved as the Claude connector saves them (hd_draft_checklist): straight into the
+    // library row, unpublished, and (below) as changes beside a published checklist. Save as draft on
+    // a Claude in the desk card is covered by helpdesk-claude-desk.spec.
+    const db = new Client({ connectionString: process.env.DATABASE_URL || "postgresql://postgres@127.0.0.1:5599/compass_e2e" });
+    await db.connect();
+    const items = [{ key: "i1", title: "Order a laptop", required: true }, { key: "i2", title: "Create the accounts" }, { key: "i3", title: "Book a welcome call", due_days: 2 }];
+    const id = (
+      await db.query(
+        "INSERT INTO hd_checklist_templates (name, items, published, draft_by_name, draft_at, draft_via) VALUES ($1, $2, 0, 'E2E Claude', now(), 'mcp') RETURNING id",
+        [draftName, JSON.stringify(items)]
+      )
+    ).rows[0].id as number;
+    // Not offered to agents while it is a draft.
+    const lib = await api(page, "/api/helpdesk/checklists");
+    expect((lib.body.templates as { id: number }[]).some((x) => x.id === id)).toBe(false);
+
+    await page.goto(`/desk/settings/checklists?id=${id}`);
+    // 1.20.13: Checklists is a tab of Forms and fields; the tab's own heading is level 2.
+    await slow(page.getByRole("heading", { level: 2, name: "Checklists" })).toBeVisible({ timeout: 60_000 });
+    const row = page.getByRole("row").filter({ hasText: draftName });
+    await slow(row.getByText("Draft from Claude", { exact: true })).toBeVisible();
+    const editor = page.locator("#checklist-editor");
+    await slow(editor.getByRole("heading", { name: `Draft · ${draftName}` })).toBeVisible();
+    const strip = editor.getByRole("region", { name: "Draft from Claude" });
+    await expect(strip).toBeVisible();
+    await expect(strip).toContainText("not published");
+    await expect(strip).toContainText("Nobody can add it to a ticket");
+    await expect(editor.getByRole("textbox", { name: "Item 3", exact: true })).toHaveValue("Book a welcome call");
+    await expect(editor.getByRole("button", { name: "Discard draft" })).toBeVisible();
+    await expect(editor.getByRole("button", { name: "Save draft" })).toBeVisible();
+    await editor.getByRole("textbox", { name: "Item 2", exact: true }).fill("Create the accounts and the mailbox");
+    await editor.getByRole("button", { name: "Publish checklist" }).click();
+    await slow(page.getByText("Checklist published. Agents can add it now.")).toBeVisible();
+    await expect(row.getByText("Draft from Claude", { exact: true })).toHaveCount(0);
+    await expect(editor.getByRole("region", { name: "Draft from Claude" })).toHaveCount(0);
+    const live = await api(page, "/api/helpdesk/checklists");
+    expect((live.body.templates as { id: number; items: number }[]).find((x) => x.id === id)?.items).toBe(3);
+
+    // Changes proposed to the live checklist, then discarded.
+    await db.query("UPDATE hd_checklist_templates SET draft = $2, draft_by_name = 'E2E Claude', draft_at = now(), draft_via = 'mcp' WHERE id = $1", [
+      id,
+      JSON.stringify({ name: draftName, items: [{ key: "i1", title: "Order a laptop", required: true }], request_type_ids: [] }),
+    ]);
+    await db.end();
+    await page.reload();
+    await slow(row.getByText("Changes from Claude", { exact: true })).toBeVisible({ timeout: 60_000 });
+    const changed = page.locator("#checklist-editor").getByRole("region", { name: "Draft from Claude" });
+    await expect(changed).toContainText("Changes from Claude");
+    await expect(page.locator("#checklist-editor").getByRole("textbox", { name: "Item 2", exact: true })).toHaveCount(0);
+    await page.locator("#checklist-editor").getByRole("button", { name: "Discard changes" }).click();
+    await slow(page.getByText("Changes discarded. The published checklist is unchanged.")).toBeVisible();
+    await expect(row.getByText("Changes from Claude", { exact: true })).toHaveCount(0);
+    await expect(page.locator("#checklist-editor").getByRole("textbox", { name: "Item 3", exact: true })).toHaveValue("Book a welcome call");
   });
 });

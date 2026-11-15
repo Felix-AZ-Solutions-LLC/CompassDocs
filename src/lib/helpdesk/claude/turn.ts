@@ -417,7 +417,7 @@ async function turnBody(turn: PreparedTurn, emit: Emit, usage: ReturnType<typeof
         if (out.activity) addActivity(out.activity);
         if (out.sources) candidates.push(...out.sources);
         if (out.card) {
-          touched.add(out.card.ticketId);
+          if (out.card.ticketId !== null) touched.add(out.card.ticketId);
           const id = await createCard({ chatId: chat.id, userId: user.id, ticketId: out.card.ticketId, kind: out.card.kind, payload: out.card.payload });
           cardIds.push(id);
           emit({ type: "card", card: { ...(out.card.payload as object), id, kind: out.card.kind, state: "offered" } as ClaudeCard });

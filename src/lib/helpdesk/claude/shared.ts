@@ -49,8 +49,8 @@ export const CLAUDE_DESK_CAP_HINT: Record<ClaudeDeskCap, string> = {
   read: "Only what the agent can see, with their desk role and teams.",
   search: "To find what fixed the same problem before.",
   web: "Only the sites you list.",
-  changes: "Status, priority, tags and team, applied only when the agent clicks Apply.",
-  drafts: "Put in the agent's reply box. A person always sends.",
+  changes: "Status, priority, tags, team and checklist ticks, applied only when the agent clicks Apply.",
+  drafts: "Put in the agent's reply box, or saved as a checklist draft for someone to publish. A person always sends and publishes.",
 };
 
 export function webHint(domains: readonly string[]): string {
@@ -263,6 +263,8 @@ export interface ClaudeChangeCard {
 export interface ClaudeChecklistCard {
   id: number;
   kind: "checklist";
+  /** Absent on cards from before 1.20.14: adding a template. */
+  action?: "add";
   number: number;
   template_id: number;
   title: string;
@@ -270,7 +272,35 @@ export interface ClaudeChecklistCard {
   state: "offered" | "applied" | "skipped";
 }
 
-export type ClaudeCard = ClaudeDraftCard | ClaudeChangeCard | ClaudeChecklistCard;
+/** 1.20.14: tick or untick items on a ticket's checklists (Apply sends each through the desk's own route). Stored as kind "checklist". */
+export interface ClaudeChecklistTickCard {
+  id: number;
+  kind: "checklist";
+  action: "tick";
+  number: number;
+  /** done: true ticks, false unticks; required: a required item (unticking it holds the ticket open again). */
+  items: { id: number; title: string; checklist: string; done: boolean; required?: boolean }[];
+  /** 'Tick "Disable sign-in"', 'Tick 3 items'. */
+  title: string;
+  hint: string;
+  state: "offered" | "applied" | "skipped";
+}
+
+/** 1.20.14: a checklist template drafted for the library (Save as draft keeps it unpublished for a person to publish). Stored as kind "checklist". */
+export interface ClaudeChecklistDraftCard {
+  id: number;
+  kind: "checklist";
+  action: "draft";
+  /** The ticket open when it was drafted, if any (for the history). */
+  number: number | null;
+  draft: { name: string; items: { key: string; title: string; required?: boolean; team_id?: number | null; due_days?: number | null }[]; request_type_ids: number[] };
+  /** "Checklist draft: Leaver IT". */
+  title: string;
+  hint: string;
+  state: "offered" | "applied" | "skipped";
+}
+
+export type ClaudeCard = ClaudeDraftCard | ClaudeChangeCard | ClaudeChecklistCard | ClaudeChecklistTickCard | ClaudeChecklistDraftCard;
 
 /** One server-sent event of a chat turn (data: JSON). */
 export type ClaudeStreamEvent =

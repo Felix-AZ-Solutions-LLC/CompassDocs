@@ -3,12 +3,16 @@
 //       leaves an internal timeline line ("Ana ticked "Image the laptop" (New starter: IT)") and
 //       is audited (helpdesk.checklist.item_ticked / helpdesk.checklist.item_unticked).
 // Helpdesk 1.19.2 (agent W3, lib/helpdesk/checklists). Anyone who works the ticket, newbies too.
+// 1.20.14: { done, card_id } from a Claude in the desk card: the same checks; when card_id is the
+//       agent's offered card for this tick, the line ends "via Claude in the desk" and the audit
+//       row carries via "claude_desk". Without one (or with only a bare `via`) it is the agent's own.
 
 import { NextResponse } from "next/server";
-import { audit, actorFrom, ipFrom } from "@/lib/audit";
+import { ipFrom } from "@/lib/audit";
 import { helpdeskGate, readJson } from "@/lib/helpdesk/access";
 import { badRequest, loadTicketFor, notFound } from "@/lib/helpdesk/routes";
-import { ChecklistError, checklistsEditable, setItemDone, ticketChecklistView } from "@/lib/helpdesk/checklists";
+import { ChecklistError, checklistsEditable, tickItemsAs, ticketChecklistView } from "@/lib/helpdesk/checklists";
+import { offeredChecklistCard } from "@/lib/helpdesk/claude/chats";
 
 export const dynamic = "force-dynamic";
 
@@ -26,19 +30,12 @@ export async function PATCH(req: Request, { params }: Ctx) {
   if (!checklistsEditable(t)) return NextResponse.json({ error: "This ticket can't change any more." }, { status: 409 });
   const b = await readJson(req, 1024);
   if (!b || typeof b.done !== "boolean") return badRequest("Send { done: true } or { done: false }.");
+  // 1.20.14: the library's tickItemsAs, which Claude's tools share (the same line and audit row).
+  // { card_id } from a Claude in the desk card marks it "via Claude in the desk", only when that is
+  // one of this agent's offered cards for exactly this tick (review fix: a bare via is ignored).
+  const fromCard = await offeredChecklistCard(gate.id, b.card_id, { action: "tick", ticketId: t.id, itemId, done: b.done });
   try {
-    const r = await setItemDone(t.id, itemId, b.done, { id: gate.id, name: gate.name || gate.username });
-    if (r.changed) {
-      await audit({
-        actor: actorFrom(gate),
-        action: b.done ? "helpdesk.checklist.item_ticked" : "helpdesk.checklist.item_unticked",
-        targetType: "helpdesk_ticket",
-        targetId: t.id,
-        targetLabel: `#${t.number} ${t.subject}`.slice(0, 200),
-        details: { number: t.number, item_id: itemId, title: r.item.title, checklist: r.checklist, required: r.item.required },
-        ip: ipFrom(req),
-      });
-    }
+    await tickItemsAs(gate, t, [{ id: itemId, done: b.done }], { ip: ipFrom(req), ...(fromCard ? { via: "claude_desk" as const } : {}) });
   } catch (e) {
     if (e instanceof ChecklistError) return NextResponse.json({ error: e.message }, { status: e.status });
     throw e;

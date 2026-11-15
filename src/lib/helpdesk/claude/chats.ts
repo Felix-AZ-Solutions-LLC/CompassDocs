@@ -208,6 +208,51 @@ export async function decideCard(userId: number, cardId: number, state: "applied
   );
 }
 
+/**
+ * 1.20.14 (review fix): the desk's checklist routes mark a change "via Claude
+ * in the desk" only when the request names a real card: one of this agent's
+ * checklist cards, still offered, for this ticket and exactly this change (the
+ * item and its tick, the template, or the drafted checklist as offered). A
+ * request with no such card is treated as the agent's own action.
+ */
+export async function offeredChecklistCard(
+  userId: number,
+  rawCardId: unknown,
+  want:
+    | { action: "tick"; ticketId: number; itemId: number; done: boolean }
+    | { action: "add"; ticketId: number; templateId: number }
+    | { action: "draft"; draft: { name: string; items: unknown[]; request_type_ids: number[] } }
+): Promise<boolean> {
+  const cardId = typeof rawCardId === "number" && Number.isInteger(rawCardId) && rawCardId > 0 ? rawCardId : null;
+  if (!cardId) return false;
+  const c = await hqOne<{ ticket_id: number | null; payload: Record<string, any> }>(
+    "SELECT ticket_id, payload FROM hd_claude_cards WHERE id = $1 AND user_id = $2 AND kind = 'checklist' AND state = 'offered'",
+    [cardId, userId]
+  );
+  if (!c) return false;
+  const action = c.payload?.action ?? "add";
+  if (action !== want.action) return false;
+  if (want.action === "tick") {
+    return c.ticket_id === want.ticketId && Array.isArray(c.payload.items) && c.payload.items.some((i: { id?: unknown; done?: unknown }) => i?.id === want.itemId && i?.done === want.done);
+  }
+  if (want.action === "add") return c.ticket_id === want.ticketId && c.payload.template_id === want.templateId;
+  const d = c.payload.draft as { name?: unknown; items?: unknown; request_type_ids?: unknown } | undefined;
+  // Payloads are stored as jsonb, which reorders keys: compare with keys sorted.
+  return !!d && stable([d.name, d.items, d.request_type_ids ?? []]) === stable([want.draft.name, want.draft.items, want.draft.request_type_ids]);
+}
+
+/** JSON with object keys sorted, for comparing a value with its jsonb round trip. */
+function stable(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stable).join(",")}]`;
+  if (v && typeof v === "object") {
+    return `{${Object.keys(v as object)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stable((v as Record<string, unknown>)[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+
 function cardOut(c: { id: number; kind: string; payload: Record<string, unknown>; state: string }): ClaudeCard {
   return { ...(c.payload as object), id: c.id, kind: c.kind, state: c.state } as ClaudeCard;
 }

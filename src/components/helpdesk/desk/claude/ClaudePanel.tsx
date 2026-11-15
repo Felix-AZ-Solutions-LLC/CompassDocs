@@ -6,6 +6,9 @@
 // line and source chips, draft cards (put straight into the reply box) and
 // Apply / Skip cards for proposed changes. Apply goes through the ticket's
 // own patch, so the desk's rules all apply; nothing is ever sent from here.
+// 1.20.14: checklist ticks (Apply sends each item through the desk's own
+// tick route) and checklist drafts (Save as draft keeps it unpublished for
+// someone to publish in Desk settings → Checklists).
 // History per ticket (the history menu: earlier chats, New chat). Screen
 // readers hear the answer once it is complete (role="log", aria-busy while
 // streaming); focus starts in the question box and returns to the opener.
@@ -284,8 +287,19 @@ export function ClaudePanel() {
                   }
                 );
           if (!ok) return;
+        } else if (card.kind === "checklist" && card.action === "tick") {
+          // One item at a time through the desk's own route; a failure stops there and the card stays to try again.
+          try {
+            for (const it of card.items) {
+              await sendJson(`/api/helpdesk/tickets/${card.number}/checklists/items/${it.id}`, "PATCH", { done: it.done, card_id: card.id }, "Couldn't tick the item.");
+            }
+          } finally {
+            if (ticket?.number === card.number) ticket.reload();
+          }
+        } else if (card.kind === "checklist" && card.action === "draft") {
+          await sendJson("/api/helpdesk/admin/checklists", "POST", { ...card.draft, draft: true, card_id: card.id }, "Couldn't save the checklist draft.");
         } else if (card.kind === "checklist") {
-          await sendJson(`/api/helpdesk/tickets/${card.number}/checklists`, "POST", { template_id: card.template_id, via: "claude_desk" }, "Couldn't add the checklist.");
+          await sendJson(`/api/helpdesk/tickets/${card.number}/checklists`, "POST", { template_id: card.template_id, card_id: card.id }, "Couldn't add the checklist.");
           if (ticket?.number === card.number) ticket.reload();
         } else if (!putDraft(card, false)) {
           toast("error", `Open #${card.number} to use this draft.`);
@@ -303,6 +317,8 @@ export function ClaudePanel() {
       if (inPanel) input.current?.focus();
       setTurns((all) => all.map((t) => ({ ...t, cards: t.cards.map((c) => (c.id === card.id ? { ...c, state: how } : c)) })));
       if (how === "applied" && card.kind === "change") toast("ok", `${card.title}. Done.`);
+      if (how === "applied" && card.kind === "checklist" && card.action === "tick") toast("ok", `${card.title}. Done.`);
+      if (how === "applied" && card.kind === "checklist" && card.action === "draft") toast("ok", "Saved as a draft. Someone who manages checklists publishes it in Desk settings.");
     } catch (e) {
       toast("error", (e as Error).message);
     }
@@ -557,6 +573,20 @@ function CardView({ card, onDecide, inBox }: { card: ClaudeCard; onDecide: (c: C
   }
   const decided = card.state !== "offered";
   const hint = card.kind === "change" || card.kind === "checklist" ? card.hint : "";
+  const isDraft = card.kind === "checklist" && card.action === "draft";
+  // 1.20.14: what a tick or draft card would change, every item (the list scrolls when long);
+  // unticking a required item says so, since it holds the ticket open again.
+  const lines: { key: string | number; text: string; tag: string; tone: "warn" | "neutral" }[] =
+    card.kind === "checklist" && card.action === "tick"
+      ? card.items.map((i) => ({
+          key: i.id,
+          text: i.title,
+          tag: i.done ? "Tick" : i.required ? "Untick (required)" : "Untick",
+          tone: !i.done && i.required ? "warn" : "neutral",
+        }))
+      : card.kind === "checklist" && card.action === "draft"
+        ? card.draft.items.map((i) => ({ key: i.key, text: i.title, tag: i.required ? "Required" : "", tone: "warn" }))
+        : [];
   return (
     <section aria-label={card.title} className={shell}>
       <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
@@ -564,17 +594,32 @@ function CardView({ card, onDecide, inBox }: { card: ClaudeCard; onDecide: (c: C
         <span className="min-w-0 flex-1">{card.title}</span>
       </div>
       {hint && <p className="mt-0.5 text-xs text-slate-500">{hint}</p>}
+      {lines.length > 0 && (
+        <ul aria-label={isDraft ? "Items" : "Items to change"} className="mt-1.5 max-h-48 space-y-0.5 overflow-y-auto pr-1 text-xs text-slate-700">
+          {lines.map((l) => (
+            <li key={l.key} className="flex items-start gap-1.5">
+              <span className="min-w-0 flex-1">{l.text}</span>
+              {l.tag && <span className={chipClass(l.tone, "sm")}>{l.tag}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
       {decided ? (
-        <p className="mt-2">
+        <p className="mt-2 flex flex-wrap items-center gap-2">
           <span className={chipClass(card.state === "applied" ? "ok" : "neutral", "sm")}>
             {card.state === "applied" && <CircleCheck className="h-3 w-3" aria-hidden />}
-            {card.state === "applied" ? "Applied" : "Skipped"}
+            {card.state === "applied" ? (isDraft ? "Saved as draft" : "Applied") : "Skipped"}
           </span>
+          {isDraft && card.state === "applied" && (
+            <Link href="/desk/settings/checklists" className="text-xs font-medium text-compass-700 hover:underline">
+              Review in Checklists
+            </Link>
+          )}
         </p>
       ) : (
         <div className="mt-2 flex gap-2">
           <button type="button" onClick={() => onDecide(card, "applied")} className={buttonClass("primary", "sm")}>
-            Apply
+            {isDraft ? "Save as draft" : "Apply"}
           </button>
           <button type="button" onClick={() => onDecide(card, "skipped")} className={buttonClass("secondary", "sm")}>
             Skip

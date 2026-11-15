@@ -4,6 +4,47 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.14] - 2026-11-15
+
+Claude works with checklists.
+
+### Added
+- **Claude drafts checklists.** Through the Claude connector
+  (`hd_draft_checklist`, `hd_list_checklists`) or in Claude in the desk (a
+  draft card with **Save as draft**), Claude can write a new checklist or
+  propose changes to an existing one. A draft waits in Desk settings,
+  Checklists, marked "Draft from Claude" or "Changes from Claude", until
+  someone with checklist rights publishes or discards it. Until then it is
+  offered nowhere: not in the picker, not by request types and not by
+  workflow tasks.
+- **Claude ticks checklist items.** The connector's `hd_update_checklist`
+  ticks or unticks items, several at once, and can add a library checklist
+  to a ticket. In Claude in the desk, a card lists every item and the agent
+  presses **Apply**. Claude acts as the agent, with the desk's own checks,
+  and the timeline says "via Claude". It never solves a ticket: required
+  items still block solving until they are ticked.
+- **Checklist ids in `hd_read_ticket`.** It also lists the checklists that
+  can be added to the ticket (`checklist_templates`).
+
+### Changed
+- **Publishing a checklist draft is always explicit.** Saving a published
+  checklist edits the live copy and keeps any pending draft; only
+  **Publish** publishes it, and only the draft the person looked at.
+
+### Security
+- **"Via Claude in the desk" is tied to a real card.** A tick, an added
+  checklist or a draft is marked as coming from Claude in the desk only when
+  it matches a card Claude offered that agent.
+- **A batch of ticks is all or nothing.**
+- **The Claude connector limits the size of a request.**
+
+### Upgrading
+- **Nothing to run.** Two columns are added to checklists on start; every
+  existing checklist stays published and unchanged. The connector's tick
+  tool needs the "Also update tickets" level and the draft tools need
+  "notes" or above; in Claude in the desk they follow the "Suggest ticket
+  changes" and "Draft replies and internal notes" switches.
+
 ## [1.20.13] - 2026-11-15
 
 Desk settings that are easy to find.

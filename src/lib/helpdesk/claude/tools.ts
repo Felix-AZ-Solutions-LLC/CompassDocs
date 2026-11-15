@@ -14,7 +14,9 @@
 // Nothing here writes: a draft or a proposed change comes back as a card for
 // the agent, who applies it through the desk's own routes with their own
 // session (newbie review, required checklists, legal hold and every other
-// rule apply there). Proposals are checked with the same permission
+// rule apply there). 1.20.14: so are checklist ticks (Apply sends each item
+// through the desk's own tick route) and checklist drafts (Save as draft
+// saves an unpublished draft that someone publishes in Desk settings). Proposals are checked with the same permission
 // functions the desk's PATCH uses, so Claude is told at once when the agent
 // could not apply them. Server-only.
 
@@ -59,7 +61,7 @@ export interface ToolOutcome {
   /** Candidate source chips (the turn keeps those the answer names). */
   sources?: ClaudeSource[];
   /** A card for the agent (created and numbered by the turn). */
-  card?: { kind: ClaudeCard["kind"]; ticketId: number; payload: Record<string, unknown> };
+  card?: { kind: ClaudeCard["kind"]; ticketId: number | null; payload: Record<string, unknown> };
 }
 
 const ok = (content: string, extra: Omit<ToolOutcome, "content" | "isError"> = {}): ToolOutcome => ({ content, isError: false, ...extra });
@@ -114,6 +116,10 @@ export async function runDeskTool(name: string, input: Record<string, any>, ctx:
         return await listChecklists(input, ctx);
       case "suggest_checklist":
         return await suggestChecklist(input, ctx);
+      case "propose_checklist_ticks":
+        return await proposeTicks(input, ctx);
+      case "draft_checklist":
+        return await draftChecklist(input, ctx);
       case "propose_ticket_change":
         return await proposeChange(input, ctx);
       case "draft_reply":
@@ -209,7 +215,8 @@ async function listChecklists(a: Record<string, any>, ctx: ToolCtx): Promise<Too
   const { ticketChecklistView } = await import("../checklists");
   const v = await ticketChecklistView(ctx.session, t);
   const value = {
-    checklists: v.checklists.map((c) => ({ name: c.name, done: c.done, total: c.total, required_open: c.required_open, items: c.items.map((i) => ({ title: i.title, done: i.done, required: !!i.required })) })),
+    // 1.20.14 (additive): checklist and item ids, for propose_checklist_ticks.
+    checklists: v.checklists.map((c) => ({ id: c.id, name: c.name, done: c.done, total: c.total, required_open: c.required_open, items: c.items.map((i) => ({ id: i.id, title: i.title, done: i.done, required: !!i.required })) })),
     templates_that_can_be_added: v.can_edit ? v.templates : [],
     solve_blocked_by: v.solve_block,
   };
@@ -235,6 +242,57 @@ async function suggestChecklist(a: Record<string, any>, ctx: ToolCtx): Promise<T
         payload: { number: t.number, template_id: tpl.id, title: `Add the checklist "${tpl.name}"`, hint: String(a.reason ?? "").slice(0, 300) },
       },
     }
+  );
+}
+
+/** 1.20.14: propose ticking or unticking items; the agent's Apply sends each through the desk's tick route. */
+async function proposeTicks(a: Record<string, any>, ctx: ToolCtx): Promise<ToolOutcome> {
+  const t = await workTicket(ctx, a.number);
+  if (typeof t === "string") return fail(t);
+  const { checklistsEditable, ticketChecklists } = await import("../checklists");
+  if (!checklistsEditable(t)) return fail(t.merged_into ? "That ticket was merged; its checklists can't change." : "That ticket is closed; its checklists can't change.");
+  const raw = Array.isArray(a.items) ? (a.items as { id: number; done: boolean }[]) : [];
+  if (!raw.length) return fail("Say which items to tick or untick (items).");
+  if (raw.length > 50) return fail("Up to 50 items at once.");
+  const lists = await ticketChecklists(t.id);
+  const byId = new Map(lists.flatMap((c) => c.items.map((i) => [i.id, { ...i, checklist: c.name }] as const)));
+  const items: { id: number; title: string; checklist: string; done: boolean; required: boolean }[] = [];
+  for (const r of raw) {
+    const it = byId.get(r.id);
+    if (!it) return fail(`Item ${r.id} isn't on #${t.number}'s checklists. Read the ticket's checklists for the item ids.`);
+    if (items.some((x) => x.id === r.id)) continue;
+    if (it.done !== r.done) items.push({ id: it.id, title: it.title, checklist: it.checklist, done: r.done, required: it.required });
+  }
+  if (!items.length) return fail(`Those items on #${t.number} are already as asked. Nothing to propose.`);
+  const ticks = items.filter((i) => i.done).length;
+  const verb = ticks === items.length ? "Tick" : ticks === 0 ? "Untick" : "Update";
+  const title = items.length === 1 ? `${verb} "${items[0].title}"` : `${verb} ${items.length} checklist items`;
+  const hint = typeof a.when === "string" && a.when.trim() ? a.when.trim().slice(0, 200) : "";
+  return done(
+    { proposed: true, applied: false, change: title, note: "The agent sees a card with Apply and Skip. Nothing changed. Ticking never solves the ticket." },
+    { card: { kind: "checklist", ticketId: t.id, payload: { action: "tick", number: t.number, items, title, hint } } }
+  );
+}
+
+/** 1.20.14: a new checklist template, checked as Desk settings would; Save as draft on the card stores it unpublished. */
+async function draftChecklist(a: Record<string, any>, ctx: ToolCtx): Promise<ToolOutcome> {
+  const { CHECKLIST_MANAGE_CAPS } = await import("../checklists-caps");
+  let may = false;
+  for (const c of CHECKLIST_MANAGE_CAPS) if (await hdCan(ctx.user, c)) may = true;
+  if (!may) return fail("The agent can't manage checklists (desk role), so there is nowhere to save a checklist draft. Suggest they ask someone who manages checklists.");
+  const { checkTemplateDraft, ChecklistError } = await import("../checklists");
+  let draft: Awaited<ReturnType<typeof checkTemplateDraft>>;
+  try {
+    draft = await checkTemplateDraft({ name: a.name, items: a.items, request_type_ids: [] });
+  } catch (e) {
+    if (e instanceof ChecklistError) return fail(e.message);
+    throw e;
+  }
+  const required = draft.items.filter((i) => i.required).length;
+  const hint = `${draft.items.length} ${draft.items.length === 1 ? "item" : "items"}${required ? `, ${required} required` : ""}. Save as draft keeps it unpublished until someone publishes it in Desk settings.`;
+  return done(
+    { drafted: true, saved: false, note: "The agent sees the checklist on a card and clicks Save as draft. Nothing is published: someone who manages checklists publishes it in Desk settings → Checklists." },
+    { card: { kind: "checklist", ticketId: null, payload: { action: "draft", number: ctx.ticket?.number ?? null, draft, title: `Checklist draft: ${draft.name}`, hint } } }
   );
 }
 

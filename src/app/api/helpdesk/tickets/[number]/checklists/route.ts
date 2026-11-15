@@ -6,10 +6,11 @@
 // requester, CC or portal customer gets 404 like any ticket outside their queues.
 
 import { NextResponse } from "next/server";
-import { audit, actorFrom, ipFrom } from "@/lib/audit";
+import { ipFrom } from "@/lib/audit";
 import { helpdeskGate, readJson } from "@/lib/helpdesk/access";
 import { badRequest, loadTicketFor } from "@/lib/helpdesk/routes";
-import { addChecklistToTicket, ChecklistError, checklistsEditable, ticketChecklistView } from "@/lib/helpdesk/checklists";
+import { addChecklistAs, ChecklistError, checklistsEditable, ticketChecklistView } from "@/lib/helpdesk/checklists";
+import { offeredChecklistCard } from "@/lib/helpdesk/claude/chats";
 
 export const dynamic = "force-dynamic";
 
@@ -34,17 +35,11 @@ export async function POST(req: Request, { params }: Ctx) {
   const templateId = typeof b?.template_id === "number" && Number.isInteger(b.template_id) && b.template_id > 0 ? b.template_id : null;
   if (!templateId) return badRequest("Choose a checklist.");
   try {
-    const r = await addChecklistToTicket(t.id, templateId, { id: gate.id, name: gate.name || gate.username });
-    await audit({
-      actor: actorFrom(gate),
-      action: "helpdesk.checklist.added",
-      targetType: "helpdesk_ticket",
-      targetId: t.id,
-      targetLabel: `#${t.number} ${t.subject}`.slice(0, 200),
-      // 1.20.0: added from a Claude in the desk suggestion (Apply sends via "claude_desk").
-      details: { number: t.number, checklist_id: r.checklist_id, template_id: templateId, name: r.name, ...(b?.via === "claude_desk" ? { via: "claude_desk", via_label: "via Claude in the desk" } : {}) },
-      ip: ipFrom(req),
-    });
+    // 1.20.0: added from a Claude in the desk suggestion, audited so. 1.20.14: through the library's
+    // addChecklistAs, which Claude's tools share; marked "via Claude in the desk" only when { card_id }
+    // is this agent's offered card for this template on this ticket (review fix: a bare via is ignored).
+    const fromCard = await offeredChecklistCard(gate.id, b?.card_id, { action: "add", ticketId: t.id, templateId });
+    await addChecklistAs(gate, t, templateId, { ip: ipFrom(req), ...(fromCard ? { via: "claude_desk" as const } : {}) });
   } catch (e) {
     if (e instanceof ChecklistError) return NextResponse.json({ error: e.message }, { status: e.status });
     throw e;

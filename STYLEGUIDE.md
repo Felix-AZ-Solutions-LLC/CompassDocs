@@ -4590,6 +4590,27 @@ live in `components/helpdesk/desk/checklists`.
   workflow tasks that add it read-only beneath. The action row: ghost
   **Delete** (`hover-danger`, `mr-auto`), amber "Unsaved changes",
   primary **Save checklist**.
+- **Drafts from Claude** (1.20.14): a checklist Claude drafted and nobody
+  has published carries an `accent` `sm` chip **Draft from Claude** under
+  its name in the table; one with changes waiting, **Changes from
+  Claude**. Its editor opens with the draft strip under the heading: the
+  dashed `ClaudeDraftCard` box (`Bot` avatar, "Draft from Claude" or
+  "Changes from Claude", "asked by {person} · {RelativeTime} · not
+  published") and one sentence on what stays unchanged until it is
+  published. The editor shows the draft's content. Action row for a new
+  draft: ghost **Discard draft** (`mr-auto`, `hover-danger`, confirmed),
+  secondary **Save draft**, primary **Publish checklist**; for changes:
+  ghost **Delete**, secondary **Discard changes**, primary **Publish
+  changes**. A draft is in no picker and adds itself to nothing ("Request
+  type X (once published)" in the table).
+- **Claude in the desk's checklist cards** (1.20.14) are the panel's Apply /
+  Skip cards with `ListChecks`: a tick card lists every item (the list
+  scrolls past `max-h-48`), each with a `neutral` `sm` **Tick** /
+  **Untick** chip, and a `warn` **Untick (required)** for a required item
+  (unticking it holds the ticket open again); a draft card lists every
+  item with a `warn` **Required** chip where it applies, and its primary
+  button is **Save as draft** (the decided chip reads "Saved as draft",
+  with a "Review in Checklists" link).
 - **The workflow builder's Task step** has a "Checklists" section like
   "If the team can't do it": rows naming each chosen checklist with its
   item count and a quiet `X`, and a secondary `sm` **Add checklist**

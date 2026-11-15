@@ -1883,7 +1883,7 @@ async function handleRpc(user: User, msg: any, origin: string, ip: string | null
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: "CompassDocs", version: currentVersion() },
         instructions:
-          "CompassDocs is this team's knowledge base. Use search_docs/read_doc to look things up, create_doc to save a drafted article as markdown, and update_doc to revise, retitle, retag, move, or publish an existing one. Call list_spaces first when creating, to pick the right space. When drafting a document of a standard kind (runbook, SOP, policy, postmortem, meeting notes, decision record), call list_templates and follow the matching template's structure, passing template to create_doc. To put an image into a document, call add_image with insert:\"append\" — pass source_url if the image has a public address, or from_attachment_id to reuse one already in the workspace; base64 data works only for small files. For a screenshot that exists only as a picture in the conversation there are no bytes you can send, so call request_upload and give the person the link it returns. Policy handbooks: list_handbooks and read_handbook to read them, handbook_status for where the person stands, create_handbook (always a draft, published by a person in the app) and update_handbook_contents (live at once on a published handbook) to build them; no tool confirms a handbook or a policy, so send the person to the confirm link instead. Helpdesk (when licensed, hd_* tools, within the person's desk role): hd_suggest_articles before hd_create_request; agents read with hd_queue / hd_read_ticket / hd_ticket_summary. Replies are drafts only: hd_draft_reply saves a draft an agent sends from the desk, and no tool sends a reply to a requester, approves or declines (hd_my_approvals gives approve_url), or publishes a workflow, request type or macro (the hd_draft_* tools save drafts). IMPORTANT: before writing or restructuring a document, call writing_guide — CompassDocs documents support rich interactive blocks well beyond plain markdown (callouts, tabs, accordions, checklists, Mermaid/PlantUML diagrams, decision trees, video/website embeds, auto-filterable tables), and good documents use them.",
+          "CompassDocs is this team's knowledge base. Use search_docs/read_doc to look things up, create_doc to save a drafted article as markdown, and update_doc to revise, retitle, retag, move, or publish an existing one. Call list_spaces first when creating, to pick the right space. When drafting a document of a standard kind (runbook, SOP, policy, postmortem, meeting notes, decision record), call list_templates and follow the matching template's structure, passing template to create_doc. To put an image into a document, call add_image with insert:\"append\" — pass source_url if the image has a public address, or from_attachment_id to reuse one already in the workspace; base64 data works only for small files. For a screenshot that exists only as a picture in the conversation there are no bytes you can send, so call request_upload and give the person the link it returns. Policy handbooks: list_handbooks and read_handbook to read them, handbook_status for where the person stands, create_handbook (always a draft, published by a person in the app) and update_handbook_contents (live at once on a published handbook) to build them; no tool confirms a handbook or a policy, so send the person to the confirm link instead. Helpdesk (when licensed, hd_* tools, within the person's desk role): hd_suggest_articles before hd_create_request; agents read with hd_queue / hd_read_ticket / hd_ticket_summary. Replies are drafts only: hd_draft_reply saves a draft an agent sends from the desk, and no tool sends a reply to a requester, approves or declines (hd_my_approvals gives approve_url), or publishes a workflow, request type, macro or checklist (the hd_draft_* tools save drafts). Agents tick checklist items with hd_update_checklist, only when the person says the step is done. IMPORTANT: before writing or restructuring a document, call writing_guide — CompassDocs documents support rich interactive blocks well beyond plain markdown (callouts, tabs, accordions, checklists, Mermaid/PlantUML diagrams, decision trees, video/website embeds, auto-filterable tables), and good documents use them.",
       });
     }
     case "ping":
@@ -1903,13 +1903,56 @@ async function handleRpc(user: User, msg: any, origin: string, ip: string | null
   }
 }
 
+/**
+ * 1.20.14 (review fix): the request body, read up to `max` bytes. A larger one
+ * is never read whole: null, answered with a JSON-RPC error. The declared
+ * Content-Length is checked first; a body without one is read in chunks.
+ */
+async function readCapped(req: Request, max: number): Promise<string | null> {
+  const declared = Number(req.headers.get("content-length") || 0);
+  if (declared > max) return null;
+  if (!req.body) return "";
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * The largest MCP request: 1 MB, or more when the workspace's attachment limit
+ * needs it (add_image's base64 `data` is the only big argument; base64 is 4/3
+ * of the bytes, plus room for the rest of the call).
+ */
+async function mcpBodyLimit(): Promise<number> {
+  const mb = 1024 * 1024;
+  try {
+    const { max_attachment_mb } = await getAppSettings();
+    return Math.max(mb, Math.ceil((Number(max_attachment_mb) || 0) * mb * (4 / 3)) + 256 * 1024);
+  } catch {
+    return mb;
+  }
+}
+
 export async function POST(req: Request) {
   const user = await authenticate(req);
   if (user instanceof Response) return user;
 
   let body: any;
+  const limit = await mcpBodyLimit();
+  const text = await readCapped(req, limit).catch(() => null);
+  if (text === null) return json(rpcError(null, -32600, `Request too large (over ${Math.round(limit / 1024)} KB).`), 413);
   try {
-    body = await req.json();
+    body = JSON.parse(text);
   } catch {
     return json(rpcError(null, -32700, "Parse error"), 400);
   }

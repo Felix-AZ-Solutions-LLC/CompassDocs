@@ -21,6 +21,15 @@
 //                               ticket_id is kept on the item too, so the
 //                               solve check is one indexed lookup.
 // Agents only: requesters, CCs and portal customers never read these.
+//
+// 1.20.14: drafts from Claude (hd_draft_checklist, Claude in the desk's
+// draft_checklist). published = 0 is a new template that is still a draft:
+// it is in no picker, adds itself to nothing and a workflow task can't name
+// it until a person publishes it in Desk settings → Checklists. On a
+// published template, `draft` holds proposed changes ({ name, items,
+// request_type_ids }) while the live copy stays as it is. draft_by_name,
+// draft_at and draft_via ('mcp' | 'claude_desk') say who asked for the draft
+// and where. Existing templates get published = 1 and no draft: unchanged.
 
 export const HD_CHECKLISTS_SCHEMA = `
 CREATE TABLE IF NOT EXISTS hd_checklist_templates (
@@ -60,5 +69,11 @@ CREATE TABLE IF NOT EXISTS hd_ticket_checklist_items (
   done_by_name text NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_hd_checklist_items_list ON hd_ticket_checklist_items (checklist_id, position, id);
+ALTER TABLE hd_checklist_templates ADD COLUMN IF NOT EXISTS published integer NOT NULL DEFAULT 1;
+ALTER TABLE hd_checklist_templates ADD COLUMN IF NOT EXISTS draft jsonb;
+ALTER TABLE hd_checklist_templates ADD COLUMN IF NOT EXISTS draft_by integer REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE hd_checklist_templates ADD COLUMN IF NOT EXISTS draft_by_name text NOT NULL DEFAULT '';
+ALTER TABLE hd_checklist_templates ADD COLUMN IF NOT EXISTS draft_at timestamptz;
+ALTER TABLE hd_checklist_templates ADD COLUMN IF NOT EXISTS draft_via text NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_hd_checklist_items_required_open ON hd_ticket_checklist_items (ticket_id) WHERE required = 1 AND done_at IS NULL;
 `;
