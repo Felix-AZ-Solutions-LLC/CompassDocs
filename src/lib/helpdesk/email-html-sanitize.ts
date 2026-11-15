@@ -35,10 +35,16 @@ export interface SanitizeOptions {
   remoteImages?: boolean;
   /** Content-ID (normalised by cidKey) → a data: URI of the picture. */
   cids?: Map<string, string>;
+  /**
+   * 1.20.11: the desk conversation's inline variant (email-html-worker.cjs foldQuotes, INLINE_CSS): fold the
+   * quoted history (`collapseQuotes`), never load a picture from the desk's own host (`selfHost`), and mark the
+   * document for the desk (`truncated` is passed through to that mark).
+   */
+  inline?: { collapseQuotes: boolean; selfHost: string; truncated: boolean };
 }
 
 export type SanitizeResult =
-  | { ok: true; html: string; remoteImages: number; insecureImages: number; missingCids: number }
+  | { ok: true; html: string; remoteImages: number; insecureImages: number; missingCids: number; quoted?: boolean }
   | { ok: false; reason: "too_complex" | "timeout" | "busy" | "failed" };
 
 /** A Content-ID as the HTML and the attachment name it: angle brackets, URL escapes and case undone. */
@@ -70,7 +76,7 @@ export function workerFile(): string {
 interface Job {
   id: number;
   html: string;
-  opts: { remoteImages: boolean; cids: [string, string][] };
+  opts: { remoteImages: boolean; cids: [string, string][]; inline?: SanitizeOptions["inline"] };
   resolve: (r: SanitizeResult) => void;
 }
 
@@ -162,7 +168,12 @@ export function sanitizeEmailHtml(html: string, opts: SanitizeOptions = {}): Pro
   if (input.length > EMAIL_HTML_LIMITS.storeBytes * 2 || htmlComplexity(input).over) return Promise.resolve({ ok: false, reason: "too_complex" });
   if (queue.length >= QUEUE_MAX) return Promise.resolve({ ok: false, reason: "busy" });
   return new Promise<SanitizeResult>((resolve) => {
-    queue.push({ id: nextId++, html: input, opts: { remoteImages: opts.remoteImages === true, cids: [...(opts.cids ?? new Map<string, string>()).entries()] }, resolve });
+    queue.push({
+      id: nextId++,
+      html: input,
+      opts: { remoteImages: opts.remoteImages === true, cids: [...(opts.cids ?? new Map<string, string>()).entries()], ...(opts.inline ? { inline: opts.inline } : {}) },
+      resolve,
+    });
     pump();
   });
 }

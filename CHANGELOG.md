@@ -4,6 +4,49 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.11] - 2026-11-15
+
+Incoming email shows as it was sent.
+
+### Added
+- **Email shows formatted in the conversation.** An incoming email that came
+  with an HTML part now shows in the desk conversation as the sender
+  formatted it (tables, bold, colours, signatures), with no click. It sits
+  on white paper with a thin edge, sized to the email; a very long email
+  stops at about 2,400 pixels with "Show the rest".
+- **Quoted history folds away.** In a reply, the earlier messages quoted
+  under it (Gmail, Outlook, Apple Mail, Thunderbird, Yahoo and others) fold
+  under "Show quoted text". A ticket's first email and forwards are never
+  folded.
+- **Plain text or formatted, per agent.** Each email has a switch between
+  "Plain text" and "Formatted". The last choice becomes that agent's
+  default; it is also under Settings, Notifications, "Emails in the
+  conversation".
+- **Pictures on request.** Remote pictures stay hidden until you press "Show
+  images" on that email. Pictures sent inside the email always show.
+
+### Changed
+- **"View original" is now "Open in a window".** The dialog and its Print
+  button are unchanged.
+
+### Security
+- **The email runs nothing.** The formatted email is cleaned as before and
+  shown in a frame that cannot run script, submit forms or reach the desk;
+  links open in a new tab.
+- **Pictures, fonts, styles and scripts that another site asks for are
+  served without your session.** This stops a picture in an email from
+  reaching a desk address with an agent's sign-in by way of a redirect. What
+  other sites legitimately embed (the logo in the app's emails, the sign-in
+  artwork, newsletter pictures, public help centre files) is public and
+  keeps working.
+- **Folding quoted text is bounded.** A hostile email cannot make it slow;
+  an email that is too complex shows as plain text, and that answer is
+  remembered for the message.
+
+### Upgrading
+- **Nothing to run, and no schema change.** Every email kept since 1.20.8
+  shows formatted. Emails from before 1.20.8 show as text, as before.
+
 ## [1.20.10] - 2026-11-14
 
 A fix for long links in messages.

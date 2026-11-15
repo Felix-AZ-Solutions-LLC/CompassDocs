@@ -108,12 +108,13 @@ test.describe("View original (licensed)", () => {
     })();
     const reply = page.locator("li", { hasText: "after the restart" }).last();
     await expect(reply).toBeVisible();
-    // The card shows the text body; the quote is cut there, kept in the original.
+    // The quote is cut from the card's text body and kept in the original. (1.20.11: the card shows the email
+    // itself, in a frame; the control that opens this dialog is "Open in a window", test/helpdesk-email-inline.)
     await expect(reply).not.toContainText("Please restart the projector");
-    const control = reply.getByRole("button", { name: "View original" });
+    const control = reply.getByRole("button", { name: "Open in a window" });
     await expect(control).toBeVisible();
-    await expect(control).toHaveAttribute("data-tt", "View original");
-    await expect(page.getByRole("button", { name: "View original" })).toHaveCount(2);
+    await expect(control).toHaveAttribute("data-tt", "Open in a window");
+    await expect(page.getByRole("button", { name: "Open in a window" })).toHaveCount(2);
 
     await control.click();
     const dialog = page.getByRole("dialog", { name: "Original email" });
@@ -161,7 +162,7 @@ test.describe("View original (licensed)", () => {
       await login(rp, REQUESTER);
       await rp.goto(`/help/requests/${opened.ticket}`);
       await expect(rp.getByText("after the restart")).toBeVisible({ timeout: 60_000 });
-      await expect(rp.getByRole("button", { name: "View original" })).toHaveCount(0);
+      await expect(rp.getByRole("button", { name: "Open in a window" })).toHaveCount(0);
       // And the route itself refuses them.
       const msgId = (await db.query("SELECT m.id FROM hd_messages m JOIN hd_tickets t ON t.id = m.ticket_id WHERE t.number = $1 AND m.body LIKE '%after the restart%'", [opened.ticket])).rows[0].id;
       expect((await api(rp, `/api/helpdesk/messages/${msgId}/original?format=info`)).status).toBe(403);

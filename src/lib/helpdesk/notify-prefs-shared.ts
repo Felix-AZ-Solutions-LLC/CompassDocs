@@ -174,6 +174,11 @@ export interface HdNotifyPrefs {
   pause: { until: string | null } | null;
   /** Follow a ticket when I reply or add a note to it (1.19.1, lib/helpdesk/ccs). Default on. */
   auto_follow: boolean;
+  /**
+   * 1.20.11: how emailed messages read in the desk conversation (ticket/InlineEmail): "formatted", the email as
+   * sent (the default), or "plain", the text body. The last choice made on a message, or on the Notifications page.
+   */
+  email_view: "formatted" | "plain";
 }
 
 /** What the agent may send in a PUT: any part of the prefs, plus a pause request. */
@@ -190,7 +195,7 @@ export const DEFAULT_QUIET: HdQuietHours = {
 export function defaultPrefs(): HdNotifyPrefs {
   const matrix = {} as HdNotifyPrefs["matrix"];
   for (const ev of HD_NOTIFY_EVENTS) matrix[ev] = { ...HD_NOTIFY_EVENT_INFO[ev].defaults };
-  return { matrix, teams: {}, quiet: { ...DEFAULT_QUIET, days: [...DEFAULT_QUIET.days] }, preview: "full", sound: true, pause: null, auto_follow: true };
+  return { matrix, teams: {}, quiet: { ...DEFAULT_QUIET, days: [...DEFAULT_QUIET.days] }, preview: "full", sound: true, pause: null, auto_follow: true, email_view: "formatted" };
 }
 
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -232,6 +237,7 @@ export function resolvePrefs(stored: unknown): HdNotifyPrefs {
   if (stored.preview === "full" || stored.preview === "private") out.preview = stored.preview;
   if (typeof stored.sound === "boolean") out.sound = stored.sound;
   if (typeof stored.auto_follow === "boolean") out.auto_follow = stored.auto_follow;
+  if (stored.email_view === "formatted" || stored.email_view === "plain") out.email_view = stored.email_view;
   if (isObj(stored.pause)) {
     const u = stored.pause.until;
     if (u === null) out.pause = { until: null };
@@ -247,7 +253,7 @@ export function resolvePrefs(stored: unknown): HdNotifyPrefs {
  */
 export function prefsPatchProblem(patch: unknown): string | null {
   if (!isObj(patch)) return "Send the preferences as an object.";
-  const known = new Set(["matrix", "teams", "quiet", "preview", "sound", "pause", "auto_follow"]);
+  const known = new Set(["matrix", "teams", "quiet", "preview", "sound", "pause", "auto_follow", "email_view"]);
   for (const k of Object.keys(patch)) if (!known.has(k)) return `Unknown preference "${k.slice(0, 40)}".`;
   if (patch.matrix !== undefined) {
     if (!isObj(patch.matrix)) return "The event matrix must be an object.";
@@ -290,6 +296,7 @@ export function prefsPatchProblem(patch: unknown): string | null {
   if (patch.preview !== undefined && patch.preview !== "full" && patch.preview !== "private") return "Preview is full or private.";
   if (patch.sound !== undefined && typeof patch.sound !== "boolean") return "Sound is on or off.";
   if (patch.auto_follow !== undefined && typeof patch.auto_follow !== "boolean") return "Following tickets you reply to is on or off.";
+  if (patch.email_view !== undefined && patch.email_view !== "formatted" && patch.email_view !== "plain") return "Emails show formatted or as plain text.";
   if (patch.pause !== undefined && !["1h", "tomorrow", "indefinite", "off"].includes(patch.pause as string)) {
     return "Pause for 1h, until tomorrow, indefinitely, or off.";
   }

@@ -775,8 +775,12 @@ describe("the sanitiser", () => {
     assert.equal(doc.status, 422);
     assert.match(doc.text, /This email is too complex to show/);
     assert.ok(Date.now() - t0 < 500, "kept, not sanitised again");
-    // A kept result is per Show images: that one is worked on (and succeeds now). A generous limit here:
+    // 1.20.11 security review: a refusal is kept for the message, whichever picture choice asks next.
+    const other = await call(originalRoute.GET, req(`/messages/${first.id}/original?images=1`, P.agent.session), { id: String(first.id) });
+    assert.equal(other.status, 422);
+    // Once it is no longer kept, it is worked on again (and succeeds now). A generous limit here:
     // on a loaded CI runner 20,000 elements can take longer than the 3 s production limit.
+    html.resetOriginalCacheForTests();
     sanitize.setSanitizeTimeoutForTests(60_000);
     try {
       const shown = await call(originalRoute.GET, req(`/messages/${first.id}/original?images=1`, P.agent.session), { id: String(first.id) });

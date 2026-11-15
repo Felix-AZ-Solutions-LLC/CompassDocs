@@ -16,6 +16,7 @@ import { Popover } from "@/components/Popover";
 import { iconButtonClass } from "@/components/Button";
 import { railIconClass, railRowClass } from "@/components/RailLink";
 import type { HdAvailability, HdCounts } from "@/lib/helpdesk/types";
+import type { HdEmailView } from "@/lib/helpdesk/email-html-shared";
 import { DeskBell } from "./DeskBell";
 import { DeskSearch } from "./DeskSearch";
 import { AvailabilityMenu } from "./AvailabilityMenu";
@@ -105,6 +106,7 @@ export function DeskShell({
   caps,
   unread,
   availability,
+  emailView = "formatted",
   installSlot,
   role,
   roleCaps,
@@ -117,6 +119,8 @@ export function DeskShell({
   caps: DeskCaps;
   unread: number;
   availability: HdAvailability;
+  /** 1.20.11: how emailed messages read in the conversation (the agent's desk preference). */
+  emailView?: HdEmailView;
   /** The desk app's install prompt (agent F's InstallDesk), shown in the user menu. */
   installSlot?: ReactNode;
   role: { key: string; label: string } | null;
@@ -140,7 +144,7 @@ export function DeskShell({
   useEffect(() => setMenuOpen(false), [pathname]);
 
   return (
-    <DeskMeContext.Provider value={{ id: user.id, name: user.name, agent: caps.agent, admin: caps.admin, reports: caps.reports, role, caps: roleCaps }}>
+    <DeskMeContext.Provider value={{ id: user.id, name: user.name, agent: caps.agent, admin: caps.admin, reports: caps.reports, role, caps: roleCaps, email_view: emailView }}>
     <DeskCountsContext.Provider value={{ counts, refresh }}>
     <TeamStatusProvider enabled={caps.agent}>
     <ClaudeHost claude={claude}>

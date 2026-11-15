@@ -21,6 +21,14 @@ function originalPrintCsp(remoteImages) {
     .join("; ");
 }
 
+/**
+ * 1.20.11: the desk conversation's in-place variant (?inline=1): the same, its sandbox adding allow-same-origin
+ * (no allow-scripts) so the desk can size the frame (lib/helpdesk/email-html originalInlineCsp says why it is safe).
+ */
+function originalInlineCsp(remoteImages) {
+  return originalCsp(remoteImages).replace("sandbox allow-popups", "sandbox allow-same-origin allow-popups");
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Emit a self-contained server (.next/standalone) for small Docker images and
@@ -129,6 +137,21 @@ const nextConfig = {
         source: "/api/helpdesk/messages/:id/original",
         has: [{ type: "query", key: "images", value: "1" }],
         headers: [{ key: "Content-Security-Policy", value: originalCsp(true) }],
+      },
+      // 1.20.11: the desk conversation's in-place variant (?inline=1, with or without images=1); before the
+      // print rules (inline beside print is refused with 400 anyway).
+      {
+        source: "/api/helpdesk/messages/:id/original",
+        has: [{ type: "query", key: "inline", value: "1" }],
+        headers: [{ key: "Content-Security-Policy", value: originalInlineCsp(false) }],
+      },
+      {
+        source: "/api/helpdesk/messages/:id/original",
+        has: [
+          { type: "query", key: "inline", value: "1" },
+          { type: "query", key: "images", value: "1" },
+        ],
+        headers: [{ key: "Content-Security-Policy", value: originalInlineCsp(true) }],
       },
       // 1.20.9: the print view (?print=1, with or without images=1) has a policy of its own; last, so it wins.
       {

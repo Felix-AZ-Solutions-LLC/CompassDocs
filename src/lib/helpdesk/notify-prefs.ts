@@ -72,6 +72,7 @@ export async function saveNotifyPrefs(userId: number, patch: unknown, now = new 
     sound?: boolean;
     pause?: HdPauseRequest;
     auto_follow?: boolean;
+    email_view?: HdNotifyPrefs["email_view"];
   };
   const raw = await storedPrefs(userId);
   const next: HdNotifyPrefs = resolvePrefs(raw);
@@ -96,6 +97,7 @@ export async function saveNotifyPrefs(userId: number, patch: unknown, now = new 
   if (p.preview) next.preview = p.preview;
   if (p.sound !== undefined) next.sound = p.sound;
   if (p.auto_follow !== undefined) next.auto_follow = p.auto_follow;
+  if (p.email_view !== undefined) next.email_view = p.email_view; // 1.20.11
   if (p.pause) next.pause = pauseFor(p.pause, now, await userTimeZone(userId));
   const resolved = resolvePrefs(next);
   const toStore = { ...resolved, matrix: sparse };

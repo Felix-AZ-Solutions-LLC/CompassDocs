@@ -20,12 +20,22 @@
 // 1.20.9: ?print=1 (with or without images=1) answers the print view instead (lib/helpdesk/email-html-print), the
 // same reads and limit, under its own policy (originalPrintHeaders; next.config.js states it too). Not audited either.
 // A repeated print (or images beside print=1): 400.
+// 1.20.11: ?inline=1 (with or without images=1) answers the desk conversation's in-place variant: the same reads,
+// limit and sanitiser, the quoted history folded for a reply (lib/helpdesk/email-html quoteFolding), and its own
+// policy, which adds allow-same-origin to the sandbox (originalInlineHeaders says why; next.config.js states it
+// too). Its document carries <meta name="compass-email" content="ok" data-remote-images data-quoted …>, which the
+// desk reads; when the email is not shown (too complex, busy) the same status as the frame's with an empty page
+// marked content="refused", and the desk shows the text. A browser that says it is opening this as a page or from
+// another site (Sec-Fetch-Dest other than iframe, Sec-Fetch-Site other than same-origin, or none for a frame the
+// person reloaded) gets 400 with a small marked page saying the email shows in the desk: it is the desk's frame
+// and nothing else. inline beside print, or a repeated inline: 400. ?inline=1&format=info is the info, with
+// `quoted`. Not audited.
 
 import { NextResponse } from "next/server";
 import { mfaRequired } from "@/lib/api-auth";
 import { canWorkTicket, deskDuoBarsTicket, hdRateLimited, helpdeskGate, tooMany } from "@/lib/helpdesk/access";
 import { hqOne } from "@/lib/helpdesk/db-core";
-import { originalHeaders, originalView } from "@/lib/helpdesk/email-html";
+import { inlineRefusalPage, originalHeaders, originalInlineHeaders, originalView } from "@/lib/helpdesk/email-html";
 import { originalPrintResponse, printQuery, repeatedPrintQuery } from "@/lib/helpdesk/email-html-print";
 import { HD_ORIGINAL_COPY } from "@/lib/helpdesk/email-html-shared";
 import { notFound } from "@/lib/helpdesk/routes";
@@ -54,11 +64,32 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const print = printQuery(url); // 1.20.9: ?print=1, the print view (lib/helpdesk/email-html-print)
   if (print === "repeated") return repeatedPrintQuery();
   const images = url.searchParams.get("images") === "1";
-  const view = await originalView(id, { remoteImages: images });
-  if (url.searchParams.get("format") === "info") {
+  // 1.20.11: ?inline=1, the desk conversation's frame.
+  const inlineAsked = url.searchParams.getAll("inline");
+  const inline = inlineAsked.length === 1 && inlineAsked[0] === "1";
+  if (inlineAsked.length > 1 || (inline && print === "print")) {
+    return NextResponse.json({ error: "Give inline once, and not with print." }, { status: 400, headers: NO_STORE });
+  }
+  const info = url.searchParams.get("format") === "info";
+  if (inline && !info) {
+    const dest = req.headers.get("sec-fetch-dest");
+    const site = req.headers.get("sec-fetch-site");
+    // 1.20.11 security review: a frame reloaded from its own menu says Sec-Fetch-Site: none (the person did it).
+    if ((dest && dest !== "iframe") || (site && site !== "same-origin" && !(site === "none" && dest === "iframe"))) {
+      // A plain page, as the frame would show it (never the JSON), marked refused: the desk shows the text.
+      return new Response(inlineRefusalPage("not_here"), { status: 400, headers: originalHeaders(false) });
+    }
+  }
+  const view = await originalView(id, { remoteImages: images, ...(inline ? { inline: { selfHost: requestHost(req, url) } } : {}) });
+  if (info) {
     return NextResponse.json(view.info, { status: view.ok ? 200 : view.status, headers: NO_STORE });
   }
   if (print === "print" && (view.ok || view.status !== 404)) return originalPrintResponse(gate, t, id, view, images);
+  if (inline) {
+    if (!view.ok && view.status === 404) return notFound();
+    if (!view.ok) return new Response(inlineRefusalPage(view.status === 503 ? "busy" : "too_complex"), { status: view.status, headers: originalInlineHeaders(false) });
+    return new Response(view.html, { status: 200, headers: originalInlineHeaders(images) });
+  }
   if (!view.ok) {
     if (view.status === 404) return notFound();
     // The frame's own page says why, under the same policy as an email.
@@ -67,4 +98,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     return new Response(page, { status: view.status, headers: originalHeaders(false) });
   }
   return new Response(view.html, { status: 200, headers: originalHeaders(images) });
+}
+
+/** The desk's host name as the browser sees it, without a port (cookies are per host name; the inline variant drops pictures on it). */
+function requestHost(req: Request, url: URL): string {
+  const forwarded = req.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const host = forwarded || req.headers.get("host") || url.host;
+  try {
+    return new URL(`http://${host}`).hostname.toLowerCase().replace(/\.+$/, "");
+  } catch {
+    return url.hostname.toLowerCase().replace(/\.+$/, "");
+  }
 }

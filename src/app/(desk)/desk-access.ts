@@ -16,6 +16,7 @@ import { hdCapsFor } from "@/lib/helpdesk/roles";
 import { HD_ROLE_LABEL } from "@/lib/helpdesk/roles-shared";
 import type { SessionUser } from "@/lib/types";
 import type { HdAvailability } from "@/lib/helpdesk/types";
+import type { HdEmailView } from "@/lib/helpdesk/email-html-shared";
 
 export interface DeskAccess {
   licensed: boolean;
@@ -48,6 +49,14 @@ export const deskAccess = cache(async (user: SessionUser): Promise<DeskAccess> =
 /** The agent's availability (hd_agent_prefs); "available" until they set one. */
 export async function agentAvailability(userId: number): Promise<HdAvailability> {
   return getAvailability(userId).catch(() => "available" as const);
+}
+
+/** 1.20.11: how emailed messages read in the agent's desk conversation (their desk preference, lib/helpdesk/notify-prefs). */
+export async function agentEmailView(userId: number): Promise<HdEmailView> {
+  const { getNotifyPrefs } = await import("@/lib/helpdesk/notify-prefs");
+  return getNotifyPrefs(userId)
+    .then((p) => p.email_view)
+    .catch(() => "formatted" as const);
 }
 
 /**

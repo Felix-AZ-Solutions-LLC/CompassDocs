@@ -33,6 +33,13 @@
 // move or keep messages by id, so the HTML stays with its message. The
 // requester's personal data export carries the HTML of the emails they sent
 // (originalHtmlFor). Server-only.
+//
+// 1.20.11, in place. The desk's conversation shows each such message's email
+// formatted, in a frame of its own, from ?inline=1 (originalView's `inline`,
+// originalInlineHeaders): the same sanitiser and the same pictures rule, plus
+// the first quoted history folded under "Show quoted text" when the message's
+// text body had it cut (a reply: see quoteFolding), and a document the desk
+// may read (same origin, still no script: originalInlineHeaders says why).
 
 import "server-only";
 import { readFile } from "node:fs/promises";
@@ -197,7 +204,14 @@ const KEPT_BYTES = 48 * 1024 * 1024;
 export function resetOriginalCacheForTests(): void {
   kept.clear();
   working.clear();
+  refusedMessages.clear();
 }
+
+// 1.20.11 security review: an email refused as too complex (or past its time) is refused for the message as a
+// whole, whichever variant, picture choice or host asked, for as long as a result is kept: one hostile reply that
+// every agent opens costs the worker once, not once per view.
+const refusedMessages = new Map<string, { at: number; view: OriginalView }>();
+const REFUSED_MAX = 256;
 
 function keep(key: string, view: OriginalView): void {
   const now = Date.now();
@@ -220,22 +234,51 @@ const refused = (status: 404 | 422 | 503, error: string, extra: Partial<HdOrigin
 });
 
 /**
+ * 1.20.11: whether the inline view folds a message's quoted history: when its text body had the quote cut at
+ * arrival (lib/helpdesk/inbound inboundBody's `reply`). That is every emailed message after the one that opened
+ * its ticket (or, for a message a merge moved, the ticket it came from), and a follow-up's opening message. The
+ * message that opened a ticket keeps everything: new mail, or a forward, whose forwarded part is the content.
+ */
+export async function quoteFolding(messageId: number): Promise<boolean> {
+  const row = await hqOne<{ opening: boolean; follow_up: boolean }>(
+    `SELECT NOT EXISTS (
+              SELECT 1 FROM hd_messages e
+               WHERE e.ticket_id = m.ticket_id AND e.kind <> 'system' AND e.merged_from IS NOT DISTINCT FROM m.merged_from
+                 AND (e.created_at, e.id) < (m.created_at, m.id)) AS opening,
+            m.body LIKE '\\_Follow-up to #%' AS follow_up
+       FROM hd_messages m WHERE m.id = $1`,
+    [messageId]
+  );
+  return !!row && (!row.opening || row.follow_up);
+}
+
+/**
  * One message's original, sanitised for the frame (the caller has checked
  * that the viewer may read the message). `remoteImages`: Show images.
+ * `inline` (1.20.11): the desk conversation's variant (quoted history folded
+ * when quoteFolding says so, no picture from `selfHost`, the desk's mark).
  */
-export async function originalView(messageId: number, opts: { remoteImages?: boolean } = {}): Promise<OriginalView> {
+export async function originalView(messageId: number, opts: { remoteImages?: boolean; inline?: { selfHost: string } } = {}): Promise<OriginalView> {
   const stored = await getOriginalHtml(messageId);
   if (!stored) return refused(404, "This message has no original email.");
-  const key = `${messageId}:${opts.remoteImages ? 1 : 0}:${EMAIL_HTML_SANITIZER_VERSION}:${new Date(stored.created_at).getTime()}`;
+  const inline = opts.inline ? `:i:${opts.inline.selfHost.toLowerCase()}` : "";
+  const messageKey = `${messageId}:${EMAIL_HTML_SANITIZER_VERSION}:${new Date(stored.created_at).getTime()}`;
+  const key = `${messageId}:${opts.remoteImages ? 1 : 0}:${EMAIL_HTML_SANITIZER_VERSION}:${new Date(stored.created_at).getTime()}${inline}`;
+  const no = refusedMessages.get(messageKey);
+  if (no && Date.now() - no.at < KEPT_MS) return no.view;
   const hit = kept.get(key);
   if (hit && Date.now() - hit.at < KEPT_MS) return hit.view;
   const running = working.get(key);
   if (running) return running;
   const work = (async (): Promise<OriginalView> => {
     const cids = await cidPictures(messageId, stored);
-    const r = await sanitizeEmailHtml(stored.html, { remoteImages: opts.remoteImages === true, cids });
     const extra = { truncated: stored.truncated === true, size: Number(stored.size) };
-    if (r.ok) return { ok: true, html: r.html, info: { ok: true, remote_images: r.remoteImages, insecure_images: r.insecureImages, ...extra } };
+    const folding = opts.inline ? { collapseQuotes: await quoteFolding(messageId), selfHost: opts.inline.selfHost, truncated: extra.truncated } : undefined;
+    const r = await sanitizeEmailHtml(stored.html, { remoteImages: opts.remoteImages === true, cids, ...(folding ? { inline: folding } : {}) });
+    if (r.ok) {
+      const info: HdOriginalInfo = { ok: true, remote_images: r.remoteImages, insecure_images: r.insecureImages, ...extra, ...(folding ? { quoted: r.quoted === true } : {}) };
+      return { ok: true, html: r.html, info };
+    }
     if (r.reason === "busy" || r.reason === "failed") return refused(503, r.reason === "busy" ? HD_ORIGINAL_COPY.busy : HD_ORIGINAL_COPY.failed, extra);
     return refused(422, HD_ORIGINAL_COPY.tooComplex, extra);
   })();
@@ -244,6 +287,10 @@ export async function originalView(messageId: number, opts: { remoteImages?: boo
     const view = await work;
     // Kept from when the work ended (a slow one is not done again for the next read); a busy desk is not kept.
     if (view.ok || view.status !== 503) keep(key, view);
+    if (!view.ok && view.status === 422) {
+      if (refusedMessages.size >= REFUSED_MAX) refusedMessages.delete(refusedMessages.keys().next().value!);
+      refusedMessages.set(messageKey, { at: Date.now(), view });
+    }
     return view;
   } finally {
     working.delete(key);
@@ -274,4 +321,40 @@ export function originalHeaders(remoteImages: boolean): Record<string, string> {
     "X-Frame-Options": "SAMEORIGIN",
     "Cross-Origin-Resource-Policy": "same-origin",
   };
+}
+
+/**
+ * 1.20.11: the inline variant's headers (?inline=1, the desk conversation). The same policy as the original's, but
+ * the sandbox adds allow-same-origin (and the frame's sandbox attribute says the same): the document is
+ * same-origin with the desk, so the desk can read its height and its mark and follow its resizes. No script can
+ * run in it: the sandbox has no allow-scripts (inline script, handlers and javascript: links are all blocked, and
+ * so is any page the frame is navigated to, as the frame's own sandbox attribute stays), and default-src 'none'
+ * gives it no script-src, which also blocks a javascript: link opened in a new tab (the initiator's policy
+ * applies). Same-origin only goes one way: the desk's scripts may reach the email's document; nothing in the
+ * email can run to reach the desk. Pictures: data: (and https: with Show images). The sanitiser drops a picture
+ * on the desk's own host, but a picture elsewhere can redirect to the desk, and from a same-origin frame that
+ * request would be same-site and carry the desk's Lax cookies: src/proxy.ts takes the Cookie header off every
+ * cross-site or same-site picture, media, font, style or script request (1.20.11 security review), so it reaches
+ * the desk signed out. Forms: none, and form-action 'none'. Framed only by the desk (frame-ancestors 'self',
+ * X-Frame-Options SAMEORIGIN).
+ */
+export function originalInlineCsp(remoteImages: boolean): string {
+  return originalHeaders(remoteImages)["Content-Security-Policy"].replace(
+    "sandbox allow-popups allow-popups-to-escape-sandbox",
+    "sandbox allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+  );
+}
+
+export function originalInlineHeaders(remoteImages: boolean): Record<string, string> {
+  return { ...originalHeaders(remoteImages), "Content-Security-Policy": originalInlineCsp(remoteImages) };
+}
+
+/** The inline variant's page when the email is not shown (the desk reads its mark and shows the text instead). */
+export function inlineRefusalPage(reason: "too_complex" | "busy" | "not_here"): string {
+  // "not_here": opened as a page or from elsewhere; it says so to whoever sees it (1.20.11 security review).
+  const body =
+    reason === "not_here"
+      ? `<p style="font:14px/1.5 system-ui,sans-serif;color:#475569;margin:12px">${HD_ORIGINAL_COPY.inlineElsewhere}</p>`
+      : "";
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="compass-email" content="refused" data-reason="${reason}"></head><body>${body}</body></html>`;
 }

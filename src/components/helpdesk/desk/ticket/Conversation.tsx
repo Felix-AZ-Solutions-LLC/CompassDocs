@@ -8,8 +8,12 @@
 // 1.20.8: with `originals`, a message whose email had an HTML part carries
 // the quiet "View original" control (./OriginalEmail); the text body stays
 // what the card shows.
+// 1.20.11: with `originals`, such a message shows its email formatted in
+// place of the text body (./InlineEmail), with a "Plain text" / "Formatted"
+// switch and "Open in a window" (the 1.20.8 dialog, where Print is). Other
+// messages, and every other caller, are as before.
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Forward, Lock, Paperclip, RotateCw } from "lucide-react";
 import { isShareLine } from "@/lib/helpdesk/share-shared";
 import { ReviewStateChip } from "../roles/role-ui";
@@ -21,7 +25,8 @@ import { RelativeTime } from "@/components/RelativeTime";
 import { initialsOf } from "@/components/UserAvatar";
 import type { HdMessage } from "@/lib/helpdesk/types";
 import { bytesLabel } from "../ui";
-import { OriginalEmailDialog, ViewOriginalButton } from "./OriginalEmail";
+import { OriginalEmailDialog } from "./OriginalEmail";
+import { useInlineEmail } from "./InlineEmail";
 
 const VIA: Record<string, string> = { email: "by email", portal: "in Get help", desk: "", system: "", mcp: "via Claude", customer_portal: "in the customer portal", api: "via API" };
 
@@ -40,7 +45,7 @@ export function Conversation({
   meId: number;
   /** Message id → the ticket a merge moved it from ("from #1051", 1.19.1). */
   origins?: Record<number, number>;
-  /** 1.20.8: offer "View original" on emailed messages (the ticket pane of an agent who works the ticket). */
+  /** 1.20.8: offer "View original" on emailed messages (the ticket pane of an agent who works the ticket); 1.20.11: and show them formatted. */
   originals?: boolean;
 }) {
   const [original, setOriginal] = useState<HdMessage | null>(null);
@@ -71,96 +76,128 @@ export function Conversation({
             </li>
           );
         }
-        const internal = m.kind === "internal";
-        // Desk roles: a newbie's public reply waits for a lead's review.
-        const review = (m as HdMessage & { review_state?: string | null; review_note?: string | null });
-        const fromAgent = !internal && m.author_id !== null && m.author_id !== requesterId;
-        const mine = m.author_id === meId;
-        const via = VIA[m.via] ?? "";
         return (
-          <li
+          <MessageCard
             key={m.id}
-            className={`rounded-xl border p-4 shadow-xs ${
-              internal
-                ? "border-amber-200 bg-amber-50 dark:border-amber-500/30 dark:bg-amber-500/10"
-                : `border-slate-200 bg-surface ${fromAgent ? "border-l-2 border-l-compass-500" : ""}`
-            }`}
-          >
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span
-                className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-2xs font-bold ${
-                  internal ? "bg-amber-200 text-amber-900 dark:bg-amber-500/25 dark:text-amber-200" : "bg-compass-100 text-compass-700"
-                }`}
-                aria-hidden
-              >
-                {initialsOf(m.author_name || "?")}
-              </span>
-              <span className="text-sm font-semibold text-slate-900">
-                {mine ? (
-                  "You"
-                ) : !ticketNumber ? (
-                  m.author_name || m.author_email
-                ) : (
-                  <ContactHoverCard ticket={ticketNumber} userId={m.author_id} email={m.author_email} name={m.author_name || m.author_email}>
-                    {m.author_name || m.author_email}
-                  </ContactHoverCard>
-                )}
-              </span>
-              {internal && (
-                <span className={chipClass("warn", "sm")}>
-                  <Lock className="h-3 w-3" aria-hidden /> Internal note
-                </span>
-              )}
-              <ReviewStateChip state={review.review_state as HdReviewState | null} />
-              <span className="text-xs text-slate-500">
-                <RelativeTime value={m.created_at} />
-                {via && ` · ${via}`}
-                {origins?.[m.id] && ` · from #${origins[m.id]}`}
-              </span>
-              {originals && m.has_original_html && (
-                <span className="-my-1 ml-auto">
-                  <ViewOriginalButton onOpen={() => setOriginal(m)} />
-                </span>
-              )}
-            </div>
-            {review.review_state === "returned" && review.review_note && (
-              <p className="mt-1 pl-9 text-xs text-slate-600">Reviewer&apos;s note: {review.review_note}</p>
-            )}
-            <div
-              className={`mt-1.5 min-w-0 pl-9 [&_.doc-prose]:text-sm! [&_.doc-prose]:leading-relaxed! [&_.doc-prose_p]:my-1.5 ${
-                internal ? "[&_.doc-prose]:text-amber-950! dark:[&_.doc-prose]:text-amber-100!" : ""
-              }`}
-            >
-              <MarkdownView content={m.body} headingOffset={2} />
-            </div>
-            {m.attachments.length > 0 && (
-              <ul className="mt-2 flex flex-wrap items-end gap-x-4 gap-y-2 pl-9" aria-label="Attachments">
-                {m.attachments.map((a) => {
-                  const href = `/api/helpdesk/attachments/${a.id}`;
-                  const image = /^image\/(png|jpeg|gif|webp)$/.test(a.type);
-                  return (
-                    <li key={a.id}>
-                      <a href={href} target="_blank" rel="noopener" className="group inline-flex flex-col gap-1 text-xs text-slate-600 hover:text-compass-700">
-                        {image && (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={href} alt="" loading="lazy" className="max-h-32 max-w-56 rounded-lg border border-slate-200 object-cover" />
-                        )}
-                        <span className="inline-flex items-center gap-1.5">
-                          <Paperclip className="h-3.5 w-3.5 text-slate-400" aria-hidden />
-                          <span className="underline-offset-2 group-hover:underline">{a.name}</span>
-                          <span className="text-slate-500">· {bytesLabel(a.size)}</span>
-                        </span>
-                      </a>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </li>
+            m={m}
+            requesterId={requesterId}
+            meId={meId}
+            ticketNumber={ticketNumber}
+            origin={origins?.[m.id]}
+            original={originals && m.has_original_html === true}
+            onOpenOriginal={() => setOriginal(m)}
+          />
         );
       })}
       {/* The dialog is a portal to <body> (components/Modal): nothing of it renders inside the list. */}
       {originals && <OriginalEmailDialog message={original} onClose={() => setOriginal(null)} />}
     </ol>
+  );
+}
+
+/** One message's card (1.20.11: a component, so an emailed message can keep its own view state). */
+function MessageCard({
+  m,
+  requesterId,
+  meId,
+  ticketNumber,
+  origin,
+  original,
+  onOpenOriginal,
+}: {
+  m: HdMessage;
+  requesterId: number | null;
+  meId: number;
+  ticketNumber?: number;
+  origin?: number;
+  /** The message has an original email and the viewer may open it (the ticket pane of an agent who works it). */
+  original: boolean;
+  onOpenOriginal: () => void;
+}) {
+  const internal = m.kind === "internal";
+  // Desk roles: a newbie's public reply waits for a lead's review.
+  const review = (m as HdMessage & { review_state?: string | null; review_note?: string | null });
+  const fromAgent = !internal && m.author_id !== null && m.author_id !== requesterId;
+  const mine = m.author_id === meId;
+  const via = VIA[m.via] ?? "";
+  const text: ReactNode = (
+    <div
+      className={`min-w-0 pl-9 [&_.doc-prose]:text-sm! [&_.doc-prose]:leading-relaxed! [&_.doc-prose_p]:my-1.5 ${
+        internal ? "[&_.doc-prose]:text-amber-950! dark:[&_.doc-prose]:text-amber-100!" : ""
+      }`}
+    >
+      <MarkdownView content={m.body} headingOffset={2} />
+    </div>
+  );
+  const email = useInlineEmail({ id: m.id, enabled: original, author: m.author_name || m.author_email || "the sender", tinted: internal, text, onOpenWindow: onOpenOriginal });
+  return (
+    <li
+      className={`rounded-xl border p-4 shadow-xs ${
+        internal
+          ? "border-amber-200 bg-amber-50 dark:border-amber-500/30 dark:bg-amber-500/10"
+          : `border-slate-200 bg-surface ${fromAgent ? "border-l-2 border-l-compass-500" : ""}`
+      }`}
+    >
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span
+          className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-2xs font-bold ${
+            internal ? "bg-amber-200 text-amber-900 dark:bg-amber-500/25 dark:text-amber-200" : "bg-compass-100 text-compass-700"
+          }`}
+          aria-hidden
+        >
+          {initialsOf(m.author_name || "?")}
+        </span>
+        <span className="text-sm font-semibold text-slate-900">
+          {mine ? (
+            "You"
+          ) : !ticketNumber ? (
+            m.author_name || m.author_email
+          ) : (
+            <ContactHoverCard ticket={ticketNumber} userId={m.author_id} email={m.author_email} name={m.author_name || m.author_email}>
+              {m.author_name || m.author_email}
+            </ContactHoverCard>
+          )}
+        </span>
+        {internal && (
+          <span className={chipClass("warn", "sm")}>
+            <Lock className="h-3 w-3" aria-hidden /> Internal note
+          </span>
+        )}
+        <ReviewStateChip state={review.review_state as HdReviewState | null} />
+        <span className="text-xs text-slate-500">
+          <RelativeTime value={m.created_at} />
+          {via && ` · ${via}`}
+          {origin && ` · from #${origin}`}
+        </span>
+        {email.controls}
+      </div>
+      {review.review_state === "returned" && review.review_note && (
+        <p className="mt-1 pl-9 text-xs text-slate-600">Reviewer&apos;s note: {review.review_note}</p>
+      )}
+      <div className="mt-1.5 min-w-0">{email.body}</div>
+      {m.attachments.length > 0 && (
+        <ul className="mt-2 flex flex-wrap items-end gap-x-4 gap-y-2 pl-9" aria-label="Attachments">
+          {m.attachments.map((a) => {
+            const href = `/api/helpdesk/attachments/${a.id}`;
+            const image = /^image\/(png|jpeg|gif|webp)$/.test(a.type);
+            return (
+              <li key={a.id}>
+                <a href={href} target="_blank" rel="noopener" className="group inline-flex flex-col gap-1 text-xs text-slate-600 hover:text-compass-700">
+                  {image && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={href} alt="" loading="lazy" className="max-h-32 max-w-56 rounded-lg border border-slate-200 object-cover" />
+                  )}
+                  <span className="inline-flex items-center gap-1.5">
+                    <Paperclip className="h-3.5 w-3.5 text-slate-400" aria-hidden />
+                    <span className="underline-offset-2 group-hover:underline">{a.name}</span>
+                    <span className="text-slate-500">· {bytesLabel(a.size)}</span>
+                  </span>
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </li>
   );
 }

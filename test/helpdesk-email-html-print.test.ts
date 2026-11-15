@@ -518,7 +518,7 @@ describe("the policy of each variant", () => {
     const config = require("../next.config.js") as { headers: () => Promise<{ source: string; has?: { type: string; key: string; value?: string }[]; headers: { key: string; value: string }[] }[]> };
     const all = await config.headers();
     const rules = all.filter((h) => h.source === "/api/helpdesk/messages/:id/original");
-    assert.equal(rules.length, 4);
+    assert.equal(rules.length, 6); // 1.20.11: and the inline variant's two (test/helpdesk-email-inline)
     // Apply the rules as Next does (every matching rule in order, the last value of a key wins) to each query.
     const applied = (query: Record<string, string>) => {
       const h = new Map<string, string>();

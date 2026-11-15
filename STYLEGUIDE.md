@@ -2841,8 +2841,40 @@ open in its own tab beside CompassDocs. Components live in
   `secondary` `sm` **Show images**, for that message only and never
   remembered; a truncated email adds a `notice-warn` line. The footer says
   replies are still plain text and offers **Back to the conversation**
-  beside the close button. The card's text body stays the default view
-  everywhere; Get help, the portal and the print page never show it.
+  beside the close button. Since 1.20.11 the control is **Open in a
+  window** (`AppWindow`, below); Get help, the portal and the print page
+  never show the email.
+- **Email shows as sent** (1.20.11, `ticket/InlineEmail`): in the ticket
+  pane, a message whose email had an HTML part shows that email in place of
+  its text body, with no click. Its header row carries two quiet `sm` icon
+  buttons at the right, each with `data-tt` and `aria-label`: the switch
+  (`Type` "Plain text" while formatted, `MailOpen` "Formatted" while plain;
+  "Shown as text" in the tooltip when the email could not be drawn) and
+  **Open in a window** (`AppWindow`, the dialog above, where Print is). Two
+  quiet icons rather than a menu: the card has no menu, and Print stays two
+  clicks away. The last switch is the agent's default (Settings →
+  Notifications, **Emails in the conversation**, a `Segmented` Formatted |
+  Plain text); a message on screen keeps its own state. The email is a
+  borderless frame on a sheet of paper **edge to edge within the card's
+  padding** (not indented under the avatar like a text body), sized to the
+  email (no scrollbar inside; past 2,400 px a white fade and a `text-xs`
+  **Show the rest** with `ChevronsDown`; never past 20,000 px, and an email
+  whose height follows its frame's is frozen and scrolls inside). Paper:
+  literal `bg-white` in both themes, `rounded-lg border p-3` with a
+  **constant hairline edge** (`border-slate-200`, dark `border-white/15`;
+  `border-amber-200` on an internal note's amber card). The edge is a
+  safety line, not decoration: the email draws whatever it likes inside it,
+  so it must never be able to pass a fake chip, note or badge off as the
+  desk's (1.20.11 security review). Nothing of the desk's fonts or
+  colours reaches the email. The reply's quoted history folds under a slate
+  pill **Show quoted text** / **Hide quoted text** drawn inside the email
+  (it works without script). Remote pictures: one `text-xs text-slate-500`
+  line above the email, `ImageOff`, "Remote images are hidden · **Show
+  images**" (a text button in `text-compass-700`), only when the email has
+  some, for that message, never remembered. While an email loads, and
+  whenever it can't be shown, the text body is what the card shows: never a
+  spinner or an error box. Text everywhere else: requesters, the print page,
+  Claude, the API.
 - **Print the original** (1.20.9, `lib/helpdesk/email-html-print`): a
   quiet `Printer` icon link left of the dialog's close button (`data-tt`
   and `aria-label` "Print this email"), shown once the original has
