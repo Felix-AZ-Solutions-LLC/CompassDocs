@@ -194,6 +194,14 @@ let A = 0;
 let B = 0;
 /** A team nobody is in: the trigger tests' own. */
 let C = 0;
+/**
+ * Quinn's only team, which holds no ticket until a test raises one there.
+ * Other files' sweeps legitimately change every open ticket in the database
+ * (a default calendar or SLA target change retimes them all), and those are
+ * real changes in the scope of whoever's queue holds them; an empty team is
+ * the only scope that is quiet for certain (the CI failure of 1.20.19).
+ */
+let D = 0;
 
 async function person(key: string, name: string): Promise<Person> {
   const addr = `${STAMP}-${key}@example.test`;
@@ -245,6 +253,7 @@ before(async () => {
     ["par", "Pat Parallel"],
     ["rev", "Rosa Revoked"],
     ["dis", "Dirk Disabled"],
+    ["quiet", "Quinn Quiet"],
   ] as const) {
     await person(k, n);
   }
@@ -252,12 +261,13 @@ before(async () => {
   roleIds.push(role.rows[0].id);
   await fixtureQuery("INSERT INTO role_permissions (role_id, permission) VALUES ($1, 'helpdesk.request')", [role.rows[0].id]);
   for (const id of personIds) await fixtureQuery("INSERT INTO role_assignments (role_id, user_id, scope_type) VALUES ($1, $2, 'global')", [role.rows[0].id, id]);
-  for (const [k, r] of [["sam", "agent"], ["ana", "agent"], ["other", "agent"], ["boss", "manager"], ["many", "agent"], ["rate", "agent"], ["gone", "agent"], ["par", "agent"], ["rev", "agent"], ["dis", "agent"]] as const) {
+  for (const [k, r] of [["sam", "agent"], ["ana", "agent"], ["other", "agent"], ["boss", "manager"], ["many", "agent"], ["rate", "agent"], ["gone", "agent"], ["par", "agent"], ["rev", "agent"], ["dis", "agent"], ["quiet", "agent"]] as const) {
     await pool().query("INSERT INTO hd_agent_roles (user_id, role) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET role = EXCLUDED.role", [P[k].id, r]);
   }
   A = await team("IT", [["sam", "agent"], ["ana", "agent"], ["many", "agent"], ["rate", "agent"], ["gone", "agent"], ["par", "agent"], ["rev", "agent"], ["dis", "agent"]]);
   B = await team("Facilities", [["other", "agent"]]);
   C = await team("Quiet", []);
+  D = await team("Night shift", [["quiet", "agent"]]);
   notify.setAgentDeliverySpyForTests(() => {});
   email.setHelpdeskTransportForTests(async () => {});
 });
@@ -581,46 +591,103 @@ async function listenFor(team: number): Promise<{ got: string[]; end: () => Prom
 
 describe("review fixes", () => {
   test("R1: cursors are time, not counts; another team's activity moves nothing an agent can see", async () => {
-    const first = await callGet(liveRoute.GET, req(`/live?wait=1`, P.sam.session));
+    // The listener is up and stays up for the whole probe (a reconnect rightly answers "changed": it can't vouch for the gap).
+    assert.equal(await live.ensureListening(), true);
+    const upSince = live.liveStateForTests().upSince;
+    const first = await callGet(liveRoute.GET, req(`/live?wait=1`, P.quiet.session));
     const c0 = ((await first.json()) as { cursor: string }).cursor;
     const parsed = shared.parseLiveCursor(c0)!;
     assert.ok(Math.abs(parsed.ms - Date.now()) < 3_000, "the cursor is the server's clock");
-    // Fifty writes in a team Sam isn't in.
+    // Fifty writes in a team Quinn isn't in.
     const t = await raise(B, `${STAMP} secret facilities ticket`);
     for (let i = 0; i < 49; i++) await pool().query("UPDATE hd_tickets SET updated_at = now() WHERE id = $1", [t.id]);
     await sleep(300);
-    const after = await callGet(liveRoute.GET, req(`/live?wait=1&since=${c0}`, P.sam.session));
+    const after = await callGet(liveRoute.GET, req(`/live?wait=1&since=${c0}`, P.quiet.session));
     const d1 = (await after.json()) as { changed: boolean; cursor: string };
-    assert.equal(d1.changed, false, "the catch-up answer depends only on Sam's scope");
-    // Two cursors a second apart differ by the second, whatever happened elsewhere meanwhile.
+    assert.equal(live.liveStateForTests().upSince, upSince, "the listener did not reconnect during the probe");
+    const inScope = live.liveRingForTests().filter((e) => e.at > parsed.ms && shared.liveConcerns(e, { teams: new Set([D]), userId: P.quiet.id }));
+    assert.equal(d1.changed, false, `the catch-up answer depends only on Quinn's scope (in scope since: ${JSON.stringify(inScope)})`);
+    // Two cursors around twenty more out-of-scope writes differ only by the time they took.
     const a = shared.parseLiveCursor(live.liveCursor())!.ms;
+    const t0 = Date.now();
     for (let i = 0; i < 20; i++) await pool().query("UPDATE hd_tickets SET updated_at = now() WHERE id = $1", [t.id]);
     const b = shared.parseLiveCursor(live.liveCursor())!.ms;
-    assert.ok(b - a >= 0 && b - a < 2_000);
+    assert.ok(b - a >= 0 && b - a <= Date.now() - t0 + 1, `${b - a} ms between cursors`);
     // And a stream's hello carries the same kind of cursor.
-    const sam = await Tap.open(P.sam);
-    await sam.until(() => sam.frames().length > 0, 3_000);
-    assert.ok(Math.abs(shared.parseLiveCursor(sam.frames()[0].id)!.ms - Date.now()) < 3_000);
-    sam.close();
+    const q = await Tap.open(P.quiet);
+    await q.until(() => q.frames().length > 0, 3_000);
+    assert.ok(Math.abs(shared.parseLiveCursor(q.frames()[0].id)!.ms - Date.now()) < 3_000);
+    q.close();
   });
 
   test("multi-process: a cursor from another process answers from time with a 2 s margin, not 'always changed'", async () => {
     const otherBoot = "0a0b0c0d";
-    await sleep(2_500);
-    // Handed out by another process just now; nothing in Sam's scope since: no reload.
+    assert.equal(await live.ensureListening(), true);
+    const upSince = live.liveStateForTests().upSince;
+    assert.ok(Date.now() - upSince > 2 * shared.LIVE_LIMITS.skewMs, "the listener has been up longer than the cursors below reach back");
+    // Handed out by another process just now; nothing in Quinn's scope, ever: no reload.
     const now = shared.formatLiveCursor(Date.now(), otherBoot);
-    const quiet = await callGet(liveRoute.GET, req(`/live?wait=1&since=${now}`, P.sam.session));
+    const quiet = await callGet(liveRoute.GET, req(`/live?wait=1&since=${now}`, P.quiet.session));
     assert.equal(((await quiet.json()) as { changed: boolean }).changed, false);
+    // Even one from almost the whole margin ago (another process's clock a little behind).
+    const behind = shared.formatLiveCursor(Date.now() - shared.LIVE_LIMITS.skewMs + 300, otherBoot);
+    const still = await callGet(liveRoute.GET, req(`/live?wait=1&since=${behind}`, P.quiet.session));
+    assert.equal(((await still.json()) as { changed: boolean }).changed, false);
     // A change in scope a moment before another process's cursor may not have reached it: counted.
-    await raise(A, `${STAMP} skew`);
-    await sleep(200);
-    const skewed = shared.formatLiveCursor(Date.now() - 100, otherBoot);
-    const hit = await callGet(liveRoute.GET, req(`/live?wait=1&since=${skewed}`, P.sam.session));
+    // (A stream of Quinn's proves the listener has heard it before the cursors below are taken.)
+    const q = await Tap.open(P.quiet);
+    await q.until(() => q.frames().length > 0, 3_000);
+    await raise(D, `${STAMP} skew`);
+    const raised = Date.now();
+    assert.ok((await q.until(() => q.changed().length > 0, 5_000)) >= 0, "the listener heard the change");
+    q.close();
+    // Another process's cursor from half a second after the change: inside the margin, so counted.
+    const skewed = shared.formatLiveCursor(raised + 500, otherBoot);
+    const hit = await callGet(liveRoute.GET, req(`/live?wait=1&since=${skewed}`, P.quiet.session));
     assert.equal(((await hit.json()) as { changed: boolean }).changed, true);
+    // The same cursor from this process (no margin) after the change: not counted.
+    const mine = live.liveCursor();
+    const own = await callGet(liveRoute.GET, req(`/live?wait=1&since=${mine}`, P.quiet.session));
+    assert.equal(((await own.json()) as { changed: boolean }).changed, false);
     // Earlier than this process's listener: it can't vouch, so one reload.
     const ancient = shared.formatLiveCursor(1_000, otherBoot);
-    const old = await callGet(liveRoute.GET, req(`/live?wait=1&since=${ancient}`, P.other.session));
+    const old = await callGet(liveRoute.GET, req(`/live?wait=1&since=${ancient}`, P.quiet.session));
     assert.equal(((await old.json()) as { changed: boolean }).changed, true);
+    assert.equal(live.liveStateForTests().upSince, upSince, "the listener did not reconnect during the probe");
+  });
+
+  test("R1 and multi-process, with synthetic changes only: the answer is decided by the scope and the clock", async () => {
+    // No database traffic at all decides this one: subscribers with made-up teams, changes published straight to the bus.
+    const QUIET = 980_000_000 + (process.pid % 1000);
+    const NOISY = QUIET + 1;
+    live.setLiveScopeForTests(async () => ({ teams: [QUIET], agent: true }));
+    try {
+      assert.equal(await live.ensureListening(), true);
+      const { sub, close } = await live.subscribeLive({ id: 2_100_000_000, role: "viewer" }, { signal: () => {}, end: () => {} });
+      try {
+        const boot = live.liveCursor().split(".")[1];
+        const c0 = live.liveCursor();
+        await sleep(5);
+        for (let i = 0; i < 200; i++) live.publishLiveChange({ teams: [NOISY], users: [2_100_000_001] });
+        assert.equal(live.changedSince(c0, sub), false, "200 changes elsewhere: not changed");
+        const foreignNow = shared.formatLiveCursor(Date.now(), "0a0b0c0d");
+        assert.equal(live.changedSince(foreignNow, sub), false, "another process's cursor: not 'always changed'");
+        assert.equal(boot.length, 8);
+        await sleep(5);
+        const before = Date.now();
+        live.publishLiveChange({ teams: [QUIET], users: [] });
+        assert.equal(live.changedSince(c0, sub), true, "a change in scope after the cursor");
+        assert.equal(live.changedSince(live.liveCursor(), sub), false, "this process's cursor after it: no margin, not changed");
+        assert.equal(live.changedSince(shared.formatLiveCursor(before + 500, "0a0b0c0d"), sub), true, "another process's cursor within the margin after it: changed");
+        assert.equal(live.changedSince(shared.formatLiveCursor(before + shared.LIVE_LIMITS.skewMs + 500, "0a0b0c0d"), sub), false, "past the margin: not changed");
+        assert.equal(live.changedSince(shared.formatLiveCursor(1_000, "0a0b0c0d"), sub), true, "older than the listener: can't vouch");
+        assert.equal(live.changedSince("not a cursor", sub), true);
+      } finally {
+        close();
+      }
+    } finally {
+      live.setLiveScopeForTests(null);
+    }
   });
 
   test("R2: twenty parallel connects by one person open exactly six", async () => {

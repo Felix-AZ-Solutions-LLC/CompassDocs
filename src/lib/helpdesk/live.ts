@@ -71,6 +71,8 @@ interface Bus {
   ring: Entry[];
   /** Changes at or after this are all in the ring (the listener was up, nothing dropped). */
   coveredSince: number;
+  /** When the listener last came up (0: never). */
+  upSince: number;
   subs: Set<LiveSubscriber>;
   byTeam: Map<number, Set<LiveSubscriber>>;
   byUser: Map<number, Set<LiveSubscriber>>;
@@ -99,6 +101,7 @@ function bus(): Bus {
       boot: randomBytes(4).toString("hex"),
       ring: [],
       coveredSince: Number.POSITIVE_INFINITY,
+      upSince: 0,
       subs: new Set(),
       byTeam: new Map(),
       byUser: new Map(),
@@ -348,6 +351,7 @@ async function connect(b: Bus): Promise<boolean> {
       b.state = "up";
       b.backoffMs = LIVE_LIMITS.reconnectMinMs;
       b.coveredSince = Date.now();
+      b.upSince = b.coveredSince;
       b.checkTimer = setInterval(() => {
         void selfCheck(b, client).then((ok) => {
           if (!ok && b.client === client) goDown(b, "self-check: no notification came back");
@@ -529,9 +533,14 @@ export async function selfCheckLiveForTests(): Promise<boolean> {
 }
 
 /** Tests: the listener's state and the places reserved. */
-export function liveStateForTests(): { state: ListenState; reserved: number; reconnecting: boolean; indexedTeams: number } {
+export function liveStateForTests(): { state: ListenState; reserved: number; reconnecting: boolean; indexedTeams: number; upSince: number } {
   const b = bus();
-  return { state: b.state, reserved: b.reservedTotal, reconnecting: !!b.reconnectTimer, indexedTeams: b.byTeam.size };
+  return { state: b.state, reserved: b.reservedTotal, reconnecting: !!b.reconnectTimer, indexedTeams: b.byTeam.size, upSince: b.upSince };
+}
+
+/** Tests: the changes this process remembers (to say which one made an answer "changed"). */
+export function liveRingForTests(): readonly (LiveChange & { at: number })[] {
+  return bus().ring;
 }
 
 /** Tests: end the LISTEN connection for good (the test process can exit). */
