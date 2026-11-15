@@ -15,6 +15,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { pool, getSetting, createSession } from "../src/lib/db";
@@ -225,7 +226,11 @@ async function q(viewer: { id: number; role: "viewer" }, query: Partial<HdAnalyt
 // The ticket ids worked out in the fixtures, by role.
 const F: Record<string, number> = {};
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   await store.ensureAnalyticsSchema();
   hours.setReportHoursForTests(HOURS);
@@ -344,6 +349,7 @@ after(async () => {
   await pool().query("DELETE FROM hd_teams WHERE id = ANY($1)", [[teamA, teamB]]);
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1)", [userIds]).catch(() => {});
   await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await mailLock?.release(email);
   await pool().end();
 });
 

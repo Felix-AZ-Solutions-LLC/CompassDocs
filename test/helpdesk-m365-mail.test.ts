@@ -32,19 +32,20 @@
 //     messages" diagnostic, the object ID lookup, key rotation.
 //
 // hd_mailboxes and the email settings are workspace-wide: the whole file
-// runs under the email settings' advisory lock (728351, as
-// test/helpdesk-mailboxes), and puts back what it changed.
+// holds the workspace mail lock exclusively (test/support/mail-lock), so no
+// other file sends or receives helpdesk mail meanwhile, and puts back what
+// it changed.
 //
 // Run: DATABASE_URL=… npx tsx --tsconfig ./tsconfig.test.json --test test/helpdesk-m365-mail.test.ts
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
-import type { PoolClient } from "pg";
 import { pool, getSetting, setSetting, createSession } from "../src/lib/db";
 import { newToken } from "../src/lib/password";
 import { fixtureQuery } from "./support/retry";
@@ -146,7 +147,6 @@ const HELP = `help@${DOMAIN}`;
 const BILLING = `billing@${DOMAIN}`; // an alias on the help@ mailbox
 const SALES = `sales@${DOMAIN}`; // a second mailbox
 const OTHER = `ceo@${DOMAIN}`; // a mailbox the desk must not reach
-const LOCK = 728351;
 const KEY = m365State.M365_MAIL_KEY;
 type Person = { id: number; email: string; session: string; name: string };
 // "lead": a desk role that holds the Email channel capability and not Helpdesk settings (see the permission tests).
@@ -163,7 +163,7 @@ let SECRET = "";
 let helpId = 0; // the connected Microsoft 365 mailbox help@
 const smtp: HelpdeskOutgoingMail[] = [];
 const ticketIds: number[] = [];
-let lockClient: PoolClient | null = null;
+let mailLock: WorkspaceMailLock | null = null;
 let savedConfig: string | undefined;
 let savedSettings = { outside_senders: false, inbound_secret: "", inbound_address: "", email_from_name: "" };
 let savedAuth: string | undefined;
@@ -240,8 +240,8 @@ const seen = async (id: string, mailboxId = helpId) => (await pool().query("SELE
 
 before(async () => {
   await getSetting("__schema_bootstrap__");
-  lockClient = await pool().connect();
-  await lockClient.query("SELECT pg_advisory_lock($1)", [LOCK]);
+  // The workspace's mail configuration is this file's alone while it runs (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("exclusive");
   savedConfig = await getSetting(KEY);
   savedAuth = await getSetting(inbound.HD_INBOUND_AUTH_KEY);
   const s = await settingsLib.getHelpdeskSettings();
@@ -341,12 +341,11 @@ after(async () => {
   else await setSetting(inbound.HD_INBOUND_AUTH_KEY, savedAuth);
   await settingsLib.saveHelpdeskSettings(savedSettings, { syncMailboxes: false });
   mailboxes.resetMailboxesReadyForTests();
+  // Notification work still running (a message being taken in) finishes before the lock goes.
+  await settled();
   await new Promise((r) => bridge.close(() => r(null)));
   await fake.close();
-  if (lockClient) {
-    await lockClient.query("SELECT pg_advisory_unlock($1)", [LOCK]).catch(() => {});
-    lockClient.release();
-  }
+  await mailLock?.release(email);
   await pool().end();
 });
 

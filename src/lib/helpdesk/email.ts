@@ -404,19 +404,47 @@ export interface HelpdeskThread {
   teamId?: number | null;
 }
 
+/** Sends under way (most are started after a commit and not awaited by their caller). */
+const inFlight = new Set<Promise<boolean>>();
+
+/**
+ * Tests: resolves once every send already under way has finished, its
+ * writes back to the send-from address or Microsoft 365 link included
+ * (test/support/mail-lock waits for this before another file may change
+ * the workspace's mail configuration).
+ */
+export async function helpdeskMailSettledForTests(): Promise<void> {
+  while (inFlight.size) await Promise.allSettled([...inFlight]);
+}
+
 /**
  * Render one hd_* template and send it to one address, threaded on the
  * ticket when `thread` is given. `opts.cc` puts the people copied on the
  * request on Cc (public replies only; never an internal-note notice).
  * Answers whether it was handed to SMTP; never throws (a failure is logged).
  */
-export async function sendHelpdeskTemplate(
+export function sendHelpdeskTemplate(
   to: string,
   templateKey: string,
   vars: Record<string, string>,
   thread?: HelpdeskThread | null,
   origin?: string,
   opts: { cc?: string[]; /** "agent": an agent's own notice, which keeps the workspace address and the default mailbox's name (1.20.2). */ audience?: "requester" | "agent" } = {}
+): Promise<boolean> {
+  const sending = sendTemplateNow(to, templateKey, vars, thread, origin, opts);
+  inFlight.add(sending);
+  const done = () => void inFlight.delete(sending);
+  sending.then(done, done);
+  return sending;
+}
+
+async function sendTemplateNow(
+  to: string,
+  templateKey: string,
+  vars: Record<string, string>,
+  thread: HelpdeskThread | null | undefined,
+  origin: string | undefined,
+  opts: { cc?: string[]; audience?: "requester" | "agent" }
 ): Promise<boolean> {
   const address = to.trim();
   if (!address || !/^[^\s@<>]+@[^\s@<>]+$/.test(address)) return false;

@@ -27,10 +27,12 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { Worker } from "node:worker_threads";
 import { JSDOM, VirtualConsole } from "jsdom";
 import { pool, getSetting, createSession } from "../src/lib/db";
 import { newToken } from "../src/lib/password";
@@ -290,7 +292,11 @@ function png(size: number): Buffer {
 const QUOTED = `<div dir="ltr"><p>Still broken after the restart.</p></div>
 <div class="gmail_quote"><div class="gmail_attr">On Mon, Ana wrote:</div><blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex">Please restart the laptop.</blockquote></div>`;
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   uploads = await mkdtemp(path.join(tmpdir(), "compass-email-inline-"));
   process.env.COMPASSDOCS_UPLOAD_DIR = uploads;
@@ -346,6 +352,7 @@ after(async () => {
   await pool().query("DELETE FROM roles WHERE id = ANY($1)", [roleIds]);
   await pool().query("DELETE FROM users WHERE id = ANY($1)", [everyone]);
   await rm(uploads, { recursive: true, force: true });
+  await mailLock?.release(email);
   await pool().end();
 });
 
@@ -917,11 +924,38 @@ describe("folding cost on hostile shapes", () => {
     });
   }
 
-  test("through the route with the production time limit: the worst shape is shown, not refused", async () => {
+  test("the worst shape fits the production time limit, and through the route it is shown, not refused", async () => {
+    const worst = "<p>hi</p>" + chain(399, '<div style="border-top:solid">', "</div>").repeat(30);
+    // The budget: what the sanitise itself costs, in a fresh worker thread as the first email after a
+    // start or a timeout gets it (cold, nothing warmed up). Counted as that thread's CPU time, which the
+    // other test processes sharing this machine do not inflate the way they stretch the wall clock (on a
+    // loaded CI runner the wall clock passed 3 s with the CPU time well under it).
+    const code = `const { parentPort, workerData } = require("node:worker_threads");
+      const m = require(workerData.file);
+      const t0 = process.threadCpuUsage();
+      const r = m.sanitize(workerData.html, workerData.opts);
+      const t = process.threadCpuUsage(t0);
+      parentPort.postMessage({ ok: r.ok, ms: (t.user + t.system) / 1000 });`;
+    const cost = await new Promise<{ ok: boolean; ms: number }>((resolve, reject) => {
+      const w = new Worker(code, { eval: true, workerData: { file: sanitize.workerFile(), html: worst, opts: { cids: [], inline: { collapseQuotes: true, selfHost: "localhost", truncated: false } } } });
+      w.once("message", (msg) => {
+        void w.terminate();
+        resolve(msg);
+      });
+      w.once("error", reject);
+    });
+    assert.ok(cost.ok);
+    assert.ok(cost.ms < sanitize.SANITIZE_TIMEOUT_MS, `the worst shape costs ${cost.ms.toFixed(0)} ms of CPU; the production limit is ${sanitize.SANITIZE_TIMEOUT_MS} ms`);
+    // The route serves it (folded, in the desk's frame), not the refusal. A generous limit here, as
+    // above: the wall clock of a loaded runner is not what this proves.
     const { t } = await opened(mail(P.req, { html: "<p>Open</p>" }));
-    const m = await replied(t, "<p>hi</p>" + chain(399, '<div style="border-top:solid">', "</div>").repeat(30));
-    sanitize.setSanitizeTimeoutForTests(null);
-    const r = await inline(m.id, P.agent.session);
-    assert.equal(r.status, 200, r.text.slice(0, 200));
+    const m = await replied(t, worst);
+    sanitize.setSanitizeTimeoutForTests(60_000);
+    try {
+      const r = await inline(m.id, P.agent.session);
+      assert.equal(r.status, 200, r.text.slice(0, 200));
+    } finally {
+      sanitize.setSanitizeTimeoutForTests(null);
+    }
   });
 });

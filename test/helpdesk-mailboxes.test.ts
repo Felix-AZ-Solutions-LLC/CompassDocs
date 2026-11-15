@@ -22,17 +22,17 @@
 //     the refusal fallback and its one audit row per streak, removing an
 //     address in use, and its own test send.
 //
-// hd_mailboxes and hd_send_addresses are workspace-wide: the whole file runs under the email
-// settings' advisory lock (728351, as test/helpdesk-review-fixes-s2), with
-// the mailboxes and the two old settings it found put back afterwards.
+// hd_mailboxes and hd_send_addresses are workspace-wide: the whole file holds the workspace
+// mail lock exclusively (test/support/mail-lock), so no other file sends or receives helpdesk
+// mail meanwhile, and puts back the mailboxes and the two old settings it found afterwards.
 //
 // Run: DATABASE_URL=… npx tsx --tsconfig ./tsconfig.test.json --test test/helpdesk-mailboxes.test.ts
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
-import type { PoolClient } from "pg";
 import { pool, getSetting, createSession } from "../src/lib/db";
 import { newToken } from "../src/lib/password";
 import { fixtureQuery } from "./support/retry";
@@ -127,7 +127,6 @@ const A = `help@${DOMAIN}`;
 const B = `billing@${DOMAIN}`;
 const C = `press@${DOMAIN}`;
 const TRANSPORT_FROM_RE = /<([^>]+)>$/;
-const LOCK = 728351;
 type Person = { id: number; email: string; session: string; name: string };
 const U: Record<"req" | "agent" | "newbie" | "manager" | "solo", Person> = {} as never;
 let teamA = 0;
@@ -142,7 +141,7 @@ const refuseFrom = new Set<string>();
 let failNext: Error | null = null;
 /** Every send the transport was asked for, refused ones included. */
 let attempts = 0;
-let lockClient: PoolClient | null = null;
+let mailLock: WorkspaceMailLock | null = null;
 let savedBoxes: Record<string, unknown>[] = [];
 let savedSenders: Record<string, unknown>[] = [];
 let savedTickets: { id: number; mailbox_id: number }[] = [];
@@ -242,8 +241,7 @@ async function threeBoxes(): Promise<{ a: HdMailbox; b: HdMailbox; c: HdMailbox 
 
 before(async () => {
   await getSetting("__schema_bootstrap__");
-  lockClient = await pool().connect();
-  await lockClient.query("SELECT pg_advisory_lock($1)", [LOCK]);
+  mailLock = await lockWorkspaceMail("exclusive");
   // What the workspace had: put back in after().
   savedBoxes = (await pool().query("SELECT * FROM hd_mailboxes ORDER BY id")).rows;
   savedSenders = (await pool().query("SELECT * FROM hd_send_addresses ORDER BY id")).rows;
@@ -331,10 +329,7 @@ after(async () => {
   for (const t of savedTickets) await pool().query("UPDATE hd_tickets SET mailbox_id = $2 WHERE id = $1", [t.id, t.mailbox_id]).catch(() => undefined);
   await settingsLib.saveHelpdeskSettings(savedSettings, { syncMailboxes: false });
   mailboxes.resetMailboxesReadyForTests();
-  if (lockClient) {
-    await lockClient.query("SELECT pg_advisory_unlock($1)", [LOCK]).catch(() => {});
-    lockClient.release();
-  }
+  await mailLock?.release(email);
   await pool().end();
 });
 

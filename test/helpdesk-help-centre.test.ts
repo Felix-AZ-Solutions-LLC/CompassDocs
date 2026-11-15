@@ -28,6 +28,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -241,7 +242,11 @@ async function call(handler: (req: Request, c: any) => Promise<Response>, url: s
   }
 }
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   uploadDirectory = await mkdtemp(path.join(tmpdir(), "compass-hdhc-"));
   process.env.COMPASSDOCS_UPLOAD_DIR = uploadDirectory;
@@ -337,6 +342,7 @@ after(async () => {
   await pool().query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await rm(uploadDirectory, { recursive: true, force: true });
+  await mailLock?.release(email);
   await pool().end();
 });
 

@@ -25,6 +25,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { pool, getSetting, createSession, getUserById } from "../src/lib/db";
@@ -154,6 +155,8 @@ function req(url: string, session: string, body?: unknown, method?: string): Req
 // --- Fixtures ----------------------------------------------------------------------
 
 const STAMP = `hdbin-${Date.now()}-${process.pid}`;
+/** IT's own address (its email alias). */
+const HELP = `${STAMP}-it@example.test`;
 interface Person {
   id: number;
   session: string;
@@ -222,7 +225,11 @@ function managerDeletes(): HdRoleMatrix {
   return { ...shared.HD_DEFAULT_MATRIX, manager: [...shared.HD_DEFAULT_MATRIX.manager, "tickets.delete"] };
 }
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   roles.setRoleMatrixForTests(managerDeletes());
   for (const [k, n] of [
@@ -235,7 +242,9 @@ before(async () => {
   ] as const) {
     await person(k, n);
   }
-  T1 = (await fixtureQuery("INSERT INTO hd_teams (name, position) VALUES ($1, 9201) RETURNING id", [`${STAMP} IT`])).rows[0].id;
+  // IT owns the address the inbound tests mail: a ticket opened from mail to an address no team owns goes
+  // to the database's first team, which may be another file's, and is deleted with it (lib/helpdesk/inbound teamForRecipients).
+  T1 = (await fixtureQuery("INSERT INTO hd_teams (name, position, email_alias) VALUES ($1, 9201, $2) RETURNING id", [`${STAMP} IT`, HELP])).rows[0].id;
   T2 = (await fixtureQuery("INSERT INTO hd_teams (name, position) VALUES ($1, 9202) RETURNING id", [`${STAMP} HR`])).rows[0].id;
   await grant(P.admin.id, ["helpdesk.admin", "helpdesk.agent", "helpdesk.request"], "admin");
   await deskRole(P.admin.id, "admin");
@@ -268,6 +277,7 @@ after(async () => {
   await pool().query("DELETE FROM roles WHERE id = ANY($1)", [roleIds]);
   await pool().query("DELETE FROM hd_agent_roles WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await mailLock?.release(email);
   await pool().end();
 });
 
@@ -553,7 +563,7 @@ describe("a binned ticket is hidden", () => {
       {
         provider: "generic",
         from: { email: P.req.email, name: P.req.name },
-        to: [{ email: "help@example.test", name: "" }],
+        to: [{ email: HELP, name: "" }],
         cc: [],
         recipients: [],
         subject: `Re: ${t.subject} [#${t.number} ref:${token}]`,
@@ -848,7 +858,7 @@ describe("review fixes", () => {
       {
         provider: "generic",
         from: { email: P.req.email, name: P.req.name },
-        to: [{ email: "help@example.test", name: "" }],
+        to: [{ email: HELP, name: "" }],
         cc: [],
         recipients: [],
         subject: `Re: ${t.subject} [#${t.number} ref:${token}]`,

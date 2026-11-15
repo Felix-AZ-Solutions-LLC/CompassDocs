@@ -44,6 +44,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -255,7 +256,11 @@ const ticketsOf = async (who: string) =>
   (await pool().query("SELECT id, number, subject, source, team_id, request_type_id FROM hd_tickets WHERE requester_id = $1 ORDER BY id", [P[who].id])).rows;
 const auditRows = async (action: string) => (await pool().query("SELECT actor_id, details FROM audit_log WHERE action = $1 AND actor_id = ANY($2) ORDER BY id", [action, personIds])).rows;
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   roles.setRoleMatrixForTests(roles.HD_DEFAULT_MATRIX);
   email.setHelpdeskTransportForTests(async () => {});
@@ -307,6 +312,7 @@ after(async () => {
   await pool().query("DELETE FROM directory_people WHERE id = ANY($1)", [dirIds]);
   // Replay keys and channel claims are hashes: this run's are the ones written since it started (only chat events write here).
   await pool().query("DELETE FROM hd_chat_seen WHERE event_id LIKE $1 OR at >= $2::timestamptz", [`%${SID}%`, STARTED]);
+  await mailLock?.release(email);
   await pool().end();
 });
 

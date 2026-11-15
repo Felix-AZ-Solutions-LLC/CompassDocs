@@ -190,9 +190,22 @@ export function slugify(input: string): string {
  * Ensure the schema and seed data exist. Guarded by a Postgres advisory lock so
  * that concurrent cold starts (e.g. serverless) can't race the DDL/seed. Cached
  * as a module-level promise so it runs at most once per instance.
+ *
+ * Only a boot that succeeded is kept. One that failed (the database briefly
+ * unreachable, a statement chosen as a deadlock victim against another
+ * instance's traffic) is forgotten once its callers have its error, so the
+ * next query boots again. (The rejected promise used to be kept, and every
+ * query of that instance failed with it until a restart.) Every boot step is
+ * idempotent, so a second run is safe.
  */
 function ready(): Promise<void> {
-  if (!global.__compassInit) global.__compassInit = initialize();
+  if (!global.__compassInit) {
+    const boot = initialize();
+    global.__compassInit = boot;
+    boot.catch(() => {
+      if (global.__compassInit === boot) global.__compassInit = undefined;
+    });
+  }
   return global.__compassInit;
 }
 
@@ -2661,27 +2674,40 @@ async function syncPresetRoles(client: import("pg").PoolClient) {
  * trigger. For something that decides whether a user has any permissions at
  * all, self-healing beats a one-shot flag.
  */
-async function migrateLadderToAssignments(client: import("pg").PoolClient) {
-  // A user deleted while this runs (its snapshot still saw them) fails the
-  // FK check (23503), which ON CONFLICT doesn't cover. Boot runs these
-  // statements outside a transaction, so the next attempt takes a fresh
-  // snapshot without that user; a startup never fails over it.
+export async function migrateLadderToAssignments(client: import("pg").PoolClient) {
+  // The users it fills in are locked FOR KEY SHARE as they are read (what the
+  // new rows' foreign key check takes anyway), skipping any user another
+  // transaction is deleting. Without that the check locked them one by one
+  // in its own order, and a statement deleting several users in another
+  // order (an admin's bulk removal on a running instance, an integration
+  // test's teardown) deadlocked with it: one held user A and wanted B, the
+  // other held B and wanted A (40P01). Postgres aborts one of the two, so
+  // either a boot or the deletion failed. A skipped user is being deleted;
+  // if that rolls back, the next boot fills it in.
+  //
+  // A user deleted after the read still fails the FK check (23503), which ON
+  // CONFLICT doesn't cover, and a deadlock remains possible against a writer
+  // this does not foresee. Boot runs these statements outside a transaction,
+  // so the next attempt takes a fresh snapshot; a startup never fails over it.
   for (let attempt = 1; ; attempt++) {
     try {
       const { rowCount } = await client.query(
         `INSERT INTO role_assignments (role_id, user_id, scope_type)
-         SELECT r.id, u.id, 'global'
-           FROM users u JOIN roles r ON r.key = u.role AND r.is_builtin
-          WHERE NOT EXISTS (
-            SELECT 1 FROM role_assignments ra
-             WHERE ra.user_id = u.id AND ra.role_id = r.id AND ra.scope_type = 'global')
+         SELECT m.role_id, m.user_id, 'global'
+           FROM (SELECT r.id AS role_id, u.id AS user_id
+                   FROM users u JOIN roles r ON r.key = u.role AND r.is_builtin
+                  WHERE NOT EXISTS (
+                    SELECT 1 FROM role_assignments ra
+                     WHERE ra.user_id = u.id AND ra.role_id = r.id AND ra.scope_type = 'global')
+                    FOR KEY SHARE OF u SKIP LOCKED) m
          ON CONFLICT DO NOTHING`
       );
       if (rowCount) console.log(`[rbac] backfilled ${rowCount} role assignment(s) from the ladder`);
       return;
     } catch (e) {
-      if ((e as { code?: string }).code !== "23503" || attempt >= 3) throw e;
-      console.warn("[rbac] a user went away during the ladder backfill; retrying");
+      const code = (e as { code?: string }).code;
+      if ((code !== "23503" && code !== "40P01") || attempt >= 3) throw e;
+      console.warn(code === "23503" ? "[rbac] a user went away during the ladder backfill; retrying" : "[rbac] the ladder backfill deadlocked with another writer; retrying");
     }
   }
 }

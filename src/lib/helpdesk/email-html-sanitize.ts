@@ -15,7 +15,13 @@
 //   2. The worker sanitises one email at a time and gets 3 seconds for it.
 //      Past that it is stopped (terminated, so the work really ends) and the
 //      email is refused ("timeout"); the next email gets a fresh worker. At
-//      most 8 emails wait their turn; more is "busy".
+//      most 8 emails wait their turn; more is "busy". A fresh worker's start
+//      (the thread, loading jsdom and DOMPurify: about a second) is not the
+//      email's time: its 3 seconds begin when the worker says it is ready.
+//      Before, the first email after a start or a timeout lost that second,
+//      so the same email was shown or refused depending on whether the
+//      worker happened to be warm. The start has its own bound
+//      (WORKER_START_MS; past it the email is "failed").
 //
 // The worker file is found by its path from the working directory, which is
 // the project in development and in tests, and the standalone folder in
@@ -66,6 +72,8 @@ export function htmlComplexity(html: string): HtmlShape {
 // --- The worker -------------------------------------------------------------------------
 
 export const SANITIZE_TIMEOUT_MS = 3000;
+/** How long a fresh worker may take to load before the email it was started for is answered "failed". */
+const WORKER_START_MS = 20_000;
 const QUEUE_MAX = 8;
 
 /** Where the worker file is: the project in development and tests, the standalone folder in production. */
@@ -81,6 +89,8 @@ interface Job {
 }
 
 let worker: Worker | null = null;
+/** The worker has loaded and is listening (its { ready } message). */
+let workerReady = false;
 let current: { job: Job; timer: NodeJS.Timeout } | null = null;
 const queue: Job[] = [];
 let nextId = 1;
@@ -100,6 +110,18 @@ function finish(result: SanitizeResult): void {
   pump();
 }
 
+/** The email in hand gets its own time from now: SANITIZE_TIMEOUT_MS, or what a test set. */
+function startEmailClock(): void {
+  if (!current) return;
+  clearTimeout(current.timer);
+  current.timer = setTimeout(() => {
+    // Past its time: the worker is stopped (its work really ends) and the next email gets a fresh one.
+    logEvent("warn", "helpdesk.email_html_timeout", { ms: timeoutMs });
+    dropWorker();
+    finish({ ok: false, reason: "timeout" });
+  }, timeoutMs);
+}
+
 function dropWorker(): void {
   const w = worker;
   worker = null;
@@ -113,8 +135,15 @@ function startWorker(): Worker | null {
     return null;
   }
   const w = new Worker(file, { workerData: { role: "email-html" }, resourceLimits: { maxOldGenerationSizeMb: 512 } });
-  w.on("message", (m: { id: number; result: SanitizeResult }) => {
-    if (current && worker === w && m.id === current.job.id) finish(m.result);
+  workerReady = false;
+  w.on("message", (m: { id: number; result: SanitizeResult } | { ready: true }) => {
+    if (worker !== w) return;
+    if ("ready" in m) {
+      workerReady = true;
+      startEmailClock();
+      return;
+    }
+    if (current && m.id === current.job.id) finish(m.result);
   });
   const lost = () => {
     if (worker !== w) return;
@@ -147,13 +176,14 @@ function pump(): void {
     pump();
     return;
   }
-  const timer = setTimeout(() => {
-    // Past its time: the worker is stopped (its work really ends) and the next email gets a fresh one.
-    logEvent("warn", "helpdesk.email_html_timeout", { ms: timeoutMs });
+  // A worker still loading: its start is bounded on its own, and the email's time begins when it is ready.
+  const starting = setTimeout(() => {
+    logEvent("error", "helpdesk.email_html_worker_start_timeout", { ms: WORKER_START_MS });
     dropWorker();
-    finish({ ok: false, reason: "timeout" });
-  }, timeoutMs);
-  current = { job, timer };
+    finish({ ok: false, reason: "failed" });
+  }, WORKER_START_MS);
+  current = { job, timer: starting };
+  if (workerReady) startEmailClock();
   worker.postMessage({ id: job.id, html: job.html, opts: job.opts });
 }
 

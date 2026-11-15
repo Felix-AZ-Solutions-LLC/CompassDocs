@@ -31,6 +31,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -281,7 +282,11 @@ function png(size: number): Buffer {
 const QUOTED = `<div dir="ltr"><p>Still broken after the restart.</p></div>
 <div class="gmail_quote"><div class="gmail_attr">On Mon, Ana wrote:</div><blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex">Please restart the laptop.</blockquote></div>`;
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   uploads = await mkdtemp(path.join(tmpdir(), "compass-email-html-"));
   process.env.COMPASSDOCS_UPLOAD_DIR = uploads;
@@ -336,6 +341,7 @@ after(async () => {
   await pool().query("DELETE FROM roles WHERE id = ANY($1)", [roleIds]);
   await pool().query("DELETE FROM users WHERE id = ANY($1)", [everyone]);
   await rm(uploads, { recursive: true, force: true });
+  await mailLock?.release(email);
   await pool().end();
 });
 

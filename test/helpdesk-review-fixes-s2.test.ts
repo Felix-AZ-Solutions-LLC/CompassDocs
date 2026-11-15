@@ -17,17 +17,18 @@
 // Fixtures are this file's own (a team with a unique alias, accounts,
 // integrations, tickets). The pipeline is driven with outsideSenders and
 // trustUnverified given. The few global settings the webhook path and the
-// trust setting need are written under one advisory lock and restored.
+// trust setting need are written and restored while the file holds the
+// workspace mail lock exclusively (test/support/mail-lock).
 //
 // Run: DATABASE_URL=… npx tsx --tsconfig ./tsconfig.test.json --test test/helpdesk-review-fixes-s2.test.ts
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import type { PoolClient } from "pg";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
@@ -222,7 +223,11 @@ function assertInert(md: string, allowedLinks: string[] = []) {
   }
 }
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // One block below sets the workspace's inbound address and secret: no other file's mail meanwhile (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("exclusive");
   await getSetting("__schema_bootstrap__");
   await integrations.ensureIntakeSchema();
   uploadDirectory = await mkdtemp(path.join(tmpdir(), "compass-hds2-"));
@@ -269,6 +274,7 @@ after(async () => {
   await pool().query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await rm(uploadDirectory, { recursive: true, force: true });
+  await mailLock?.release(email);
   await pool().end();
 });
 
@@ -574,14 +580,10 @@ describe("#37 unbound uploads have a per-person quota", () => {
 
 // --- Global settings: the webhook path, the trust setting, note notices ---------------------------------
 
-describe("with the inbound address configured (global settings, under a lock)", () => {
-  const LOCK = 728351;
-  let lockClient: PoolClient | null = null;
+describe("with the inbound address configured (global settings; the file holds the mail lock)", () => {
   let saved: { secret: string; address: string; auth: string | undefined } = { secret: "", address: "", auth: undefined };
 
   before(async () => {
-    lockClient = await pool().connect();
-    await lockClient.query("SELECT pg_advisory_lock($1)", [LOCK]);
     const s = await settingsLib.getHelpdeskSettings();
     saved = { secret: s.inbound_secret, address: s.inbound_address, auth: await getSetting(inbound.HD_INBOUND_AUTH_KEY) };
     await settingsLib.saveHelpdeskSettings({
@@ -594,10 +596,6 @@ describe("with the inbound address configured (global settings, under a lock)", 
     await settingsLib.saveHelpdeskSettings({ inbound_secret: saved.secret, inbound_address: saved.address });
     if (saved.auth === undefined) await pool().query("DELETE FROM settings WHERE key = $1", [inbound.HD_INBOUND_AUTH_KEY]);
     else await pool().query("UPDATE settings SET value = $2 WHERE key = $1", [inbound.HD_INBOUND_AUTH_KEY, saved.auth]);
-    if (lockClient) {
-      await lockClient.query("SELECT pg_advisory_unlock($1)", [LOCK]).catch(() => {});
-      lockClient.release();
-    }
   });
 
   test("#5 a Manager (sla.manage, csat.manage) reads the settings without the webhook path; channels.manage gets it", async () => {

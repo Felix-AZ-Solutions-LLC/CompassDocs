@@ -47,9 +47,11 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
-import { fakeHardware, fakePerson, fakeSnipeItTransport, startFakeSnipeIt, type FakeSnipeItState, type Obj } from "./support/fake-snipeit";
+import { syncAlone, sweepAlone } from "./support/asset-sync";
+import { fakeHardware, fakePerson, fakeSnipeItTransport, holdNext, startFakeSnipeIt, type FakeSnipeItState, type Obj } from "./support/fake-snipeit";
 import { pool, getSetting, createSession, getUserById } from "../src/lib/db";
 import { newToken } from "../src/lib/password";
 import { fixtureQuery } from "./support/retry";
@@ -224,6 +226,11 @@ const cacheId = async (externalId: number) =>
 
 const SYNC_KEY = `helpdesk_assets_sync:${PROVIDER}`;
 /** Set the sync record's times to "<interval> ago" on the database's clock. */
+// This file's source synced, and the sweep, as the workspace would run them with no other
+// source syncing (test/support/asset-sync: another file's claim can hold the shared key).
+const sync = (opts: { force?: boolean } = { force: true }) => syncAlone(assets, PROVIDER, opts);
+const sweep = () => sweepAlone(assets, PROVIDER);
+
 async function setSync(v: { started_at: string; heartbeat_at: string; at: string | null; run_id?: string }) {
   const ago = (i: string | null) => (i === null ? "NULL::text" : `to_char((now() - interval '${i}') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`);
   await pool().query(
@@ -237,7 +244,11 @@ const REQ_ASSET = 5001;
 const REQ2_ASSET = 5002;
 const MONITOR = 5003;
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   roles.setRoleMatrixForTests(roles.HD_DEFAULT_MATRIX);
   email.setHelpdeskTransportForTests(async () => {});
@@ -290,6 +301,7 @@ after(async () => {
   await pool().query("DELETE FROM notifications WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await mailLock?.release(email);
   await pool().end();
 });
 
@@ -507,7 +519,7 @@ describe("the HTTP layer", () => {
       assert.ok(!echo.message.includes(KEY), echo.message);
       assert.match(echo.message, /\[key\]/);
       fake.fail.set("/api/v1/hardware", { status: 500, times: 1 });
-      const r = await assets.syncProvider(PROVIDER, { force: true });
+      const r = await sync();
       assert.equal(r.ok, false);
       assert.ok(!JSON.stringify(r).includes(KEY));
       const state = await getSetting(`helpdesk_assets_sync:${PROVIDER}`);
@@ -528,7 +540,7 @@ describe("the Snipe-IT client and the cache", () => {
   test("a full sync pages by id, 500 at a time, backs off on 429, and upserts everything", async () => {
     fake.seen.length = 0;
     fake.fail.set("/api/v1/hardware", { status: 429, headers: { "retry-after": "0" }, times: 1 });
-    const r = await assets.syncProvider(PROVIDER, { force: true });
+    const r = await sync();
     assert.equal(r.ok, true, r.error);
     assert.equal(r.seen, 1206);
     const pages = fake.seen.filter((s) => s.path.startsWith("/api/v1/hardware?limit=500"));
@@ -551,28 +563,31 @@ describe("the Snipe-IT client and the cache", () => {
   });
 
   test("not due within 30 minutes (the database's clock); one run at a time; the sweep only syncs when due", async () => {
-    assert.deepEqual(await assets.syncProvider(PROVIDER), { ran: false, skipped: "not_due" });
-    const [a, b] = await Promise.all([assets.syncProvider(PROVIDER, { force: true }), assets.syncProvider(PROVIDER, { force: true })]);
+    assert.deepEqual(await sync({}), { ran: false, skipped: "not_due" });
+    const [a, b] = await Promise.all([sync(), sync()]);
     assert.equal([a, b].filter((x) => x.skipped === "running").length, 1, "the second waits its turn");
     const rec = JSON.parse((await getSetting(SYNC_KEY))!);
     assert.ok(rec.at >= rec.started_at && rec.heartbeat_at >= rec.started_at, "every time from one clock: a finished run never looks live");
     assert.equal((await assets.syncState(PROVIDER)).running, false);
-    assert.deepEqual(await assets.assetsSweep(), [{ ran: false, skipped: "not_due" }]);
+    assert.deepEqual(await sweep(), [{ ran: false, skipped: "not_due" }]);
     await setSync({ started_at: "32 minutes", heartbeat_at: "32 minutes", at: "31 minutes" });
-    const later = await assets.assetsSweep();
+    const later = await sweep();
     assert.equal(later[0].ran, true);
   });
 
   test("a run is live while its heartbeat is fresh, taken over once it's stale, and a run taken over writes nothing", async () => {
     await setSync({ started_at: "20 minutes", heartbeat_at: "1 minute", at: null, run_id: "other" });
-    assert.deepEqual(await assets.syncProvider(PROVIDER, { force: true }), { ran: false, skipped: "running" }, "a long run with a fresh heartbeat");
+    assert.deepEqual(await sync(), { ran: false, skipped: "running" }, "a long run with a fresh heartbeat");
     assert.equal((await assets.syncState(PROVIDER)).running, true);
     await setSync({ started_at: "20 minutes", heartbeat_at: "6 minutes", at: null, run_id: "other" });
-    assert.equal((await assets.syncProvider(PROVIDER, { force: true })).ok, true, "a stale heartbeat: the run died");
-    fake.fail.set("/api/v1/hardware", { status: 429, headers: { "retry-after": "1" }, times: 1 });
-    const run = assets.syncProvider(PROVIDER, { force: true });
-    await new Promise((r) => setTimeout(r, 400));
+    assert.equal((await sync()).ok, true, "a stale heartbeat: the run died");
+    // The run claims the record, then asks for its first page; it is held there (no sleep: the
+    // take-over lands after the claim and before the first write, whatever the machine's speed).
+    const gate = holdNext(fake, "/api/v1/hardware");
+    const run = sync();
+    await gate.reached;
     await pool().query(`UPDATE settings SET value = jsonb_set(value::jsonb, '{run_id}', '"thief"')::text WHERE key = $1`, [SYNC_KEY]);
+    gate.release();
     const r = await run;
     assert.equal(r.error, "Another sync took over.");
     const after = JSON.parse((await getSetting(SYNC_KEY))!);
@@ -587,12 +602,12 @@ describe("the Snipe-IT client and the cache", () => {
     await pool().query("INSERT INTO hd_ticket_assets (ticket_id, asset_id) VALUES ($1, $2)", [t.id, linkedId]);
     const dropped = fake.hardware.splice(0, 2);
     try {
-      const first = await assets.syncProvider(PROVIDER, { force: true });
+      const first = await sync();
       assert.equal(first.complete, true);
       assert.equal(first.removed, 0, "missed once: kept");
       assert.ok(await cacheId(2));
       assert.equal((await assets.getAsset(linkedId))!.gone, false);
-      const second = await assets.syncProvider(PROVIDER, { force: true });
+      const second = await sync();
       assert.equal(second.removed, 1);
       assert.equal(second.gone, 1);
       assert.equal(await cacheId(2), undefined, "unlinked: deleted");
@@ -601,7 +616,7 @@ describe("the Snipe-IT client and the cache", () => {
     } finally {
       fake.hardware.unshift(...dropped);
     }
-    await assets.syncProvider(PROVIDER, { force: true });
+    await sync();
     assert.equal((await assets.getAsset(linkedId))!.gone, false, "back in the source: not gone");
   });
 
@@ -611,8 +626,8 @@ describe("the Snipe-IT client and the cache", () => {
     await pool().query("INSERT INTO hd_ticket_assets (ticket_id, asset_id) VALUES ($1, $2)", [t.id, id]);
     fake.hideFromList.add(3);
     try {
-      await assets.syncProvider(PROVIDER, { force: true });
-      const r = await assets.syncProvider(PROVIDER, { force: true });
+      await sync();
+      const r = await sync();
       assert.equal(r.gone, 0);
       assert.equal((await assets.getAsset(id))!.gone, false);
       assert.equal((await pool().query("SELECT missing_since FROM hd_assets WHERE id = $1", [id])).rows[0].missing_since, null, "found by id: seen");
@@ -626,14 +641,14 @@ describe("the Snipe-IT client and the cache", () => {
     try {
       await pool().query("UPDATE hd_assets SET missing_since = now() - interval '1 hour' WHERE provider = $1 AND external_id IN ('1', '2')", [PROVIDER]);
       snipe.setSnipeItPagingForTests({ page: 500, maxPages: 1 });
-      const capped = await assets.syncProvider(PROVIDER, { force: true });
+      const capped = await sync();
       snipe.setSnipeItPagingForTests(null);
       assert.equal(capped.complete, false);
       assert.equal(capped.ok, false);
       assert.match(capped.error!, /stopped after 500 of 1,20\d assets, so nothing was removed/);
       assert.ok(await cacheId(2), "not removed");
       fake.extraTotal = 5;
-      const short = await assets.syncProvider(PROVIDER, { force: true });
+      const short = await sync();
       assert.equal(short.complete, false, "an empty page before the reported total");
       assert.ok(await cacheId(2), "still not removed");
       assert.equal((await assets.syncState(PROVIDER)).ok, false);
@@ -642,7 +657,7 @@ describe("the Snipe-IT client and the cache", () => {
       fake.extraTotal = 0;
       fake.hardware.unshift(...dropped);
     }
-    assert.equal((await assets.syncProvider(PROVIDER, { force: true })).ok, true);
+    assert.equal((await sync()).ok, true);
   });
 
   test("lookups: bytag (found, 200-error), byserial, a person's assets, one asset, maintenance and suppliers", async () => {
@@ -793,7 +808,7 @@ describe("linking assets to tickets", () => {
   });
 
   test("with search-all off: search finds only the agent's people's assets; the requester's own can still be linked", async () => {
-    await assets.syncProvider(PROVIDER, { force: true });
+    await sync();
     assets.setAssetSettingsForTests(SETTINGS({}, false));
     try {
       const tb = await ticket("Team B ticket", "req2", "B");
@@ -1049,7 +1064,12 @@ describe("Desk settings → Assets", () => {
   });
 
   test("Sync now: audited, answers with the result", async () => {
-    const r = await call(adminSyncRoute.POST, req("/admin/assets/sync", P.admin.session, {}));
+    // "Already running" from another file's claim on the shared key, while nothing runs here, is asked again (test/support/asset-sync).
+    let r = await call(adminSyncRoute.POST, req("/admin/assets/sync", P.admin.session, {}));
+    for (let i = 0; i < 200 && r.status === 409 && /already running/.test(r.body?.error) && !(await assets.syncState(PROVIDER)).running; i++) {
+      await new Promise((res) => setTimeout(res, 50));
+      r = await call(adminSyncRoute.POST, req("/admin/assets/sync", P.admin.session, {}));
+    }
     assert.equal(r.status, 200, r.text);
     assert.equal(r.body.ok, true);
     assert.equal(r.body.running, false);
@@ -1203,7 +1223,7 @@ describe("merge and the ten-asset limit", () => {
 
   before(async () => {
     assets.setAssetSettingsForTests(SETTINGS());
-    await assets.syncProvider(PROVIDER, { force: true });
+    await sync();
   });
 
   test("merging 6 + 7 links: all 13 move to the kept ticket (the limit is for linking by hand); an 11th by hand is refused", async () => {
@@ -1337,7 +1357,7 @@ describe("after Snipe-IT is disconnected", () => {
   before(async () => {
     // As stored after a first save: the cache remembers its address, so reconnecting it is no new source.
     assets.setAssetSettingsForTests({ ...SETTINGS(), cache_source: "https://snipe.test" });
-    await assets.syncProvider(PROVIDER, { force: true });
+    await sync();
     linkedId = (await cacheId(400))!;
     unlinkedId = (await cacheId(401))!;
     wrongId = (await cacheId(402))!;
@@ -1491,7 +1511,7 @@ describe("after Snipe-IT is disconnected", () => {
 
 describe("changing the Snipe-IT address", () => {
   test("the old rows are retired: linked ones kept as gone under a retired key, the rest deleted; a sync never re-points a link", async () => {
-    await assets.syncProvider(PROVIDER, { force: true });
+    await sync();
     const t = await ticket("Old instance");
     const oldId = (await cacheId(5))!;
     await pool().query("INSERT INTO hd_ticket_assets (ticket_id, asset_id) VALUES ($1, $2)", [t.id, oldId]);
@@ -1511,7 +1531,7 @@ describe("changing the Snipe-IT address", () => {
     assert.equal(linked.assets[0].provider_label, "Snipe-IT");
     // The new instance has its own asset 5: a sync adds it as a new row; the ticket keeps the old device.
     assets.setAssetSettingsForTests({ ...SETTINGS(), cache_source: "https://snipe.test" });
-    await assets.syncProvider(PROVIDER, { force: true });
+    await sync();
     assert.notEqual(await cacheId(5), oldId);
     assert.deepEqual((await pool().query("SELECT asset_id FROM hd_ticket_assets WHERE ticket_id = $1", [t.id])).rows.map((r) => r.asset_id), [oldId]);
     await pool().query("DELETE FROM hd_ticket_assets WHERE ticket_id = $1", [t.id]);

@@ -29,6 +29,7 @@ import { pool, getSetting, createSession } from "../src/lib/db";
 import { newToken } from "../src/lib/password";
 import { fixtureQuery } from "./support/retry";
 import { fakeDevice, fakeIntuneTransport, startFakeIntune, type FakeIntuneState } from "./support/fake-intune";
+import { syncAlone } from "./support/asset-sync";
 
 process.env.COMPASSDOCS_SECRET_KEY ||= "7c4f0d5e8a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5";
 
@@ -297,7 +298,7 @@ describe("Intune's own app registration", () => {
     s = await assets.getAssetSettings();
     assert.deepEqual([s.intune?.cache_source, s.intune?.secret], [TID, OWN.secret]);
     // It syncs, with directory sync still unlicensed and not set up.
-    const sync = await assets.syncProvider(INTUNE, { force: true });
+    const sync = await syncAlone(assets, INTUNE);
     assert.equal(sync.ok, true, JSON.stringify(sync));
     assert.deepEqual((await rows()).map((x) => x.external_id), ["d-1"]);
     assert.equal((await assets.testIntune()).ok, true);
@@ -556,7 +557,7 @@ describe("the one-click setup's core side (1.20.4)", () => {
     // Microsoft is ready: Test connection and the sync work with what was saved.
     assert.deepEqual(await assets.testIntune(), { ok: true, total: 1, tenant: TID, tag: assets.credTag({ tenant: TID, clientId: OWN.client_id }) });
     await pool().query("DELETE FROM hd_assets WHERE provider LIKE $1", [`${INTUNE}%`]);
-    const sync = await assets.syncProvider(INTUNE, { force: true });
+    const sync = await syncAlone(assets, INTUNE);
     assert.equal(sync.ok, true, JSON.stringify(sync));
     assert.deepEqual((await rows()).map((x) => x.external_id), ["d-1"]);
     assert.equal((await audited()).length, had, "the library audits nothing: the caller does, as the route does");

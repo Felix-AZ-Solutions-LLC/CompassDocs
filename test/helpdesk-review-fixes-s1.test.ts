@@ -25,6 +25,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -257,7 +258,11 @@ const spaceGrants = async (userId: number) =>
 const decide = (who: Person, approvalId: number, body: unknown) =>
   call(approvalRoute.POST as AnyHandler, req(`/approvals/${approvalId}`, who.session, body), { id: String(approvalId) });
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   await pool().query(roles.HD_ROLES_SCHEMA);
   uploadDirectory = await mkdtemp(path.join(tmpdir(), "compass-hds1-"));
@@ -340,6 +345,7 @@ after(async () => {
   await pool().query("DELETE FROM directory_people WHERE id = ANY($1)", [dps.rows.map((r) => r.id)]);
   await pool().query("DELETE FROM spaces WHERE id = ANY($1)", [spaceIds]);
   await rm(uploadDirectory, { recursive: true, force: true });
+  await mailLock?.release(email);
   await pool().end();
 });
 
