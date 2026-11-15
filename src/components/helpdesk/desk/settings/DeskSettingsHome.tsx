@@ -23,9 +23,13 @@ export function DeskSettingsHome({ viewer }: { viewer: DeskSettingsViewer }) {
   return (
     <PageContainer>
       <PageHeader icon={<Settings />} title="Settings" subtitle="How the desk works. Search for a setting, or pick a section." />
-      <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3" data-testid="desk-settings-home">
+      {/* 1.20.16: columns, not a grid. The groups differ a lot in length (General has two
+          sections, Requesters four with long lines), so grid rows left tall gaps under the short
+          cards; columns stack each card straight under the one above. Reading order stays the
+          DOM order (down each column). */}
+      <div className="gap-4 md:columns-2 xl:columns-3" data-testid="desk-settings-home">
         {groups.map((g) => (
-          <section key={g.label} className={`${CARD_CLASS} p-4`} aria-label={g.label}>
+          <section key={g.label} className={`${CARD_CLASS} mb-4 break-inside-avoid p-4`} aria-label={g.label}>
             <CardTitle as="h2" className="mb-2 px-2">
               {g.label}
             </CardTitle>

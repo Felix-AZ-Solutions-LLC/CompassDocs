@@ -38,6 +38,10 @@ Claude drafts categories, automations and recurring tickets.
   person under Notify, and a shared macro by name even when you can't manage
   it.
 
+### Fixed
+- **No more gaps on the Desk settings overview.** The group cards now stack
+  in columns, so a short card no longer leaves empty space under it.
+
 ### Security
 - **Publishing is explicit and checks what you reviewed.** A draft is
   published only from its review, and only if it is the draft you looked at,
