@@ -43,15 +43,22 @@ test.describe("long links in the desk conversation (licensed)", () => {
         ticket = t.body.ticket.number;
       }
       await page.goto(`/desk/tickets/${ticket}`);
-      const link = page.locator(`a[href^="https://login-us.mimecast.com/"]`).first();
+      // The link inside the message's prose (1.20.11: the conversation may
+      // re-render once as the agent's desk preferences arrive, so measure
+      // the settled element, read fresh each time).
+      const link = page.locator(`.doc-prose a[href^="https://login-us.mimecast.com/"]`).first();
       await expect(link).toBeVisible();
-      const fits = await link.evaluate((a) => {
-        let card: HTMLElement | null = a.parentElement;
-        while (card && !card.classList.contains("doc-prose")) card = card.parentElement;
-        const box = card!.getBoundingClientRect();
-        const chip = a.getBoundingClientRect();
-        return { chipRight: Math.round(chip.right), proseRight: Math.round(box.right), scroll: card!.scrollWidth, client: card!.clientWidth };
-      });
+      const measure = () =>
+        page.evaluate(() => {
+          const a = document.querySelector<HTMLElement>(`.doc-prose a[href^="https://login-us.mimecast.com/"]`);
+          const card = a?.closest<HTMLElement>(".doc-prose");
+          if (!a || !card) return null;
+          const box = card.getBoundingClientRect();
+          const chip = a.getBoundingClientRect();
+          return { chipRight: Math.round(chip.right), proseRight: Math.round(box.right), scroll: card.scrollWidth, client: card.clientWidth };
+        });
+      await expect.poll(measure, { timeout: 10_000 }).not.toBeNull();
+      const fits = (await measure())!;
       expect(fits.chipRight, JSON.stringify(fits)).toBeLessThanOrEqual(fits.proseRight + 1);
       expect(fits.scroll, JSON.stringify(fits)).toBeLessThanOrEqual(fits.client + 1);
       // Nothing scrolls the page sideways either.
