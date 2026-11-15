@@ -1,4 +1,5 @@
 // GET  /api/helpdesk/admin/automations   every automation, in run order, with the event labels
+//      (1.20.16, additive: in_words / draft_in_words, people (desk agents), macros (names))
 // POST /api/helpdesk/admin/automations   { name, event, conditions?, actions, active?, position? }
 // Helpdesk 1.19.0 (automations.manage, agent J's capability). Audited as helpdesk.automation.created.
 // 1.20.16: POST { draft: true, card_id } is "Save as draft" on a Claude in the desk automation card:
@@ -22,15 +23,35 @@ import {
   createAutomation,
   listAutomations,
   validateAutomationInput,
+  automationsInWords,
   type AutomationInput,
 } from "@/lib/helpdesk/automations";
+import { listDeskAgents } from "@/lib/helpdesk/roles-agents";
+import { hq } from "@/lib/helpdesk/db-core";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const gate = await hdCapGate("automations.manage");
   if (gate instanceof NextResponse) return gate;
-  return NextResponse.json({ automations: await listAutomations(), events: HD_AUTOMATION_EVENT_LABEL });
+  // 1.20.16 (additive): each rule in plain words (and its draft's), the desk agents a rule can assign
+  // or notify, and the names of the macros rules send, so a reviewer sees every action.
+  const automations = await listAutomations();
+  const shapes = automations.flatMap((a) => (a.draft ? [a, a.draft] : [a]));
+  const words = await automationsInWords(shapes);
+  let k = 0;
+  const withWords = automations.map((a) => ({ ...a, in_words: words[k++], draft_in_words: a.draft ? words[k++] : null }));
+  const macroIds = [...new Set(shapes.map((a) => a.actions?.macro_id).filter((x): x is number => !!x))];
+  const [agents, macros] = await Promise.all([
+    listDeskAgents(),
+    macroIds.length ? hq<{ id: number; title: string; owner_id: number | null }>("SELECT id, title, owner_id FROM hd_macros WHERE id = ANY($1::int[])", [macroIds]) : [],
+  ]);
+  return NextResponse.json({
+    automations: withWords,
+    events: HD_AUTOMATION_EVENT_LABEL,
+    people: agents.filter((a) => a.role !== null).map((a) => ({ id: a.user_id, name: a.name || a.username })),
+    macros: macros.map((m) => ({ id: m.id, title: m.title, shared: m.owner_id === null })),
+  });
 }
 
 export async function POST(req: Request) {

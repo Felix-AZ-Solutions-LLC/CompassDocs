@@ -540,7 +540,7 @@ function CategoryDraftReview({ draft, onDone }: { draft: HdCategoryDraft; onDone
   }
 
   return (
-    <ClaudeDraftStrip changes askedBy={draft.draft_by_name} at={draft.draft_at} className="mb-4" id="claude-category-draft">
+    <ClaudeDraftStrip changes askedBy={draft.draft_by_name} editedBy={draft.edited_by_name ?? ""} at={draft.draft_at} className="mb-4" id="claude-category-draft">
       <p>Review the changes below. Agents keep picking from the list as it is until you publish them.</p>
       <ul role="list" aria-label="Proposed changes" className="mt-3 space-y-2">
         {changes.map((c, i) => (

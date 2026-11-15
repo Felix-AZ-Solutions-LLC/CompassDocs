@@ -39,6 +39,9 @@
 //                              hd_categories only, so a draft name can't be
 //                              set on a ticket until it is published (which
 //                              runs the same create and rename as the page).
+//                              edited_by(_name): the person who last edited it
+//                              on the page (review fix; their save renews
+//                              draft_at, so a publish names that version).
 
 export const HD_CATEGORIES_SCHEMA = `
 CREATE TABLE IF NOT EXISTS hd_categories (
@@ -64,4 +67,6 @@ CREATE TABLE IF NOT EXISTS hd_category_draft (
   draft_via text NOT NULL DEFAULT '',
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE hd_category_draft ADD COLUMN IF NOT EXISTS edited_by integer REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE hd_category_draft ADD COLUMN IF NOT EXISTS edited_by_name text NOT NULL DEFAULT '';
 `;

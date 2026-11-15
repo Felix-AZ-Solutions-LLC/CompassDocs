@@ -12,6 +12,7 @@ import { RelativeTime } from "@/components/RelativeTime";
 export function ClaudeDraftStrip({
   changes,
   askedBy,
+  editedBy = "",
   at,
   children,
   className = "",
@@ -20,6 +21,8 @@ export function ClaudeDraftStrip({
   /** True: changes beside something live ("Changes from Claude"); false: a new draft ("Draft from Claude"). */
   changes: boolean;
   askedBy: string;
+  /** Review fix: who last edited the draft on the page, when someone has. */
+  editedBy?: string;
   at: string | null;
   /** The sentence (and anything else) under the title line. */
   children: React.ReactNode;
@@ -42,7 +45,8 @@ export function ClaudeDraftStrip({
         <span className="text-xs text-slate-500">
           {askedBy ? `asked by ${askedBy} · ` : ""}
           {at && <RelativeTime value={at} />}
-          {at ? " · " : ""}not published
+          {at ? " · " : ""}
+          {editedBy ? `edited by ${editedBy} · ` : ""}not published
         </span>
       </div>
       <div className="mt-1.5 text-sm text-slate-700 sm:pl-9">{children}</div>

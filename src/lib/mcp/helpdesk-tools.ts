@@ -1758,11 +1758,9 @@ async function listAutomationsTool(a: Args, ctx: Ctx) {
     });
   }
   const rules = (await au.listAutomations()).slice(0, AUTOMATION_LIST_MAX);
-  const out = [];
-  for (const [i, r] of rules.entries()) {
-    const w = await au.automationInWords(r);
-    out.push({ id: r.id, order: i + 1, name: r.name, status: draftStatus(r, r.active ? "on" : "off"), when: w.when, if: w.if, then: w.then });
-  }
+  // Review fix: one batch of name lookups for every rule (not a handful of queries per rule).
+  const words = await au.automationsInWords(rules);
+  const out = rules.map((r, i) => ({ id: r.id, order: i + 1, name: r.name, status: draftStatus(r, r.active ? "on" : "off"), when: words[i].when, if: words[i].if, then: words[i].then }));
   return toolJson({ automations: out, note: "Rules run in this order, first to last, on each event.", edit_url: settingsUrl(ctx, "automations") });
 }
 

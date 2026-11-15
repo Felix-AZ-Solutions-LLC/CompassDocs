@@ -4645,7 +4645,14 @@ live in `components/helpdesk/desk/checklists`.
   out"), then ghost **Discard changes**, secondary **Save draft**
   (enabled when edited), primary **Publish changes** (confirmed when it
   renames). `?id=` opens the rule or schedule, and scrolls to and tints a
-  category row.
+  category row. An automation's strip also holds **What this rule will
+  do** (a bordered `bg-surface` box, `text-xs`, the server's plain words:
+  When, If, Then and each action, naming who is assigned or notified and
+  which macro reply is sent), read-only above the editable form; the form
+  shows every action a rule can carry (Assign to, Notify with each desk
+  agent by name, a shared macro by name even when the reviewer can't
+  manage it). The strip's line adds "edited by {person}" once someone has
+  edited the draft.
 - **Claude in the desk's settings draft cards** (1.20.16) are the
   checklist draft card's shape with `FolderTree` (categories), `Bot`
   (an automation) or `Repeat` (a recurring ticket): the title, the hint,

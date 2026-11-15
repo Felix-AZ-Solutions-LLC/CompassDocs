@@ -202,6 +202,12 @@ async function call(handler: unknown, who: string, url: string, method = "GET", 
   }
 }
 const patchRule = (who: string, id: number, body: Record<string, unknown>) => call(autoOneRoute.PATCH, who, `/admin/automations/${id}`, "PATCH", body, { id: String(id) });
+/** What the review dialog sends on publish: the rule as shown (the draft's fields, else the row's). */
+async function shown(id: number): Promise<Record<string, unknown>> {
+  const a = (await automations.getAutomation(id))!;
+  const d = a.draft ?? a;
+  return { name: d.name, event: d.event, conditions: d.conditions, actions: d.actions };
+}
 const patchSched = (who: string, id: number, body: Record<string, unknown>) => call(recOneRoute.PATCH, who, `/admin/recurring/${id}`, "PATCH", body, { id: String(id) });
 const putCatDraft = (who: string, body: Record<string, unknown>) => call(catDraftRoute.PUT, who, "/admin/categories/draft", "PUT", body);
 
@@ -337,11 +343,11 @@ describe("automations: a draft rule never fires until a person publishes it", ()
     assert.equal(saved.body.automation.published, false);
     assert.equal(saved.body.automation.active, 0);
     // Publishing names the reviewed draft: without it, or a wrong one, 409; an agent can't.
-    assert.equal((await patchRule("agent", id, { publish: true })).status, 403);
-    assert.equal((await patchRule("manager", id, { publish: true })).status, 409);
-    assert.equal((await patchRule("manager", id, { publish: true, draft_at: "2001-01-01T00:00:00Z" })).status, 409);
+    assert.equal((await patchRule("agent", id, { ...(await shown(id)), publish: true })).status, 403);
+    assert.equal((await patchRule("manager", id, { ...(await shown(id)), publish: true })).status, 409);
+    assert.equal((await patchRule("manager", id, { ...(await shown(id)), publish: true, draft_at: "2001-01-01T00:00:00Z" })).status, 409);
     const at = (await automations.getAutomation(id))!.draft_at;
-    const pub = await patchRule("manager", id, { publish: true, draft_at: at });
+    const pub = await patchRule("manager", id, { ...(await shown(id)), publish: true, draft_at: at });
     assert.equal(pub.status, 200, JSON.stringify(pub.body));
     assert.equal(pub.body.automation.published, true);
     assert.equal(pub.body.automation.active, 1, "publishing switches it on");
@@ -390,13 +396,13 @@ describe("automations: a draft rule never fires until a person publishes it", ()
     await tool("manager", "hd_draft_automation", { id, name: `Route v2 ${STAMP}`, actions: { tags_add: ["draft-tag"] } });
     await pool().query("UPDATE hd_automations SET active = 0 WHERE id = $1", [id]);
     const at = (await automations.getAutomation(id))!.draft_at;
-    const pub = await patchRule("manager", id, { publish_draft: true, draft_at: at });
+    const pub = await patchRule("manager", id, { ...(await shown(id)), publish_draft: true, draft_at: at });
     assert.equal(pub.status, 200, JSON.stringify(pub.body));
     assert.equal(pub.body.automation.name, `Route v2 ${STAMP}`);
     assert.deepEqual(pub.body.automation.actions, { tags_add: ["draft-tag"] });
     assert.equal(pub.body.automation.active, 0, "publishing changes keeps on/off");
     assert.equal(pub.body.automation.draft, null);
-    assert.equal((await patchRule("manager", id, { publish_draft: true, draft_at: at })).status, 409, "nothing waits any more");
+    assert.equal((await patchRule("manager", id, { ...(await shown(id)), publish_draft: true, draft_at: at })).status, 409, "nothing waits any more");
     await automations.deleteAutomation(id);
   });
 
@@ -458,7 +464,7 @@ describe("automations: a draft rule never fires until a person publishes it", ()
     const seen = row.draft_at;
     await new Promise((res) => setTimeout(res, 20));
     await automations.saveAutomationDraft({ actions: { tags_add: ["newer"] } }, { id: P.manager.id, name: P.manager.name, via: "mcp" }, id);
-    const stale = await patchRule("manager", id, { publish_draft: true, draft_at: seen });
+    const stale = await patchRule("manager", id, { ...(await shown(id)), publish_draft: true, draft_at: seen });
     assert.equal(stale.status, 409);
     assert.match(stale.body.error, /newer draft/);
     assert.equal((await patchRule("manager", id, { discard_draft: true, draft_at: seen })).status, 409, "nor discarded unseen");
@@ -967,6 +973,217 @@ describe("Claude in the desk: draft cards and Save as draft", () => {
     } finally {
       config.setClaudeDeskConfigForTests(CFG());
     }
+  });
+});
+
+// --- 1.20.16 security review: regression tests for findings F1 to F4 ------------------------------
+
+describe("review fixes (F1 to F4)", () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const MCP = () => ({ id: P.manager.id, name: P.manager.name, via: "mcp" as const });
+
+  test("F1: notify and assign only desk agents; GET lists every action in words; a publish must send the whole reviewed rule", async () => {
+    // A requester (no desk role) can't be notified or assigned by a rule, Claude's or a person's.
+    for (const actions of [{ notify: { user_id: P.req.id } }, { assignee_id: P.req.id }]) {
+      const r = await tool("manager", "hd_draft_automation", { name: `Leak ${STAMP}`, event: "ticket_created", conditions: { keywords: [WORD] }, actions });
+      assert.equal(r.isError, true, JSON.stringify(actions));
+      assert.match(r.text, /not a desk agent\. Nothing was saved\./);
+      const human = await call(autoRoute.POST, "manager", "/admin/automations", "POST", { name: `Leak ${STAMP}`, event: "ticket_created", conditions: { keywords: [WORD] }, actions });
+      assert.equal(human.status, 400, "the settings page's own rule is the same");
+    }
+    // A shared macro the reviewer can't manage, a person to notify and to assign: all named for the reviewer.
+    const mac = await pool().query("INSERT INTO hd_macros (title, body, actions) VALUES ($1, 'Hello', '{}') RETURNING id", [`Shared reply ${STAMP}`]);
+    const macroId = mac.rows[0].id as number;
+    try {
+      const r = await tool("manager", "hd_draft_automation", {
+        name: `Everything ${STAMP}`,
+        event: "ticket_created",
+        conditions: { keywords: [WORD] },
+        actions: { notify: { user_id: P.agent.id }, assignee_id: P.agent.id, macro_id: macroId, internal_note: "Checked by Claude" },
+      });
+      assert.equal(r.isError, false, r.text);
+      const id = r.out.id as number;
+      const list = await call(autoRoute.GET, "manager", "/admin/automations");
+      const row = list.body.automations.find((a: { id: number }) => a.id === id);
+      assert.deepEqual(row.in_words.then, [
+        `assign it to ${P.agent.name}`,
+        `add the internal note "Checked by Claude"`,
+        `send the macro reply "Shared reply ${STAMP}" to the requester`,
+        `notify ${P.agent.name}`,
+      ]);
+      assert.ok(list.body.people.some((p: { id: number }) => p.id === P.agent.id), "desk agents to pick from");
+      assert.ok(!list.body.people.some((p: { id: number }) => p.id === P.req.id), "never a requester");
+      assert.deepEqual(list.body.macros.find((m: { id: number }) => m.id === macroId), { id: macroId, title: `Shared reply ${STAMP}`, shared: true });
+      // Publishing without the reviewed form (an API call naming only draft_at) is refused.
+      const at = (await automations.getAutomation(id))!.draft_at;
+      const bare = await patchRule("manager", id, { publish: true, draft_at: at });
+      assert.equal(bare.status, 400);
+      assert.match(bare.body.error, /as you reviewed it/);
+      assert.equal((await ruleRow(id)).published, 0);
+      // The reviewer took the notification out: what goes live is what the form sent.
+      const form = await shown(id);
+      const pub = await patchRule("manager", id, { ...form, actions: { ...(form.actions as object), notify: undefined }, publish: true, draft_at: at });
+      assert.equal(pub.status, 200, JSON.stringify(pub.body));
+      assert.equal(pub.body.automation.actions.notify, undefined);
+      await automations.deleteAutomation(id);
+    } finally {
+      await pool().query("DELETE FROM hd_macros WHERE id = $1", [macroId]);
+    }
+  });
+
+  test("F2: a category rename racing a publish rewrites the published rule, never a stale copy; the draft stays gone", async () => {
+    const cat = await categories.createCategory({ name: `Alpha ${STAMP}` }, { id: P.dadmin.id });
+    const id = await liveRule("Racing", { priority: "low" }, { conditions: { categories: [`Alpha ${STAMP}`] } });
+    await automations.saveAutomationDraft({ event: "ticket_updated", actions: { priority: "urgent", tags_add: ["x"] } }, MCP(), id);
+    // A person's publish holds the row; the rename starts meanwhile.
+    const h = await pool().connect();
+    try {
+      await h.query("BEGIN");
+      await h.query("SELECT pg_advisory_xact_lock_shared(728346)");
+      await h.query("SELECT id FROM hd_automations WHERE id = $1 FOR UPDATE", [id]);
+      const rename = categories.renameCategory(cat.id, `Beta ${STAMP}`);
+      await sleep(400);
+      await h.query(
+        "UPDATE hd_automations SET event = 'ticket_updated', actions = $2, updated_at = now(), draft = NULL, draft_by = NULL, draft_by_name = '', draft_at = NULL, draft_via = '', draft_base_at = NULL WHERE id = $1",
+        [id, JSON.stringify({ priority: "urgent", tags_add: ["x"] })]
+      );
+      await h.query("COMMIT");
+      await rename;
+    } finally {
+      h.release();
+    }
+    const row = (await pool().query("SELECT event, conditions, actions, draft, draft_at FROM hd_automations WHERE id = $1", [id])).rows[0];
+    assert.equal(row.event, "ticket_updated");
+    assert.deepEqual(row.actions, { priority: "urgent", tags_add: ["x"] }, "the published actions stand");
+    assert.deepEqual(row.conditions, { categories: [`Beta ${STAMP}`], keywords: [WORD] }, "and carry the new name");
+    assert.equal(row.draft, null, "the published draft does not come back");
+    // The other order: the rename holds the list; a publish through updateAutomation waits for it, then sees the new name.
+    await automations.saveAutomationDraft({ actions: { priority: "high" } }, MCP(), id);
+    const at = (await automations.getAutomation(id))!.draft_at;
+    const c = await pool().connect();
+    let pub: Promise<unknown>;
+    try {
+      await c.query("BEGIN");
+      await c.query("SELECT pg_advisory_xact_lock(728346)");
+      pub = automations.updateAutomation(id, {}, { publishDraft: true, draftAt: at });
+      await sleep(300);
+      await c.query("UPDATE hd_categories SET name = $2 WHERE id = $1", [cat.id, `Gamma ${STAMP}`]);
+      await c.query("UPDATE hd_automations SET conditions = $2 WHERE id = $1", [id, JSON.stringify({ categories: [`Gamma ${STAMP}`], keywords: [WORD] })]);
+      await c.query("UPDATE hd_automations SET draft = jsonb_set(draft, '{conditions}', $2::jsonb) WHERE id = $1", [id, JSON.stringify({ categories: [`Gamma ${STAMP}`], keywords: [WORD] })]);
+      await c.query("COMMIT");
+    } finally {
+      c.release();
+    }
+    await pub!;
+    const after = await ruleRow(id);
+    assert.deepEqual(after.conditions, { categories: [`Gamma ${STAMP}`], keywords: [WORD] });
+    assert.deepEqual(after.actions, { priority: "high" });
+    await automations.deleteAutomation(id);
+  });
+
+  test("F3: a stored rename or sub-category whose entry was renamed since is refused (409), nothing renamed", async () => {
+    const pr = await categories.createCategory({ name: `Plotters ${STAMP}` }, { id: P.dadmin.id });
+    const saved = await catDrafts.saveCategoryDraft(
+      [
+        { kind: "rename", id: pr.id, to: `Print ${STAMP}` },
+        { kind: "add_subcategory", category_id: pr.id, name: "Toner" },
+      ],
+      { id: P.dadmin.id, name: P.dadmin.name, via: "mcp" }
+    );
+    const reviewed = saved.draft.changes;
+    assert.equal((reviewed[0] as { from: string }).from, `Plotters ${STAMP}`);
+    await categories.renameCategory(pr.id, `Hardware2 ${STAMP}`);
+    const pub = await putCatDraft("dadmin", { publish: true, draft_at: saved.draft.draft_at, changes: reviewed });
+    assert.equal(pub.status, 409);
+    assert.match(pub.body.error, new RegExp(`Change 1: "Plotters ${STAMP}" is now called "Hardware2 ${STAMP}"\\. Review the draft again`));
+    assert.equal((await pool().query("SELECT name FROM hd_categories WHERE id = $1", [pr.id])).rows[0].name, `Hardware2 ${STAMP}`, "nothing renamed");
+    // Without the rename, the sub-category alone is stale too; and a publish must say what it renames.
+    const sub = await putCatDraft("dadmin", { publish: true, draft_at: saved.draft.draft_at, changes: [reviewed[1]] });
+    assert.equal(sub.status, 409);
+    assert.match(sub.body.error, /the category "Print .*" is now called "Hardware2/);
+    const bare = await putCatDraft("dadmin", { publish: true, draft_at: saved.draft.draft_at, changes: [{ kind: "rename", id: pr.id, to: "x" }] });
+    assert.equal(bare.status, 400);
+    // Claude adding to it now is refused the same way (the waiting change is stale).
+    await assert.rejects(catDrafts.saveCategoryDraft([{ kind: "add_category", name: `Other ${STAMP}` }], MCP()), /is now called/);
+    await catDrafts.discardCategoryDraft();
+  });
+
+  test("F4a: a person's edit of the category draft renews draft_at and names the editor", async () => {
+    const saved = await catDrafts.saveCategoryDraft([{ kind: "add_category", name: `Edited ${STAMP}` }], MCP());
+    const first = saved.draft.draft_at;
+    await sleep(20);
+    const edit = await putCatDraft("dadmin", { changes: [{ kind: "add_category", name: `Edited v2 ${STAMP}`, subcategories: [] }], draft_at: first });
+    assert.equal(edit.status, 200, JSON.stringify(edit.body));
+    assert.equal(edit.body.draft.edited_by_name, P.dadmin.name);
+    assert.notEqual(new Date(edit.body.draft.draft_at).getTime(), new Date(first).getTime());
+    assert.equal((await auditRows("helpdesk.category_draft.updated", P.dadmin.id)).at(-1)!.details.edited_by, P.dadmin.name);
+    // An API publish naming the version before the edit can't publish it unseen.
+    assert.equal((await putCatDraft("dadmin", { publish: true, draft_at: first })).status, 409);
+    assert.equal((await putCatDraft("dadmin", { discard_draft: true, draft_at: edit.body.draft.draft_at })).status, 200);
+    // Automations and schedules: a person's save of an unpublished draft renews draft_at too.
+    const d = await automations.saveAutomationDraft({ name: `Renew ${STAMP}`, event: "ticket_created", conditions: { keywords: [WORD] }, actions: { priority: "high" } }, MCP());
+    await sleep(20);
+    const saved2 = await patchRule("manager", d.automation.id, { name: `Renew v2 ${STAMP}` });
+    assert.notEqual(new Date(saved2.body.automation.draft_at).getTime(), new Date(d.automation.draft_at!).getTime());
+    assert.equal((await patchRule("manager", d.automation.id, { ...(await shown(d.automation.id)), publish: true, draft_at: d.automation.draft_at })).status, 409);
+    await automations.deleteAutomation(d.automation.id);
+  });
+
+  test("F4b: publishing changes over a rule or schedule a person edited since is refused; a category rename isn't such an edit", async () => {
+    const id = await liveRule("Edited live", { tags_add: ["one"] });
+    await automations.saveAutomationDraft({ actions: { tags_add: ["claude"] } }, MCP(), id);
+    await sleep(20);
+    assert.equal((await patchRule("manager", id, { actions: { tags_add: ["person"] } })).status, 200, "a person edits the live rule");
+    const at = (await automations.getAutomation(id))!.draft_at;
+    const r = await patchRule("manager", id, { ...(await shown(id)), publish_draft: true, draft_at: at });
+    assert.equal(r.status, 409);
+    assert.match(r.body.error, /The rule changed since this draft was made/);
+    assert.deepEqual((await ruleRow(id)).actions, { tags_add: ["person"] }, "the person's edit stands");
+    // A category rename rewrites the rule but is not a person's edit: the changes stay publishable.
+    const cat = await categories.createCategory({ name: `Delta ${STAMP}` }, { id: P.dadmin.id });
+    const id2 = await liveRule("Renamed under", { tags_add: ["one"] }, { conditions: { categories: [`Delta ${STAMP}`] } });
+    await automations.saveAutomationDraft({ actions: { tags_add: ["two"] } }, MCP(), id2);
+    await sleep(20);
+    await categories.renameCategory(cat.id, `Epsilon ${STAMP}`);
+    const at2 = (await automations.getAutomation(id2))!.draft_at;
+    const ok = await patchRule("manager", id2, { ...(await shown(id2)), publish_draft: true, draft_at: at2 });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.deepEqual(ok.body.automation.conditions.categories, [`Epsilon ${STAMP}`]);
+    await automations.deleteAutomation(id);
+    await automations.deleteAutomation(id2);
+    // Recurring: the same.
+    const sid = await liveSchedule("Edited schedule");
+    await tool("dadmin", "hd_draft_recurring", { id: sid, subject: `Claude subject ${STAMP}` });
+    await sleep(20);
+    assert.equal((await patchSched("dadmin", sid, { body: "A person's edit." })).status, 200);
+    const sat = (await recurring.getRecurring(sid))!.draft_at;
+    const sr = await patchSched("dadmin", sid, { publish_draft: true, draft_at: sat });
+    assert.equal(sr.status, 409);
+    assert.match(sr.body.error, /The schedule changed since this draft was made/);
+  });
+
+  test("F4c: Save as draft on a recurring card audits the caller's address", async () => {
+    const out = await deskTools.runDeskTool(
+      "draft_recurring",
+      {
+        id: 0,
+        team_id: T.A,
+        subject: `Ip check ${STAMP}`,
+        body: "",
+        priority: "normal",
+        request_type_id: 0,
+        assignee_id: 0,
+        due_business_days: 0,
+        pattern: { kind: "daily", time: "08:00", days: [], mode: "day", nth: 1, weekday: 1, day: 1, months: [], unit: "days", every: 1, start: "2026-01-01" },
+        holiday_rule: "skip",
+        timezone: "UTC",
+      },
+      toolCtx(await user("lead"))
+    );
+    const cardId = await offerCard("lead", out.card!.payload);
+    assert.equal((await call(recRoute.POST, "lead", "/admin/recurring", "POST", { draft: true, card_id: cardId })).status, 201);
+    const row = (await auditRows("helpdesk.claude.card", P.lead.id)).find((x) => x.details.card_id === cardId)!;
+    assert.equal(row.ip, IP);
   });
 });
 

@@ -13,6 +13,10 @@
 // ("Changes from Claude") open in the dialog in place of the live rule, with
 // Discard changes / Publish changes; until then the rule runs as it is.
 // ?id=<rule> opens that rule (the links Claude hands out).
+// Review fixes: the dialog shows and edits every action a rule can carry
+// (Assign to, Notify one person by name, a shared macro by name even when the
+// reviewer can't manage it), and a draft's strip lists "What this rule will
+// do" from the server's plain words (every trigger, condition and action).
 
 import { useEffect, useId, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Bot, Pencil, Plus, Trash2, X } from "lucide-react";
@@ -50,6 +54,10 @@ import { CategoryFields } from "../categories/CategoryFields";
 import { draftChipLabel, waitsForReview } from "@/lib/helpdesk/claude-drafts-shared";
 import { ClaudeDraftStrip } from "./ClaudeDraftStrip";
 
+/** 1.20.16: a rule as GET lists it, with its plain words (and its draft's). */
+type RuleWords = { when: string; if: string[]; then: string[] };
+type RuleRow = HdAutomation & { in_words?: RuleWords; draft_in_words?: RuleWords | null };
+
 const EVENT_FALLBACK: Record<HdAutomationEvent, string> = {
   ticket_created: "A ticket is created",
   ticket_updated: "A ticket is updated",
@@ -59,21 +67,29 @@ const EVENT_FALLBACK: Record<HdAutomationEvent, string> = {
 };
 
 export function AutomationsSettings() {
-  const [rows, setRows] = useState<HdAutomation[] | null>(null);
+  const [rows, setRows] = useState<RuleRow[] | null>(null);
   const [events, setEvents] = useState<Record<string, string>>(EVENT_FALLBACK);
+  // 1.20.16 review fix: who a rule may assign or notify (desk agents), and the names of the macros rules send.
+  const [people, setPeople] = useState<{ id: number; name: string }[]>([]);
+  const [ruleMacros, setRuleMacros] = useState<{ id: number; title: string; shared: boolean }[]>([]);
   const [error, setError] = useState("");
-  const [editing, setEditing] = useState<HdAutomation | "new" | null>(null);
+  const [editing, setEditing] = useState<RuleRow | "new" | null>(null);
   const [busy, setBusy] = useState(false);
   const asked = useRef(false);
   const { teams } = useTeams();
   const { types } = useRequestTypes();
 
   const load = () =>
-    getJson<{ automations: HdAutomation[]; events?: Record<string, string> }>("/api/helpdesk/admin/automations", "Couldn't load the automations.")
+    getJson<{ automations: RuleRow[]; events?: Record<string, string>; people?: { id: number; name: string }[]; macros?: { id: number; title: string; shared: boolean }[] }>(
+      "/api/helpdesk/admin/automations",
+      "Couldn't load the automations."
+    )
       .then((d) => {
-        const list = listOf<HdAutomation>(d, "automations");
+        const list = listOf<RuleRow>(d, "automations");
         setRows(list);
         if (d.events) setEvents(d.events);
+        setPeople(Array.isArray(d.people) ? d.people : []);
+        setRuleMacros(Array.isArray(d.macros) ? d.macros : []);
         // 1.20.16: ?id= opens that rule (a link from Claude) on the first load.
         if (!asked.current) {
           asked.current = true;
@@ -111,7 +127,7 @@ export function AutomationsSettings() {
     setBusy(true);
     try {
       const d = await sendJson<{ automations: HdAutomation[] }>("/api/helpdesk/admin/automations/reorder", "POST", { ids }, "Couldn't change the order.");
-      setRows(listOf<HdAutomation>(d, "automations"));
+      setRows(listOf<RuleRow>(d, "automations"));
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
@@ -226,6 +242,8 @@ export function AutomationsSettings() {
         events={events}
         teams={(teams ?? []).map((t) => ({ id: t.id, name: t.name }))}
         types={(types ?? []).map((t) => ({ id: t.id, name: t.title }))}
+        people={people}
+        ruleMacros={ruleMacros}
         onClose={() => setEditing(null)}
         onSaved={() => {
           setEditing(null);
@@ -243,13 +261,17 @@ function RuleDialog({
   events,
   teams,
   types,
+  people,
+  ruleMacros,
   onClose,
   onSaved,
 }: {
-  rule: HdAutomation | "new" | null;
+  rule: RuleRow | "new" | null;
   events: Record<string, string>;
   teams: { id: number; name: string }[];
   types: { id: number; name: string }[];
+  people: { id: number; name: string }[];
+  ruleMacros: { id: number; title: string; shared: boolean }[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -386,9 +408,13 @@ function RuleDialog({
         </div>
         {claude && (
           <ClaudeDraftStrip changes={changesWaiting} askedBy={claude.draft_by_name ?? ""} at={claude.draft_at ?? null} className="mt-3">
-            {changesWaiting
-              ? "Review the changes below. The rule keeps running as it is until you publish them."
-              : "Review it below. It is off and runs on no ticket until you publish it. Publishing switches it on."}
+            <p>
+              {changesWaiting
+                ? "Review the changes below. The rule keeps running as it is until you publish them."
+                : "Review it below. It is off and runs on no ticket until you publish it. Publishing switches it on."}
+            </p>
+            {/* Review fix: everything Claude's draft would do, read-only, before the editable form. */}
+            {(changesWaiting ? claude.draft_in_words : claude.in_words) && <RuleSummary words={(changesWaiting ? claude.draft_in_words : claude.in_words)!} />}
           </ClaudeDraftStrip>
         )}
         <div className="mt-4 space-y-4">
@@ -473,16 +499,43 @@ function RuleDialog({
                       {m.title}
                     </option>
                   ))}
+                  {/* Review fix: a rule's macro is shown by name even when it isn't one this person manages. */}
+                  {x.macro_id && !macros.some((m) => m.id === x.macro_id) && (
+                    <option value={x.macro_id}>{ruleMacros.find((m) => m.id === x.macro_id)?.title ?? `Macro ${x.macro_id}`}</option>
+                  )}
+                </Select>
+              </Field>
+              <Field label="Assign to">
+                <Select value={x.assignee_id ?? ""} onChange={(e) => setX({ ...x, assignee_id: e.target.value ? Number(e.target.value) : undefined })}>
+                  <option value="">Leave as it is</option>
+                  {people.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                  {x.assignee_id && !people.some((p) => p.id === x.assignee_id) && <option value={x.assignee_id}>{`Not on the desk (person ${x.assignee_id})`}</option>}
                 </Select>
               </Field>
               <Field label="Notify">
                 <Select
-                  value={typeof x.notify === "string" ? x.notify : ""}
-                  onChange={(e) => setX({ ...x, notify: (e.target.value || undefined) as "assignee" | "team" | undefined })}
+                  value={typeof x.notify === "string" ? x.notify : x.notify ? `user:${x.notify.user_id}` : ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setX({ ...x, notify: v.startsWith("user:") ? { user_id: Number(v.slice(5)) } : ((v || undefined) as "assignee" | "team" | undefined) });
+                  }}
                 >
                   <option value="">Nobody</option>
                   <option value="assignee">The owner</option>
                   <option value="team">The team</option>
+                  {/* Review fix: one person, by name. */}
+                  {people.map((p) => (
+                    <option key={p.id} value={`user:${p.id}`}>
+                      {p.name}
+                    </option>
+                  ))}
+                  {typeof x.notify === "object" && x.notify && !people.some((p) => typeof x.notify === "object" && p.id === x.notify.user_id) && (
+                    <option value={`user:${x.notify.user_id}`}>{`Not on the desk (person ${x.notify.user_id})`}</option>
+                  )}
                 </Select>
               </Field>
               <Field label="Add an internal note" className="sm:col-span-2">
@@ -537,6 +590,23 @@ function RuleDialog({
         )}
       </form>
     </Modal>
+  );
+}
+
+/** 1.20.16 review fix: a rule in plain words (When, If, Then), read-only, as the server describes it. */
+function RuleSummary({ words }: { words: RuleWords }) {
+  const lower = (t: string) => t.charAt(0).toLowerCase() + t.slice(1);
+  return (
+    <div className="mt-2 rounded-lg border border-slate-200 bg-surface px-3 py-2" data-testid="rule-summary">
+      <p className="text-xs font-semibold text-slate-700">What this rule will do</p>
+      <ul aria-label="What this rule will do" className="mt-1 space-y-0.5 text-xs text-slate-700">
+        <li>When {lower(words.when)}</li>
+        <li>If {words.if.join(", and ")}</li>
+        {words.then.map((t, i) => (
+          <li key={i}>{i === 0 ? "Then " : "and "}{t}</li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

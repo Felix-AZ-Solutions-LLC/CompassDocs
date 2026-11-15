@@ -25,6 +25,8 @@
 // published schedule, `draft` holds proposed changes (the schedule's fields
 // but enabled) while the live one keeps running unchanged. draft_by_name,
 // draft_at, draft_via ('mcp' | 'claude_desk'): who asked, when, where.
+// draft_base_at (review fix): the live schedule's updated_at when the changes
+// were drafted; publishing them is refused for a schedule edited since.
 // Existing schedules get published = 1 and no draft: unchanged.
 
 export const HD_RECURRING_SCHEMA = `
@@ -64,4 +66,5 @@ ALTER TABLE hd_recurring ADD COLUMN IF NOT EXISTS draft_by integer REFERENCES us
 ALTER TABLE hd_recurring ADD COLUMN IF NOT EXISTS draft_by_name text NOT NULL DEFAULT '';
 ALTER TABLE hd_recurring ADD COLUMN IF NOT EXISTS draft_at timestamptz;
 ALTER TABLE hd_recurring ADD COLUMN IF NOT EXISTS draft_via text NOT NULL DEFAULT '';
+ALTER TABLE hd_recurring ADD COLUMN IF NOT EXISTS draft_base_at timestamptz;
 `;

@@ -10,6 +10,7 @@
 //      via "claude_desk"; the card is used once.
 
 import { NextResponse } from "next/server";
+import { ipFrom } from "@/lib/audit";
 import { hdAnyCapGate } from "@/lib/helpdesk/roles";
 import { hq } from "@/lib/helpdesk/db-core";
 import { auditDraftCardApplied, claimDraftCard, releaseDraftCard } from "@/lib/helpdesk/claude/draft-cards";
@@ -82,7 +83,7 @@ async function saveDraftFromCard(req: Request, gate: SessionUser, cardId: unknow
     const details = { team_id: draft.team_id, pattern: draft.pattern, draft: true, ...draftViaDetails("claude_desk"), card_id: card.id };
     if (r.kind === "new") await auditRecurring(req, gate, "helpdesk.recurring.created", r.schedule.id, scheduleTitle(draft.subject), { ...details, enabled: false, published: false });
     else await auditRecurring(req, gate, "helpdesk.recurring.updated", r.schedule.id, scheduleTitle(r.schedule.subject), { changed: ["draft"], ...details, published: r.schedule.published });
-    await auditDraftCardApplied(gate, card, null);
+    await auditDraftCardApplied(gate, card, ipFrom(req));
     return NextResponse.json({ schedule: r.schedule }, { status: r.kind === "new" ? 201 : 200 });
   } catch (e) {
     await releaseDraftCard(gate.id, card.id);

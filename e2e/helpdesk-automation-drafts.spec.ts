@@ -140,6 +140,13 @@ test.describe("claude drafts in desk settings (licensed)", () => {
     await expect(strip).toContainText("not published");
     await expect(strip).toContainText("Publishing switches it on");
     await expect(dialog.getByRole("heading", { name: `Draft ${draftName}` })).toBeVisible();
+    // Review fix: everything the draft does, read-only, in the strip.
+    const summary = strip.getByRole("list", { name: "What this rule will do" });
+    await expect(summary).toContainText("When a ticket is created");
+    await expect(summary).toContainText(`If it mentions "${WORD}" or "printer"`);
+    await expect(summary).toContainText(`Then move it to ${teamName}`);
+    await expect(summary).toContainText("and set the priority to High");
+    await expect(summary).toContainText("and add the tag printer");
     await shots(page, "automations-draft-review");
     await small(page, `/desk/settings/automations?id=${draftId}`, "automations-draft-review", async (p) => {
       await slow(p.getByRole("dialog").getByRole("region", { name: "Draft from Claude" })).toBeVisible({ timeout: 60_000 });

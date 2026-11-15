@@ -26,6 +26,8 @@ export interface HdCategoryDraft {
   draft_at: string;
   /** "mcp" | "claude_desk". */
   draft_via: string;
+  /** Review fix: who last edited it on the Categories tab ("" when nobody has). */
+  edited_by_name?: string;
 }
 
 export const CATEGORY_DRAFT_LIMITS = {
@@ -53,7 +55,8 @@ interface SimEntry {
   subs: { id: number | null; name: string }[];
 }
 
-type Plan = { ok: true; changes: HdCategoryDraftChange[] } | { ok: false; error: string };
+/** `stale`: a change names an entry as it was when drafted, and the list has changed since (review fix: 409). */
+type Plan = { ok: true; changes: HdCategoryDraftChange[] } | { ok: false; error: string; stale?: boolean };
 
 /**
  * Check `raw` (a list of changes, as Claude sends them or as stored) against
@@ -69,6 +72,7 @@ export function planCategoryDraft(tree: readonly HdCategory[], raw: unknown): Pl
   const out: HdCategoryDraftChange[] = [];
   const renamed = new Set<number>();
   const at = (i: number, why: string): Plan => ({ ok: false, error: `Change ${i + 1}: ${why}` });
+  const stale = (i: number, why: string): Plan => ({ ok: false, stale: true, error: `Change ${i + 1}: ${why} Review the draft again before you publish it.` });
   const entryById = (id: number) => {
     for (const c of sim) {
       if (c.id === id) return { entry: c, parent: null as SimEntry | null };
@@ -112,6 +116,10 @@ export function planCategoryDraft(tree: readonly HdCategory[], raw: unknown): Pl
       const byId = typeof r.category_id === "number" && Number.isInteger(r.category_id) && r.category_id > 0 ? sim.find((c) => c.id === r.category_id) : undefined;
       const parent = byId ?? (typeof r.category === "string" && r.category.trim() ? sim.find((c) => categoryKey(c.name) === categoryKey(r.category as string)) : undefined);
       if (!parent) return at(i, "that category is not on the list. Name a category from the list, or add the category with its sub-categories.");
+      // Review fix: a stored change names its category as it was reviewed; a rename since makes it stale.
+      if (byId && typeof r.category === "string" && r.category.trim() && byId.name !== r.category) {
+        return stale(i, `the category "${r.category}" is now called "${byId.name}".`);
+      }
       if (parent.subs.some((s) => categoryKey(s.name) === categoryKey(name))) return at(i, `${parent.name} already has a sub-category called "${name}".`);
       if (parent.subs.length >= CATEGORY_LIMITS.subcategories) return at(i, `a category holds up to ${CATEGORY_LIMITS.subcategories} sub-categories.`);
       parent.subs.push({ id: null, name });
@@ -127,6 +135,10 @@ export function planCategoryDraft(tree: readonly HdCategory[], raw: unknown): Pl
     const found = id ? entryById(id) : null;
     if (!id || !found || found.entry.id === null) return at(i, "rename needs the id of a category or sub-category on the list (hd_list_categories lists them).");
     if (renamed.has(id)) return at(i, `"${found.entry.name}" is renamed twice. Keep one rename.`);
+    // Review fix: a stored rename says what it renames ("Rename Printers to …"); the entry must still be that.
+    if (typeof r.from === "string" && r.from !== found.entry.name) return stale(i, `"${r.from}" is now called "${found.entry.name}".`);
+    if (typeof r.parent === "string" && found.parent && r.parent !== found.parent.name) return stale(i, `"${r.parent}" is now called "${found.parent.name}".`);
+    if (r.parent === null && found.parent) return stale(i, `"${found.entry.name}" is now a sub-category of ${found.parent.name}.`);
     const to = cleanCategoryName(r.to ?? r.name);
     const what = found.parent ? "sub-category" : "category";
     const problem = categoryNameProblem(to, what);

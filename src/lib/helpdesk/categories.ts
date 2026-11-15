@@ -126,8 +126,10 @@ interface AutomationRow {
   draft?: { conditions?: AutomationRow["conditions"]; actions?: AutomationRow["actions"] } & Record<string, unknown> | null;
 }
 
-async function automationRows(client?: HdQueryable): Promise<AutomationRow[]> {
-  return hq<AutomationRow>("SELECT id, name, conditions, actions, draft FROM hd_automations ORDER BY position, id", [], client);
+async function automationRows(client?: HdQueryable, lock = false): Promise<AutomationRow[]> {
+  // 1.20.16 review fix: a rewrite locks the rules it reads (a publish or a draft saved at the same moment
+  // is either before it, and rewritten, or after it, and sees the new name), never writes back a stale copy.
+  return hq<AutomationRow>(`SELECT id, name, conditions, actions, draft FROM hd_automations ORDER BY position, id${lock ? " FOR UPDATE" : ""}`, [], client);
 }
 
 const pairKey = (category: string, subcategory: string) => `${categoryKey(category)}\u0000${categoryKey(subcategory)}`;
@@ -456,15 +458,24 @@ async function rewriteCarriers(
   map: (category: string, subcategory: string) => { category: string; subcategory: string } | null
 ): Promise<void> {
   // Automations: the action's category and sub-category, the conditions' lists (1.20.16: and a draft's).
-  for (const a of await automationRows(client)) {
+  for (const a of await automationRows(client, true)) {
     const live = rewriteRule(a.conditions, a.actions, map);
-    if (live) await client.query("UPDATE hd_automations SET conditions = $2, actions = $3, updated_at = now() WHERE id = $1", [a.id, JSON.stringify(live.conditions), JSON.stringify(live.actions)]);
+    // The rename is not a person's edit of the rule: changes Claude drafted against it stay publishable
+    // (draft_base_at follows updated_at when it was current). The right-hand side reads the old row.
+    if (live) {
+      await client.query(
+        `UPDATE hd_automations SET conditions = $2, actions = $3, updated_at = now(),
+                draft_base_at = CASE WHEN draft_base_at IS NOT NULL AND draft_base_at >= updated_at THEN now() ELSE draft_base_at END
+          WHERE id = $1`,
+        [a.id, JSON.stringify(live.conditions), JSON.stringify(live.actions)]
+      );
+    }
     const d = a.draft ? rewriteRule(a.draft.conditions ?? {}, a.draft.actions ?? {}, map) : null;
     if (d) await client.query("UPDATE hd_automations SET draft = $2 WHERE id = $1", [a.id, JSON.stringify({ ...a.draft, conditions: d.conditions, actions: d.actions })]);
   }
   // Saved views: filters.category, and filters.subcategory ("Category › Sub-category", or a bare sub-category).
   const views = await hq<{ id: number; filters: Record<string, string> }>(
-    "SELECT id, filters FROM hd_saved_views WHERE filters ? 'category' OR filters ? 'subcategory'",
+    "SELECT id, filters FROM hd_saved_views WHERE filters ? 'category' OR filters ? 'subcategory' FOR UPDATE",
     [],
     client
   );
@@ -504,7 +515,7 @@ async function rewriteCarriers(
   }
   // Report dashboards: the category filter of the dashboard and of each widget (a list of names).
   const boards = await hq<{ id: number; layout: { filters?: { category?: unknown }; widgets?: { filters?: { category?: unknown } }[] } }>(
-    "SELECT id, layout FROM hd_dashboards WHERE layout::text LIKE '%\"category\"%'",
+    "SELECT id, layout FROM hd_dashboards WHERE layout::text LIKE '%\"category\"%' FOR UPDATE",
     [],
     client
   );

@@ -117,7 +117,11 @@ interface Row {
   draft_by_name: string;
   draft_at: string | null;
   draft_via: string;
+  draft_base_at: string | null;
 }
+
+/** 1.20.16 review fix: publishing changes over a schedule a person edited after Claude drafted them. */
+export const SCHEDULE_CHANGED_SINCE = "The schedule changed since this draft was made. Review it again: discard the changes, or ask Claude for new ones.";
 
 const SELECT = `SELECT r.*, t.name AS team_name, u.name AS assignee_name,
        (SELECT tk.number FROM hd_recurring_runs rr JOIN hd_tickets tk ON tk.id = rr.ticket_id
@@ -522,7 +526,12 @@ export async function saveRecurringDraft(
       );
       return "replaced" as const;
     }
-    await client.query("UPDATE hd_recurring SET draft = $2, draft_by = $3, draft_by_name = $4, draft_at = now(), draft_via = $5 WHERE id = $1", [id, JSON.stringify(draft), ...meta]);
+    // draft_base_at (review fix): the live schedule these changes were drafted against.
+    await client.query("UPDATE hd_recurring SET draft = $2, draft_by = $3, draft_by_name = $4, draft_at = now(), draft_via = $5, draft_base_at = updated_at WHERE id = $1", [
+      id,
+      JSON.stringify(draft),
+      ...meta,
+    ]);
     return "changes" as const;
   });
   return { schedule: (await getRecurring(id))!, kind };
@@ -555,6 +564,10 @@ export async function saveRecurring(
     const publishDraft = opts.publishDraft === true;
     if (publishDraft && !(before.published && before.draft)) throw new RecurringDraftError(NO_CHANGES_WAITING, 409);
     if ((publish || publishDraft) && !sameDraftInstant(before.draft_at, opts.draftAt)) throw new RecurringDraftError(STALE_DRAFT_MESSAGE, 409);
+    // Review fix: the changes were drafted against the schedule as it was; a person's edit since would be undone unseen.
+    if (publishDraft && row.draft_base_at && new Date(row.updated_at).getTime() > new Date(row.draft_base_at).getTime()) {
+      throw new RecurringDraftError(SCHEDULE_CHANGED_SINCE, 409);
+    }
     const base: RecurringInput = publishDraft ? { ...before.draft!, enabled: before.enabled } : inputOf(before);
     const v = await validateRecurringInput(raw, base);
     if (!v.ok) throw new RecurringDraftError(v.error, 400);
@@ -562,14 +575,18 @@ export async function saveRecurring(
     if (input.team_id !== before.team_id && opts.mayUseTeam && !(await opts.mayUseTeam(input.team_id))) {
       throw new RecurringDraftError("You can only schedule tickets for teams you lead.", 403);
     }
-    if (!before.published && !publish) {
+    const editsDraft = !before.published && !publish;
+    if (editsDraft) {
       if (raw.enabled === true) throw new RecurringDraftError("This schedule is a draft from Claude. Publish it to switch it on.", 409);
       input.enabled = false;
     } else if (publish) input.enabled = raw.enabled !== false;
     const next = await computeNextRun({ ...input, id }, now, client);
     await client.query(
       `UPDATE hd_recurring SET ${DRAFT_SET(2)}, enabled = $13, next_run_at = $14, next_key = $15, updated_at = now()${publish ? ", published = 1" : ""}${
-        publish || publishDraft ? `, ${CLEAR_DRAFT_SQL}` : ""
+        publish || publishDraft ? `, ${CLEAR_DRAFT_SQL}, draft_base_at = NULL` : ""
+      }${
+        // Review fix: a person's edit of an unpublished draft is a new version: a publish must name it.
+        editsDraft ? ", draft_at = now()" : ""
       }
         WHERE id = $1`,
       [id, ...draftValues(draftOfInput(input)), input.enabled ? 1 : 0, next?.at ?? null, next?.key ?? null]
@@ -590,7 +607,7 @@ export async function discardRecurringDraft(id: number, draftAt?: unknown): Prom
     const row = await hqOne<Row>(`${SELECT} WHERE r.id = $1 FOR UPDATE OF r`, [id], client);
     if (!row || row.published !== 1 || !row.draft) return undefined;
     if (draftAt !== undefined && draftAt !== null && !sameDraftInstant(row.draft_at, draftAt)) throw new RecurringDraftError(STALE_DISCARD_MESSAGE, 409);
-    await client.query(`UPDATE hd_recurring SET ${CLEAR_DRAFT_SQL} WHERE id = $1`, [id]);
+    await client.query(`UPDATE hd_recurring SET ${CLEAR_DRAFT_SQL}, draft_base_at = NULL WHERE id = $1`, [id]);
     return toApi(row);
   });
   return gone;

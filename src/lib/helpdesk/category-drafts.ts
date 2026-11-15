@@ -27,7 +27,7 @@ import { categoryTree, HdCategoryError, insertEntryTx, renameEntryTx, withCatego
 import { CATEGORY_DRAFT_LIMITS, mergeCategoryChanges, planCategoryDraft, type HdCategoryDraft, type HdCategoryDraftChange } from "./category-drafts-shared";
 import { STALE_DISCARD_MESSAGE, STALE_DRAFT_MESSAGE, sameDraftInstant, type HdDraftVia } from "./claude-drafts-shared";
 
-const COLS = "changes, draft_by_name, draft_at, draft_via";
+const COLS = "changes, draft_by_name, draft_at, draft_via, edited_by_name";
 
 async function readDraft(client?: PoolClient, lock = false): Promise<HdCategoryDraft | null> {
   const r = await hqOne<HdCategoryDraft>(`SELECT ${COLS} FROM hd_category_draft WHERE id = 1${lock ? " FOR UPDATE" : ""}`, [], client);
@@ -68,11 +68,11 @@ export async function saveCategoryDraft(
     const earlier = await readDraft(client, true);
     const all = earlier ? mergeCategoryChanges(earlier.changes, raw) : raw;
     const plan = planCategoryDraft(await categoryTree(client), all);
-    if (!plan.ok) throw new HdCategoryError(plan.error);
+    if (!plan.ok) throw new HdCategoryError(plan.error, plan.stale ? 409 : 400);
     const d = await hqOne<HdCategoryDraft>(
       `INSERT INTO hd_category_draft (id, changes, draft_by, draft_by_name, draft_at, draft_via, updated_at) VALUES (1, $1, $2, $3, now(), $4, now())
        ON CONFLICT (id) DO UPDATE SET changes = EXCLUDED.changes, draft_by = EXCLUDED.draft_by, draft_by_name = EXCLUDED.draft_by_name,
-              draft_at = now(), draft_via = EXCLUDED.draft_via, updated_at = now()
+              draft_at = now(), draft_via = EXCLUDED.draft_via, updated_at = now(), edited_by = NULL, edited_by_name = ''
        RETURNING ${COLS}`,
       [JSON.stringify(plan.changes), actor.id, actor.name, actor.via],
       client
@@ -84,10 +84,12 @@ export async function saveCategoryDraft(
 /**
  * A person saves the draft as the Categories tab shows it (names edited,
  * changes taken out), naming the draft they saw (409 when Claude saved a
- * newer one). It stays a draft; who asked Claude for it is kept. An empty
- * list discards it.
+ * newer one). It stays a draft; who asked Claude for it is kept, the editor
+ * is recorded and draft_at is renewed (review fix: a publish must name the
+ * edited version). A change whose entry was renamed since is refused (409).
+ * An empty list discards it.
  */
-export async function editCategoryDraft(raw: unknown, draftAt: unknown): Promise<HdCategoryDraft | null> {
+export async function editCategoryDraft(raw: unknown, draftAt: unknown, editor: { id: number | null; name: string } = { id: null, name: "" }): Promise<HdCategoryDraft | null> {
   if (!Array.isArray(raw) || raw.length > CATEGORY_DRAFT_LIMITS.changes) {
     throw new HdCategoryError(`Send the changes as a list of up to ${CATEGORY_DRAFT_LIMITS.changes}.`);
   }
@@ -100,8 +102,13 @@ export async function editCategoryDraft(raw: unknown, draftAt: unknown): Promise
       return null;
     }
     const plan = planCategoryDraft(await categoryTree(client), raw);
-    if (!plan.ok) throw new HdCategoryError(plan.error);
-    return (await hqOne<HdCategoryDraft>(`UPDATE hd_category_draft SET changes = $1, updated_at = now() WHERE id = 1 RETURNING ${COLS}`, [JSON.stringify(plan.changes)], client))!;
+    if (!plan.ok) throw new HdCategoryError(plan.error, plan.stale ? 409 : 400);
+    // Review fix: the person's edit is a new version (a new draft_at, so a publish must name it) and says who made it.
+    return (await hqOne<HdCategoryDraft>(
+      `UPDATE hd_category_draft SET changes = $1, updated_at = now(), draft_at = now(), edited_by = $2, edited_by_name = $3 WHERE id = 1 RETURNING ${COLS}`,
+      [JSON.stringify(plan.changes), editor.id, editor.name],
+      client
+    ))!;
   });
 }
 
@@ -121,6 +128,17 @@ export interface PublishedCategoryDraft {
 export async function publishCategoryDraft(draftAt: unknown, raw?: unknown, actorId: number | null = null): Promise<PublishedCategoryDraft> {
   if (raw !== undefined && (!Array.isArray(raw) || raw.length > CATEGORY_DRAFT_LIMITS.changes)) {
     throw new HdCategoryError(`Send the changes as a list of up to ${CATEGORY_DRAFT_LIMITS.changes}.`);
+  }
+  // Review fix: what is published is what was reviewed, so each change says what it acts on
+  // (a rename its "from" and category, a new sub-category its category), checked against the list.
+  if (
+    Array.isArray(raw) &&
+    raw.some((c) => {
+      const o = (c ?? {}) as Record<string, unknown>;
+      return (o.kind === "rename" && (typeof o.from !== "string" || !("parent" in o))) || (o.kind === "add_subcategory" && typeof o.category !== "string");
+    })
+  ) {
+    throw new HdCategoryError("Publish the changes as the Categories tab shows them: each rename with the name it renames.");
   }
   return withCategoryListLock(async (client) => {
     const cur = await readDraft(client, true);

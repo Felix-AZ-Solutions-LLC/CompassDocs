@@ -6,13 +6,15 @@
 //      person's offered card; 400 otherwise, and used once) are added to the draft, checked as the
 //      page checks a name. Audited helpdesk.category_draft.created / .updated (via "claude_desk").
 // PUT  { changes, draft_at }                 the person saves the draft as the page shows it (names
-//      edited, changes taken out); it stays a draft. helpdesk.category_draft.updated.
+//      edited, changes taken out); it stays a draft, with a new draft_at and the editor recorded
+//      (review fix). helpdesk.category_draft.updated (edited_by).
 // PUT  { publish: true, draft_at, changes? } publishes it: in one transaction, each change runs exactly
 //      as the page's own add and rename (a rename rewrites the name on tickets, request types, rules,
 //      saved views and report filters). helpdesk.category_draft.published, and one
 //      helpdesk.category.created / .renamed per change, as the page writes them.
 // PUT  { discard_draft: true, draft_at? }    drops it. helpdesk.category_draft.draft_discarded.
-// Every PUT names the draft the person reviewed (draft_at): 409 when Claude saved a newer one.
+// Every PUT names the draft the person reviewed (draft_at): 409 when Claude saved a newer one, and
+// (review fix) 409 when a change names an entry that was renamed since it was drafted.
 
 import { NextResponse } from "next/server";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
@@ -108,8 +110,9 @@ export async function PUT(req: Request) {
       }
       return NextResponse.json({ ok: true, created: r.created.length, renamed: r.renamed.map((x) => ({ from: x.before.name, to: x.after.name, tickets: x.tickets })), draft: null });
     }
-    const d = await editCategoryDraft(b.changes, b.draft_at);
-    await audit({ ...base, action: d ? "helpdesk.category_draft.updated" : "helpdesk.category_draft.draft_discarded", targetLabel: LABEL, details: { changes: d?.changes.length ?? 0 } });
+    const editor = gate.name || gate.username;
+    const d = await editCategoryDraft(b.changes, b.draft_at, { id: gate.id, name: editor });
+    await audit({ ...base, action: d ? "helpdesk.category_draft.updated" : "helpdesk.category_draft.draft_discarded", targetLabel: LABEL, details: { changes: d?.changes.length ?? 0, edited_by: editor } });
     return NextResponse.json({ draft: d });
   } catch (e) {
     if (e instanceof HdCategoryError) return NextResponse.json({ error: e.message }, { status: e.status });

@@ -11,6 +11,8 @@
 //        unpublished draft can't be switched on (409). PATCH { discard_draft: true, draft_at? } drops the
 //        changes waiting on a published rule (helpdesk.automation.draft_discarded; 409 when there are
 //        none or a newer one). An unpublished draft is discarded with DELETE.
+//        Review fixes: a publish must send name, event, conditions and actions (400 otherwise);
+//        publish_draft over a rule edited after the draft was made is refused (409).
 
 import { NextResponse } from "next/server";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
@@ -61,6 +63,11 @@ export async function PATCH(req: Request, ctx: Ctx) {
         ip: ipFrom(req),
       });
       return NextResponse.json({ automation: await getAutomation(id) });
+    }
+    // 1.20.16 review fix: a publish sends the whole rule as the person reviewed it (every trigger,
+    // condition and action the dialog shows), so nothing goes live that the form didn't show.
+    if ((body.publish === true || body.publish_draft === true) && !["name", "event", "conditions", "actions"].every((k) => body[k] !== undefined && body[k] !== null)) {
+      return NextResponse.json({ error: "Publish sends the rule as you reviewed it: its name, when, if and then." }, { status: 400 });
     }
     const input = await validateAutomationInput(body, true);
     if (!input.ok) return NextResponse.json({ error: input.error }, { status: 400 });
