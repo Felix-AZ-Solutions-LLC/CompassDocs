@@ -361,3 +361,35 @@ export async function claudeChatsForExport(userId: number): Promise<{ ticket: nu
   }
   return [...out.values()];
 }
+
+/**
+ * 1.20.15: Apply on a Claude in the desk macro card. The desk's macro route
+ * claims the card in one statement before it applies anything: one of this
+ * agent's macro cards, still offered, on this ticket (by number, not in the
+ * recycle bin) for exactly this macro becomes "applied" and its payload (the
+ * plan it showed) comes back. A second click, a replay or a concurrent request
+ * finds it taken (review fix: one card, one apply). Undefined when there is no
+ * such card.
+ */
+export async function claimMacroCard(
+  userId: number,
+  rawCardId: unknown,
+  want: { number: number; macroId: number }
+): Promise<{ id: number; payload: Record<string, any> } | undefined> {
+  const cardId = typeof rawCardId === "number" && Number.isInteger(rawCardId) && rawCardId > 0 ? rawCardId : null;
+  if (!cardId) return undefined;
+  return hqOne<{ id: number; payload: Record<string, any> }>(
+    `UPDATE hd_claude_cards c SET state = 'applied', decided_at = now()
+       FROM hd_tickets t
+      WHERE c.id = $1 AND c.user_id = $2 AND c.kind = 'change' AND c.state = 'offered'
+        AND t.id = c.ticket_id AND t.number = $3 AND t.deleted_at IS NULL
+        AND c.payload->>'action' = 'macro' AND c.payload->>'macro_id' = $4
+      RETURNING c.id, c.payload`,
+    [cardId, userId, want.number, String(want.macroId)]
+  );
+}
+
+/** 1.20.15: the apply was refused and wrote nothing, so the claimed card is offered again. */
+export async function releaseMacroCard(userId: number, cardId: number): Promise<void> {
+  await hq("UPDATE hd_claude_cards SET state = 'offered', decided_at = NULL WHERE id = $1 AND user_id = $2 AND state = 'applied'", [cardId, userId]);
+}

@@ -11,6 +11,9 @@
 // The owner's rules, which no setting changes:
 //   - replies are DRAFTS ONLY. hd_draft_reply saves a draft the desk shows
 //     as "Draft from Claude"; no tool sends a public reply to a requester.
+//     (1.20.15: hd_apply_macro keeps the rule: a macro's reply is saved as
+//     such a draft, and its status change is not made: an agent sets it
+//     after sending the reply.)
 //   - no tool approves or declines: hd_my_approvals returns approve_url.
 //   - nothing is published: workflows, request types, macros and (1.20.14)
 //     checklists are saved as drafts (an unpublished workflow draft, a
@@ -87,7 +90,7 @@ const refuse = (text: string) => toolText(text, true);
 
 // --- Definitions -------------------------------------------------------------------
 
-type Side = "request" | "agent" | "reports" | "workflows" | "request_types" | "macros" | "checklists";
+type Side = "request" | "agent" | "reports" | "workflows" | "request_types" | "macros" | "checklists" | "macro_use";
 
 interface HdToolDef {
   name: string;
@@ -218,8 +221,16 @@ export const HELPDESK_TOOL_DEFS: HdToolDef[] = [
     side: "agent",
     write: "notes",
     description:
-      "Helpdesk desk: save a reply DRAFT on a ticket. It is NOT sent: the draft waits in the ticket as \"Draft from Claude\" above the composer, and an agent edits it and sends it from the desk, or discards it (their send follows the normal rules, including newbie review). No tool sends a reply to a requester, and no setting allows it. Tell the person the draft is waiting in the desk.",
-    inputSchema: obj({ number: NUMBER, body: { type: "string", description: "The reply text, addressed to the requester (markdown)." } }, ["number", "body"]),
+      "Helpdesk desk: save a reply DRAFT on a ticket. It is NOT sent: the draft waits in the ticket as \"Draft from Claude\" above the composer, and an agent edits it and sends it from the desk, or discards it (their send follows the normal rules, including newbie review). No tool sends a reply to a requester, and no setting allows it. Tell the person the draft is waiting in the desk. With canned_id (from hd_canned_responses), the draft starts from that canned response filled for this ticket, and body, if sent, follows it.",
+    // 1.20.15 (additive): canned_id; body is then optional.
+    inputSchema: obj(
+      {
+        number: NUMBER,
+        body: { type: "string", description: "The reply text, addressed to the requester (markdown). Needed unless canned_id is sent." },
+        canned_id: { type: "number", description: "A canned response's id (hd_canned_responses) the person may use: the draft starts from it, filled for this ticket." },
+      },
+      ["number"]
+    ),
   },
   // Canned responses, read only (1.19.2, agent W4, lib/mcp/canned-tool).
   CANNED_TOOL_DEF,
@@ -278,6 +289,32 @@ export const HELPDESK_TOOL_DEFS: HdToolDef[] = [
         add_template_id: { type: "number", description: "A library checklist to add (hd_read_ticket → checklist_templates[].id). Added before any ticking." },
       },
       ["number"]
+    ),
+  },
+  // 1.20.15: macros, as the agent applies them in the desk (lib/helpdesk/macros applyMacroAs).
+  {
+    name: "hd_list_macros",
+    side: "macro_use",
+    description:
+      "Helpdesk desk: the macros the person can apply (their own personal ones, their teams' and everyone's), each with its id, name, scope and what it does: its reply (a preview) and its changes to status, priority, team and tags, and whether it solves. With a ticket number they work, only the macros usable on that ticket, with the reply filled for it. Apply one with hd_apply_macro.",
+    inputSchema: obj({
+      number: { type: "number", description: "A ticket number (#1047 → 1047): only the macros usable there, reply filled for it." },
+      query: { type: "string", description: "Words in the macro's name or reply." },
+      limit: { type: "number", description: "1 to 50 (default 20)." },
+    }),
+  },
+  {
+    name: "hd_apply_macro",
+    side: "macro_use",
+    write: "update",
+    description:
+      "Helpdesk desk: apply a macro to a ticket as the person, with the desk's own checks (Use macros in the ticket's team, the macro is theirs to use, each change within their desk role, required checklist items and \"Before you solve\" when it solves, not on a closed or merged ticket). The macro's field changes are made at once and show \"via Claude\" on the timeline. Its reply is NOT sent: it is saved as a reply draft (\"Draft from Claude\") for an agent to send from the desk, and a status change the macro makes (for example Solved) is not made: nothing sets it later, so the agent sets it after sending the reply; the result says so. Confirm with the person before applying.",
+    inputSchema: obj(
+      {
+        number: NUMBER,
+        macro_id: { type: "number", description: "The macro's id (hd_list_macros)." },
+      },
+      ["number", "macro_id"]
     ),
   },
   {
@@ -426,6 +463,9 @@ async function onSide(user: User, side: Side): Promise<boolean> {
       for (const c of CHECKLIST_MANAGE_CAPS) if (await hdCan(user, c)) return true;
       return false;
     }
+    case "macro_use":
+      // 1.20.15: an agent who holds Use macros somewhere (the desk's macro route's gate).
+      return (await isAgent(user)) && hdCan(user, "macros.use");
   }
 }
 
@@ -587,6 +627,10 @@ export async function callHelpdeskTool(user: User, name: string, args: Args, ctx
         return await listChecklistsTool(a, ctx);
       case "hd_draft_checklist":
         return await draftChecklist(user, a, ctx);
+      case "hd_list_macros":
+        return await listMacrosTool(user, a, ctx);
+      case "hd_apply_macro":
+        return await applyMacroTool(user, a, ctx);
     }
   } catch (e) {
     if (e instanceof HdTicketError) return refuse(e.message);
@@ -957,17 +1001,36 @@ async function draftReply(user: User, a: Args, ctx: Ctx) {
   }
   const locked = await mergedLock(t);
   if (locked) return refuse(`${locked} (409)`);
-  const body = textField(a.body, DRAFT_LIMITS.body);
+  let body = textField(a.body, DRAFT_LIMITS.body);
   if (body === null) return refuse("The draft is too long.");
-  if (!body) return refuse("Write the draft (body).");
+  // 1.20.15: canned_id starts the draft from a canned response the person may use there, filled for
+  // the ticket as hd_canned_responses fills it (lib/helpdesk/canned, the desk's own insert rules).
+  let canned: { id: number; name: string } | null = null;
+  if (a.canned_id !== undefined && a.canned_id !== null) {
+    const id = Number(a.canned_id);
+    const cn = await import("../helpdesk/canned");
+    const c = Number.isSafeInteger(id) && id > 0 ? await cn.getCanned(id) : undefined;
+    if (!c || !cn.cannedVisibleTo(c, user.id, await agentTeamIds(user), t.team_id)) {
+      return refuse(`No canned response with id ${String(a.canned_id)} that you can use on #${t.number}. hd_canned_responses lists them. Nothing was saved.`);
+    }
+    const filled = (await cn.renderCannedFor(c, t, user)).trim();
+    body = body ? `${filled}\n\n${body}` : filled;
+    if (body.length > DRAFT_LIMITS.body) return refuse("The draft is too long.");
+    canned = { id: c.id, name: c.title };
+  }
+  if (!body) return refuse("Write the draft (body), or send canned_id.");
   const draft = await createReplyDraft(t.id, body, user.id, "claude");
+  // A canned response put into a reply counts as a use, as an insert in the desk does.
+  if (canned) await (await import("../helpdesk/canned")).recordCannedUse(canned.id, user.id, t.id);
   await auditMcp(user, ctx, "helpdesk.reply_draft.created", { type: "helpdesk_ticket", id: t.id, label: ticketLabel(t) }, {
     number: t.number,
     draft_id: draft.id,
+    ...(canned ? { canned_id: canned.id } : {}),
   });
   return toolJson({
     number: t.number,
     draft_id: draft.id,
+    ...(canned ? { canned_response: canned } : {}),
     sent: false,
     note: "Saved as a draft. Nothing was sent to the requester. It waits in the ticket as \"Draft from Claude\" for an agent to edit and send, or discard.",
     url: `${ctx.origin}/desk/tickets/${t.number}`,
@@ -1413,5 +1476,94 @@ async function draftChecklist(user: User, a: Args, ctx: Ctx) {
         ? "Tickets and request types keep using the live checklist. A person with checklist access reviews the changes and publishes or discards them in Desk settings → Checklists."
         : "Nobody can add it to a ticket yet and nothing adds it automatically. A person with checklist access reviews it, edits it if needed and publishes it in Desk settings → Checklists.",
     edit_url: checklistsUrl(ctx, t.id),
+  });
+}
+
+// --- Macros (1.20.15) ----------------------------------------------------------------------
+
+const MACRO_REPLY_PREVIEW = 400;
+
+async function listMacrosTool(user: User, a: Args, ctx: Ctx) {
+  const mac = await import("../helpdesk/macros");
+  let t: HdTicket | null = null;
+  if (a.number !== undefined && a.number !== null && a.number !== "") {
+    const found = await ticketFor(user, a.number, "work");
+    if (!found) return refuse(NOT_FOUND(a.number));
+    t = found.t;
+    // The desk's rule: Use macros in the ticket's team.
+    if (!(await hdCan(user, "macros.use", { teamId: t.team_id }))) return refuse(`${HD_FORBIDDEN} (403: Use macros on #${t.number})`);
+  }
+  const query = typeof a.query === "string" ? a.query.trim().toLowerCase().slice(0, 200) : "";
+  const limit = Math.min(50, Math.max(1, Number.isFinite(Number(a.limit)) ? Math.floor(Number(a.limit)) : 20));
+  // Exactly the macros the desk lets them apply: their own personal ones, their teams' and everyone's (macroVisibleTo).
+  const all = await mac.listMacros(await agentTeamIds(user), user.id);
+  const hits = all.filter((m) => !query || m.title.toLowerCase().includes(query) || m.body.toLowerCase().includes(query)).slice(0, limit);
+  const mctx = t ? await mac.macroContext(t.id, { id: user.id, name: user.name || user.username, email: user.email }, ctx.origin) : null;
+  const out = [];
+  for (const m of hits) {
+    const does = await mac.macroDoes(m);
+    const reply = (mctx ? mac.renderMacro(m.body, mctx) : m.body).trim();
+    out.push({
+      id: m.id,
+      name: m.title,
+      scope: m.scope,
+      team: m.scope === "team" ? m.team_name ?? null : null,
+      does: does.lines,
+      solves: does.solves,
+      reply_preview: reply ? (reply.length > MACRO_REPLY_PREVIEW ? `${reply.slice(0, MACRO_REPLY_PREVIEW - 1)}…` : reply) : null,
+      changes: m.actions ?? {},
+    });
+  }
+  return toolJson({
+    ...(t ? { ticket: t.number } : {}),
+    count: out.length,
+    macros: out,
+    note: "Apply one with hd_apply_macro, after confirming with the person. Its reply is saved as a draft for an agent to send from the desk, never sent, and its status change is not made (the agent sets it after sending the reply). Macros never change the assignee.",
+  });
+}
+
+async function applyMacroTool(user: User, a: Args, ctx: Ctx) {
+  if (messagePostLimited(user.id)) return tooMany();
+  const n = parseTicketNumber(typeof a.number === "number" || typeof a.number === "string" ? a.number : "");
+  if (!n) return refuse(NOT_FOUND(a.number));
+  const macroId = Number(a.macro_id);
+  if (!Number.isSafeInteger(macroId) || macroId <= 0) return refuse("macro_id is a macro's id from hd_list_macros.");
+  const { applyMacroAs, MACRO_DRAFT_STATUS_WAITS } = await import("../helpdesk/macros");
+  // The desk route's own function, as the person; the reply becomes a draft (this connector never sends one).
+  const r = await applyMacroAs(toSessionUser(user), n, macroId, { origin: ctx.origin, replyAs: "draft", via: "mcp", ip: ctx.ip });
+  if (!r.ok) {
+    if (r.status === 404 && r.error === "Ticket not found.") return refuse(NOT_FOUND(a.number));
+    if (r.status === 404) return refuse(`No macro with id ${macroId} that you can use. hd_list_macros lists them. Nothing was changed.`);
+    if (r.merged) {
+      const t = await getTicketByNumber(n);
+      const locked = t ? await mergedLock(t) : null;
+      return refuse(`${locked ?? `#${n} was merged into another ticket.`} (409) Nothing was changed.`);
+    }
+    if (r.status === 409 && r.error === "This ticket is closed.") return refuse(`#${n} is closed, so a macro can't change it. (409) Nothing was changed.`);
+    if (r.missing) return refuse(`${r.error} (409) The task's hand-off is entered in the desk (Mark done). Nothing was changed.`);
+    return refuse(`${r.error} (${r.status}) Nothing was changed.`);
+  }
+  const res = r.result;
+  const fresh = await getTicketByNumber(n);
+  const drafted = res.draft_id !== undefined;
+  const waits = res.status_unchanged === MACRO_DRAFT_STATUS_WAITS;
+  const notes: string[] = [];
+  if (drafted) notes.push("The macro's reply was saved as a draft and NOT sent. It waits in the ticket as \"Draft from Claude\" for an agent to edit and send from the desk, or discard. Tell the person.");
+  if (waits) notes.push(`The macro's status change (${r.macro.actions?.status}) was not made: set it once the reply is sent, in the desk or with hd_update_ticket, with the person's say-so.`);
+  else if (res.status_unchanged) notes.push(`The status was not changed: ${res.status_unchanged}`);
+  if (res.patch && Object.keys(res.patch).length) notes.push("The other changes were made and show \"via Claude\" on the timeline.");
+  if (!drafted && !Object.keys(res.patch).length) notes.push("Nothing needed changing: the ticket already was as the macro sets it.");
+  return toolJson({
+    number: n,
+    macro: { id: r.macro.id, name: r.macro.title },
+    changed: Object.keys(res.patch),
+    reply: drafted ? { saved_as: "draft", draft_id: res.draft_id, sent: false } : null,
+    ...(res.status_unchanged ? { status_unchanged: res.status_unchanged } : {}),
+    status: fresh?.status,
+    priority: fresh?.priority,
+    team: fresh?.team_name ?? null,
+    tags: fresh?.tags ?? [],
+    note: notes.join(" "),
+    url: `${ctx.origin}/desk/tickets/${n}`,
   });
 }

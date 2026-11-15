@@ -128,13 +128,24 @@ export async function newerMessages(ticketId: number, sinceId: number, userId: n
  * Otherwise the 409 to return; nothing has been written.
  */
 export async function collisionRefusal(ticketId: number, userId: number, body: Record<string, unknown> | null | undefined): Promise<NextResponse | null> {
+  const c = await collisionCheck(ticketId, userId, body);
+  if (!c) return null;
+  return NextResponse.json(c.status === 409 ? { error: c.error, newer: c.newer } : { error: c.error }, { status: c.status });
+}
+
+/** 1.20.15: collisionRefusal's answer as plain data, for lib/helpdesk/macros applyMacroAs (the desk's macro route and Claude share it). */
+export async function collisionCheck(
+  ticketId: number,
+  userId: number,
+  body: Record<string, unknown> | null | undefined
+): Promise<{ status: 400; error: string } | { status: 409; error: string; newer: HdNewerMessage[] } | null> {
   if (!body || !("expect_last_message_id" in body) || body.force === true) return null;
   const raw = body.expect_last_message_id;
   const since = raw === null || raw === undefined ? 0 : Number(raw);
-  if (!Number.isSafeInteger(since) || since < 0) return NextResponse.json({ error: "expect_last_message_id is a message id." }, { status: 400 });
+  if (!Number.isSafeInteger(since) || since < 0) return { status: 400, error: "expect_last_message_id is a message id." };
   const newer = await newerMessages(ticketId, since, userId);
   if (!newer.length) return null;
-  return NextResponse.json({ error: COLLISION_ERROR, newer }, { status: 409 });
+  return { status: 409, error: COLLISION_ERROR, newer };
 }
 
 function iso(v: unknown): string {

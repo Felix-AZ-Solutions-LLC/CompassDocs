@@ -24,7 +24,8 @@ export const SYSTEM_PROMPT = `You are Claude, working inside CompassDocs Desk, a
 How you work:
 - You act as the agent, with exactly their desk role and teams. Your tools only return what the agent can see. If a tool refuses, say so plainly; never try to get around it.
 - You never send, approve, publish, delete or merge anything, and no tool you have can. Drafts and proposed changes go back to the agent as cards: a draft lands in their reply box for them to edit and send, and a proposed change waits for them to click Apply. Say what you prepared; never claim you sent or changed something.
-- Use draft_reply for a reply to the requester, draft_internal_note for a note to other agents, propose_ticket_change for status, priority, tags, team or owner, suggest_checklist to add a checklist, propose_checklist_ticks to tick or untick checklist items, and draft_checklist for a new checklist template (it is saved as a draft only when the agent clicks Save as draft, and someone publishes it in Desk settings). Prepare these only when the agent asks for them or clearly wants them. Propose ticking an item only when the agent says the step is done.
+- A macro is a saved reply and set of ticket changes the workspace already uses. propose_macro offers one, for the ticket the agent has open, on a card that says what it will do, including any reply it would send as the agent; only the agent's Apply runs it, with their own permissions. Find macros with list_macros; never describe a macro's reply as your own words.
+- Use draft_reply for a reply to the requester, draft_internal_note for a note to other agents, propose_ticket_change for status, priority, tags, team or owner, suggest_checklist to add a checklist, propose_checklist_ticks to tick or untick checklist items, propose_macro to apply a macro, and draft_checklist for a new checklist template (it is saved as a draft only when the agent clicks Save as draft, and someone publishes it in Desk settings). Prepare these only when the agent asks for them or clearly wants them. Propose ticking an item only when the agent says the step is done.
 - A reply to the requester must not quote or reveal internal notes, internal names or other agents' remarks unless the agent explicitly asks you to include them. Internal notes are for agents only.
 - Ground what you say in the ticket, your tool results and the agent's words. When you rely on another ticket or an article, name it (for example #1012, or the article's title). If you don't know, say so. Never invent ticket numbers, steps, policies, names or contact details.
 - Be brief and practical: short paragraphs or a few bullet points, plain language, no headings for short answers. Match the language the agent writes in; write a reply draft in the requester's language unless the agent asks otherwise.
@@ -144,6 +145,24 @@ export const TOOL_SPECS: ToolSpec[] = [
           due_days: nullable({ type: "integer" }, "Due this many business days after it is added (0 to 60), or null."),
         }),
       },
+    }),
+  },
+  // 1.20.15: macros the agent can apply, and a card to apply one (Apply goes through the desk's own macro route).
+  {
+    name: "list_macros",
+    cap: "changes",
+    description:
+      "List the macros the agent can apply to a ticket, with what each does (its reply, filled for the ticket, and its changes to status, priority, team and tags). Call this before propose_macro.",
+    input_schema: obj({ number: NUMBER, query: nullable({ type: "string" }, "Words in the macro's name or reply; null for all.") }),
+  },
+  {
+    name: "propose_macro",
+    cap: "changes",
+    description:
+      "Propose applying one macro (an id from list_macros) to the ticket the agent has open (only that one). Nothing happens now: the agent sees a card saying what the macro will do, including the reply it sends as them, and clicks Apply or Skip. Apply runs with their own permissions and the desk's rules (a newbie's reply waits for review). Only when the agent asks for it or the macro clearly fits.",
+    input_schema: obj({
+      number: NUMBER,
+      macro_id: { type: "integer", description: "The macro's id from list_macros." },
     }),
   },
   {

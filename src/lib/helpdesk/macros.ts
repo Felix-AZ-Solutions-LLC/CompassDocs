@@ -14,7 +14,21 @@
 // markdown the body is: "*Bob*" stays those characters in the reply.
 //
 // Visibility: a macro with no team is everyone's; a team macro is its
-// team's (and every agent_all agent's). Server-only.
+// team's (and every agent_all agent's).
+//
+// 1.20.15: applying as an agent is one library function, applyMacroAs,
+// which the desk's route (POST …/macro/[id]) and Claude share: the same
+// checks in the same order (the recycle bin, works the ticket, Use macros
+// in its team, the macro's scope, closed and merged, the send guard, the
+// reply and field-change capabilities, a workflow task's hand-off,
+// required checklist items and "Before you solve", newbie review). The
+// Claude connector's hd_apply_macro saves the macro's reply as a reply
+// DRAFT instead of sending it (its rule: replies are drafts only), so the
+// macro's status change is not made (an agent sets it after sending the
+// reply), as for a reply held for review. A change
+// through Claude is audited (helpdesk.macro.applied, via "mcp" or
+// "claude_desk") and its timeline lines say "via Claude".
+// Server-only.
 
 import "server-only";
 import { hq, hqOne } from "./db-core";
@@ -337,7 +351,15 @@ export interface MacroApplyActor {
   id: number | null;
   name: string;
   email?: string;
+  /** 1.20.15: through the Claude connector ("mcp") or a Claude in the desk card ("claude_desk"): the field changes' timeline lines say so. */
+  via?: MacroVia;
 }
+
+/** 1.20.15: how a macro reached the ticket through Claude. */
+export type MacroVia = "mcp" | "claude_desk";
+
+/** 1.20.15: why a macro's status change was not made when its reply was saved as a draft (the Claude connector). Nothing sets it later. */
+export const MACRO_DRAFT_STATUS_WAITS = "The reply was saved as a draft, not sent, so the macro's status change was not made. Set the status after the reply is sent.";
 
 export type MacroApplyResult =
   | {
@@ -350,6 +372,10 @@ export type MacroApplyResult =
       held?: boolean;
       /** 1.19.2: the status change was left out because required checklist items are open (an automation's macro, or a race); the sentence. */
       status_unchanged?: string;
+      /** 1.20.15: the reply was saved as this reply draft (replyAs "draft"), not sent. */
+      draft_id?: number;
+      /** 1.20.15: every check passed and nothing was written (dryRun). */
+      dry_run?: true;
     }
   | { ok: false; status: 403 | 404 | 409; error: string; missing?: string[] };
 
@@ -372,15 +398,26 @@ export async function applyMacroToTicket(
   ticketId: number,
   macroId: number,
   actor: MacroApplyActor,
-  opts: { preview?: boolean; fromAutomation?: boolean; origin?: string; authorize?: MacroAuthorize; /** 1.20.5: closing answers for a macro that solves (lib/helpdesk/solve-requirements). */ solveAnswers?: unknown } = {}
+  opts: {
+    preview?: boolean;
+    fromAutomation?: boolean;
+    origin?: string;
+    authorize?: MacroAuthorize;
+    /** 1.20.5: closing answers for a macro that solves (lib/helpdesk/solve-requirements). */
+    solveAnswers?: unknown;
+    /** 1.20.15: "draft" saves the reply as a reply draft for an agent to send (the Claude connector) and holds back the status change. */
+    replyAs?: "send" | "draft";
+    /** 1.20.15: run every check (authorize, required checklist items, "Before you solve", newbie review) and write nothing. */
+    dryRun?: boolean;
+  } = {}
 ): Promise<MacroApplyResult> {
   const macro = await getMacro(macroId);
   if (!macro) return { ok: false, status: 404, error: "Macro not found." };
   const ctx = await macroContext(ticketId, actor, opts.origin ?? "");
   if (!ctx) return { ok: false, status: 404, error: "Ticket not found." };
   const body = renderMacro(macro.body, ctx).trim();
-  const t = await hqOne<{ status: HdStatus; priority: HdPriority; team_id: number | null; tags: string[] }>(
-    "SELECT status, priority, team_id, tags FROM hd_tickets WHERE id = $1",
+  const t = await hqOne<{ status: HdStatus; priority: HdPriority; team_id: number | null; tags: string[]; requester_id: number | null }>(
+    "SELECT status, priority, team_id, tags, requester_id FROM hd_tickets WHERE id = $1",
     [ticketId]
   );
   if (!t) return { ok: false, status: 404, error: "Ticket not found." };
@@ -399,11 +436,19 @@ export async function applyMacroToTicket(
     const refused = await opts.authorize({ body, patch });
     if (refused) return { ok: false, ...refused };
   }
+  let statusDropped: string | undefined;
+  // 1.20.15: a reply saved as a draft is not sent, so its status change waits (as for a reply
+  // held for review below): "reply and solve" must not solve while the requester has no reply.
+  // Checked after authorize, so a macro the agent may not apply in full is refused as in the desk.
+  const asDraft = opts.replyAs === "draft" && !!body;
+  if (asDraft && patch.status !== undefined) {
+    delete patch.status;
+    statusDropped = MACRO_DRAFT_STATUS_WAITS;
+  }
   // 1.19.2 (agent W3): required checklist items block the macro's solve before its reply
   // is posted, for every caller. A person's macro is refused whole (409); an automation's
   // drops only the status change and still sends the reply and makes the rest.
   const checklists = await import("./checklists");
-  let statusDropped: string | undefined;
   if (checklists.solvesForChecklists(t.status, patch.status)) {
     const held = await checklists.checklistSolveRefusal(ticketId);
     if (held && !opts.fromAutomation) return { ok: false, status: 409, error: held.error };
@@ -424,10 +469,28 @@ export async function applyMacroToTicket(
       statusDropped = needs.error;
     }
   }
+  // 1.20.15: a dry run (a Claude in the desk proposal) stops here, every check passed; whether a
+  // newbie's reply would be held is asked as addMessage asks it, and its status change waits then too.
+  if (opts.dryRun) {
+    let wouldHold = false;
+    if (body && !asDraft && actor.id) {
+      const { prepareReply } = await import("./review");
+      wouldHold = (await prepareReply({ id: actor.id }, { id: ticketId, requester_id: t.requester_id, team_id: t.team_id }, { kind: "public" })).review_state === "pending";
+    }
+    if (wouldHold && patch.status !== undefined) delete patch.status;
+    return { ok: true, preview: false, body, patch, message_id: null, held: wouldHold, dry_run: true, ...(statusDropped ? { status_unchanged: statusDropped } : {}) };
+  }
   const hook = { fromAutomation: opts.fromAutomation, actorId: actor.id, actorName: actor.name, origin: opts.origin };
+  // 1.20.15: field changes through Claude end "via Claude" / "via Claude in the desk" on the timeline (lib/helpdesk/tickets).
+  const updater = { id: actor.id, name: actor.name, ...(actor.via ? { via: actor.via } : {}) };
   let messageId: number | null = null;
+  let draftId: number | undefined;
   let held = false;
-  if (body) {
+  if (asDraft) {
+    // The connector's rule: a reply is a draft that waits above the composer as "Draft from Claude" (lib/helpdesk/drafts).
+    const { createReplyDraft } = await import("./drafts");
+    draftId = (await createReplyDraft(ticketId, body, actor.id, "claude")).id;
+  } else if (body) {
     const { addMessage } = await import("./messages");
     const r = await addMessage(
       ticketId,
@@ -444,7 +507,7 @@ export async function applyMacroToTicket(
   if (Object.keys(patch).length) {
     const { updateTicket } = await import("./tickets");
     try {
-      await updateTicket(ticketId, patch, { id: actor.id, name: actor.name }, hook, { solveAnswers: opts.solveAnswers });
+      await updateTicket(ticketId, patch, updater, hook, { solveAnswers: opts.solveAnswers });
     } catch (e) {
       // An item unticked since the check above: the reply is out, so keep the rest of the change (W3).
       // 1.20.5: the same when a "Before you solve" requirement refuses it now (a reply held for review doesn't count as sent).
@@ -452,8 +515,212 @@ export async function applyMacroToTicket(
       if (patch.status === undefined || !(checklists.isChecklistBlock(msg) || solveReqs.isSolveRequirementBlock(msg))) throw e;
       delete patch.status;
       statusDropped = msg;
-      if (Object.keys(patch).length) await updateTicket(ticketId, patch, { id: actor.id, name: actor.name }, hook);
+      if (Object.keys(patch).length) await updateTicket(ticketId, patch, updater, hook);
     }
   }
-  return { ok: true, preview: false, body, patch, message_id: messageId, held, ...(statusDropped ? { status_unchanged: statusDropped } : {}) };
+  return {
+    ok: true,
+    preview: false,
+    body,
+    patch,
+    message_id: messageId,
+    held,
+    ...(statusDropped ? { status_unchanged: statusDropped } : {}),
+    ...(draftId !== undefined ? { draft_id: draftId } : {}),
+  };
+}
+
+// --- As an agent: the desk's route and Claude's tools (1.20.15) ---------------------------
+
+/** Who applies (a desk session, or the connector's user as a session). */
+export type MacroAgent = import("../types").SessionUser;
+
+/**
+ * 1.20.15 (review fix): what a macro would write on a ticket, as Claude in the desk's card
+ * showed it: the macro's version (updated_at), the filled reply and the field changes
+ * before any is held back. Apply with a card must match it exactly or writes nothing.
+ */
+export interface MacroPlan {
+  macro_updated_at: string;
+  body: string;
+  patch: import("./types").HdTicketPatch;
+}
+
+export const MACRO_CHANGED = "The macro changed since Claude suggested it. Ask again.";
+export const MACRO_TICKET_CHANGED = "The ticket changed since Claude suggested this, so the macro would now do something else. Ask again.";
+
+const isoOf = (v: unknown): string => {
+  const d = new Date(v as string);
+  return Number.isNaN(d.getTime()) ? String(v ?? "") : d.toISOString();
+};
+
+/** JSON with object keys sorted (a plan read back from jsonb has its keys reordered). */
+function stableJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(",")}]`;
+  if (v && typeof v === "object") {
+    return `{${Object.keys(v as object)
+      .filter((k) => (v as Record<string, unknown>)[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableJson((v as Record<string, unknown>)[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+
+export type MacroAsOutcome =
+  | { ok: false; status: 400 | 403 | 404 | 409; error: string; missing?: string[]; newer?: unknown[]; merged?: boolean }
+  | {
+      ok: true;
+      result: Extract<MacroApplyResult, { ok: true }>;
+      ticket: { id: number; number: number; subject: string };
+      macro: HdMacroRow & { scope: MacroScope };
+      /** 1.20.15: what it wrote, or (dryRun) would write, for a card to carry. */
+      plan?: MacroPlan;
+    };
+
+/**
+ * Apply a macro to a ticket as `user`: the desk's POST
+ * /api/helpdesk/tickets/[n]/macro/[id] (whose caller holds Use macros
+ * somewhere, hdCapGate) and Claude's tools. In order, as the route always
+ * checked: not in the recycle bin and worked by the caller (404), Use
+ * macros in the ticket's team (403), the macro is theirs to use (personal:
+ * its owner; team: their teams; everyone's) (404); then, unless previewing,
+ * a closed or merged ticket (409) and the send guard (`guard`: the body's
+ * expect_last_message_id / force) for a macro with a reply; then
+ * applyMacroToTicket with the route's authorize (reply capability, each
+ * field change's capability, a workflow task's hand-off), required
+ * checklist items, "Before you solve" and newbie review. A refusal writes
+ * nothing. Through Claude (`via`), a change is audited as
+ * helpdesk.macro.applied with the marker.
+ */
+export async function applyMacroAs(
+  user: MacroAgent,
+  number: number,
+  macroId: number,
+  opts: {
+    preview?: boolean;
+    origin?: string;
+    solveAnswers?: unknown;
+    guard?: Record<string, unknown>;
+    replyAs?: "send" | "draft";
+    dryRun?: boolean;
+    via?: MacroVia;
+    ip?: string | null;
+    /**
+     * 1.20.15 (review fix): Apply on a Claude in the desk card: the plan the card showed (null
+     * when the card has none). Any difference refuses the whole apply with a 409, writing nothing.
+     */
+    expect?: MacroPlan | null;
+    /** The card, for the audit row. */
+    cardId?: number;
+  } = {}
+): Promise<MacroAsOutcome> {
+  const [{ agentTeamIds, canWorkTicket }, { HD_FORBIDDEN, hdCan }, { patchRefusal }] = await Promise.all([
+    import("./access"),
+    import("./roles"),
+    import("./patch-caps"),
+  ]);
+  if (!(await hdCan(user, "macros.use"))) return { ok: false, status: 403, error: HD_FORBIDDEN };
+  const ticket = await hqOne<
+    Pick<import("./types").HdTicketRow, "id" | "number" | "subject" | "requester_id" | "team_id" | "assignee_id" | "status" | "priority" | "source"> & { merged_into: number | null }
+  >(
+    // 1.19.4 (C7): not a ticket in the recycle bin.
+    "SELECT id, number, subject, requester_id, team_id, assignee_id, status, priority, source, merged_into FROM hd_tickets WHERE number = $1 AND deleted_at IS NULL",
+    [number]
+  );
+  if (!ticket || !(await canWorkTicket(user, ticket))) return { ok: false, status: 404, error: "Ticket not found." };
+  if (!(await hdCan(user, "macros.use", { teamId: ticket.team_id }))) return { ok: false, status: 403, error: HD_FORBIDDEN };
+  const macro = await getMacro(macroId);
+  if (!macro || !macroVisibleTo(macro, await agentTeamIds(user), user.id)) return { ok: false, status: 404, error: "Macro not found." };
+  if (opts.expect !== undefined && (!opts.expect || isoOf(opts.expect.macro_updated_at) !== isoOf(macro.updated_at))) {
+    return { ok: false, status: 409, error: MACRO_CHANGED };
+  }
+  const preview = opts.preview === true;
+  // A merged ticket is closed into the one it joined (lib/helpdesk/merge), so this answers it too.
+  if (!preview && ticket.status === "closed") return { ok: false, status: 409, error: "This ticket is closed.", ...(ticket.merged_into ? { merged: true } : {}) };
+  // 1.19.1 collision warning (lib/helpdesk/presence): a macro's reply is a send too. A draft sends nothing.
+  if (!preview && !opts.dryRun && opts.replyAs !== "draft" && macro.body.trim()) {
+    const { collisionCheck } = await import("./presence");
+    const collided = await collisionCheck(ticket.id, user.id, opts.guard);
+    if (collided) return { ok: false, ...collided };
+  }
+  const teamId = ticket.team_id;
+  let plan: MacroPlan | undefined;
+  const result = await applyMacroToTicket(
+    ticket.id,
+    macroId,
+    { id: user.id, name: user.name || user.username, email: user.email, ...(opts.via ? { via: opts.via } : {}) },
+    {
+      preview,
+      origin: opts.origin,
+      solveAnswers: opts.solveAnswers,
+      ...(opts.replyAs === "draft" ? { replyAs: "draft" as const } : {}),
+      ...(opts.dryRun ? { dryRun: true } : {}),
+      authorize: async ({ body: reply, patch }) => {
+        plan = { macro_updated_at: isoOf(macro.updated_at), body: reply, patch: { ...patch } };
+        // 1.20.15 (review fix): exactly what the card showed, or nothing (the ticket moved on since).
+        if (opts.expect && (opts.expect.body !== reply || stableJson(opts.expect.patch) !== stableJson(patch))) {
+          return { status: 409, error: MACRO_TICKET_CHANGED };
+        }
+        if (reply && !(await hdCan(user, "tickets.reply_public", { teamId })) && !(await hdCan(user, "tickets.reply_needs_review", { teamId }))) {
+          return { status: 403, error: HD_FORBIDDEN };
+        }
+        const refused = await patchRefusal(user, ticket, patch);
+        if (refused) return { status: 403, error: refused };
+        if (ticket.source === "workflow" && (patch.status === "solved" || patch.status === "closed")) {
+          const { validateTaskSolve } = await import("./engine");
+          const missing = await validateTaskSolve(ticket.id);
+          if (missing) return { status: 409, error: missing.error, missing: missing.missing_keys };
+        }
+        return null;
+      },
+    }
+  );
+  if (!result.ok) return result;
+  if (opts.via && !preview && !result.dry_run) {
+    const { audit, actorFrom } = await import("../audit");
+    await audit({
+      actor: actorFrom(user),
+      action: "helpdesk.macro.applied",
+      targetType: "helpdesk_ticket",
+      targetId: ticket.id,
+      targetLabel: `#${ticket.number} ${ticket.subject}`.slice(0, 200),
+      details: {
+        number: ticket.number,
+        macro_id: macro.id,
+        macro: macro.title,
+        scope: macroScope(macro),
+        changed: Object.keys(result.patch),
+        reply: result.draft_id !== undefined ? "draft" : result.held ? "held" : result.body ? "sent" : "none",
+        ...(result.draft_id !== undefined ? { draft_id: result.draft_id } : {}),
+        ...(result.message_id ? { message_id: result.message_id } : {}),
+        ...(result.status_unchanged ? { status_unchanged: true } : {}),
+        ...(opts.cardId ? { card_id: opts.cardId } : {}),
+        ...(opts.via === "mcp" ? { via: "mcp" } : { via: "claude_desk", via_label: "via Claude in the desk" }),
+      },
+      ip: opts.ip ?? null,
+    });
+  }
+  return { ok: true, result, ticket: { id: ticket.id, number: ticket.number, subject: ticket.subject }, macro: { ...macro, scope: macroScope(macro) }, ...(plan ? { plan } : {}) };
+}
+
+// --- What a macro does, in words (Claude's tools, 1.20.15) --------------------------------
+
+/**
+ * "Replies to the requester", "Sets the status to Solved", "Adds the tags vpn, mfa", …
+ * for a macro's own actions (not checked against a ticket). Macros never change the assignee.
+ */
+export async function macroDoes(m: Pick<HdMacro, "body" | "actions">): Promise<{ lines: string[]; solves: boolean }> {
+  const { HD_STATUS_LABEL } = await import("./types");
+  const a = m.actions ?? {};
+  const lines: string[] = [];
+  if (m.body.trim()) lines.push("Replies to the requester");
+  if (a.status) lines.push(`Sets the status to ${HD_STATUS_LABEL[a.status] ?? a.status}`);
+  if (a.priority) lines.push(`Sets the priority to ${HD_PRIORITY_LABEL[a.priority] ?? a.priority}`);
+  if (a.team_id) {
+    const team = await hqOne<{ name: string }>("SELECT name FROM hd_teams WHERE id = $1", [a.team_id]);
+    lines.push(`Moves it to the team ${team?.name ?? "that no longer exists"}`);
+  }
+  if (a.tags_add?.length) lines.push(`Adds ${a.tags_add.length === 1 ? "the tag" : "the tags"} ${a.tags_add.join(", ")}`);
+  return { lines, solves: a.status === "solved" || a.status === "closed" };
 }

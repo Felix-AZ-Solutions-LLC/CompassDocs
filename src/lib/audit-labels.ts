@@ -208,6 +208,8 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.macro.created": "Created macro",
   "helpdesk.macro.updated": "Edited macro",
   "helpdesk.macro.deleted": "Deleted macro",
+  // 1.20.15: a macro applied through Claude (the connector, or a Claude in the desk card).
+  "helpdesk.macro.applied": "Applied a macro",
   // Canned responses (1.19.2, agent W4).
   "helpdesk.canned.created": "Created canned response",
   "helpdesk.canned.updated": "Edited canned response",
