@@ -78,7 +78,8 @@ test.describe.serial("skills and languages (licensed)", () => {
   test("Settings: add a skill, add French, tag an agent", async ({ page }) => {
     test.setTimeout(300_000);
     await page.goto("/desk/settings/skills");
-    await slow(page.getByRole("heading", { level: 1, name: "Skills and languages" })).toBeVisible({ timeout: 60_000 });
+    // 1.20.13: a tab under its section's h1; the tab's own title is an h2.
+    await slow(page.getByRole("heading", { level: 2, name: "Skills and languages" })).toBeVisible({ timeout: 60_000 });
     await slow(page.getByRole("link", { name: "Skills and languages" })).toHaveAttribute("aria-current", "page");
     await expect(page.getByText("A ticket's language comes from the requester's directory entry, or is detected from the first message.")).toBeVisible();
 

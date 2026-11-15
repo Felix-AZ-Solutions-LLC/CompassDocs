@@ -347,7 +347,7 @@ export function EmailSettings() {
         {/* 1.20.7: read the help mailboxes straight from Microsoft 365 (lib/helpdesk/m365). */}
         <M365MailCard />
 
-        <Card title="Webhook" description="One webhook takes the mail for every address. Forward each of your addresses to this webhook.">
+        <Card id="email-webhook" className="scroll-mt-6" title="Webhook" description="One webhook takes the mail for every address. Forward each of your addresses to this webhook.">
           {path ? (
             <div>
               <p className="mb-1 text-xs font-medium text-slate-500">Webhook address (keep it private)</p>
@@ -375,7 +375,7 @@ export function EmailSettings() {
           )}
         </Card>
 
-        <Card title="Who can write in">
+        <Card id="who-can-write-in" className="scroll-mt-6" title="Who can write in">
           <Toggle
             label="Accept mail from outside the workspace"
             help="Off: only people with a CompassDocs account can open tickets by email. Mail from addresses outside your workspace is ignored and logged. No reply is sent, so forged senders can't be used to send mail through you."

@@ -48,7 +48,9 @@ test.describe("Helpdesk: canned responses", () => {
 
       // --- The library (d2) ------------------------------------------------------
       await page.goto("/desk/settings/canned").catch(() => page.goto("/desk/settings/canned"));
-      await look(page.locator("h1")).toHaveText("Canned responses");
+      // 1.20.13: a tab of Macros and replies, whose name is the h1; the tab's own title is an h2.
+      await look(page.locator("h1")).toHaveText("Macros and replies");
+      await look(page.getByRole("heading", { level: 2, name: "Canned responses" })).toBeAttached();
       await look(page.getByText("Type ; in the reply box to insert one at the cursor.", { exact: false })).toBeVisible();
       await look(page.getByRole("radiogroup", { name: "Show" }).or(page.getByRole("combobox", { name: "Show" }))).toBeVisible();
       await page.getByRole("searchbox", { name: "Search canned responses" }).fill(tag);

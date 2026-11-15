@@ -166,6 +166,8 @@ export function SkillsSettings() {
         <div className="space-y-4">
           <div className="grid gap-4 lg:grid-cols-2">
             <Card
+              id="skills"
+              className="scroll-mt-6"
               title="Skills"
               actions={
                 lists ? (
@@ -201,6 +203,8 @@ export function SkillsSettings() {
               )}
             </Card>
             <Card
+              id="languages"
+              className="scroll-mt-6"
               title="Languages"
               actions={
                 lists ? (

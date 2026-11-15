@@ -714,6 +714,26 @@ table {
   animation: pending-in 0s linear 150ms forwards, spin 1s linear infinite;
 }
 
+/* Settings search landing (1.20.13, components/SettingsJumpHighlight): the
+ * card a result jumped to wears an accent outline that fades over 2.4s. With
+ * reduced motion the animation collapses and the outline simply stays until
+ * the attribute goes. */
+@keyframes settings-flash {
+  0%, 45% { outline-color: rgb(var(--compass-500)); }
+  100% { outline-color: rgb(var(--compass-500) / 0); }
+}
+[data-settings-flash] {
+  outline: 2px solid rgb(var(--compass-500));
+  outline-offset: 3px;
+  scroll-margin-top: 1.5rem;
+  animation: settings-flash 2.4s ease-out forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-settings-flash] {
+    animation: none !important;
+  }
+}
+
 /* Custom tooltips: any element with data-tt="Label" shows a styled tooltip on
  * hover or keyboard focus — replacing native title=, which browsers show
  * inconsistently (slow, unstyled, never on focus). Attribute-driven so no

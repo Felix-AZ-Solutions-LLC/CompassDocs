@@ -8,6 +8,7 @@
 
 import { createContext, useContext, useState } from "react";
 import { Segmented } from "./Segmented";
+import { useSettingsSubPage } from "./SettingsSubPage";
 
 export type Width = "normal" | "wide" | "full";
 
@@ -66,6 +67,9 @@ export function PageContainer({
   className?: string;
 }) {
   const { width } = usePageWidth();
+  // 1.20.13: a settings tab sits inside its section's container already.
+  const sub = useSettingsSubPage();
+  if (sub) return <div className={className || undefined}>{children}</div>;
   return (
     // data-page-width drives the document reading measure in globals.css.
     // Choosing a wider page is a request for density, so the measure widens

@@ -103,7 +103,7 @@ export function FeedLinks({ all = false }: { /** Also list everyone's links (set
 
   return (
     <div className="flex flex-col gap-4">
-      <Card padding="none" title="Your calendar feed links" description="Subscribe from Outlook, Google Calendar or Apple Calendar. A link is private: anyone who has it can read those events." icon={<Rss />}>
+      <Card id="feed-links" className="scroll-mt-6" padding="none" title="Your calendar feed links" description="Subscribe from Outlook, Google Calendar or Apple Calendar. A link is private: anyone who has it can read those events." icon={<Rss />}>
         <ul className="divide-y divide-slate-100" data-testid="feed-links">
           {scopes.map((s) => {
             const f = mine.find((x) => (x.team_id ?? null) === s.teamId);

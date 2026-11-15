@@ -66,7 +66,7 @@ export function CsatSettings() {
     <PageContainer>
       <PageHeader icon={<Star />} title="Satisfaction" subtitle="Ask one question when a ticket is solved: how did we do?" />
       <div className="flex flex-col gap-4">
-        <Card title="The survey">
+        <Card id="survey" className="scroll-mt-6" title="The survey">
           <Toggle
             label="Ask after every solved request"
             help="The requester gets it by email and on the request in Get help. Answers show in Reports."

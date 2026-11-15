@@ -143,7 +143,7 @@ export function SlaSettings() {
             <TeamSlaTargets key={scoped} teamId={scoped} framed={false} />
           </Card>
         )}
-        {scoped === null && <Card title="Targets by priority" description="The clock pauses while a ticket waits on the requester or is on hold." padding="none">
+        {scoped === null && <Card id="targets" className="scroll-mt-6" title="Targets by priority" description="The clock pauses while a ticket waits on the requester or is on hold." padding="none">
           <Table scroll minWidth="40rem">
             <thead>
               <tr>

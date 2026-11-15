@@ -56,7 +56,8 @@ test.describe("recurring tickets and time (licensed)", () => {
   test("a weekly schedule: preview, save, open one now, delete", async ({ page }) => {
     test.setTimeout(300_000);
     await page.goto("/desk/settings/recurring");
-    await slow(page.getByRole("heading", { level: 1, name: "Recurring tickets" })).toBeVisible({ timeout: 60_000 });
+    // 1.20.13: a tab under its section's h1; the tab's own title is an h2.
+    await slow(page.getByRole("heading", { level: 2, name: "Recurring tickets" })).toBeVisible({ timeout: 60_000 });
     await slow(page.getByRole("link", { name: "Recurring tickets" })).toHaveAttribute("aria-current", "page");
     await page.getByRole("button", { name: "New schedule" }).first().click();
 

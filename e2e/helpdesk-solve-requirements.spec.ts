@@ -89,7 +89,8 @@ test.describe("before you solve (licensed)", () => {
 
     // Desk settings → Before you solve: a new set.
     await page.goto(SETTINGS);
-    await slow(page.getByRole("heading", { level: 1, name: "Before you solve" })).toBeVisible({ timeout: 120_000 });
+    // 1.20.13: a tab under its section's h1; the tab's own title is an h2.
+    await slow(page.getByRole("heading", { level: 2, name: "Before you solve" })).toBeVisible({ timeout: 120_000 });
     await slow(page.getByRole("link", { name: /^Before you solve/ })).toHaveAttribute("aria-current", "page");
     const create = page.getByRole("dialog", { name: "New requirement set" });
     // The busy dev rig may still be hydrating: click until the dialog opens.

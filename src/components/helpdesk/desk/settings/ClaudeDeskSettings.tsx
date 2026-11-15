@@ -213,7 +213,7 @@ export function ClaudeDeskSettings() {
           </div>
         </Card>
 
-        <Card title="What Claude can do">
+        <Card id="claude-abilities" className="scroll-mt-6" title="What Claude can do">
           <div className="divide-y divide-slate-100">
             {CLAUDE_DESK_CAPS.filter((k) => k !== "web" || data.web_available).map((k) => (
               <div key={k} className="py-3 first:pt-0 last:pb-0">
@@ -248,7 +248,7 @@ export function ClaudeDeskSettings() {
           )}
         </Card>
 
-        <Card title="Spending">
+        <Card id="claude-spending" className="scroll-mt-6" title="Spending">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Monthly limit for the workspace" help="Empty for no limit." error={wsError}>
               <TextInput inputMode="decimal" value={form.limitWorkspace} placeholder="No limit" onChange={(e) => set({ limitWorkspace: e.target.value })} />

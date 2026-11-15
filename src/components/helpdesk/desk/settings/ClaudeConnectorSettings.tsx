@@ -74,7 +74,7 @@ export function ClaudeConnectorSettings() {
         subtitle="What Claude can do in the helpdesk for people who connect it. It always acts as that person, with their role and teams."
       />
       <div className="flex flex-col gap-4">
-        <Card title="Claude can">
+        <Card id="claude-can" className="scroll-mt-6" title="Claude can">
           <RadioCards
             label="Claude can"
             name="hd-claude-level"
