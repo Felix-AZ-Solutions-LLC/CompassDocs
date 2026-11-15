@@ -7,7 +7,7 @@
 // POST followed by a reload of the ticket, the list and the counts.
 //
 // Keys (single-key shortcuts): r reply, n internal note, e solve,
-// a assign to me.
+// a assign to me, Shift+O pop the reply out (1.20.18).
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -68,6 +68,10 @@ import { isChecklistBlock } from "@/lib/helpdesk/checklists-shared";
 import { isSolveRequirementBlock } from "@/lib/helpdesk/solve-requirements-shared";
 import { askBeforeYouSolve, BeforeYouSolveHost, type SolveExtras } from "../solve/BeforeYouSolve";
 import { BinnedTicketPane } from "../recycle-bin/BinnedTicketPane";
+// 1.20.18: the reply in a window of its own (../popout).
+import { popoutAllowed, useReplyElsewhere } from "../popout/useReplyPopout";
+import { ReplyElsewhere } from "../popout/ReplyElsewhere";
+import { clearHandoff, readDraft, writeDraft, type PopoutMode } from "../popout/reply-popout";
 import { DeleteTicketsDialog } from "../recycle-bin/DeleteTicketsDialog";
 
 const PILL_TONE: Record<string, string> = {
@@ -89,6 +93,36 @@ export function TicketPane({ number }: { number: number }) {
   const composer = useRef<ComposerHandle>(null);
   // CCs and followers (1.19.1, agent V3).
   const people = useTicketPeople(number);
+  // 1.20.18: the reply popped out into its own window. Sent there: reload here and start empty
+  // (the desk window's toast says so, ../popout useReplyPopoutToasts).
+  const elsewhere = useReplyElsewhere(number, me.id, {
+    onSent: () => {
+      void load(true);
+      refreshQueue();
+      people.reload();
+    },
+    // The pop-out applied a macro's other changes after sending.
+    onChanged: () => {
+      void load(true);
+      refreshQueue();
+    },
+    // 1.20.18 (security review): the pop-out closed while its send was on its way. If the ticket's newest message of
+    // that kind by this agent is exactly the unsent text, it went out: say so, and give nothing back to send twice.
+    checkSent: async (mode: PopoutMode) => {
+      const draft = readDraft(me.id, number, mode).trim();
+      if (!draft) return false;
+      const fresh = await getJson<HdTicketDetail>(`/api/helpdesk/tickets/${number}`, "Couldn't load that ticket.");
+      setD(fresh);
+      const mine = fresh.messages.filter((m) => m.author_id === me.id && m.kind === mode);
+      const last = mine[mine.length - 1];
+      if (!last || last.body.trim() !== draft) return false;
+      writeDraft(me.id, number, mode, "");
+      clearHandoff(me.id, number);
+      toast("ok", mode === "public" ? "This reply was sent." : "This note was added.");
+      refreshQueue();
+      return true;
+    },
+  });
 
   const load = useCallback(
     (quiet = false) =>
@@ -177,7 +211,8 @@ export function TicketPane({ number }: { number: number }) {
       ? {
           number: d.ticket.number,
           subject: d.ticket.subject,
-          fill: (text, mode, replace) => composer.current?.fill(text, mode, replace),
+          // 1.20.18: while the reply is in another window, Claude's draft goes there.
+          fill: (text, mode, replace) => (elsewhere.away ? elsewhere.fill(text, mode, replace) : composer.current?.fill(text, mode, replace)),
           apply: (p) => patch(p as HdTicketPatch & { via?: "claude_desk" }),
           reload: () => void load(true),
         }
@@ -204,8 +239,15 @@ export function TicketPane({ number }: { number: number }) {
 
   useDeskKeys(
     {
-      r: () => composer.current?.focus("public"),
-      n: () => composer.current?.focus("internal"),
+      // 1.20.18: while the reply is in another window, r and n (and Shift+O) bring that window forward.
+      r: () => (elsewhere.away ? elsewhere.show() : composer.current?.focus("public")),
+      n: () => (elsewhere.away ? elsewhere.show() : composer.current?.focus("internal")),
+      O: (e) => {
+        // Shift+O only: Caps Lock and o is not the shortcut.
+        if (merged || !e.shiftKey) return;
+        if (elsewhere.away) elsewhere.show();
+        else if (popoutAllowed()) composer.current?.popOut();
+      },
       e: () => t && !closed && can$("tickets.change_status") && patch({ status: "solved" }, `#${t.number} solved.`),
       a: () => t && can$("tickets.assign_self") && t.assignee_id !== me.id && patch({ assignee_id: me.id }, "Assigned to you."),
     },
@@ -369,7 +411,7 @@ export function TicketPane({ number }: { number: number }) {
         </div>
 
         {/* The requester strip (1.20.3): full pane width, above the conversation and the side column. */}
-        <RequesterStrip number={t.number} canWork={can} refreshKey={d.messages.length} onReply={can && !merged ? () => composer.current?.focus("public") : undefined} />
+        <RequesterStrip number={t.number} canWork={can} refreshKey={d.messages.length} onReply={can && !merged ? () => (elsewhere.away ? elsewhere.show() : composer.current?.focus("public")) : undefined} />
 
         {/* One column: the grid is plain flow inside the article's scroll. Two (@2xl): it takes the
             height the header leaves (never less than 20rem; a short window then scrolls the article a
@@ -390,11 +432,22 @@ export function TicketPane({ number }: { number: number }) {
             {/* Checklists (1.19.2, agent W3); refreshed as the timeline moves. */}
             {can && <TicketChecklists number={t.number} refreshKey={d.messages.length} />}
             <Conversation messages={d.messages} requesterId={t.requester_id} meId={me.id} ticketNumber={t.number} origins={d.merge?.message_origins} originals={can} />
-            {can && !merged && <ClaudeDraftCard number={t.number} onUse={(body) => composer.current?.fill(body)} />}
+            {can && !merged && !elsewhere.away && <ClaudeDraftCard number={t.number} onUse={(body) => composer.current?.fill(body)} />}
             {can && merged ? (
               <MergedComposerLock d={d} />
+            ) : can && elsewhere.away ? (
+              // 1.20.18: the reply is open in another window: one quiet line here, never a second box to send from.
+              <ReplyElsewhere
+                state={elsewhere.state}
+                onShow={elsewhere.show}
+                onBringBack={elsewhere.bringBack}
+                onTakeBack={elsewhere.takeBackAnyway}
+                onKeepWaiting={elsewhere.keepWaiting}
+              />
             ) : can ? (
               <Composer
+                // 1.20.18: one composer per ticket, so a reply handed back from a pop-out is picked up on arrival.
+                key={t.number}
                 ref={composer}
                 number={t.number}
                 subject={t.subject}
@@ -410,6 +463,8 @@ export function TicketPane({ number }: { number: number }) {
                 latestMessageId={latestMessageId(d.messages)}
                 onNewer={() => void load(true)}
                 beforeSolve={d.before_solve === true}
+                handoff={elsewhere.pendingAck ? "peek" : "take"}
+                onPopOut={elsewhere.popOut}
               />
             ) : (
               <p className="notice-warn rounded-lg border px-3 py-2 text-sm">You can read this ticket but not work it: it belongs to a team you're not in.</p>
@@ -424,7 +479,7 @@ export function TicketPane({ number }: { number: number }) {
               d={d}
               onPatch={patch}
               onInsertArticle={(title, url) => composer.current?.insertLink(title, url)}
-              onReply={() => composer.current?.focus("public")}
+              onReply={() => (elsewhere.away ? elsewhere.show() : composer.current?.focus("public"))}
               onReload={() => void load(true)}
             />
           </div>

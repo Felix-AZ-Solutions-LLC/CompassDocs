@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { Kbd } from "@/components/palette/Kbd";
 import { useSingleKeyOn } from "../hotkeys";
 
-const KEYS: [string, string][] = [
+const KEYS: [string | string[], string][] = [
   ["j", "Next ticket"],
   ["k", "Previous ticket"],
   ["Enter", "Open it"],
@@ -17,6 +17,8 @@ const KEYS: [string, string][] = [
   ["n", "Internal note"],
   ["e", "Solve"],
   ["a", "Assign to me"],
+  // 1.20.18: the reply in a window of its own (desktop widths).
+  [["Shift", "O"], "Pop out the reply"],
   ["/", "Search"],
 ];
 
@@ -32,9 +34,9 @@ export function NoTicketPane() {
         {keys && (
           <dl className="mt-6 grid grid-cols-2 gap-x-6 gap-y-2 text-left text-sm">
             {KEYS.map(([k, label]) => (
-              <div key={k} className="flex items-center gap-2">
+              <div key={String(k)} className="flex items-center gap-2">
                 <dt>
-                  <Kbd keys={[k]} />
+                  <Kbd keys={Array.isArray(k) ? k : [k]} />
                 </dt>
                 <dd className="text-slate-600">{label}</dd>
               </div>

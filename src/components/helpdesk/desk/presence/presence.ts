@@ -152,6 +152,7 @@ export async function postGuarded<T = unknown>(url: string, body: Record<string,
   const data = (await res.json().catch(() => ({}))) as { error?: string; code?: unknown; newer?: HdNewerMessage[] };
   if (res.status === 409 && Array.isArray(data.newer) && data.newer.length) throw new CollisionError(data.error || fallback, data.newer);
   noteDuoRequired(res.status, data.code); // 1.20.5: a refused Send raises the desk's Duo prompt; the text stays in the box
-  if (!res.ok) throw new ApiError(data.error || fallback, res.status);
+  // 1.20.18: with the server's code (e.g. "other_user", "send_in_progress"), so the composer can tell.
+  if (!res.ok) throw new ApiError(data.error || fallback, res.status, typeof data.code === "string" ? data.code : undefined);
   return data as T;
 }

@@ -4,6 +4,43 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.18] - 2026-11-15
+
+Pop out the reply.
+
+### Added
+- **Pop out the reply into its own window.** The **Pop out** button at the
+  top right of the reply box, or Shift+O, opens the reply in a window of its
+  own, so you can keep working in the desk. What you have typed, Reply or
+  Internal note, attached files and a picked macro go with it. The ticket
+  shows "Replying in another window" with **Show window** and **Bring
+  back**. Send from the window and it closes and the ticket refreshes; close
+  it without sending and the reply comes back to the ticket. One window per
+  ticket; several tickets at once work. Not shown on phones.
+- **Everything works in the window.** It shows the ticket's number, subject,
+  requester, who else is viewing or replying, CCs and the latest messages.
+  Macros, canned responses, articles, attachments, Send with a status, the
+  solve questions, newbie review and the "replied while you were typing"
+  warning all work there.
+
+### Security
+- **A reply is never sent twice.** Each send carries a one-time key the
+  server checks; **Bring back** waits while a send is on its way, and a
+  window closed mid-send is checked before its text comes back.
+- **Only one window can send.** A pop-out whose reply was taken back in the
+  desk turns read-only; if a pop-out stops answering, the desk asks before
+  taking the reply back.
+- **Desk drafts belong to each agent** and are cleared when you sign out,
+  which also closes your pop-outs. A pop-out refuses to send if someone else
+  has signed in.
+- **Desk pages send `Cross-Origin-Opener-Policy: same-origin`,** and links
+  in messages to other sites open in a new tab.
+
+### Upgrading
+- **Nothing to run.** A small table (`hd_message_send_ids`) is added on
+  start. Unsent desk drafts from earlier versions are kept for the first agent who
+  opens the desk in that browser.
+
 ## [1.20.17] - 2026-11-15
 
 A server that starts alongside busy instances, and emails shown the same

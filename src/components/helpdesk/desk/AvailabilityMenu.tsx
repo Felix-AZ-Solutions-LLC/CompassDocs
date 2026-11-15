@@ -18,6 +18,7 @@ import { isHdRole } from "@/lib/helpdesk/roles-shared";
 import { HD_AVAILABILITY_LABEL, type HdAvailability } from "@/lib/helpdesk/types";
 import { sendJson } from "./api";
 import { AutoAssignToggle } from "./assignment/AutoAssignToggle";
+import { forgetDeskOnSignOut } from "./popout/reply-popout";
 
 const DOT: Record<HdAvailability, string> = {
   available: "bg-emerald-500",
@@ -67,6 +68,8 @@ export function AvailabilityMenu({
   async function signOut() {
     // This device stops getting desk push notices once signed out.
     await forgetPushOnThisDevice();
+    // 1.20.18: reply pop-outs close and this browser keeps no desk drafts or hand-offs (a shared computer).
+    forgetDeskOnSignOut();
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
     router.push("/login");
     router.refresh();

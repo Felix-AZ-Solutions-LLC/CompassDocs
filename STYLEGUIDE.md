@@ -2883,7 +2883,8 @@ open in its own tab beside CompassDocs. Components live in
   the named action beside it.
 - **Keyboard.** `j` / `k` move real focus through the list, `Enter` opens
   the focused row, `r` reply, `n` internal note, `e` solve, `a` assign to
-  me, `/` the search. Every key goes through `useDeskKeys`
+  me, `/` the search, `Shift+O` pop the reply out (1.20.18; while it is out,
+  `r`, `n` and `Shift+O` bring its window forward). Every key goes through `useDeskKeys`
   (`blockBareKey` plus the account's single-key preference); the empty
   pane lists them only while single-key shortcuts are on.
 - **The conversation**: a requester's or agent's message is a card (an
@@ -2965,6 +2966,44 @@ open in its own tab beside CompassDocs. Components live in
   chevron opening "Send and set Waiting on requester / On hold / Solved".
   A newbie's button reads **Send for review**. Drafts are kept per ticket
   in `localStorage` (a per-viewer convenience).
+- **The reply pop-out** (1.20.18, `desk/popout`): the composer's header
+  row ends with **Pop out**, a quiet `sm` icon button
+  (`SquareArrowOutUpRight`, `aria-label` "Pop out the reply", `data-tt`
+  "Pop out (Shift+O)", `aria-keyshortcuts`), hidden under `sm` (a new
+  window means nothing on a phone). It opens `/desk/tickets/[n]/reply`
+  with `window.open` **inside the click or key handler** (popup blockers
+  allow nothing else), one named window per ticket, 720 × 780 like a mail
+  compose window; a blocked window is a plain error toast and the composer
+  stays. The page is a desk page in the `(desk)` group (same sign-in,
+  licence and Duo gates); `DeskShell` sees the path and draws **no top bar
+  or rail**, only the providers. Inside: a compact header (`#n · team ·
+  requester`, the subject as `h2 text-base`, the status chip `sm`, the
+  presence line, the CC row, "Answering from" when there is a choice), a
+  "Latest 3 of n messages" toggle (`ChevronDown`, `aria-expanded`) over the
+  conversation's own cards, the Claude draft card, and **the same
+  `Composer`**, so every composer rule above holds there. The pane, while
+  the reply is out, shows one quiet line in its place: `AppWindow` +
+  "Replying in another window · **Show window** · **Bring back**" (link
+  buttons), never a second box to send from. Refusals in the window are
+  the pane's own `EmptyState` copy with **Close this window**. The
+  hand-off is same-origin only (the composer's `localStorage` draft for
+  the text, a shape-checked record for type, files and macro, a
+  `BroadcastChannel` for events); nothing goes in the URL and the window
+  drops `window.opener` as it loads. Sent there, the window closes and the
+  desk window says "Reply sent on #n."
+  **Never two senders** (1.20.18 security review): while the window is
+  sending, uploading or asking a solve question it refuses Bring back and
+  the pane's line reads "Still sending in the other window" (no Bring
+  back); a window with a recent heartbeat that doesn't answer is never
+  taken over silently: the line asks "The other window isn't answering.
+  Take the reply back here?" (`CircleAlert` in `text-amber-600`, **Take it
+  back** · **Keep waiting**). A window whose reply was taken back shows the
+  refusal "This reply was taken back in the desk" (`Undo2`) and no
+  composer; one closed mid-send makes the pane check the ticket first
+  ("Checking whether the reply was sent…" with a `Spinner`, then "This
+  reply was sent." instead of the text). Desk drafts and hand-offs are
+  keyed by the agent and cleared at sign-out; desk pages send
+  `Cross-Origin-Opener-Policy: same-origin`.
 - **The side column**: the requester card, the properties card (rows of
   label and a picker-menu value button), Due (eyebrow, first reply and
   resolve as ink, a `role="img"` bar of the resolution time used), the

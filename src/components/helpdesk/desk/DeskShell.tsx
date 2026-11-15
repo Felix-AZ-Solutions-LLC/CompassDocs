@@ -32,6 +32,9 @@ import { DeskLookRoot } from "./appearance/DeskLook";
 import { DeskBackgroundMenuItem, MyDeskBackgroundPanel } from "./appearance/MyDeskBackground";
 // Claude in the desk (1.20.0): the top bar's button, Ctrl/⌘+J and the docked panel.
 import { ClaudeButton, ClaudeDeskProvider, type ClaudeDeskProps } from "./claude/ClaudeDesk";
+// 1.20.18: the reply pop-out (/desk/tickets/[number]/reply) is a desk page with no top bar or rail.
+import { adoptLegacyDrafts, isReplyPopoutPath, pruneDeskStorage } from "./popout/reply-popout";
+import { useReplyPopoutToasts } from "./popout/useReplyPopout";
 
 export interface DeskCaps {
   agent: boolean;
@@ -134,7 +137,18 @@ export function DeskShell({
   children: ReactNode;
 }) {
   const pathname = usePathname() || "/desk";
-  const { counts, refresh } = useCountsPoll(caps.agent);
+  // 1.20.18: the reply pop-out gets the desk's providers (who you are, your role, dialogs) and nothing else:
+  // no top bar, no rail, no counts or status polling. The layout's gates (sign-in, licence, Duo) ran as for any desk page.
+  const bare = isReplyPopoutPath(pathname);
+  const { counts, refresh } = useCountsPoll(caps.agent && !bare);
+  // A reply sent from a pop-out is announced here, in the desk window (the pop-out closes as it sends).
+  useReplyPopoutToasts(user.id, caps.agent && !bare);
+  // 1.20.18 (security review): a shared computer keeps no one else's desk drafts or hand-offs. 1.20.16's drafts named
+  // no one: the first agent to open the desk in this browser adopts them (once), so nobody loses a reply mid-upgrade.
+  useEffect(() => {
+    adoptLegacyDrafts(user.id);
+    pruneDeskStorage(user.id);
+  }, [user.id]);
   const dests = destinations(caps, counts);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuBtn = useRef<HTMLButtonElement>(null);
@@ -142,6 +156,20 @@ export function DeskShell({
 
   // The fold menu closes when the page changes under it.
   useEffect(() => setMenuOpen(false), [pathname]);
+
+  if (bare) {
+    return (
+      <DeskMeContext.Provider value={{ id: user.id, name: user.name, agent: caps.agent, admin: caps.admin, reports: caps.reports, role, caps: roleCaps, email_view: emailView }}>
+        <DeskCountsContext.Provider value={{ counts, refresh }}>
+          <div className="relative flex h-dvh flex-col overflow-clip bg-canvas print:h-auto print:overflow-visible">
+            <main id="main" tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 outline-none">
+              {children}
+            </main>
+          </div>
+        </DeskCountsContext.Provider>
+      </DeskMeContext.Provider>
+    );
+  }
 
   return (
     <DeskMeContext.Provider value={{ id: user.id, name: user.name, agent: caps.agent, admin: caps.admin, reports: caps.reports, role, caps: roleCaps, email_view: emailView }}>
