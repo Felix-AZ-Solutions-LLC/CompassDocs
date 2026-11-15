@@ -18,7 +18,10 @@
 // through the desk's own tick route) and checklist drafts (Save as draft
 // saves an unpublished draft that someone publishes in Desk settings), and
 // 1.20.15 macros (Apply sends it through the desk's own macro route, whose
-// checks propose_macro runs first as a dry run). Proposals are checked with the same permission
+// checks propose_macro runs first as a dry run), and 1.20.16 drafts of
+// category changes, automations and recurring tickets (checked as Desk
+// settings would; Save as draft sends the card's id to the desk's own
+// settings route, which saves it unpublished, off or paused). Proposals are checked with the same permission
 // functions the desk's PATCH uses, so Claude is told at once when the agent
 // could not apply them. Server-only.
 
@@ -124,6 +127,14 @@ export async function runDeskTool(name: string, input: Record<string, any>, ctx:
         return await draftChecklist(input, ctx);
       case "list_macros":
         return await listMacros(input, ctx);
+      case "list_desk_settings":
+        return await listDeskSettings(input, ctx);
+      case "draft_categories":
+        return await draftCategories(input, ctx);
+      case "draft_automation":
+        return await draftAutomation(input, ctx);
+      case "draft_recurring":
+        return await draftRecurring(input, ctx);
       case "propose_macro":
         return await proposeMacro(input, ctx);
       case "propose_ticket_change":
@@ -299,6 +310,184 @@ async function draftChecklist(a: Record<string, any>, ctx: ToolCtx): Promise<Too
   return done(
     { drafted: true, saved: false, note: "The agent sees the checklist on a card and clicks Save as draft. Nothing is published: someone who manages checklists publishes it in Desk settings → Checklists." },
     { card: { kind: "checklist", ticketId: null, payload: { action: "draft", number: ctx.ticket?.number ?? null, draft, title: `Checklist draft: ${draft.name}`, hint } } }
+  );
+}
+
+// --- Drafts for Desk settings (1.20.16) ---------------------------------------------------------
+
+const SETTINGS_TOOL: Record<string, string> = { categories: "hd_list_categories", automations: "hd_list_automations", recurring: "hd_list_recurring" };
+
+/** The connector's read tools, as the agent (their desk role decides what they see). */
+async function listDeskSettings(a: Record<string, any>, ctx: ToolCtx): Promise<ToolOutcome> {
+  const what = typeof a.what === "string" && SETTINGS_TOOL[a.what] ? (a.what as string) : null;
+  if (!what) return fail("Say which: categories, automations or recurring.");
+  const id = Number.isSafeInteger(a.id) && a.id > 0 ? a.id : null;
+  const r = await viaConnector(ctx, SETTINGS_TOOL[what], id && what !== "categories" ? { id } : {});
+  if (r.isError) return fail(/\(403\)$/.test(r.text) ? `The agent can't manage ${what} (desk role).` : r.text);
+  const label = what === "categories" ? "Read the categories" : what === "automations" ? "Read the automations" : "Read the recurring tickets";
+  return ok(dataBlock("desk_settings", { what, written_by: "admins of this workspace (settings)" }, quoteJson(r.out ?? r.text)), { activity: { label, icon: "list" } });
+}
+
+const CANT = (what: string) => `The agent can't manage ${what} (desk role), so there is nowhere to save this draft. Suggest they ask someone who manages ${what}.`;
+
+/** Category list changes, checked as the Categories tab would; Save as draft adds them to the draft beside the list. */
+async function draftCategories(a: Record<string, any>, ctx: ToolCtx): Promise<ToolOutcome> {
+  if (!(await hdCan(ctx.user, "settings.manage"))) return fail(CANT("categories"));
+  const { CATEGORY_DRAFT_LIMITS, categoryChangeLine } = await import("../category-drafts-shared");
+  if (!Array.isArray(a.changes) || a.changes.length === 0 || a.changes.length > CATEGORY_DRAFT_LIMITS.changes) return fail(`Propose 1 to ${CATEGORY_DRAFT_LIMITS.changes} changes.`);
+  const raw = (a.changes as Record<string, any>[]).map((c) =>
+    c.kind === "rename"
+      ? { kind: "rename", id: c.id, to: c.name }
+      : c.kind === "add_subcategory"
+        ? { kind: "add_subcategory", category: c.category, name: c.name }
+        : { kind: c.kind, name: c.name, subcategories: Array.isArray(c.subcategories) ? c.subcategories : [] }
+  );
+  const { checkCategoryChanges } = await import("../category-drafts");
+  const { HdCategoryError } = await import("../categories");
+  let changes: Awaited<ReturnType<typeof checkCategoryChanges>>;
+  try {
+    changes = await checkCategoryChanges(raw);
+  } catch (e) {
+    if (e instanceof HdCategoryError) return fail(e.message);
+    throw e;
+  }
+  const lines = changes.map(categoryChangeLine);
+  return done(
+    { drafted: true, saved: false, note: "The agent sees the changes on a card and clicks Save as draft. Nothing changes on the list: someone who manages categories publishes them in Desk settings → Categories." },
+    {
+      card: {
+        kind: "change",
+        ticketId: null,
+        payload: {
+          action: "settings_draft",
+          target: "categories",
+          target_id: null,
+          number: ctx.ticket?.number ?? null,
+          draft: { changes },
+          title: changes.length === 1 ? "Category change" : `${changes.length} category changes`,
+          hint: "Save as draft keeps the list as it is until someone publishes the changes in Desk settings.",
+          lines,
+        },
+      },
+    }
+  );
+}
+
+/** Desk-shaped automation input (strict: empty means not used) → the settings API's shape. */
+function automationInput(a: Record<string, any>): Record<string, unknown> {
+  const c = (a.conditions ?? {}) as Record<string, any>;
+  const x = (a.actions ?? {}) as Record<string, any>;
+  const list = (v: unknown) => (Array.isArray(v) && v.length ? v : undefined);
+  const conditions: Record<string, unknown> = {};
+  for (const k of ["team_ids", "categories", "subcategories", "priorities", "request_type_ids", "sources", "keywords"]) if (list(c[k])) conditions[k] = c[k];
+  const actions: Record<string, unknown> = {};
+  for (const k of ["team_id", "assignee_id", "macro_id"]) if (Number.isInteger(x[k]) && x[k] > 0) actions[k] = x[k];
+  for (const k of ["priority", "status", "category", "subcategory", "internal_note", "notify"]) if (typeof x[k] === "string" && x[k].trim()) actions[k] = x[k];
+  if (list(x.tags_add)) actions.tags_add = x.tags_add;
+  return { name: a.name, event: a.event, conditions, actions };
+}
+
+/** An automation rule, checked as Desk settings would; Save as draft saves it off (or beside the live rule). */
+async function draftAutomation(a: Record<string, any>, ctx: ToolCtx): Promise<ToolOutcome> {
+  if (!(await hdCan(ctx.user, "automations.manage"))) return fail(CANT("automations"));
+  const au = await import("../automations");
+  const id = Number.isSafeInteger(a.id) && a.id > 0 ? (a.id as number) : null;
+  const live = id ? await au.getAutomation(id) : undefined;
+  if (id && !live) return fail(`No automation with id ${id}. Call list_desk_settings for the rules.`);
+  let draft: Awaited<ReturnType<typeof au.checkAutomationDraft>>;
+  try {
+    draft = await au.checkAutomationDraft(automationInput(a));
+  } catch (e) {
+    if (e instanceof au.AutomationDraftError) return fail(e.message);
+    throw e;
+  }
+  const w = await au.automationInWords(draft);
+  const lines = [`When ${w.when.charAt(0).toLowerCase()}${w.when.slice(1)}`, `If ${w.if.join(", and ")}`, `Then ${w.then.join(", ")}`];
+  const hint = live
+    ? `The rule keeps running as it is until someone publishes these changes in Desk settings.`
+    : "Saved switched off. It runs only once someone publishes it in Desk settings.";
+  return done(
+    { drafted: true, saved: false, note: "The agent sees the rule on a card and clicks Save as draft. Nothing runs: someone who manages automations publishes it in Desk settings → Automations." },
+    {
+      card: {
+        kind: "change",
+        ticketId: null,
+        payload: {
+          action: "settings_draft",
+          target: "automation",
+          target_id: live?.id ?? null,
+          number: ctx.ticket?.number ?? null,
+          draft,
+          title: live ? `Changes to the automation "${live.name}"` : `Automation draft: ${draft.name}`,
+          hint,
+          lines,
+        },
+      },
+    }
+  );
+}
+
+/** Desk-shaped recurring input (strict: 0 and empty mean not used) → the settings API's shape. */
+function recurringInput(a: Record<string, any>): Record<string, unknown> {
+  const p = (a.pattern ?? {}) as Record<string, any>;
+  const pattern =
+    p.kind === "weekly"
+      ? { kind: "weekly", days: p.days, time: p.time }
+      : p.kind === "monthly"
+        ? p.mode === "day"
+          ? { kind: "monthly", mode: "day", day: p.day, months: p.months ?? [], time: p.time }
+          : { kind: "monthly", mode: "nth_weekday", nth: p.nth, weekday: p.weekday, months: p.months ?? [], time: p.time }
+        : p.kind === "interval"
+          ? { kind: "interval", unit: p.unit, every: p.every, start: p.start, time: p.time }
+          : { kind: p.kind, time: p.time };
+  return {
+    team_id: a.team_id,
+    subject: a.subject,
+    body: a.body ?? "",
+    priority: a.priority,
+    request_type_id: Number.isInteger(a.request_type_id) && a.request_type_id > 0 ? a.request_type_id : null,
+    assign_mode: Number.isInteger(a.assignee_id) && a.assignee_id > 0 ? "user" : "team_rules",
+    assignee_id: Number.isInteger(a.assignee_id) && a.assignee_id > 0 ? a.assignee_id : null,
+    due_business_days: Number.isInteger(a.due_business_days) && a.due_business_days > 0 ? a.due_business_days : null,
+    pattern,
+    holiday_rule: a.holiday_rule,
+    timezone: typeof a.timezone === "string" ? a.timezone : "",
+  };
+}
+
+/** A recurring schedule, checked as Desk settings would; Save as draft saves it paused (or beside the live one). */
+async function draftRecurring(a: Record<string, any>, ctx: ToolCtx): Promise<ToolOutcome> {
+  const rc = await import("../recurring");
+  const id = Number.isSafeInteger(a.id) && a.id > 0 ? (a.id as number) : null;
+  const live = id ? await rc.getRecurring(id) : undefined;
+  if (id && (!live || !(await rc.canManageRecurringTeam(ctx.session, live.team_id)))) return fail(`No recurring ticket with id ${id} that the agent manages. Call list_desk_settings for them.`);
+  let draft: Awaited<ReturnType<typeof rc.checkRecurringDraft>>;
+  try {
+    draft = await rc.checkRecurringDraft(recurringInput(a));
+  } catch (e) {
+    if (e instanceof rc.RecurringDraftError) return fail(e.message);
+    throw e;
+  }
+  if (!(await rc.canManageRecurringTeam(ctx.session, draft.team_id))) return fail(CANT("that team's recurring tickets"));
+  const { scheduleTitle } = await import("../recurring-shared");
+  return done(
+    { drafted: true, saved: false, note: "The agent sees the schedule on a card and clicks Save as draft. Nothing opens: someone who manages the team's schedules publishes it in Desk settings → Recurring tickets." },
+    {
+      card: {
+        kind: "change",
+        ticketId: null,
+        payload: {
+          action: "settings_draft",
+          target: "recurring",
+          target_id: live?.id ?? null,
+          number: ctx.ticket?.number ?? null,
+          draft,
+          title: live ? `Changes to the recurring ticket "${scheduleTitle(live.subject)}"` : `Recurring ticket draft: ${scheduleTitle(draft.subject)}`,
+          hint: live ? "The schedule keeps running as it is until someone publishes these changes in Desk settings." : "Saved paused. It opens tickets only once someone publishes it in Desk settings.",
+          lines: await rc.recurringInWords(draft),
+        },
+      },
+    }
   );
 }
 

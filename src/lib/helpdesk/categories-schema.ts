@@ -27,6 +27,18 @@
 // binary typed in the meantime joins the list the next time 1.20.6 starts
 // (lib/helpdesk/categories adoptCategories).
 // The list is the workspace's configuration, not personal data.
+//
+//   hd_category_draft          1.20.16: changes Claude proposed to the list
+//                              (lib/helpdesk/category-drafts), waiting beside
+//                              it for a person to publish on the Categories
+//                              tab. One row at most (id 1): `changes` is the
+//                              ordered list (add a category with its
+//                              sub-categories, add a sub-category, rename);
+//                              never a delete or a merge. Nothing in it is on
+//                              the list: pickers, the API and every check read
+//                              hd_categories only, so a draft name can't be
+//                              set on a ticket until it is published (which
+//                              runs the same create and rename as the page).
 
 export const HD_CATEGORIES_SCHEMA = `
 CREATE TABLE IF NOT EXISTS hd_categories (
@@ -43,4 +55,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_hd_categories_name ON hd_categories (COALE
 ALTER TABLE hd_tickets ADD COLUMN IF NOT EXISTS subcategory text NOT NULL DEFAULT '';
 ALTER TABLE hd_request_types ADD COLUMN IF NOT EXISTS subcategory text NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_hd_tickets_category ON hd_tickets (lower(category)) WHERE category <> '';
+CREATE TABLE IF NOT EXISTS hd_category_draft (
+  id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  changes jsonb NOT NULL DEFAULT '[]',
+  draft_by integer REFERENCES users(id) ON DELETE SET NULL,
+  draft_by_name text NOT NULL DEFAULT '',
+  draft_at timestamptz NOT NULL DEFAULT now(),
+  draft_via text NOT NULL DEFAULT '',
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 `;

@@ -14,6 +14,10 @@
 // (marked "via Claude in the desk" only for this agent's offered card), so
 // every desk rule runs then; a macro's reply is sent by
 // the agent's click, never by Claude.
+// 1.20.16: settings draft cards (category changes, an automation, a recurring
+// ticket): Save as draft sends only the card's id to the desk's own settings
+// route, which claims the card and saves its content unpublished, switched
+// off or paused for someone with access to publish in Desk settings.
 // History per ticket (the history menu: earlier chats, New chat). Screen
 // readers hear the answer once it is complete (role="log", aria-busy while
 // streaming); focus starts in the question box and returns to the opener.
@@ -23,8 +27,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
   BookOpen,
+  Bot,
   CircleCheck,
   CircleStop,
+  FolderTree,
   Globe,
   History,
   ListChecks,
@@ -33,6 +39,7 @@ import {
   Package,
   Pencil,
   Plus,
+  Repeat,
   Search,
   SlidersHorizontal,
   Sparkle,
@@ -51,6 +58,7 @@ import {
   CLAUDE_FOOTER_NOTE,
   CLAUDE_INPUT_PLACEHOLDER,
   CLAUDE_INPUT_PLACEHOLDER_NO_TICKET,
+  SETTINGS_DRAFT_HREF,
   type ClaudeCard,
   type ClaudeChatHistory,
   type ClaudeChatTurn,
@@ -292,7 +300,12 @@ export function ClaudePanel() {
     let done = "";
     try {
       if (how === "applied") {
-        if (card.kind === "change" && card.action === "macro") {
+        if (card.kind === "change" && card.action === "settings_draft") {
+          // 1.20.16: the desk's own settings route claims the card and saves its content as a draft.
+          const url = card.target === "categories" ? "/api/helpdesk/admin/categories/draft" : card.target === "automation" ? "/api/helpdesk/admin/automations" : "/api/helpdesk/admin/recurring";
+          await sendJson(url, "POST", card.target === "categories" ? { card_id: card.id } : { draft: true, card_id: card.id }, "Couldn't save the draft.");
+          done = "Saved as a draft. Someone with access publishes it in Desk settings.";
+        } else if (card.kind === "change" && card.action === "macro") {
           // 1.20.15: the desk's own macro route, with the card (claimed there, so it applies once)
           // and the send guard from when Claude proposed it. Only with its ticket open.
           if (ticket?.number !== card.number) {
@@ -346,7 +359,8 @@ export function ClaudePanel() {
           return;
         }
       }
-      if (card.kind === "change" || card.kind === "checklist") {
+      // A saved settings draft's card was already claimed by the settings route; Skip is recorded here.
+      if (card.kind === "checklist" || (card.kind === "change" && !(card.action === "settings_draft" && how === "applied"))) {
         await sendJson(`/api/helpdesk/claude/cards/${card.id}`, "POST", { state: how }).catch(() => {});
       }
       // The card's buttons give way to its state: focus stays in the panel, on the question box.
@@ -616,7 +630,8 @@ function CardView({ card, onDecide, inBox, busy }: { card: ClaudeCard; onDecide:
   const decided = card.state !== "offered";
   // A macro card has no hint: Claude's own words never appear on it.
   const hint = card.kind === "change" ? (card.action === "macro" ? "" : card.hint) : card.kind === "checklist" ? card.hint : "";
-  const isDraft = card.kind === "checklist" && card.action === "draft";
+  const settingsDraft = card.kind === "change" && card.action === "settings_draft" ? card : null;
+  const isDraft = (card.kind === "checklist" && card.action === "draft") || !!settingsDraft;
   const isMacro = card.kind === "change" && card.action === "macro";
   // 1.20.14: what a tick or draft card would change, every item (the list scrolls when long);
   // unticking a required item says so, since it holds the ticket open again. 1.20.15: what a macro will do.
@@ -630,7 +645,7 @@ function CardView({ card, onDecide, inBox, busy }: { card: ClaudeCard; onDecide:
         }))
       : card.kind === "checklist" && card.action === "draft"
         ? card.draft.items.map((i) => ({ key: i.key, text: i.title, tag: i.required ? "Required" : "", tone: "warn" as const }))
-        : card.kind === "change" && card.action === "macro"
+        : card.kind === "change" && (card.action === "macro" || card.action === "settings_draft")
           ? card.lines.map((l, i) => ({ key: i, text: l, tag: "", tone: "neutral" as const }))
           : [];
   return (
@@ -638,6 +653,14 @@ function CardView({ card, onDecide, inBox, busy }: { card: ClaudeCard; onDecide:
       <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
         {card.kind === "checklist" ? (
           <ListChecks className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        ) : settingsDraft ? (
+          settingsDraft.target === "categories" ? (
+            <FolderTree className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          ) : settingsDraft.target === "automation" ? (
+            <Bot className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          ) : (
+            <Repeat className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          )
         ) : isMacro ? (
           <Zap className="h-3.5 w-3.5 shrink-0" aria-hidden />
         ) : (
@@ -647,7 +670,7 @@ function CardView({ card, onDecide, inBox, busy }: { card: ClaudeCard; onDecide:
       </div>
       {hint && <p className="mt-0.5 text-xs text-slate-500">{hint}</p>}
       {lines.length > 0 && (
-        <ul aria-label={isDraft ? "Items" : isMacro ? "What it will do" : "Items to change"} className="mt-1.5 max-h-48 space-y-0.5 overflow-y-auto pr-1 text-xs text-slate-700">
+        <ul aria-label={settingsDraft ? "What the draft says" : isDraft ? "Items" : isMacro ? "What it will do" : "Items to change"} className="mt-1.5 max-h-48 space-y-0.5 overflow-y-auto pr-1 text-xs text-slate-700">
           {lines.map((l) => (
             <li key={l.key} className="flex items-start gap-1.5">
               <span className="min-w-0 flex-1">{l.text}</span>
@@ -685,8 +708,8 @@ function CardView({ card, onDecide, inBox, busy }: { card: ClaudeCard; onDecide:
             {card.state === "applied" ? (isDraft ? "Saved as draft" : "Applied") : "Skipped"}
           </span>
           {isDraft && card.state === "applied" && (
-            <Link href="/desk/settings/checklists" className="text-xs font-medium text-compass-700 hover:underline">
-              Review in Checklists
+            <Link href={settingsDraft ? SETTINGS_DRAFT_HREF[settingsDraft.target].href : "/desk/settings/checklists"} className="text-xs font-medium text-compass-700 hover:underline">
+              {settingsDraft ? SETTINGS_DRAFT_HREF[settingsDraft.target].label : "Review in Checklists"}
             </Link>
           )}
         </p>

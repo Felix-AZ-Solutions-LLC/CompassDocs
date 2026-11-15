@@ -5,12 +5,20 @@
 // Move up / Move down, Edit… and Delete…; New rule opens the editor in a
 // dialog. Conditions are all optional (none = every ticket); a rule needs
 // at least one action.
+//
+// 1.20.16: drafts from Claude. A new rule Claude drafted is off and
+// unpublished (a "Draft from Claude" chip, no Turn on): its dialog opens with
+// the dashed draft strip and Discard draft / Save draft / Publish rule
+// (publishing switches it on). Changes Claude proposed to a running rule
+// ("Changes from Claude") open in the dialog in place of the live rule, with
+// Discard changes / Publish changes; until then the rule runs as it is.
+// ?id=<rule> opens that rule (the links Claude hands out).
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Bot, Pencil, Plus, Trash2, X } from "lucide-react";
 import { Button, iconButtonClass } from "@/components/Button";
 import { Card } from "@/components/Card";
-import { Chip } from "@/components/Chip";
+import { Chip, chipClass } from "@/components/Chip";
 import { EmptyState, Field, FormError, Select, TextInput, Textarea } from "@/components/form";
 import { Modal } from "@/components/Modal";
 import { PageHeader } from "@/components/PageHeader";
@@ -39,6 +47,8 @@ import { useRequestTypes, useTeams } from "../admin-data";
 import { categoryLabel } from "@/lib/helpdesk/categories-shared";
 import { CategoryChecks, type CategoryPairs } from "../categories/CategoryChecks";
 import { CategoryFields } from "../categories/CategoryFields";
+import { draftChipLabel, waitsForReview } from "@/lib/helpdesk/claude-drafts-shared";
+import { ClaudeDraftStrip } from "./ClaudeDraftStrip";
 
 const EVENT_FALLBACK: Record<HdAutomationEvent, string> = {
   ticket_created: "A ticket is created",
@@ -54,14 +64,28 @@ export function AutomationsSettings() {
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<HdAutomation | "new" | null>(null);
   const [busy, setBusy] = useState(false);
+  const asked = useRef(false);
   const { teams } = useTeams();
   const { types } = useRequestTypes();
 
   const load = () =>
     getJson<{ automations: HdAutomation[]; events?: Record<string, string> }>("/api/helpdesk/admin/automations", "Couldn't load the automations.")
       .then((d) => {
-        setRows(listOf<HdAutomation>(d, "automations"));
+        const list = listOf<HdAutomation>(d, "automations");
+        setRows(list);
         if (d.events) setEvents(d.events);
+        // 1.20.16: ?id= opens that rule (a link from Claude) on the first load.
+        if (!asked.current) {
+          asked.current = true;
+          let id: number | null = null;
+          try {
+            id = Number(new URLSearchParams(window.location.search).get("id")) || null;
+          } catch {
+            id = null;
+          }
+          const hit = id ? list.find((r) => r.id === id) : undefined;
+          if (hit) setEditing(hit);
+        }
       })
       .catch((e: Error) => setError(e.message));
   useEffect(() => void load(), []);
@@ -158,16 +182,27 @@ export function AutomationsSettings() {
                   <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-900">
                     {a.name}
                     {!a.active && <Chip tone="neutral" size="sm">Off</Chip>}
+                    {draftChipLabel({ published: a.published !== false, draft: a.draft }) && (
+                      <span className={chipClass("accent", "sm")}>{draftChipLabel({ published: a.published !== false, draft: a.draft })}</span>
+                    )}
                   </p>
                   <p className="mt-0.5 text-xs text-slate-500">
                     When {(events[a.event] ?? a.event).charAt(0).toLowerCase() + (events[a.event] ?? a.event).slice(1)}. {summary(a)}
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                  <Button variant="secondary" size="sm" onClick={() => toggle(a)}>
-                    {a.active ? "Turn off" : "Turn on"}
-                    <span className="sr-only"> {a.name}</span>
-                  </Button>
+                  {a.published === false ? (
+                    // Only a person's publish switches a draft on (the dialog's Publish rule).
+                    <Button variant="secondary" size="sm" onClick={() => setEditing(a)}>
+                      Review
+                      <span className="sr-only"> {a.name}</span>
+                    </Button>
+                  ) : (
+                    <Button variant="secondary" size="sm" onClick={() => toggle(a)}>
+                      {a.active ? "Turn off" : "Turn on"}
+                      <span className="sr-only"> {a.name}</span>
+                    </Button>
+                  )}
                   <button type="button" disabled={busy || i === 0} onClick={() => move(i, -1)} aria-label={`Move ${a.name} up`} data-tt="Move up" className={iconButtonClass("quiet", "sm")}>
                     <ArrowUp aria-hidden />
                   </button>
@@ -232,9 +267,13 @@ function RuleDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  // 1.20.16: a new draft, or changes waiting beside a running rule; the dialog shows the draft.
+  const claude = existing && waitsForReview({ published: existing.published !== false, draft: existing.draft }) ? existing : null;
+  const changesWaiting = !!claude && claude.published !== false;
+
   useEffect(() => {
     if (!rule) return;
-    const r = rule === "new" ? null : rule;
+    const r = rule === "new" ? null : rule.published !== false && rule.draft ? { ...rule, ...rule.draft } : rule;
     setName(r?.name ?? "");
     setEvent(r?.event ?? "ticket_created");
     setC(r?.conditions ?? {});
@@ -257,6 +296,15 @@ function RuleDialog({
     actions: Object.keys(actions).length === 0 ? "Choose at least one thing for the rule to do." : undefined,
   };
 
+  // Which submit button was used (a ref: the form's submit runs before a state update would show).
+  const mode = useRef<"save" | "publish">("save");
+  const form = useRef<HTMLFormElement>(null);
+  /** Publish is never the form's default (Enter saves a draft at most). */
+  const publish = () => {
+    mode.current = "publish";
+    form.current?.requestSubmit();
+  };
+
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setTried(true);
@@ -274,9 +322,47 @@ function RuleDialog({
     setError("");
     try {
       const payload = { name: name.trim(), event, conditions, actions };
-      if (existing) await sendJson(`/api/helpdesk/admin/automations/${existing.id}`, "PATCH", payload, "Couldn't save the rule.");
+      // 1.20.16: publishing names the draft this dialog showed (draft_at); a newer one is refused (409), never published unseen.
+      const publishing = mode.current === "publish" && claude ? (changesWaiting ? { publish_draft: true, draft_at: claude.draft_at } : { publish: true, draft_at: claude.draft_at }) : {};
+      if (existing) await sendJson(`/api/helpdesk/admin/automations/${existing.id}`, "PATCH", { ...payload, ...publishing }, "Couldn't save the rule.");
       else await sendJson("/api/helpdesk/admin/automations", "POST", { ...payload, active: 1 }, "Couldn't create the rule.");
-      toast("ok", existing ? "Rule saved." : "Rule created.");
+      toast(
+        "ok",
+        claude
+          ? mode.current === "publish"
+            ? changesWaiting
+              ? "Changes published. The rule runs with them now."
+              : "Rule published and switched on."
+            : "Draft saved. It stays off."
+          : existing
+            ? "Rule saved."
+            : "Rule created."
+      );
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** 1.20.16: drop a new draft (DELETE) or the changes waiting (the running rule stays). */
+  async function discard() {
+    if (!claude) return;
+    if (!changesWaiting) {
+      const ok = await confirmDialog({ title: `Discard the draft ${claude.name}?`, body: "It was never published, so it never ran.", confirmLabel: "Discard draft", danger: true });
+      if (ok !== true) return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      if (changesWaiting) {
+        await sendJson(`/api/helpdesk/admin/automations/${claude.id}`, "PATCH", { discard_draft: true, draft_at: claude.draft_at }, "Couldn't discard the changes.");
+        toast("ok", "Changes discarded. The rule runs as it did.");
+      } else {
+        await sendJson(`/api/helpdesk/admin/automations/${claude.id}`, "DELETE", undefined, "Couldn't discard the draft.");
+        toast("ok", "Draft discarded.");
+      }
       onSaved();
     } catch (err) {
       setError((err as Error).message);
@@ -289,15 +375,22 @@ function RuleDialog({
 
   return (
     <Modal open={!!rule} onClose={onClose} labelledBy={titleId} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-slate-200 bg-surface p-5 shadow-modal">
-      <form onSubmit={save} noValidate>
+      <form ref={form} onSubmit={save} noValidate>
         <div className="flex items-start justify-between gap-3">
           <h2 id={titleId} className="text-base font-semibold text-slate-900">
-            {existing ? `Edit ${existing.name}` : "New rule"}
+            {existing ? `${claude && !changesWaiting ? "Draft" : "Edit"} ${existing.name}` : "New rule"}
           </h2>
           <button type="button" onClick={onClose} aria-label="Close" data-tt="Close" className={iconButtonClass("quiet", "sm", "-mr-1 -mt-1")}>
             <X aria-hidden />
           </button>
         </div>
+        {claude && (
+          <ClaudeDraftStrip changes={changesWaiting} askedBy={claude.draft_by_name ?? ""} at={claude.draft_at ?? null} className="mt-3">
+            {changesWaiting
+              ? "Review the changes below. The rule keeps running as it is until you publish them."
+              : "Review it below. It is off and runs on no ticket until you publish it. Publishing switches it on."}
+          </ClaudeDraftStrip>
+        )}
         <div className="mt-4 space-y-4">
           <Field label="Name" error={tried ? errs.name : undefined}>
             <TextInput value={name} onChange={(e) => setName(e.target.value)} maxLength={120} placeholder="VPN and network" />
@@ -404,14 +497,44 @@ function RuleDialog({
           </fieldset>
           <FormError>{error}</FormError>
         </div>
-        <div className="mt-5 flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" busy={busy}>
-            {existing ? "Save rule" : "Create rule"}
-          </Button>
-        </div>
+        {claude ? (
+          <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+            {changesWaiting ? (
+              <>
+                <Button variant="ghost" className="mr-auto" onClick={onClose}>
+                  Cancel
+                </Button>
+                <Button variant="secondary" busy={busy} onClick={discard}>
+                  Discard changes
+                </Button>
+                <Button busy={busy} onClick={() => publish()}>
+                  Publish changes
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="ghost" icon={<Trash2 />} className="mr-auto hover-danger" busy={busy} onClick={discard}>
+                  Discard draft
+                </Button>
+                <Button type="submit" variant="secondary" busy={busy} onClick={() => (mode.current = "save")}>
+                  Save draft
+                </Button>
+                <Button busy={busy} onClick={() => publish()}>
+                  Publish rule
+                </Button>
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="mt-5 flex justify-end gap-2">
+            <Button variant="secondary" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" busy={busy} onClick={() => (mode.current = "save")}>
+              {existing ? "Save rule" : "Create rule"}
+            </Button>
+          </div>
+        )}
       </form>
     </Modal>
   );

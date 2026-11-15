@@ -10,12 +10,20 @@
 //   - Delete is for an entry nothing uses; one that is used offers Merge.
 //   - Merge into… moves everything to another entry (CategoryMergeDialog).
 // STYLEGUIDE §Helpdesk: categories.
+//
+// 1.20.16: changes Claude proposed (lib/helpdesk/category-drafts) wait in the
+// dashed "Changes from Claude" strip above the list: each change on a row
+// (its name editable, a quiet X takes it out), then Discard changes / Save
+// draft / Publish changes. Nothing in it is on the list until it is
+// published; the rows it would rename or add to carry a "Changes from
+// Claude" chip. ?id=<entry> scrolls to that row and tints it.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Folder, FolderTree, GitMerge, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Folder, FolderTree, GitMerge, MoreHorizontal, Pencil, Plus, Trash2, X } from "lucide-react";
 import { Button, iconButtonClass } from "@/components/Button";
 import { CARD_CLASS } from "@/components/Card";
-import { Chip } from "@/components/Chip";
+import { Chip, chipClass } from "@/components/Chip";
+import { TextInput } from "@/components/form";
 import { EmptyState, SectionEmpty } from "@/components/form";
 import { ListFilter } from "@/components/ListFilter";
 import { PageHeader } from "@/components/PageHeader";
@@ -39,6 +47,8 @@ import {
 import { getJson, sendJson } from "../api";
 import { forgetDeskCategories } from "./categories";
 import { CategoryMergeDialog, type MergeSource } from "./CategoryMergeDialog";
+import { ClaudeDraftStrip } from "../settings/ClaudeDraftStrip";
+import { categoryChangeLine, type HdCategoryDraft, type HdCategoryDraftChange } from "@/lib/helpdesk/category-drafts-shared";
 
 const API = "/api/helpdesk/admin/categories";
 const tickets = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "ticket" : "tickets"}`;
@@ -59,16 +69,45 @@ export function CategoriesSettings() {
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("");
   const [merge, setMerge] = useState<MergeSource | null>(null);
+  // 1.20.16: Claude's draft, and the person's edits to it on this page.
+  const [draft, setDraft] = useState<HdCategoryDraft | null>(null);
+  const [focusId, setFocusId] = useState<number | null>(null);
+  const asked = useRef(false);
 
   const reload = useCallback(() => {
-    getJson<{ categories: HdCategoryAdmin[] }>(API, "Couldn't load the categories.")
+    getJson<{ categories: HdCategoryAdmin[]; draft?: HdCategoryDraft | null }>(API, "Couldn't load the categories.")
       .then((d) => {
-        setList(Array.isArray(d.categories) ? d.categories : []);
+        const cats = Array.isArray(d.categories) ? d.categories : [];
+        setList(cats);
+        setDraft(d.draft ?? null);
         setError("");
+        // ?id= scrolls to that row (a link from Claude) on the first load.
+        if (!asked.current) {
+          asked.current = true;
+          let id: number | null = null;
+          try {
+            id = Number(new URLSearchParams(window.location.search).get("id")) || null;
+          } catch {
+            id = null;
+          }
+          if (id && cats.some((c) => c.id === id || c.subcategories.some((x) => x.id === id))) {
+            setFocusId(id);
+            setTimeout(() => document.querySelector(`[data-entry-id="${id}"]`)?.scrollIntoView({ block: "center" }), 60);
+          }
+        }
       })
       .catch((e: Error) => setError(e.message));
   }, []);
   useEffect(() => reload(), [reload]);
+  /** Rows the draft renames or adds to (their chip). */
+  const touched = useMemo(() => {
+    const ids = new Set<number>();
+    for (const c of draft?.changes ?? []) {
+      if (c.kind === "rename") ids.add(c.id);
+      if (c.kind === "add_subcategory") ids.add(c.category_id);
+    }
+    return ids;
+  }, [draft]);
 
   /** Run one change, say so, and read the list again (the desk's pickers too). */
   async function act(run: () => Promise<unknown>, ok: string, fallback: string): Promise<boolean> {
@@ -203,6 +242,16 @@ export function CategoriesSettings() {
         actions={atLimit ? <Tooltip label={`The list holds up to ${CATEGORY_LIMITS.categories} categories.`}>{addButton}</Tooltip> : addButton}
       />
       {error && <p className="notice-error mb-4 rounded-lg border px-3 py-2 text-sm">{error}</p>}
+      {draft && (
+        <CategoryDraftReview
+          key={draft.draft_at}
+          draft={draft}
+          onDone={() => {
+            forgetDeskCategories();
+            reload();
+          }}
+        />
+      )}
       {list === null && !error && <LoadingRow className="py-10" />}
       {list && list.length === 0 && (
         <EmptyState
@@ -230,12 +279,12 @@ export function CategoriesSettings() {
                 const i = list.findIndex((x) => x.id === c.id);
                 const entry: Entry = { id: c.id, name: c.name, archived: c.archived, use: c.use, parent: null, children: c.subcategories.length };
                 return (
-                  <li key={c.id} data-testid="hd-category-row" data-category={c.name}>
-                    <div className="flex items-center gap-3 px-4 py-2.5">
+                  <li key={c.id} data-testid="hd-category-row" data-category={c.name} data-entry-id={c.id}>
+                    <div className={`flex items-center gap-3 px-4 py-2.5 ${focusId === c.id ? "bg-compass-50 dark:bg-compass-500/10" : ""}`}>
                       <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-compass-50 text-compass-700" aria-hidden>
                         <Folder className="h-4.5 w-4.5" />
                       </span>
-                      <RowText name={c.name} archived={c.archived} use={c.use} strong />
+                      <RowText name={c.name} archived={c.archived} use={c.use} strong pending={touched.has(c.id)} />
                       <div className="flex shrink-0 items-center gap-0.5">
                         <AddSubButton c={c} onAdd={() => void addSub(c)} />
                         <button type="button" onClick={() => void rename(entry)} aria-label={`Rename ${c.name}`} data-tt="Rename" className={iconButtonClass("quiet", "sm")}>
@@ -260,6 +309,8 @@ export function CategoriesSettings() {
                           <SubRow
                             key={s.id}
                             s={s}
+                            pending={touched.has(s.id)}
+                            focused={focusId === s.id}
                             first={j === 0}
                             last={j === c.subcategories.length - 1}
                             onRename={() => void rename(subEntry(c, s))}
@@ -300,7 +351,7 @@ export function CategoriesSettings() {
 const subEntry = (c: HdCategoryAdmin, s: HdSubcategoryAdmin): Entry => ({ id: s.id, name: s.name, archived: s.archived, use: s.use, parent: c, children: 0 });
 
 /** The name, its Archived chip and what uses it. */
-function RowText({ name, archived, use, strong = false }: { name: string; archived: boolean; use: HdCategoryUse; strong?: boolean }) {
+function RowText({ name, archived, use, strong = false, pending = false }: { name: string; archived: boolean; use: HdCategoryUse; strong?: boolean; pending?: boolean }) {
   return (
     <span className="min-w-0 flex-1">
       <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -309,6 +360,11 @@ function RowText({ name, archived, use, strong = false }: { name: string; archiv
           <Chip tone="neutral" size="sm">
             <span className="sr-only">, </span>Archived
           </Chip>
+        )}
+        {pending && (
+          <span className={chipClass("accent", "sm")}>
+            <span className="sr-only">, </span>Changes from Claude
+          </span>
         )}
       </span>
       <span className="mt-0.5 block truncate text-xs text-slate-500">{categoryUseLine(use)}</span>
@@ -328,6 +384,8 @@ function AddSubButton({ c, onAdd }: { c: HdCategoryAdmin; onAdd: () => void }) {
 
 function SubRow({
   s,
+  pending,
+  focused,
   first,
   last,
   onRename,
@@ -337,6 +395,8 @@ function SubRow({
   onDelete,
 }: {
   s: HdSubcategoryAdmin;
+  pending: boolean;
+  focused: boolean;
   first: boolean;
   last: boolean;
   onRename: () => void;
@@ -346,8 +406,8 @@ function SubRow({
   onDelete: () => void;
 }) {
   return (
-    <li className="flex items-center gap-3 py-1" data-testid="hd-subcategory-row" data-subcategory={s.name}>
-      <RowText name={s.name} archived={s.archived} use={s.use} />
+    <li className={`flex items-center gap-3 py-1 ${focused ? "bg-compass-50 dark:bg-compass-500/10" : ""}`} data-testid="hd-subcategory-row" data-subcategory={s.name} data-entry-id={s.id}>
+      <RowText name={s.name} archived={s.archived} use={s.use} pending={pending} />
       <div className="flex shrink-0 items-center gap-0.5">
         <button type="button" onClick={onRename} aria-label={`Rename ${s.name}`} data-tt="Rename" className={iconButtonClass("quiet", "sm")}>
           <Pencil aria-hidden />
@@ -422,5 +482,116 @@ function RowMenu({
         </MenuItem>
       </Popover>
     </div>
+  );
+}
+
+/**
+ * 1.20.16: the changes Claude proposed, for a person to review. Each change
+ * is a row whose name can be edited, and taken out; Save draft keeps it a
+ * draft, Publish changes runs them as this page's own add and rename do
+ * (naming the draft shown: a newer one from Claude is refused), Discard
+ * changes drops them. The list itself is untouched until then.
+ */
+function CategoryDraftReview({ draft, onDone }: { draft: HdCategoryDraft; onDone: () => void }) {
+  const [changes, setChanges] = useState<HdCategoryDraftChange[]>(() => draft.changes.map((c) => ({ ...c, ...(c.kind === "add_category" ? { subcategories: [...c.subcategories] } : {}) }) as HdCategoryDraftChange));
+  const [busy, setBusy] = useState<"" | "save" | "publish" | "discard">("");
+  const [problem, setProblem] = useState("");
+  const dirty = JSON.stringify(changes) !== JSON.stringify(draft.changes);
+  const renames = changes.filter((c) => c.kind === "rename").length;
+
+  const nameOf = (c: HdCategoryDraftChange) => (c.kind === "rename" ? c.to : c.name);
+  const setName = (i: number, v: string) =>
+    setChanges((all) => all.map((c, j) => (j !== i ? c : c.kind === "rename" ? { ...c, to: v } : { ...c, name: v })));
+  const setSubs = (i: number, v: string) =>
+    setChanges((all) => all.map((c, j) => (j === i && c.kind === "add_category" ? { ...c, subcategories: v.split(",").map((x) => x.trim()).filter(Boolean) } : c)));
+  const label = (c: HdCategoryDraftChange) =>
+    c.kind === "add_category" ? "New category" : c.kind === "add_subcategory" ? `New sub-category of ${c.category}` : c.parent ? `Rename ${c.parent} › ${c.from} to` : `Rename ${c.from} to`;
+
+  async function run(kind: "save" | "publish" | "discard") {
+    setProblem("");
+    if (kind === "discard") {
+      const ok = await confirmDialog({ title: "Discard Claude's changes?", body: "The category list stays as it is.", confirmLabel: "Discard changes", danger: true });
+      if (ok !== true) return;
+    }
+    if (kind === "publish" && renames) {
+      const ok = await confirmDialog({
+        title: "Publish the changes?",
+        body: `${renames === 1 ? "The rename applies" : `The ${renames} renames apply`} to every ticket, request type and rule that has the old name. Earlier timeline lines keep it.`,
+        confirmLabel: "Publish changes",
+      });
+      if (ok !== true) return;
+    }
+    setBusy(kind);
+    try {
+      const body =
+        kind === "discard"
+          ? { discard_draft: true, draft_at: draft.draft_at }
+          : kind === "publish"
+            ? { publish: true, draft_at: draft.draft_at, changes }
+            : { changes, draft_at: draft.draft_at };
+      await sendJson(`${API}/draft`, "PUT", body, kind === "discard" ? "Couldn't discard the changes." : kind === "publish" ? "Couldn't publish the changes." : "Couldn't save the draft.");
+      toast("ok", kind === "discard" ? "Changes discarded. The list is unchanged." : kind === "publish" ? "Changes published. Agents can pick them now." : "Draft saved. The list is unchanged.");
+      onDone();
+    } catch (e) {
+      setProblem((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <ClaudeDraftStrip changes askedBy={draft.draft_by_name} at={draft.draft_at} className="mb-4" id="claude-category-draft">
+      <p>Review the changes below. Agents keep picking from the list as it is until you publish them.</p>
+      <ul role="list" aria-label="Proposed changes" className="mt-3 space-y-2">
+        {changes.map((c, i) => (
+          <li key={`${c.kind}-${i}`} className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-surface px-3 py-2" data-testid="hd-category-draft-change">
+            <span className="min-w-0 flex-1 basis-48 text-xs font-medium text-slate-600">{label(c)}</span>
+            <TextInput
+              aria-label={`${label(c)}: name`}
+              value={nameOf(c)}
+              maxLength={80}
+              onChange={(e) => setName(i, e.target.value)}
+              className="w-full min-w-0 flex-1 basis-40 sm:w-auto"
+            />
+            {c.kind === "add_category" && (
+              <TextInput
+                aria-label={`Sub-categories of ${c.name}`}
+                value={c.subcategories.join(", ")}
+                placeholder="Sub-categories, comma-separated"
+                onChange={(e) => setSubs(i, e.target.value)}
+                className="w-full min-w-0 flex-1 basis-40 sm:w-auto"
+              />
+            )}
+            <button
+              type="button"
+              onClick={() => setChanges((all) => all.filter((_, j) => j !== i))}
+              aria-label={`Take out: ${categoryChangeLine(c)}`}
+              data-tt="Take this change out"
+              className={iconButtonClass("quiet", "sm")}
+            >
+              <X aria-hidden />
+            </button>
+          </li>
+        ))}
+      </ul>
+      {changes.length === 0 && <SectionEmpty className="mt-2">No changes left. Save draft to drop the draft, or discard the changes.</SectionEmpty>}
+      {problem && (
+        <p className="notice-error mt-3 rounded-lg border px-3 py-2 text-sm" role="alert">
+          {problem}
+        </p>
+      )}
+      <div className="mt-3 flex flex-wrap items-center justify-end gap-2 print:hidden">
+        <Button variant="ghost" icon={<Trash2 />} className="mr-auto hover-danger" busy={busy === "discard"} disabled={busy !== ""} onClick={() => void run("discard")}>
+          Discard changes
+        </Button>
+        {dirty && <span className="text-sm text-amber-700 dark:text-amber-300">Unsaved changes</span>}
+        <Button variant="secondary" busy={busy === "save"} disabled={busy !== "" || !dirty} onClick={() => void run("save")}>
+          Save draft
+        </Button>
+        <Button busy={busy === "publish"} disabled={busy !== "" || changes.length === 0} onClick={() => void run("publish")}>
+          Publish changes
+        </Button>
+      </div>
+    </ClaudeDraftStrip>
   );
 }

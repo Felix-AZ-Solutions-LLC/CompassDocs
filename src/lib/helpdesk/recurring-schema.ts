@@ -17,6 +17,15 @@
 //                      (recurring_id, occurrence_key): the sweep claims the
 //                      key in the transaction that inserts the ticket, so a
 //                      crash or a second instance never opens two.
+//
+// 1.20.16: drafts from Claude (lib/helpdesk/recurring saveRecurringDraft).
+// published = 0 is a new schedule Claude drafted: saved paused (enabled 0,
+// no next run), the sweep and "Open one now" never open a ticket from it
+// until a person publishes it in Desk settings → Recurring tickets. On a
+// published schedule, `draft` holds proposed changes (the schedule's fields
+// but enabled) while the live one keeps running unchanged. draft_by_name,
+// draft_at, draft_via ('mcp' | 'claude_desk'): who asked, when, where.
+// Existing schedules get published = 1 and no draft: unchanged.
 
 export const HD_RECURRING_SCHEMA = `
 CREATE TABLE IF NOT EXISTS hd_recurring (
@@ -49,4 +58,10 @@ CREATE TABLE IF NOT EXISTS hd_recurring_runs (
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (recurring_id, occurrence_key)
 );
+ALTER TABLE hd_recurring ADD COLUMN IF NOT EXISTS published integer NOT NULL DEFAULT 1;
+ALTER TABLE hd_recurring ADD COLUMN IF NOT EXISTS draft jsonb;
+ALTER TABLE hd_recurring ADD COLUMN IF NOT EXISTS draft_by integer REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE hd_recurring ADD COLUMN IF NOT EXISTS draft_by_name text NOT NULL DEFAULT '';
+ALTER TABLE hd_recurring ADD COLUMN IF NOT EXISTS draft_at timestamptz;
+ALTER TABLE hd_recurring ADD COLUMN IF NOT EXISTS draft_via text NOT NULL DEFAULT '';
 `;

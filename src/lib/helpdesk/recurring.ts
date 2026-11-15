@@ -23,11 +23,22 @@
 //
 // Permissions (the routes): settings.manage for every team, else
 // agents.manage_team in the schedule's team (a team lead). Server-only.
+//
+// 1.20.16: drafts from Claude (saveRecurringDraft; the model of 1.20.14's
+// checklist drafts, lib/helpdesk/claude-drafts-shared). A new schedule
+// Claude drafts is saved paused and unpublished: the sweep (published = 1)
+// and Open one now never open a ticket from it, and it can't be switched on
+// until a person publishes it. Changes Claude proposes to a published
+// schedule wait in `draft` while the live one keeps running. Publishing is
+// explicit and names the reviewed draft (saveRecurring publish /
+// publishDraft with draftAt). Saves lock the row. Validation is the settings
+// API's own (validateRecurringInput).
 
 import "server-only";
 import type { PoolClient } from "pg";
 import { logEvent } from "../log";
 import { hq, hqOne, withTx, type HdQueryable } from "./db-core";
+import { CLEAR_DRAFT_SQL, NO_CHANGES_WAITING, STALE_DISCARD_MESSAGE, STALE_DRAFT_MESSAGE, sameDraftInstant, type HdDraftVia } from "./claude-drafts-shared";
 import { hoursForTeam, invalidateCalendarCache } from "./calendars";
 import { hdCan } from "./roles";
 import { assignable, isPriorityValue } from "./tickets";
@@ -53,6 +64,7 @@ import {
   type HdHolidayRule,
   type HdRecurring,
   type HdRecurringAssignMode,
+  type HdRecurringDraft,
   type HdRecurringPreviewItem,
   type RecurringPattern,
 } from "./recurring-shared";
@@ -100,6 +112,11 @@ interface Row {
   created_by: number | null;
   created_at: string;
   updated_at: string;
+  published: number;
+  draft: HdRecurringDraft | null;
+  draft_by_name: string;
+  draft_at: string | null;
+  draft_via: string;
 }
 
 const SELECT = `SELECT r.*, t.name AS team_name, u.name AS assignee_name,
@@ -130,6 +147,11 @@ function toApi(r: Row): HdRecurring {
     created_by: r.created_by,
     created_at: r.created_at,
     updated_at: r.updated_at,
+    published: r.published === 1,
+    draft: r.draft ?? null,
+    draft_by_name: r.draft_by_name ?? "",
+    draft_at: r.draft_at ?? null,
+    draft_via: r.draft_via ?? "",
   };
 }
 
@@ -408,6 +430,191 @@ export async function deleteRecurring(id: number): Promise<HdRecurring | undefin
   return s;
 }
 
+// --- Drafts from Claude (1.20.16) --------------------------------------------------------------------
+
+/** A draft or publish refused (the sentence, and the status the route answers). */
+export class RecurringDraftError extends Error {
+  constructor(message: string, public status = 400) {
+    super(message);
+  }
+}
+
+const draftOfInput = (i: RecurringInput): HdRecurringDraft => {
+  const { enabled: _enabled, ...rest } = i;
+  void _enabled;
+  return rest;
+};
+
+/** The schedule's own fields as a draft (what a proposal starts from). */
+export const draftOfSchedule = (s: HdRecurring): HdRecurringDraft => draftOfInput(inputOf(s));
+
+/**
+ * Check a recurring draft as Desk settings would, without saving it (the
+ * connector's hd_draft_recurring and Claude in the desk's card). Fields not
+ * sent come from `base` (an existing schedule's draft or live copy). Never
+ * carries on or off.
+ */
+export async function checkRecurringDraft(raw: unknown, base?: HdRecurringDraft): Promise<HdRecurringDraft> {
+  const r = { ...((raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>) };
+  delete r.enabled;
+  const v = await validateRecurringInput(r, base ? { ...base, enabled: false } : undefined);
+  if (!v.ok) throw new RecurringDraftError(v.error, 400);
+  return draftOfInput(v.value);
+}
+
+const DRAFT_SET = (from: number) =>
+  `team_id = $${from}, subject = $${from + 1}, body = $${from + 2}, priority = $${from + 3}, request_type_id = $${from + 4}, assign_mode = $${from + 5}, assignee_id = $${from + 6},
+   due_business_days = $${from + 7}, pattern = $${from + 8}, holiday_rule = $${from + 9}, timezone = $${from + 10}`;
+const draftValues = (d: HdRecurringDraft) => [
+  d.team_id,
+  d.subject,
+  d.body,
+  d.priority,
+  d.request_type_id,
+  d.assign_mode,
+  d.assignee_id,
+  d.due_business_days,
+  JSON.stringify(d.pattern),
+  d.holiday_rule,
+  d.timezone,
+];
+
+/**
+ * Save a recurring draft for a person to review (Claude's
+ * hd_draft_recurring, and Save as draft on a Claude in the desk card). The
+ * caller checked the person may manage the team(s). Without `id`: a new
+ * schedule, paused and unpublished, with no next run. With `id`: an
+ * unpublished draft is replaced; a published schedule keeps running and gets
+ * the proposal in `draft` (replacing an earlier one). Fields not sent come
+ * from the current draft, else the live schedule. The row is locked.
+ */
+export async function saveRecurringDraft(
+  draft: HdRecurringDraft,
+  actor: { id: number | null; name: string; via: HdDraftVia },
+  id?: number
+): Promise<{ schedule: HdRecurring; kind: "new" | "replaced" | "changes" }> {
+  const meta = [actor.id, actor.name, actor.via];
+  if (id === undefined) {
+    const newId = await withTx(async (client) => {
+      await client.query("SELECT pg_advisory_xact_lock($1, $2)", [RECURRING_SWEEP_LOCK, draft.team_id]);
+      const n = await hqOne<{ n: number }>("SELECT count(*)::int AS n FROM hd_recurring WHERE team_id = $1", [draft.team_id], client);
+      if ((n?.n ?? 0) >= RECURRING_LIMITS.perTeam) throw new RecurringDraftError(`A team can have at most ${RECURRING_LIMITS.perTeam} recurring tickets.`, 409);
+      const row = await hqOne<{ id: number }>(
+        `INSERT INTO hd_recurring (team_id, subject, body, priority, request_type_id, assign_mode, assignee_id, due_business_days,
+            pattern, holiday_rule, timezone, enabled, next_run_at, next_key, created_by, published, draft_by, draft_by_name, draft_at, draft_via)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, NULL, NULL, $12, 0, $12, $13, now(), $14) RETURNING id`,
+        [...draftValues(draft), ...meta],
+        client
+      );
+      return row!.id;
+    });
+    return { schedule: (await getRecurring(newId))!, kind: "new" };
+  }
+  const kind = await withTx(async (client) => {
+    const before = await hqOne<{ published: number }>("SELECT published FROM hd_recurring WHERE id = $1 FOR UPDATE", [id], client);
+    if (!before) throw new RecurringDraftError(`No recurring ticket with id ${id}.`, 404);
+    if (before.published !== 1) {
+      await client.query(
+        `UPDATE hd_recurring SET ${DRAFT_SET(2)}, enabled = 0, next_run_at = NULL, next_key = NULL, updated_at = now(),
+                draft_by = $13, draft_by_name = $14, draft_at = now(), draft_via = $15
+          WHERE id = $1 AND published = 0`,
+        [id, ...draftValues(draft), ...meta]
+      );
+      return "replaced" as const;
+    }
+    await client.query("UPDATE hd_recurring SET draft = $2, draft_by = $3, draft_by_name = $4, draft_at = now(), draft_via = $5 WHERE id = $1", [id, JSON.stringify(draft), ...meta]);
+    return "changes" as const;
+  });
+  return { schedule: (await getRecurring(id))!, kind };
+}
+
+/**
+ * Save a schedule from Desk settings (the PATCH; the caller checked the
+ * team). The row is locked while it is read and written. 1.20.16:
+ *   - a plain save edits the live schedule, or the unpublished draft, and
+ *     keeps any changes waiting; an unpublished draft stays paused (switching
+ *     it on is refused, 409);
+ *   - `publish` (an unpublished draft) makes it a real schedule and switches
+ *     it on (unless the save says enabled false); `publishDraft` applies the
+ *     changes waiting on a published schedule (fields not sent come from that
+ *     draft) and keeps it on or off as it is. Both name the draft the person
+ *     reviewed (`draftAt`, 409 when Claude saved a newer one).
+ * Answers the input it saved too, so the route can check the team it moved to.
+ */
+export async function saveRecurring(
+  id: number,
+  raw: Record<string, unknown>,
+  opts: { publish?: boolean; publishDraft?: boolean; draftAt?: unknown; mayUseTeam?: (teamId: number) => Promise<boolean> } = {},
+  now = Date.now()
+): Promise<{ before: HdRecurring; after: HdRecurring; published: boolean } | undefined> {
+  const out = await withTx(async (client) => {
+    const row = await hqOne<Row>(`${SELECT} WHERE r.id = $1 FOR UPDATE OF r`, [id], client);
+    if (!row) return undefined;
+    const before = toApi(row);
+    const publish = opts.publish === true && !before.published;
+    const publishDraft = opts.publishDraft === true;
+    if (publishDraft && !(before.published && before.draft)) throw new RecurringDraftError(NO_CHANGES_WAITING, 409);
+    if ((publish || publishDraft) && !sameDraftInstant(before.draft_at, opts.draftAt)) throw new RecurringDraftError(STALE_DRAFT_MESSAGE, 409);
+    const base: RecurringInput = publishDraft ? { ...before.draft!, enabled: before.enabled } : inputOf(before);
+    const v = await validateRecurringInput(raw, base);
+    if (!v.ok) throw new RecurringDraftError(v.error, 400);
+    const input = v.value;
+    if (input.team_id !== before.team_id && opts.mayUseTeam && !(await opts.mayUseTeam(input.team_id))) {
+      throw new RecurringDraftError("You can only schedule tickets for teams you lead.", 403);
+    }
+    if (!before.published && !publish) {
+      if (raw.enabled === true) throw new RecurringDraftError("This schedule is a draft from Claude. Publish it to switch it on.", 409);
+      input.enabled = false;
+    } else if (publish) input.enabled = raw.enabled !== false;
+    const next = await computeNextRun({ ...input, id }, now, client);
+    await client.query(
+      `UPDATE hd_recurring SET ${DRAFT_SET(2)}, enabled = $13, next_run_at = $14, next_key = $15, updated_at = now()${publish ? ", published = 1" : ""}${
+        publish || publishDraft ? `, ${CLEAR_DRAFT_SQL}` : ""
+      }
+        WHERE id = $1`,
+      [id, ...draftValues(draftOfInput(input)), input.enabled ? 1 : 0, next?.at ?? null, next?.key ?? null]
+    );
+    return { before, published: publish || publishDraft };
+  });
+  if (!out) return undefined;
+  return { before: out.before, after: (await getRecurring(id))!, published: out.published };
+}
+
+/**
+ * Drop the changes waiting on a published schedule (it keeps running as it
+ * is). Undefined when nothing waits. With `draftAt`, only the draft the
+ * person saw (409 when Claude saved a newer one).
+ */
+export async function discardRecurringDraft(id: number, draftAt?: unknown): Promise<HdRecurring | undefined> {
+  const gone = await withTx(async (client) => {
+    const row = await hqOne<Row>(`${SELECT} WHERE r.id = $1 FOR UPDATE OF r`, [id], client);
+    if (!row || row.published !== 1 || !row.draft) return undefined;
+    if (draftAt !== undefined && draftAt !== null && !sameDraftInstant(row.draft_at, draftAt)) throw new RecurringDraftError(STALE_DISCARD_MESSAGE, 409);
+    await client.query(`UPDATE hd_recurring SET ${CLEAR_DRAFT_SQL} WHERE id = $1`, [id]);
+    return toApi(row);
+  });
+  return gone;
+}
+
+/** A schedule in plain words, for Claude's hd_list_recurring and the draft cards. */
+export async function recurringInWords(d: HdRecurringDraft): Promise<string[]> {
+  const { patternSummary, HD_HOLIDAY_RULE_LABEL: HOL } = await import("./recurring-shared");
+  const team = await hqOne<{ name: string }>("SELECT name FROM hd_teams WHERE id = $1", [d.team_id]);
+  const who = d.assign_mode === "user" && d.assignee_id ? await hqOne<{ name: string }>("SELECT COALESCE(NULLIF(name, ''), username) AS name FROM users WHERE id = $1", [d.assignee_id]) : undefined;
+  const type = d.request_type_id ? await hqOne<{ title: string }>("SELECT title FROM hd_request_types WHERE id = $1", [d.request_type_id]) : undefined;
+  const { HD_PRIORITY_LABEL } = await import("./types");
+  const lines = [
+    `Opens "${d.subject}" for ${team?.name ?? "a team"}`,
+    `${patternSummary(d.pattern)} (${d.timezone})`,
+    who ? `Assigned to ${who.name}` : "Assigned by the team's rules",
+    `Priority ${HD_PRIORITY_LABEL[d.priority as keyof typeof HD_PRIORITY_LABEL] ?? d.priority}`,
+  ];
+  if (type) lines.push(`Request type ${type.title}`);
+  if (d.due_business_days) lines.push(`Due in ${d.due_business_days} business ${d.due_business_days === 1 ? "day" : "days"}`);
+  lines.push(`On a holiday: ${HOL[d.holiday_rule].toLowerCase()}`);
+  return lines;
+}
+
 // --- Opening tickets -----------------------------------------------------------------------------------
 
 interface DbSchedule {
@@ -492,7 +699,7 @@ export async function recurringSweep(now: Date = new Date()): Promise<{ opened: 
     if (!lock.rows[0]?.ok) return;
     const due = await client.query<DbSchedule>(
       `SELECT r.*, t.name AS team_name FROM hd_recurring r JOIN hd_teams t ON t.id = r.team_id
-        WHERE r.enabled = 1 AND r.next_run_at IS NOT NULL AND r.next_run_at <= $1
+        WHERE r.enabled = 1 AND r.published = 1 AND r.next_run_at IS NOT NULL AND r.next_run_at <= $1
         ORDER BY r.next_run_at, r.id LIMIT 50 FOR UPDATE OF r SKIP LOCKED`,
       [now]
     );
@@ -577,6 +784,8 @@ export async function openRecurringNow(id: number, actor: { id: number; name: st
       await client.query<DbSchedule>(`SELECT r.*, t.name AS team_name FROM hd_recurring r JOIN hd_teams t ON t.id = r.team_id WHERE r.id = $1 FOR UPDATE OF r`, [id])
     ).rows[0];
     if (!s) return null;
+    // 1.20.16: a draft from Claude opens nothing until a person publishes it.
+    if ((s as DbSchedule & { published?: number }).published === 0) throw new RecurringDraftError("This schedule is a draft from Claude. Publish it first.", 409);
     const opened = await openOccurrence(client, s, key, localDate(now, s.timezone), now);
     if (opened) await client.query("UPDATE hd_recurring SET last_run_at = $2 WHERE id = $1", [id, new Date(now)]);
     return opened;
@@ -587,7 +796,14 @@ export async function openRecurringNow(id: number, actor: { id: number; name: st
 
 // --- Audit -------------------------------------------------------------------------------------------------
 
-export type RecurringAuditAction = "helpdesk.recurring.created" | "helpdesk.recurring.updated" | "helpdesk.recurring.deleted" | "helpdesk.recurring.run";
+export type RecurringAuditAction =
+  | "helpdesk.recurring.created"
+  | "helpdesk.recurring.updated"
+  | "helpdesk.recurring.deleted"
+  | "helpdesk.recurring.run"
+  // 1.20.16: a person publishes a schedule Claude drafted, or discards the changes it proposed.
+  | "helpdesk.recurring.published"
+  | "helpdesk.recurring.draft_discarded";
 
 export async function auditRecurring(
   req: Request,

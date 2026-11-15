@@ -4625,6 +4625,36 @@ live in `components/helpdesk/desk/checklists`.
   scrolls). Claude proposes a macro only for the open ticket, and Apply
   works only with it open. While a card's decision is in flight its
   Apply and Skip are `disabled`.
+- **Drafts from Claude beyond checklists** (1.20.16): Categories,
+  Automations and Recurring tickets use the same pieces as Checklists.
+  The strip is the shared `ClaudeDraftStrip` (settings/ClaudeDraftStrip:
+  dashed `compass-300` box, `Bot` avatar, "Draft from Claude" or
+  "Changes from Claude", "asked by {person} · {RelativeTime} · not
+  published", one sentence on what stays as it is). Rows carry the
+  `accent` `sm` chip. A new automation or schedule is saved off or
+  paused: its row has no Turn on (an automation shows a secondary `sm`
+  **Review** instead), the recurring editor hides "Schedule is on" and
+  Open one now, and the action row is ghost **Discard draft**
+  (`mr-auto`, `hover-danger`, confirmed), secondary **Save draft**,
+  primary **Publish rule** / **Publish schedule** (publishing switches it
+  on). Changes beside a live one: secondary **Discard changes**, primary
+  **Publish changes**; Publish is never a form's default (Enter saves a
+  draft at most). Categories show the draft above the list: each change
+  a bordered row (a label, its name in a `TextInput`, sub-categories
+  comma-separated for a new category, a quiet `X` "Take this change
+  out"), then ghost **Discard changes**, secondary **Save draft**
+  (enabled when edited), primary **Publish changes** (confirmed when it
+  renames). `?id=` opens the rule or schedule, and scrolls to and tints a
+  category row.
+- **Claude in the desk's settings draft cards** (1.20.16) are the
+  checklist draft card's shape with `FolderTree` (categories), `Bot`
+  (an automation) or `Repeat` (a recurring ticket): the title, the hint,
+  then the draft in plain lines with no chips ("When a ticket is
+  created", "If it mentions "vpn"", "Then move it to Network"). The
+  primary button is **Save as draft**; the decided chip reads "Saved as
+  draft" with a "Review in Categories / Automations / Recurring tickets"
+  link. Save as draft is claimed by the settings route (one card, one
+  draft), and is `disabled` while its decision is in flight, as Apply is.
 - **The workflow builder's Task step** has a "Checklists" section like
   "If the team can't do it": rows naming each chosen checklist with its
   item count and a quiet `X`, and a secondary `sm` **Add checklist**
