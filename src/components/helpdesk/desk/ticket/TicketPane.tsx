@@ -256,9 +256,19 @@ export function TicketPane({ number }: { number: number }) {
   const vip = (d.requester as typeof d.requester & { card?: { vip?: { vip: boolean; reason: string } } }).card?.vip;
   const statusOptions = HD_STATUSES.filter((s) => s !== "closed" || t.status === "closed").map((s) => ({ value: s, label: HD_STATUS_LABEL[s] }));
 
+  // 1.20.12 (STYLEGUIDE §Helpdesk: the desk, "Desk panes own their scroll"): with the side column
+  // beside the conversation (@2xl), the header and the requester strip stay put and the two
+  // columns each scroll on their own, to their own end; the article itself then has nothing to
+  // scroll. Narrower (one column, a phone) the article is the pane's one scroll, as before.
   return (
-    <div className="min-w-0 flex-1 overflow-y-auto">
-      <article aria-labelledby="ticket-subject" className="@container px-4 py-4 sm:px-6 sm:py-5">
+    <div className="flex min-h-0 min-w-0 flex-1">
+      <article
+        aria-labelledby="ticket-subject"
+        // A click on text in a scroll area focuses it (not the page's <main>), so Page Down, Space
+        // and the arrows scroll the area under the pointer; the same on the two columns below.
+        tabIndex={-1}
+        className="@container flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-4 pt-4 outline-none sm:px-6 sm:pt-5 print:block print:overflow-visible"
+      >
         {back}
         <PageHeader className="sr-only" title={`Ticket #${t.number}: ${t.subject}`} />
         {/* A major incident's own ticket, or one linked to it (1.19.2, agent W1). */}
@@ -361,8 +371,17 @@ export function TicketPane({ number }: { number: number }) {
         {/* The requester strip (1.20.3): full pane width, above the conversation and the side column. */}
         <RequesterStrip number={t.number} canWork={can} refreshKey={d.messages.length} onReply={can && !merged ? () => composer.current?.focus("public") : undefined} />
 
-        <div className="mt-4 grid grid-cols-1 items-start gap-4 @2xl:grid-cols-[minmax(0,1fr)_15rem] @5xl:grid-cols-[minmax(0,1fr)_18rem]">
-          <div className="flex min-w-0 flex-col gap-3">
+        {/* One column: the grid is plain flow inside the article's scroll. Two (@2xl): it takes the
+            height the header leaves (never less than 20rem; a short window then scrolls the article a
+            little), each column is its own scroll reaching the pane's edge (the scrollbar at the edge,
+            the padding inside), and overscroll-contain keeps a wheel at one column's end from moving
+            anything else. pt-1 keeps a focus ring on the first card inside the clip. */}
+        <div className="mt-3 grid shrink-0 grid-cols-1 items-start gap-4 pb-4 sm:pb-5 @2xl:min-h-80 @2xl:flex-1 @2xl:grid-cols-[minmax(0,1fr)_15.5rem] @2xl:grid-rows-[minmax(0,1fr)] @2xl:items-stretch @2xl:gap-0 @2xl:pb-0 @5xl:grid-cols-[minmax(0,1fr)_18.5rem] print:pb-0">
+          <div
+            data-testid="ticket-conversation-pane"
+            tabIndex={-1}
+            className="relative outline-none flex min-w-0 flex-col gap-3 pt-1 @2xl:-ml-6 @2xl:min-h-0 @2xl:overflow-x-hidden @2xl:overflow-y-auto @2xl:overscroll-contain @2xl:pb-5 @2xl:pl-6 @2xl:pr-4 print:m-0 print:overflow-visible print:p-0"
+          >
             <BlockedRunBanner detail={d} onChanged={() => void load(true).then(refreshQueue)} />
             <TaskOutcomeBar detail={d} onChanged={() => void load(true).then(refreshQueue)} />
             <MergedNotice d={d} />
@@ -396,18 +415,24 @@ export function TicketPane({ number }: { number: number }) {
               <p className="notice-warn rounded-lg border px-3 py-2 text-sm">You can read this ticket but not work it: it belongs to a team you're not in.</p>
             )}
           </div>
-          {/* The solve flow's "Log a maintenance record" dialog (1.19.3, assets/SolveMaintenance). */}
-          <SolveMaintenanceHost />
-          {/* The solve flow's "Before you solve" dialog (1.20.5, solve/BeforeYouSolve). */}
-          <BeforeYouSolveHost onChanged={() => void load(true)} />
-          <SidePanel
-            d={d}
-            onPatch={patch}
-            onInsertArticle={(title, url) => composer.current?.insertLink(title, url)}
-            onReply={() => composer.current?.focus("public")}
-            onReload={() => void load(true)}
-          />
+          <div
+            data-testid="ticket-side-pane"
+            tabIndex={-1}
+            className="relative outline-none min-w-0 @2xl:-mr-6 @2xl:min-h-0 @2xl:overflow-x-hidden @2xl:overflow-y-auto @2xl:overscroll-contain @2xl:pb-5 @2xl:pl-2 @2xl:pr-6 @2xl:pt-1 print:m-0 print:overflow-visible print:p-0"
+          >
+            <SidePanel
+              d={d}
+              onPatch={patch}
+              onInsertArticle={(title, url) => composer.current?.insertLink(title, url)}
+              onReply={() => composer.current?.focus("public")}
+              onReload={() => void load(true)}
+            />
+          </div>
         </div>
+        {/* The solve flow's "Log a maintenance record" dialog (1.19.3, assets/SolveMaintenance). */}
+        <SolveMaintenanceHost />
+        {/* The solve flow's "Before you solve" dialog (1.20.5, solve/BeforeYouSolve). */}
+        <BeforeYouSolveHost onChanged={() => void load(true)} />
       </article>
     </div>
   );

@@ -22,8 +22,8 @@ const GAP = 9;
 /** How close to an edge a bubble may sit. */
 const EDGE = 4;
 
-/** The box a bubble of `el` can be seen in: the viewport, cut down by every clipping ancestor. */
-function visibleBox(el: Element): { top: number; left: number; right: number; bottom: number } {
+/** The box a bubble of `el` can be seen in: the viewport, cut down by every clipping ancestor (1.20.12: Popover uses it too). */
+export function visibleBox(el: Element): { top: number; left: number; right: number; bottom: number } {
   const box = { top: 0, left: 0, right: document.documentElement.clientWidth, bottom: window.innerHeight };
   for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
     const cs = getComputedStyle(p);

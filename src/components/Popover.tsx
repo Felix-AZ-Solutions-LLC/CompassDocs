@@ -15,8 +15,12 @@
 //     </Popover>
 //   </div>
 
-import { useEffect, useRef, type ReactNode, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
 import { pushOverlay, bindEscapeDispatcher } from "@/lib/overlay-stack";
+import { visibleBox } from "./TooltipPlacer";
+
+/** How close to a clipping edge a panel may sit. */
+const EDGE = 4;
 
 /**
  * The items arrows walk in a role="menu" panel: plain actions and the
@@ -55,6 +59,32 @@ export function Popover({
   children: ReactNode;
 }) {
   const panel = useRef<HTMLDivElement>(null);
+
+  // 1.20.12: a panel that would cross the side of a pane that clips it (the desk ticket's own
+  // scrolling side column is 15rem, an end-aligned w-60 menu hung past its left edge) slides back
+  // inside, as a data-tt bubble does (TooltipPlacer), and is never wider than that box. Measured
+  // once on open, before the menu moves focus into it (so focus never scrolls the pane sideways).
+  useLayoutEffect(() => {
+    const el = panel.current;
+    if (!open || !el?.parentElement) return;
+    el.style.removeProperty("translate");
+    el.style.removeProperty("max-width");
+    const box = visibleBox(el.parentElement);
+    const room = box.right - box.left - 2 * EDGE;
+    let r = el.getBoundingClientRect();
+    if (room > 0 && r.width > room) {
+      el.style.maxWidth = `${Math.floor(room)}px`;
+      r = el.getBoundingClientRect();
+    }
+    let shift = 0;
+    if (r.right > box.right - EDGE) shift = box.right - EDGE - r.right;
+    if (r.left + shift < box.left + EDGE) shift = box.left + EDGE - r.left;
+    if (Math.abs(shift) < 1) return;
+    // On top of any translate the caller's classes give it (a centred panel's -translate-x-1/2).
+    const given = getComputedStyle(el).translate;
+    const [x = "0px", ...rest] = given === "none" ? [] : given.split(" ");
+    el.style.translate = [`calc(${x} + ${Math.round(shift)}px)`, ...(rest.length ? rest : ["0px"])].join(" ");
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;

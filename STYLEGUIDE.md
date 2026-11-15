@@ -1894,6 +1894,10 @@ per-route variants:
   overlay stack, focus back to the trigger. The trigger carries
   `aria-expanded` and `aria-haspopup`. Never hand-roll an `absolute …
   shadow-lg` panel (a guard test fails the build).
+  A panel that would cross the side of a pane that clips it (a scrolling
+  column, the viewport) slides back inside on open and is never wider than
+  that box (1.20.12, the same measure as §Tooltips' bubbles), so `align`
+  says where it hangs from and the pane's edge still wins.
 - **A picker menu** (one choice among a few, 1.18.0: `FindModeMenu`) is a
   `Popover role="menu"` whose rows are `role="menuitemradio"` with
   `aria-checked` on the chosen one, never `menuitem` plus an sr-only
@@ -2771,6 +2775,28 @@ open in its own tab beside CompassDocs. Components live in
   min-h-0 flex-1` and every screen owns its own scrolling column, so the
   bar and rail never scroll away. `id="main"` sits on the page area for
   the skip link.
+- **Desk panes own their scroll** (1.20.12). The shell is `relative flex
+  h-dvh flex-col overflow-clip`: the document never scrolls, only panes do,
+  and each pane ends at its last content (no spacer, no `h-screen` or
+  `100vh` inside the shell, no `min-h-screen` in a pane). The root must stay
+  positioned: an `sr-only` label is `position: absolute`, and with no
+  positioned ancestor every one of them escaped the panes and made the page
+  thousands of pixels tall, so a wheel past a pane's end slid the whole desk
+  up into empty space. A pane is `min-h-0 flex-1 overflow-y-auto` and never
+  scrolls sideways (globals.css hides the x axis of every desk
+  `overflow-y-auto`: a resting `data-tt` bubble near the right edge made
+  panes wider than themselves); one that truly scrolls both ways says
+  `overflow-x-auto` too. **The ticket**: with the side column beside the
+  conversation (`@2xl`), the header and the requester strip stay put and
+  the conversation column (banners, checklists, messages, composer) and the
+  side column scroll on their own, each with its scrollbar at its edge,
+  `overscroll-contain` so a wheel at one end never moves the other, and
+  `tabIndex={-1}` so a click on text then Page Down, Space or the arrows
+  scrolls that column (a click otherwise focuses `<main>`, which scrolls
+  nothing). One column (under `@2xl`, a phone) is one scroll, as a page.
+  Nothing is pinned inside a column: the composer grows with the reply and
+  `r` / `n` reach it from anywhere. Print turns every pane back to plain
+  flow.
 - **Gate and guard.** Unlicensed is `DeskLicenceGate` (a bare top bar, the
   page's `PageHeader` and the house `LicenseGate`); signed in without a
   desk permission (`helpdesk.agent`, `agent_all`, `admin`, `reports`) is

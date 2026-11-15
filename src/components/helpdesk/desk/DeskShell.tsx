@@ -148,7 +148,12 @@ export function DeskShell({
     <DeskCountsContext.Provider value={{ counts, refresh }}>
     <TeamStatusProvider enabled={caps.agent}>
     <ClaudeHost claude={claude}>
-      <DeskLookRoot look={look} menu={lookMenu} className="flex h-dvh flex-col overflow-hidden bg-canvas print:h-auto print:overflow-visible">
+      {/* 1.20.12: `relative overflow-clip`, not `overflow-hidden`. Every `sr-only` label (a list count's
+          " open tickets", a due's full text) is `position: absolute`; with no positioned ancestor it
+          escaped the panes and made the document itself thousands of pixels tall, so a wheel past the
+          end of a pane scrolled the whole desk up into empty space. Positioned, the root contains them;
+          `clip` (not a scroll container) means nothing, not even scrollIntoView, can scroll it. */}
+      <DeskLookRoot look={look} menu={lookMenu} className="relative flex h-dvh flex-col overflow-clip bg-canvas print:h-auto print:overflow-visible">
         <a
           href="#main"
           className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded-lg focus:bg-compass-600 focus:px-3 focus:py-2 focus:text-sm focus:font-semibold focus:text-white"
