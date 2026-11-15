@@ -9,7 +9,9 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import { pool, createDocument, setAckRequired, reconcilePoliciesForUser, reconcilePolicyAssignments } from "../src/lib/db";
+import { fixtureQuery } from "./support/retry";
 
 const STAMP = `ackrace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 let spaceId = 0;
@@ -65,7 +67,11 @@ async function removeWhile<T>(userId: number, run: () => Promise<T>): Promise<T>
   }
 }
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   const s = await pool().query<{ id: number }>(
     `INSERT INTO spaces (name, slug, icon, description, visibility) VALUES ($1, $2, '📁', '', 'private') RETURNING id`,
     [`Ack race ${STAMP}`, STAMP]
@@ -74,10 +80,11 @@ before(async () => {
 });
 
 after(async () => {
-  if (docIds.length) await pool().query("DELETE FROM documents WHERE id = ANY($1::int[])", [docIds]);
-  if (userIds.length) await pool().query("DELETE FROM users WHERE id = ANY($1::int[])", [userIds]);
+  if (docIds.length) await fixtureQuery("DELETE FROM documents WHERE id = ANY($1::int[])", [docIds]);
+  if (userIds.length) await fixtureQuery("DELETE FROM users WHERE id = ANY($1::int[])", [userIds]);
   if (spaceId) await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
   await pool().end();
+  await complianceLock?.release();
 });
 
 test("switching a policy on while a member's account is removed enrols the others and skips the removed one", async () => {
@@ -101,7 +108,7 @@ test("enrolling one account that is removed at the same moment does not throw", 
   await policy(`Race joiner policy ${STAMP}`);
   // The policy is on, so the joiner path would enrol them.
   await setAckRequired(docIds[docIds.length - 1], true, { editDefault: null, recertMonths: null });
-  await pool().query("DELETE FROM policy_assignments WHERE user_id = $1", [leaves]);
+  await fixtureQuery("DELETE FROM policy_assignments WHERE user_id = $1", [leaves]);
 
   await removeWhile(leaves, () => reconcilePoliciesForUser(leaves));
 

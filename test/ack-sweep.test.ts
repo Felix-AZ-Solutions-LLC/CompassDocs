@@ -15,7 +15,7 @@
 import "./support/ee-stub";
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
-import type { PoolClient } from "pg";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import { edition } from "./support/ee-stub";
 import {
   pool,
@@ -188,7 +188,11 @@ async function withRowHeld<T>(id: number, run: () => Promise<T>, label: string):
   }
 }
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings, and one describe changes them (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   const sp = await fixtureQuery(
     `INSERT INTO spaces (name, slug, icon, description, visibility) VALUES ($1, $2, '📁', '', 'internal') RETURNING id`,
@@ -203,14 +207,15 @@ before(async () => {
 });
 
 after(async () => {
-  await pool().query("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = $2", [docIds, readerId]);
+  await fixtureQuery("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = $2", [docIds, readerId]);
   await pool().query("DELETE FROM ack_decisions WHERE document_id = ANY($1) OR document_title LIKE $2", [docIds, `${STAMP}%`]);
   await pool().query("DELETE FROM ack_notices WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM ack_outbox WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM audit_log WHERE action = 'ack.recert' AND target_id = ANY($1)", [docIds.map(String)]);
-  await pool().query("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
-  await pool().query("DELETE FROM users WHERE id = $1", [readerId]);
+  await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = $1", [readerId]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
+  await complianceLock?.release();
 });
 
 describe("the re-confirmation sweep", () => {
@@ -487,24 +492,16 @@ describe("the stored next date", () => {
 });
 
 describe("the workspace default interval on the first switch-on", () => {
-  /** The advisory lock the settings-touching describes share with test/compliance-settings.test.ts. */
-  const SETTINGS_LOCK = 728342;
-  let lockClient: PoolClient | null = null;
   let savedDefaults: string | undefined;
 
   before(async () => {
-    const client = await pool().connect();
-    await client.query("SELECT pg_advisory_lock($1)", [SETTINGS_LOCK]);
-    lockClient = client;
+    await complianceLock!.exclusive();
     savedDefaults = await getSetting("ack_defaults");
   });
   after(async () => {
     if (savedDefaults === undefined) await pool().query("DELETE FROM settings WHERE key = 'ack_defaults'");
     else await setSetting("ack_defaults", savedDefaults);
-    if (lockClient) {
-      await lockClient.query("SELECT pg_advisory_unlock($1)", [SETTINGS_LOCK]).catch(() => {});
-      lockClient.release();
-    }
+    await complianceLock?.shared();
   });
 
   async function newPolicy(title: string): Promise<number> {
@@ -744,7 +741,7 @@ describe("the reminder sweep (E2)", () => {
       author: "test",
     });
     await switchOn(doc.id, { editDefault: null, recertMonths: null });
-    await pool().query("DELETE FROM policy_assignments WHERE document_id = $1", [doc.id]);
+    await fixtureQuery("DELETE FROM policy_assignments WHERE document_id = $1", [doc.id]);
     docIds.push(doc.id);
     e2Docs.push(doc.id);
     return doc.id;
@@ -839,11 +836,11 @@ describe("the reminder sweep (E2)", () => {
 
   after(async () => {
     await pool().query("DELETE FROM audit_log WHERE action IN ('ack.reminder_auto', 'ack.escalated') AND target_id = ANY($1)", [e2Docs.map(String)]);
-    await pool().query("DELETE FROM acknowledgements WHERE user_id = ANY($1)", [userIds]);
+    await fixtureQuery("DELETE FROM acknowledgements WHERE user_id = ANY($1)", [userIds]);
     await pool().query("DELETE FROM groups WHERE id = ANY($1)", [[teamGroup, scopeGroup]]);
     // The documents (and their rows, outbox rows and notices) go with the file's after().
-    await pool().query("DELETE FROM policy_assignments WHERE user_id = ANY($1)", [userIds]);
-    await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+    await fixtureQuery("DELETE FROM policy_assignments WHERE user_id = ANY($1)", [userIds]);
+    await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
     await pool().query("DELETE FROM spaces WHERE id = $1", [privateSpace]);
   });
 

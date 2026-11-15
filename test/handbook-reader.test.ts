@@ -27,6 +27,7 @@
 import { edition } from "./support/ee-stub";
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import {
   pool,
   approveChangeRequest,
@@ -141,7 +142,11 @@ async function view(user: SessionUser, docId: number, handbookId = hbId) {
   return { base, v };
 }
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   data = await import("../src/components/handbooks/reader/reader-data");
   handbooks = await import("../src/lib/handbooks");
   const open = await createSpace({ slug: `${STAMP.toLowerCase()}-open`, name: `${STAMP} People Ops`, visibility: "private" });
@@ -212,6 +217,7 @@ after(async () => {
   await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await fixtureQuery("DELETE FROM spaces WHERE id = ANY($1)", [[openSpaceId, closedSpaceId]]);
   await pool().end();
+  await complianceLock?.release();
 });
 
 const facts = (v: { facts: { label: string; value: string }[] }) => Object.fromEntries(v.facts.map((f) => [f.label, f.value]));

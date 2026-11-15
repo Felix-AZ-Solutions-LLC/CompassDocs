@@ -21,6 +21,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -196,7 +197,11 @@ async function newTicket(subject: string, over: Record<string, unknown> = {}) {
   return t;
 }
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   uploadDirectory = await mkdtemp(path.join(tmpdir(), "compass-hdchan-"));
   process.env.COMPASSDOCS_UPLOAD_DIR = uploadDirectory;
@@ -248,8 +253,9 @@ after(async () => {
   await pool().query("DELETE FROM audit_log WHERE target_label LIKE $1 OR actor_id = ANY($2)", [`${STAMP}%`, userIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await rm(uploadDirectory, { recursive: true, force: true });
+  await mailLock?.release(email);
   await pool().end();
 });
 

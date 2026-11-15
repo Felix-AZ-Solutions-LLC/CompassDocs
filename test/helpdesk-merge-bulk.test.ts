@@ -16,6 +16,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { pool, getSetting, createSession } from "../src/lib/db";
@@ -124,6 +125,8 @@ function req(url: string, session: string, body?: unknown): Request {
 // --- Fixtures ----------------------------------------------------------------------
 
 const STAMP = `hdmerge-${Date.now()}-${process.pid}`;
+/** STAMP as one word: what an emailed message's text carries (the inbound body escapes punctuation). */
+const TAG = STAMP.replace(/\W/g, "");
 interface Person {
   id: number;
   session: string;
@@ -191,7 +194,11 @@ const row = async (id: number) => (await pool().query("SELECT * FROM hd_tickets 
 const doMerge = (by: Person, body: unknown) => call(mergeRoute.POST, req("/tickets/merge", by.session, body));
 const doBulk = (by: Person, body: unknown) => call(bulkRoute.POST, req("/tickets/bulk", by.session, body));
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   roles.setRoleMatrixForTests(shared.HD_DEFAULT_MATRIX);
   for (const [k, n] of [
@@ -235,7 +242,8 @@ after(async () => {
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM roles WHERE id = ANY($1)", [roleIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await mailLock?.release(email);
   await pool().end();
 });
 
@@ -473,7 +481,8 @@ describe("merge", () => {
         cc: [],
         recipients: [],
         subject: `Re: ${STAMP} printer [#${a.number} ref:${token}]`,
-        text: "Still broken after the restart.",
+        // Stamped: other files mail the same sentence, and the lookup below reads the whole table.
+        text: `Still broken after the restart ${TAG}.`,
         html: "",
         stripped: "",
         messageId: `${newToken()}@mail.example.test`,
@@ -487,7 +496,7 @@ describe("merge", () => {
     );
     assert.equal(res.body.outcome, "appended", JSON.stringify(res.body));
     assert.equal(res.body.ticket, keep.number);
-    const last = (await pool().query("SELECT ticket_id, author_id FROM hd_messages WHERE body LIKE '%Still broken after the restart%'")).rows;
+    const last = (await pool().query("SELECT ticket_id, author_id FROM hd_messages WHERE body LIKE $1", [`%Still broken after the restart ${TAG}%`])).rows;
     assert.deepEqual(last, [{ ticket_id: keep.id, author_id: P.req2.id }]);
     assert.equal((await row(a.id)).status, "closed", "the merged ticket stays closed");
   });
@@ -521,11 +530,11 @@ describe("merge", () => {
       if (seen.length === 1) assert.equal((await doMerge(P.agent, { keep: keep.number, merge: [a.number], notify: false })).status, 200);
     });
     try {
-      const res = await inbound.processInboundEmail(mailOn(a, token, P.req2, "Raced the merge, still broken."), { outsideSenders: false });
+      const res = await inbound.processInboundEmail(mailOn(a, token, P.req2, `Raced the merge, still broken ${TAG}.`), { outsideSenders: false });
       assert.equal(res.body.outcome, "appended", JSON.stringify(res.body));
       assert.equal(res.body.ticket, keep.number);
       assert.deepEqual(seen, [a.id, keep.id], "looked up again and retried onto the kept ticket");
-      const msgs = (await pool().query("SELECT ticket_id, author_id FROM hd_messages WHERE body LIKE '%Raced the merge, still broken%'")).rows;
+      const msgs = (await pool().query("SELECT ticket_id, author_id FROM hd_messages WHERE body LIKE $1", [`%Raced the merge, still broken ${TAG}%`])).rows;
       assert.deepEqual(msgs, [{ ticket_id: keep.id, author_id: P.req2.id }], "one message, on the kept ticket, as its requester");
       assert.equal((await row(a.id)).merged_into, keep.id);
     } finally {
@@ -545,11 +554,11 @@ describe("merge", () => {
     });
     try {
       await assert.rejects(
-        inbound.processInboundEmail(mailOn(b, token2, P.req3, "Raced twice."), { outsideSenders: false }),
+        inbound.processInboundEmail(mailOn(b, token2, P.req3, `Raced twice ${TAG}.`), { outsideSenders: false }),
         (e: unknown) => e instanceof tickets.HdTicketError && e.status === 409
       );
       assert.deepEqual(seen2, [b.id, keep2.id], "one retry, no more");
-      assert.equal((await pool().query("SELECT count(*)::int AS n FROM hd_messages WHERE body LIKE '%Raced twice%'")).rows[0].n, 0);
+      assert.equal((await pool().query("SELECT count(*)::int AS n FROM hd_messages WHERE body LIKE $1", [`%Raced twice ${TAG}%`])).rows[0].n, 0);
     } finally {
       inbound.setInboundBeforeAppendForTests(null);
     }

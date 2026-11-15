@@ -19,6 +19,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { pool, getSetting, createSession, getUserById } from "../src/lib/db";
@@ -205,7 +206,11 @@ const DEVICE_OPTIONS = [
   { value: "phone", label: "Phone", hint: "Company phones only" },
 ];
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   roles.setRoleMatrixForTests(roles.HD_DEFAULT_MATRIX);
   email.setHelpdeskTransportForTests(async (m) => {
@@ -261,7 +266,8 @@ after(async () => {
   await pool().query("DELETE FROM notifications WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM hd_agent_roles WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await mailLock?.release(email);
   await pool().end();
 });
 

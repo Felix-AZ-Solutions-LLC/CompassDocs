@@ -36,11 +36,11 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import { createHash } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PoolClient } from "pg";
 import { asScope } from "../src/lib/space-scope";
 import {
   pool,
@@ -105,8 +105,6 @@ async function newPolicy(title: string, content = "Policy body"): Promise<number
   return doc.id;
 }
 
-/** The advisory lock the settings-touching describes share with test/compliance-settings.test.ts. */
-const SETTINGS_LOCK = 728342;
 
 async function latestVersionId(docId: number): Promise<number> {
   return (await listVersions(docId))[0].id;
@@ -131,7 +129,11 @@ const auditDetails = async (action: string, id: number) =>
 
 // Shared by both describes below (node:test runs a describe's `after` before
 // the next describe starts, so the fixtures live at the top level).
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings, and one describe changes them (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__"); // run the schema and migrations first
   const sp = await fixtureQuery(
     `INSERT INTO spaces (name, slug, icon, description, visibility) VALUES ($1, $2, '📁', '', 'internal') RETURNING id`,
@@ -160,7 +162,7 @@ before(async () => {
 
 after(async () => {
   const userIds = [readerId, otherId, approverId];
-  await pool().query("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = ANY($2)", [
+  await fixtureQuery("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = ANY($2)", [
     docIds,
     userIds,
   ]);
@@ -173,9 +175,10 @@ after(async () => {
   await pool().query("DELETE FROM audit_log WHERE target_type = 'document' AND target_id = ANY($1::text[])", [
     docIds.map(String),
   ]);
-  await pool().query("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
+  await complianceLock?.release();
 });
 
 describe("read confirmation marker and version evidence", () => {
@@ -809,25 +812,19 @@ describe("the per-document edit default (A5): ask, material, reset", () => {
   const NUMBER = BODY.replace("over 20 pounds", "over 25 pounds");
   const stamps = "SELECT ack_version_id FROM documents WHERE id = $1";
   let savedDefaults: string | undefined;
-  // The settings row is shared with test/compliance-settings.test.ts and
-  // node:test runs files in parallel: the lock is held on one dedicated
-  // connection for the whole describe (an advisory lock is per session).
-  let lockClient: PoolClient | null = null;
+  // The settings row is shared by every file whose policies read it, and
+  // node:test runs files in parallel: this describe holds the compliance
+  // lock alone while it changes the row (test/support/compliance-lock).
 
   before(async () => {
     actor.id = otherId;
-    const client = await pool().connect();
-    await client.query("SELECT pg_advisory_lock($1)", [SETTINGS_LOCK]);
-    lockClient = client;
+    await complianceLock!.exclusive();
     savedDefaults = await getSetting("ack_defaults");
   });
   after(async () => {
     if (savedDefaults === undefined) await pool().query("DELETE FROM settings WHERE key = 'ack_defaults'");
     else await setSetting("ack_defaults", savedDefaults);
-    if (lockClient) {
-      await lockClient.query("SELECT pg_advisory_unlock($1)", [SETTINGS_LOCK]).catch(() => {});
-      lockClient.release();
-    }
+    await complianceLock?.shared();
   });
 
   async function workspaceDefault(value: "ask" | "material" | "reset" | null) {

@@ -24,9 +24,9 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import Module from "node:module";
 import path from "node:path";
-import type { PoolClient } from "pg";
 import {
   pool,
   getSetting,
@@ -147,12 +147,10 @@ function sessionRequest(url: string, session: string | null): Request {
 
 const STAMP = `ackrec-${Date.now()}`;
 const DAY = 86_400_000;
-const SETTINGS_LOCK = 728342;
 const IP = "203.0.113.7";
 const RESET_REASON = "Section 4 now covers contractors";
 const PRIVATE_TITLE = `${STAMP} Private vault policy`;
 
-let lockClient: PoolClient | null = null;
 let savedDefaults: string | undefined;
 
 let pubSpace = 0;
@@ -315,12 +313,20 @@ async function writeLeadsSeePolicies(on: boolean) {
   await setSetting("ack_defaults", JSON.stringify({ ...stored, leads_see_policies: on }));
 }
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
+// Its policies read the workspace's compliance settings, and one describe changes them (test/support/compliance-lock).
+before(async () => {
+  complianceLock = await holdComplianceSettings();
+});
+after(async () => {
+  await complianceLock?.release();
+});
+
 describe("the per-person compliance record (F3)", () => {
   before(async () => {
     await getSetting("__schema_bootstrap__"); // run the schema and migrations first
-    const client = await pool().connect();
-    await client.query("SELECT pg_advisory_lock($1)", [SETTINGS_LOCK]);
-    lockClient = client;
+    await complianceLock!.exclusive();
     savedDefaults = await getSetting("ack_defaults");
     // Off until the lead test switches it on: an upgraded workspace's default.
     await writeLeadsSeePolicies(false);
@@ -460,22 +466,19 @@ describe("the per-person compliance record (F3)", () => {
   after(async () => {
     await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
     await pool().query("DELETE FROM ack_notices WHERE user_id = ANY($1) OR document_id = ANY($2)", [userIds, docIds]);
-    await pool().query("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = ANY($2)", [docIds, userIds]);
+    await fixtureQuery("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = ANY($2)", [docIds, userIds]);
     await pool().query("DELETE FROM ack_decisions WHERE document_id = ANY($1)", [docIds]);
     await pool().query("DELETE FROM attested_texts WHERE document_id = ANY($1)", [docIds]);
     await pool().query("DELETE FROM ack_outbox WHERE document_id = ANY($1)", [docIds]);
     await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1)", [userIds]);
-    await pool().query("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
+    await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
     if (roleIds.length) await pool().query("DELETE FROM roles WHERE id = ANY($1)", [roleIds]);
-    await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+    await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
     await pool().query("DELETE FROM groups WHERE id = ANY($1)", [groupIds]);
     await pool().query("DELETE FROM spaces WHERE id = ANY($1)", [[pubSpace, pub2Space, privSpace]]);
     if (savedDefaults === undefined) await pool().query("DELETE FROM settings WHERE key = 'ack_defaults'");
     else await setSetting("ack_defaults", savedDefaults);
-    if (lockClient) {
-      await lockClient.query("SELECT pg_advisory_unlock($1)", [SETTINGS_LOCK]).catch(() => {});
-      lockClient.release();
-    }
+    await complianceLock?.shared();
   });
 
   test("the person sees every row: the four current standings, the three kinds of history, both notices, nothing hidden, no IP", async () => {

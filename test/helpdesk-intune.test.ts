@@ -44,6 +44,7 @@
 import { test, before, after, describe } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { fakeDevice, fakeIntuneTransport, startFakeIntune, type FakeIntuneState } from "./support/fake-intune";
@@ -51,6 +52,7 @@ import { fakeHardware, fakePerson, fakeSnipeItTransport, startFakeSnipeIt, type 
 import { pool, getSetting, createSession } from "../src/lib/db";
 import { newToken } from "../src/lib/password";
 import { fixtureQuery } from "./support/retry";
+import { syncAlone, sweepAlone } from "./support/asset-sync";
 
 let currentRequest: Request | null = null;
 
@@ -220,7 +222,11 @@ const auditRows = async (action: string) => (await pool().query("SELECT actor_id
 // The shared serial: Snipe-IT's MacBook and Intune's view of it.
 const SERIAL = `C02${TAGP}`;
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   roles.setRoleMatrixForTests(roles.HD_DEFAULT_MATRIX);
   email.setHelpdeskTransportForTests(async () => {});
@@ -295,7 +301,8 @@ after(async () => {
   await pool().query("DELETE FROM hd_teams WHERE id = ANY($1)", [Object.values(T)]);
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1) OR target_label LIKE $2", [userIds, `%${STAMP}%`]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await mailLock?.release(email);
   await pool().end();
 });
 
@@ -549,7 +556,7 @@ describe("Intune: sync", () => {
     try {
       await holder.query("BEGIN");
       await holder.query("SELECT pg_advisory_xact_lock($1)", [assets.ASSETS_SYNC_LOCK]);
-      const r = await assets.syncProvider(INTUNE, { force: true });
+      const r = await syncAlone(assets, INTUNE);
       assert.equal(r.ran, true, JSON.stringify(r));
       assert.equal(r.ok, true);
       assert.equal(r.seen, 4);
@@ -562,23 +569,28 @@ describe("Intune: sync", () => {
     assert.equal(mac.assigned_upn, P.req.email);
     assert.equal(mac.raw.compliance, "compliant");
     assert.equal((await rowOf(INTUNE, `vm-${STAMP}`))!.serial, "", "a placeholder serial is kept as none");
-    const snipeRun = await assets.syncProvider(SNIPE, { force: true });
+    const snipeRun = await syncAlone(assets, SNIPE);
     assert.equal(snipeRun.ok, true, JSON.stringify(snipeRun));
   });
 
   test("Sync now for Intune (audited as Intune's); a pass cut short removes nothing", async () => {
-    const r = await call(adminSyncRoute.POST, req("/admin/assets/sync", P.admin.session, { provider: "intune" }));
+    // "Already running" from another file's claim on the shared key, while nothing runs here, is asked again (test/support/asset-sync).
+    let r = await call(adminSyncRoute.POST, req("/admin/assets/sync", P.admin.session, { provider: "intune" }));
+    for (let i = 0; i < 200 && r.status === 409 && /already running/.test(r.body?.error) && !(await assets.syncState(INTUNE)).running; i++) {
+      await new Promise((res) => setTimeout(res, 50));
+      r = await call(adminSyncRoute.POST, req("/admin/assets/sync", P.admin.session, { provider: "intune" }));
+    }
     assert.equal(r.status, 200, r.text);
     assert.equal(r.body.ok, true);
     assert.equal(r.body.settings.intune.sync.count >= 4, true);
     assert.equal((await auditRows("helpdesk.assets.intune_synced")).length, 1);
     // A cut-short pass: the device that would have been missed stays.
     graph.devices.push(fakeDevice(`tmp-${STAMP}`, { serialNumber: `TMP${TAGP}` }));
-    await assets.syncProvider(INTUNE, { force: true });
+    await syncAlone(assets, INTUNE);
     graph.devices.pop();
     intune.setIntunePagingForTests({ page: 2, maxPages: 1 });
     try {
-      const short = await assets.syncProvider(INTUNE, { force: true });
+      const short = await syncAlone(assets, INTUNE);
       assert.equal(short.complete, false);
       assert.match(short.error!, /before Microsoft Graph's last page, so nothing was removed/);
     } finally {
@@ -761,8 +773,8 @@ describe("a device matched to Snipe-IT stays its Intune user's (review: visibili
       fakeDevice(`tw1-${STAMP}`, { deviceName: "DANIEL-AIR", serialNumber: NOBODY, userPrincipalName: P.req.email, userDisplayName: "Daniel Okafor" }),
       fakeDevice(`tw2-${STAMP}`, { deviceName: "DANIEL-LOANER", serialNumber: ELSE, userPrincipalName: P.req.email, userDisplayName: "Daniel Okafor" })
     );
-    assert.equal((await assets.syncProvider(SNIPE, { force: true })).ok, true);
-    assert.equal((await assets.syncProvider(INTUNE, { force: true })).ok, true);
+    assert.equal((await syncAlone(assets, SNIPE)).ok, true);
+    assert.equal((await syncAlone(assets, INTUNE)).ok, true);
     nobodyId = await idOf(SNIPE, "901");
     elseId = await idOf(SNIPE, "902");
   });
@@ -922,7 +934,7 @@ describe("system notes escape device names and source text (review: Markdown)", 
   test("an Intune device named like a link is linked and picked in Get help: both notes show the name as text", async () => {
     graph.devices.push(fakeDevice(`evil-${STAMP}`, { deviceName: EVIL, serialNumber: `EV${TAGP}`, userPrincipalName: P.req.email }));
     try {
-      await assets.syncProvider(INTUNE, { force: true });
+      await syncAlone(assets, INTUNE);
       const id = await idOf(INTUNE, `evil-${STAMP}`);
       const t = await ticket("Evil name");
       await assets.linkAsset(agentUser(), (await ticketOf(t.id))!, id, actor());
@@ -947,7 +959,7 @@ describe("Intune: turned off (the 1.19.3 disconnect rules)", () => {
   let phoneId = 0;
   before(async () => {
     assets.setAssetSettingsForTests(SETTINGS());
-    await assets.syncProvider(INTUNE, { force: true });
+    await syncAlone(assets, INTUNE);
     t = await ticket("Phone history");
     phoneId = await idOf(INTUNE, `iph-${STAMP}`);
     await assets.linkAsset(agentUser(), (await ticketOf(t.id))!, phoneId, actor());
@@ -1074,7 +1086,7 @@ describe("Intune: the tenant the credentials sign in to is the source (review: t
     assets.setAssetSettingsForTests(SETTINGS());
     intune.setIntunePagingForTests(null);
     graph.pageDelayMs = 0;
-    const r = await assets.syncProvider(INTUNE, { force: true });
+    const r = await syncAlone(assets, INTUNE);
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.ok((await intuneRows()) >= 4);
   }
@@ -1145,7 +1157,7 @@ describe("Intune: the tenant the credentials sign in to is the source (review: t
     intune.setIntunePagingForTests({ page: 1, maxPages: 50 });
     graph.pageDelayMs = 150;
     const pagesBefore = graph.seen.filter((x) => x.path.startsWith("/v1.0/deviceManagement/managedDevices?")).length;
-    const run = assets.syncProvider(INTUNE, { force: true });
+    const run = syncAlone(assets, INTUNE);
     // Wait until it is mid-way (two pages asked for).
     for (let i = 0; i < 100 && graph.seen.filter((x) => x.path.startsWith("/v1.0/deviceManagement/managedDevices?")).length < pagesBefore + 2; i++) await new Promise((r) => setTimeout(r, 30));
     assets.setIntuneCredentialsForTests({ ...CREDS, tenant: OTHER });
@@ -1194,7 +1206,7 @@ describe("Intune: the tenant the credentials sign in to is the source (review: t
     graph.pageDelayMs = 0;
     intune.setIntunePagingForTests(null);
     await pool().query("DELETE FROM settings WHERE key = ANY($1)", [[`helpdesk_assets_sync:${SNIPE}`, `helpdesk_assets_sync:${INTUNE}`]]);
-    const r = await assets.assetsSweep();
+    const r = await sweepAlone(assets, [SNIPE, INTUNE]);
     assert.equal(r.length, 2, JSON.stringify(r));
     assert.ok(r.every((x) => x.ran && x.ok), JSON.stringify(r));
   });

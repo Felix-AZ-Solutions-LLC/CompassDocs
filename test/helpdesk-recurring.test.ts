@@ -21,6 +21,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { pool, getSetting, createSession } from "../src/lib/db";
@@ -313,7 +314,11 @@ async function person(key: string, deskRole: string | null) {
 
 const NEXT_YEAR = new Date().getUTCFullYear() + 1;
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   await aStore.assignmentReady();
   const cal = await pool().query("INSERT INTO hd_calendars (name, timezone, schedule) VALUES ($1, 'Europe/London', $2) RETURNING id", [`${STAMP} office`, JSON.stringify(OFFICE)]);
@@ -350,8 +355,9 @@ after(async () => {
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1) OR (action LIKE 'helpdesk.recurring.%' AND target_label LIKE $2)", [userIds, `%${STAMP}%`]);
   await pool().query("DELETE FROM notifications WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   calendars.invalidateCalendarCache();
+  await mailLock?.release(email);
   await pool().end();
 });
 

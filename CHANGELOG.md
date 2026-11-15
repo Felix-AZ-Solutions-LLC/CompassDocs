@@ -4,6 +4,38 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.17] - 2026-11-15
+
+A server that starts alongside busy instances, and emails shown the same
+whether or not the desk was just started.
+
+### Fixed
+- **A failed start no longer leaves the server failing every request.** If
+  the database was briefly unreachable while the server started, or its
+  start-up check lost a lock conflict to another instance, the server used
+  to keep that error and fail every request until it was restarted. The next
+  request now tries again.
+- **Starting an instance while another removes several people at once no
+  longer conflicts.** The start-up check that gives every account its
+  workspace role skips accounts being deleted at that moment instead of
+  waiting on them, so neither the start nor the removal fails.
+- **Formatted emails get their full time to display.** Each email has 3
+  seconds to be made safe for viewing. The first email after the server
+  started (or after a slow one) also had to wait for the safety checker to
+  load, about a second of its 3, so the same email could show or be
+  refused depending on timing. The 3 seconds now start once the checker is
+  ready.
+
+### Changed
+- **The integration test suite runs reliably in parallel.** Test files
+  that change workspace-wide settings (help addresses, Microsoft 365 mail,
+  compliance defaults) no longer run alongside the files that depend on
+  them, and the timing-based tests check measured work instead of the
+  clock. No change for anyone running CompassDocs.
+
+### Upgrading
+- **Nothing to run.**
+
 ## [1.20.16] - 2026-11-15
 
 Claude drafts categories, automations and recurring tickets.

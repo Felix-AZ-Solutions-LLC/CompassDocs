@@ -15,6 +15,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { pool, getSetting, createSession } from "../src/lib/db";
@@ -198,7 +199,11 @@ const lines = async (ticketId: number, kind = "system") =>
   (await pool().query("SELECT body FROM hd_messages WHERE ticket_id = $1 AND kind = $2 ORDER BY id", [ticketId, kind])).rows.map((r) => r.body as string);
 const outcome = (who: Person, number: number, body: unknown) => call(outcomeRoute.POST, req(`/tickets/${number}/task-outcome`, who.session, body), { number: String(number) });
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   await person("req", "Rhea Requester");
   await person("itl", "Liam London IT", "agent");
@@ -233,8 +238,9 @@ after(async () => {
   await pool().query("DELETE FROM notifications WHERE user_id = ANY($1)", [personIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [personIds]);
   const dps = await pool().query("SELECT directory_person_id AS id FROM users WHERE id = ANY($1) AND directory_person_id IS NOT NULL", [personIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [personIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [personIds]);
   await pool().query("DELETE FROM directory_people WHERE id = ANY($1)", [dps.rows.map((r) => r.id)]);
+  await mailLock?.release(email);
   await pool().end();
 });
 

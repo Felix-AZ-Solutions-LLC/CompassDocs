@@ -42,11 +42,11 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import Module from "node:module";
 import path from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import type { PoolClient } from "pg";
 import JSZip from "jszip";
 import {
   pool,
@@ -178,7 +178,6 @@ let sessionToken = "";
 const docIds: number[] = [];
 
 /** The advisory lock the settings-touching describe shares with test/compliance-settings.test.ts and test/ack-revision.test.ts. */
-const SETTINGS_LOCK = 728342;
 
 const TEXT = Array.from({ length: 30 }, (_, i) => `Clause ${i + 1}: staff must follow the procedure described here.`).join(
   "\n\n"
@@ -205,7 +204,11 @@ async function confirmedPolicy(title: string): Promise<{ id: number; v1: number 
   return { id: doc.id, v1 };
 }
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings, and one describe changes them (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   const sp = await fixtureQuery(
     `INSERT INTO spaces (name, slug, icon, description, visibility) VALUES ($1, $2, '📁', '', 'internal') RETURNING id`,
@@ -249,14 +252,15 @@ after(async () => {
   await pool().query("DELETE FROM oauth_clients WHERE client_id = $1", [oauthClientId]);
   // Before the users and the documents: reviewed_by has no ON DELETE.
   await pool().query("DELETE FROM change_requests WHERE document_id = ANY($1) OR created_by = $2", [docIds, adminId]);
-  await pool().query("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = $2", [docIds, adminId]);
+  await fixtureQuery("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = $2", [docIds, adminId]);
   await pool().query("DELETE FROM ack_decisions WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM attested_texts WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM ack_outbox WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM audit_log WHERE actor_id = $1", [adminId]);
-  await pool().query("DELETE FROM documents WHERE id = ANY($1) OR space_id = $2", [docIds, spaceId]);
-  await pool().query("DELETE FROM users WHERE id = $1", [adminId]);
+  await fixtureQuery("DELETE FROM documents WHERE id = ANY($1) OR space_id = $2", [docIds, spaceId]);
+  await fixtureQuery("DELETE FROM users WHERE id = $1", [adminId]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
+  await complianceLock?.release();
 });
 
 /** One JSON-RPC tools/call through the connector, as the e2e helper does it. */
@@ -553,25 +557,19 @@ describe("a keep's reason follows Program settings on every path; a reset always
   const admin = { id: 0, name: "Tok Admin" };
   const EDITED = TEXT.replace("Clause 1: staff", "Clause 1: all staff and contractors");
   let savedDefaults: string | undefined;
-  // The settings row is shared with test/compliance-settings.test.ts and
-  // test/ack-revision.test.ts, and node:test runs files in parallel: the
-  // lock is held on one dedicated connection for the whole describe.
-  let lockClient: PoolClient | null = null;
+  // The settings row is shared by every file whose policies read it, and
+  // node:test runs files in parallel: this describe holds the compliance
+  // lock alone while it changes the row (test/support/compliance-lock).
 
   before(async () => {
     admin.id = adminId;
-    const client = await pool().connect();
-    await client.query("SELECT pg_advisory_lock($1)", [SETTINGS_LOCK]);
-    lockClient = client;
+    await complianceLock!.exclusive();
     savedDefaults = await getSetting("ack_defaults");
   });
   after(async () => {
     if (savedDefaults === undefined) await pool().query("DELETE FROM settings WHERE key = 'ack_defaults'");
     else await setSetting("ack_defaults", savedDefaults);
-    if (lockClient) {
-      await lockClient.query("SELECT pg_advisory_unlock($1)", [SETTINGS_LOCK]).catch(() => {});
-      lockClient.release();
-    }
+    await complianceLock?.shared();
   });
 
   async function keepReasonRequired(value: boolean) {

@@ -26,6 +26,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import Module from "node:module";
 import path from "node:path";
 import {
@@ -271,7 +272,11 @@ function track(set: { id: number }): number {
 const DAY = 24 * HOUR;
 const at = (iso: string | null | undefined): number => (iso ? Date.parse(iso) : NaN);
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   const sp = await fixtureQuery(
     "INSERT INTO spaces (name, slug, icon, description, visibility) VALUES ($1, $2, '📁', '', 'private') RETURNING id",
@@ -326,6 +331,7 @@ after(async () => {
   await fixtureQuery("DELETE FROM groups WHERE id = ANY($1)", [[g1, g2, g3]]);
   await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await fixtureQuery("DELETE FROM spaces WHERE id = $1", [spaceP]);
+  await complianceLock?.release();
 });
 
 // --- The pure module --------------------------------------------------------------

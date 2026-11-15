@@ -19,6 +19,7 @@
 import { edition } from "./support/ee-stub";
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import { pool, createDocument, createSpace, createRole, assignRole, deleteRole, setSpaceGroups } from "../src/lib/db";
 import { fixtureQuery } from "./support/retry";
 import { switchOn } from "./support/assign";
@@ -116,7 +117,11 @@ async function view(user: SessionUser, handbookId: number, docId: number) {
   return { base, v };
 }
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   data = await import("../src/components/handbooks/reader/reader-data");
   hb = await import("../src/lib/handbooks");
   confirm = await import("../src/lib/handbook-confirm");
@@ -158,6 +163,7 @@ after(async () => {
   await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await fixtureQuery("DELETE FROM spaces WHERE id = $1", [spaceId]);
   await pool().end();
+  await complianceLock?.release();
 });
 
 // --- The wording, pure ----------------------------------------------------------------

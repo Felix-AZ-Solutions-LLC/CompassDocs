@@ -30,6 +30,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { pool, getSetting } from "../src/lib/db";
@@ -281,7 +282,11 @@ const firstMessage = async (ticketId: number) =>
   (await pool().query<{ body: string }>("SELECT body FROM hd_messages WHERE ticket_id = $1 AND kind = 'public' ORDER BY id LIMIT 1", [ticketId])).rows[0]?.body ?? "";
 const actor = (k: keyof typeof NAMES | "req") => ({ id: P[k].id, role: "viewer" as const, name: P[k].name, username: P[k].name, email: P[k].email });
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   const { unified } = await import("unified");
   const remarkParse = (await import("remark-parse")).default;
   const remarkGfm = (await import("remark-gfm")).default;
@@ -303,7 +308,10 @@ before(async () => {
   ]);
   calendarId = cal.rows[0].id;
   for (const k of ["A", "RR"]) {
-    const r = await fixtureQuery("INSERT INTO hd_teams (name, position, calendar_id) VALUES ($1, 9450, $2) RETURNING id", [`${STAMP} ${k}`, calendarId]);
+    // Team A owns the address the inbound test mails: a ticket opened from mail to an address no
+    // team owns goes to the database's first team, which may be another file's, and is deleted
+    // with it (lib/helpdesk/inbound teamForRecipients).
+    const r = await fixtureQuery("INSERT INTO hd_teams (name, position, calendar_id, email_alias) VALUES ($1, 9450, $2, $3) RETURNING id", [`${STAMP} ${k}`, calendarId, k === "A" ? `${STAMP}-it@example.test` : ""]);
     T[k] = r.rows[0].id;
   }
   await person("evil", NAMES.evil, "agent");
@@ -343,7 +351,8 @@ after(async () => {
   await pool().query("DELETE FROM notifications WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM audit_log WHERE target_type = 'helpdesk_ticket' AND target_id = ANY($1)", [all.map(String)]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await mailLock?.release(email);
   await pool().end();
 });
 

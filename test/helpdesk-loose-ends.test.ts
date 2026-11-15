@@ -21,6 +21,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { access, mkdtemp, rm } from "node:fs/promises";
@@ -228,7 +229,11 @@ function inboundEmail(over: Partial<InboundEmail> = {}): InboundEmail {
   } as InboundEmail;
 }
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   lockClient = await pool().connect();
   await lockClient.query("SELECT pg_advisory_lock($1)", [PORTAL_LOCK]);
@@ -305,13 +310,14 @@ after(async () => {
   await pool().query("DELETE FROM hd_agent_roles WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   if (savedPortal === undefined) await pool().query("DELETE FROM settings WHERE key = $1", [portal.HD_PORTAL_SETTINGS_KEY]);
   else await setSetting(portal.HD_PORTAL_SETTINGS_KEY, savedPortal);
   await lockClient.query("SELECT pg_advisory_unlock($1)", [PORTAL_LOCK]);
   lockClient.release();
   calendars.invalidateCalendarCache();
   await rm(uploadDirectory, { recursive: true, force: true });
+  await mailLock?.release(email);
   await pool().end();
 });
 

@@ -23,18 +23,21 @@
 //   - the pure rules (print options, share line, message limit) and the
 //     notification catalog entry with its email.
 //
-// Fixtures are this file's own (two stamped teams, their accounts, tickets);
-// no workspace setting is written.
+// Fixtures are this file's own (two stamped teams, their accounts, tickets).
+// One review-fix test sets the workspace's inbound address for a moment, so
+// the file holds the workspace mail lock exclusively (test/support/mail-lock).
 //
 // Run: DATABASE_URL=… npx tsx --tsconfig ./tsconfig.test.json --test test/helpdesk-share.test.ts
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { pool, getSetting, createSession } from "../src/lib/db";
 import { hashPassword, newToken } from "../src/lib/password";
 import { fixtureQuery } from "./support/retry";
+import { inOneSnapshot } from "./support/snapshot";
 
 // --- Request scope and licence stubs (as test/helpdesk-ccs.test.ts) ------------------
 
@@ -104,6 +107,7 @@ const shareRoute = require("../src/app/api/helpdesk/tickets/[number]/share/route
 const inbound = require("../src/lib/helpdesk/inbound") as typeof import("../src/lib/helpdesk/inbound");
 const settingsLib = require("../src/lib/helpdesk/settings") as typeof import("../src/lib/helpdesk/settings");
 const rolesAgents = require("../src/lib/helpdesk/roles-agents") as typeof import("../src/lib/helpdesk/roles-agents");
+const roles = require("../src/lib/helpdesk/roles") as typeof import("../src/lib/helpdesk/roles");
 const requestRoute = require("../src/app/api/helpdesk/requests/[number]/route") as typeof import("../src/app/api/helpdesk/requests/[number]/route");
 /* eslint-enable @typescript-eslint/no-require-imports */
 
@@ -166,7 +170,11 @@ async function newTicket(subject: string) {
 
 const shareUrl = (n: number) => `http://localhost/api/helpdesk/tickets/${n}/share`;
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // One test sets the workspace's inbound address: no other file's mail meanwhile (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("exclusive");
   await getSetting("__schema_bootstrap__");
   const creds = hashPassword(PASSWORD);
   const names = { req: "Daniel Okafor", agent: "Ana Kowalski", agent2: "Sam Lee", agent3: "Marco Rossi", outsider: "Lena Fischer", allq: "Priya Natarajan" };
@@ -223,7 +231,8 @@ after(async () => {
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [ids]);
   await pool().query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [ids]);
   await pool().query("DELETE FROM hd_agent_roles WHERE user_id = ANY($1)", [ids]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [ids]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [ids]);
+  await mailLock?.release(email);
   await pool().end();
 });
 
@@ -479,10 +488,7 @@ function inboundEmail(over: Partial<InboundEmail> = {}): InboundEmail {
 describe("review fixes", () => {
   test("HIGH: the hd_shared email is agent-only; a reply to it is an internal note, never a public reply", async () => {
     // Inbound configured, as on a live desk (so an ordinary ticket mail would carry a Reply-To);
-    // the same lock and restore as test/helpdesk-review-fixes-s2.
-    const LOCK = 728351;
-    const lock = await pool().connect();
-    await lock.query("SELECT pg_advisory_lock($1)", [LOCK]);
+    // restored as test/helpdesk-review-fixes-s2 (the file holds the mail lock).
     const before = await settingsLib.getHelpdeskSettings();
     try {
       await settingsLib.saveHelpdeskSettings({
@@ -522,8 +528,6 @@ describe("review fixes", () => {
       assert.equal(mail.filter((x) => x.to === U.req.email).length, 0, "nothing reaches the requester");
     } finally {
       await settingsLib.saveHelpdeskSettings({ inbound_secret: before.inbound_secret, inbound_address: before.inbound_address });
-      await lock.query("SELECT pg_advisory_unlock($1)", [LOCK]).catch(() => {});
-      lock.release();
     }
   });
 
@@ -573,32 +577,25 @@ describe("review fixes", () => {
   test("the dialog's batched access check agrees with canWorkTicket for every desk agent", async () => {
     const t = await newTicket("Batch");
     const assigned = { ...t, assignee_id: U.outsider.id };
-    const agents = await rolesAgents.listDeskAgents();
-    const roles = new Map((await pool().query("SELECT id, role FROM users WHERE id = ANY($1)", [agents.map((a) => a.user_id)])).rows.map((r) => [r.id, r.role]));
-    for (const ticket of [t, assigned]) {
-      const batch = await share.canWorkMany(agents, ticket);
-      const mismatches: string[] = [];
-      for (const a of agents) {
-        const one = await access.canWorkTicket({ id: a.user_id, role: roles.get(a.user_id) }, ticket);
-        if (one === batch.get(a.user_id)) continue;
-        // Other test files run in parallel against this database and change their own accounts
-        // (a role, a team) between the batch read and this one. A real disagreement holds when
-        // both are read again back to back; a concurrent change does not.
-        let still = true;
-        for (let i = 0; i < 3 && still; i++) {
-          // Re-read the agent itself too (desk role, teams), not just the workspace role.
-          const fresh = (await rolesAgents.listDeskAgents()).find((x) => x.user_id === a.user_id);
-          if (!fresh) { still = false; break; }
-          const role = (await pool().query("SELECT role FROM users WHERE id = $1", [a.user_id])).rows[0]?.role;
-          const [b, o] = [(await share.canWorkMany([fresh], ticket)).get(a.user_id), await access.canWorkTicket({ id: a.user_id, role }, ticket)];
-          still = b !== o;
-          if (!still) break;
-          await new Promise((r) => setTimeout(r, 200));
+    // Other test files run in parallel against this database and change their own accounts (a role,
+    // a team) as they go. Every read below sees one snapshot (test/support/snapshot), so the two paths
+    // are compared on the same facts, for every agent on the database, with no tolerance for a mismatch.
+    const agents = await inOneSnapshot(async () => {
+      roles.clearRoleMatrixCache(); // read from the snapshot, like everything else here
+      const agents = await rolesAgents.listDeskAgents();
+      const role = new Map((await pool().query("SELECT id, role FROM users WHERE id = ANY($1)", [agents.map((a) => a.user_id)])).rows.map((r) => [r.id, r.role]));
+      for (const ticket of [t, assigned]) {
+        const batch = await share.canWorkMany(agents, ticket);
+        const mismatches: string[] = [];
+        for (const a of agents) {
+          const one = await access.canWorkTicket({ id: a.user_id, role: role.get(a.user_id) }, ticket);
+          if (one !== batch.get(a.user_id)) mismatches.push(`${a.username} (${a.role}): batch ${batch.get(a.user_id)}, one ${one}`);
         }
-        if (still) mismatches.push(`${a.username} (${a.role}): batch ${batch.get(a.user_id)}, one ${one}`);
+        assert.deepEqual(mismatches, [], `${agents.length} agents checked`);
       }
-      assert.deepEqual(mismatches, [], `${agents.length} agents checked`);
-    }
+      return agents;
+    });
+    roles.clearRoleMatrixCache();
     const batch = await share.canWorkMany(agents, t);
     assert.equal(batch.get(U.allq.id), true, "explicit Agent + the agent_all floor: every queue");
     assert.equal(batch.get(U.outsider.id), false);

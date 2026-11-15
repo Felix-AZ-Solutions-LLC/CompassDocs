@@ -260,7 +260,7 @@ after(async () => {
   await pool().query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM roles WHERE id = ANY($1)", [roleIds]);
   await pool().query("DELETE FROM hd_agent_roles WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().end();
 });
 
@@ -658,7 +658,7 @@ describe("review fixes", () => {
     const inc = (await pool().query("SELECT incident_id FROM hd_status_incident_watch WHERE service_id = ANY($1) LIMIT 1", [Object.values(S)])).rows[0].incident_id;
     await pool().query("INSERT INTO hd_status_asks (incident_id, user_id, dismissed_at) VALUES ($1, $2, now())", [inc, tmp.id]);
     await pool().query("DELETE FROM sessions WHERE user_id = $1", [tmp.id]);
-    await pool().query("DELETE FROM users WHERE id = $1", [tmp.id]);
+    await fixtureQuery("DELETE FROM users WHERE id = $1", [tmp.id]);
     assert.equal((await pool().query("SELECT count(*)::int AS n FROM hd_status_asks WHERE user_id = $1", [tmp.id])).rows[0].n, 0);
   });
 

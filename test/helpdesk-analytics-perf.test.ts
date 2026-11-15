@@ -64,7 +64,7 @@ after(async () => {
   setReportHoursForTests(null);
   await pool().query("DELETE FROM hd_tickets WHERE team_id = ANY($1::int[])", [teams]);
   await pool().query("DELETE FROM hd_teams WHERE id = ANY($1::int[])", [teams]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1::int[])", [agents]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1::int[])", [agents]);
   await pool().end();
 });
 

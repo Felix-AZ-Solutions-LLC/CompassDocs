@@ -242,7 +242,7 @@ after(async () => {
   await pool().query("DELETE FROM hd_teams WHERE id = ANY($1)", [[teamA, teamB]]);
   await pool().query("DELETE FROM hd_agent_prefs WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM handbooks WHERE id = $1", [handbookId]);
-  await pool().query("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
+  await fixtureQuery("DELETE FROM documents WHERE id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM roles WHERE id = ANY($1)", [[roleAll, roleAdmin]]);
   await pool().query("DELETE FROM group_members WHERE group_id = $1", [groupId]);
@@ -250,7 +250,7 @@ after(async () => {
   await pool().query("DELETE FROM spaces WHERE id = ANY($1)", [[openSpace, closedSpace]]);
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   if (uploadDirectory) await rm(uploadDirectory, { recursive: true, force: true });
 });
 

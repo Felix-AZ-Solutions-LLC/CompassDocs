@@ -36,6 +36,23 @@ export interface FakeSnipeItState {
   extraTotal: number;
   /** Ids left out of the list (and its total) but still answered by id. */
   hideFromList: Set<number>;
+  /** path → the next request there waits here until released (holdNext). */
+  hold: Map<string, { reached: () => void; released: Promise<void> }>;
+}
+
+/**
+ * Hold the next authorised request to `path`: `reached` resolves once it has
+ * arrived (the caller is then mid-request, after everything before it), and
+ * the fake answers it only after `release()`. A test steps in between
+ * deterministically instead of sleeping and hoping the request is in flight.
+ */
+export function holdNext(fake: FakeSnipeItState, path: string): { reached: Promise<void>; release: () => void } {
+  let reached!: () => void;
+  let release!: () => void;
+  const r = new Promise<void>((res) => (reached = res));
+  const released = new Promise<void>((res) => (release = res));
+  fake.hold.set(path, { reached, released });
+  return { reached: r, release };
 }
 
 /** A hardware row as Snipe-IT's API returns it. */
@@ -70,7 +87,7 @@ function json(res: http.ServerResponse, status: number, body: unknown, headers: 
 }
 
 export async function startFakeSnipeIt(key: string): Promise<{ state: FakeSnipeItState; port: number; close: () => Promise<void> }> {
-  const fake: FakeSnipeItState = { hardware: [], users: [], maintenances: [], suppliers: [], fail: new Map(), rejectMaintenance: null, seen: [], extraTotal: 0, hideFromList: new Set() };
+  const fake: FakeSnipeItState = { hardware: [], users: [], maintenances: [], suppliers: [], fail: new Map(), rejectMaintenance: null, seen: [], extraTotal: 0, hideFromList: new Set(), hold: new Map() };
   const server = http.createServer(async (rq, rs) => {
     const u = new URL(rq.url ?? "/", "http://x");
     const p = u.pathname;
@@ -99,6 +116,12 @@ export async function startFakeSnipeIt(key: string): Promise<{ state: FakeSnipeI
     if (p === "/api/v1/redirect-in") return json(rs, 302, {}, { location: "/api/v1/hardware?limit=1&offset=0" });
     if (p === "/api/v1/echo-key") return json(rs, 422, { status: "error", messages: `Bad request for ${String(rq.headers.authorization).replace("Bearer ", "")}` });
     if (rq.headers.authorization !== `Bearer ${key}`) return json(rs, 401, { message: "Unauthenticated." });
+    const held = fake.hold.get(p);
+    if (held) {
+      fake.hold.delete(p);
+      held.reached();
+      await held.released;
+    }
     for (const [where, f] of fake.fail) {
       if (p === where && f.times > 0) {
         f.times--;

@@ -33,6 +33,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import Module from "node:module";
 import path from "node:path";
 import {
@@ -238,7 +239,11 @@ async function expectError(p: Promise<unknown>, status: number, message?: string
   });
 }
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   const mk = async (name: string, visibility: string) =>
     (
@@ -312,6 +317,7 @@ after(async () => {
   await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await fixtureQuery("DELETE FROM spaces WHERE id = ANY($1)", [[spaceA, spaceB, spaceI]]);
   await pool().end();
+  await complianceLock?.release();
 });
 
 // --- Pure parsing -------------------------------------------------------------------

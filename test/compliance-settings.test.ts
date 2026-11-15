@@ -387,7 +387,7 @@ describe("PUT /api/admin/compliance/settings", () => {
     await pool().query("DELETE FROM audit_log WHERE action = 'ack.report_settings' AND actor_id = $1", [managerId]);
     await pool().query("DELETE FROM sessions WHERE user_id = $1", [managerId]);
     if (roleId) await pool().query("DELETE FROM roles WHERE id = $1", [roleId]);
-    await pool().query("DELETE FROM users WHERE id = ANY($1)", [[managerId, activeId, disabledId]]);
+    await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [[managerId, activeId, disabledId]]);
     if (lockClient) {
       await lockClient.query("SELECT pg_advisory_unlock($1)", [SETTINGS_LOCK]).catch(() => {});
       lockClient.release();

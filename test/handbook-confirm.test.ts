@@ -17,6 +17,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import Module from "node:module";
 import path from "node:path";
 import {
@@ -259,7 +260,11 @@ async function handbookRecords(handbookId: number, userId = readerId) {
   return r.rows;
 }
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   const sp = await fixtureQuery(
     `INSERT INTO spaces (name, slug, icon, description, visibility) VALUES ($1, $2, '📁', '', 'private') RETURNING id`,
@@ -316,20 +321,21 @@ after(async () => {
   await pool().query("DELETE FROM handbook_confirmations WHERE handbook_id = ANY($1) OR user_id = ANY($2)", [handbookIds, userIds]);
   await pool().query("DELETE FROM handbooks WHERE id = ANY($1)", [handbookIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = ANY($2)", [docIds, userIds]);
+  await fixtureQuery("DELETE FROM acknowledgements WHERE document_id = ANY($1) OR user_id = ANY($2)", [docIds, userIds]);
   await pool().query("DELETE FROM ack_decisions WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM attested_texts WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM ack_outbox WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM doc_views WHERE document_id = ANY($1)", [docIds]);
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM documents WHERE id = ANY($1) OR space_id = $2", [docIds, spaceId]);
-  await pool().query("DELETE FROM documents WHERE space_id = $1", [closedSpaceId]);
-  await pool().query("DELETE FROM policy_assignments WHERE user_id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM documents WHERE id = ANY($1) OR space_id = $2", [docIds, spaceId]);
+  await fixtureQuery("DELETE FROM documents WHERE space_id = $1", [closedSpaceId]);
+  await fixtureQuery("DELETE FROM policy_assignments WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM group_members WHERE group_id = ANY($1)", [[groupId, ownGroupId]]);
   await pool().query("DELETE FROM groups WHERE id = ANY($1)", [[groupId, ownGroupId]]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM spaces WHERE id = ANY($1)", [[spaceId, closedSpaceId]]);
   if (uploadDirectory) await rm(uploadDirectory, { recursive: true, force: true });
+  await complianceLock?.release();
 });
 
 // --- The tests ----------------------------------------------------------------------

@@ -28,6 +28,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import Module from "node:module";
 import path from "node:path";
 import {
@@ -241,7 +242,11 @@ async function handbookIdsTitled(prefix: string): Promise<number[]> {
   return r.rows.map((x) => x.id);
 }
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   const mk = async (name: string) =>
     (
@@ -350,6 +355,7 @@ after(async () => {
   await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await fixtureQuery("DELETE FROM spaces WHERE id = ANY($1)", [[spaceA, spaceB]]);
   await pool().end();
+  await complianceLock?.release();
 });
 
 // --- The tool surface -------------------------------------------------------------

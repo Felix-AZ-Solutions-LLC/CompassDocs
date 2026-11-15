@@ -23,6 +23,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { pool, getSetting, createSession } from "../src/lib/db";
@@ -180,7 +181,11 @@ function inboundEmail(over: Partial<InboundEmail> = {}): InboundEmail {
   } as InboundEmail;
 }
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   const creds = hashPassword(PASSWORD);
   const names = { req: "Daniel Okafor", agent: "Ana Kowalski", agent2: "Sam Lee", colleague: "Priya Natarajan", stranger: "Tom Becker", outsider_agent: "Grace Lin" };
@@ -231,7 +236,8 @@ after(async () => {
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1)", [ids]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [ids]);
   await pool().query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [ids]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [ids]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [ids]);
+  await mailLock?.release(email);
   await pool().end();
 });
 
@@ -613,7 +619,7 @@ describe("one notice per person, and only to people who may hear it", () => {
   after(async () => {
     ccs.setOutsideSendersForTests(null);
     await pool().query("DELETE FROM hd_portal_contacts WHERE email = $1", [BLOCKED]);
-    if (extraUsers.length) await pool().query("DELETE FROM users WHERE id = ANY($1)", [extraUsers]);
+    if (extraUsers.length) await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [extraUsers]);
   });
 
   test("outside senders off: outside CCs keep their rows and are mailed nothing; a blocked portal contact never is", async () => {

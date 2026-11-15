@@ -20,6 +20,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { pool, getSetting, createSession } from "../src/lib/db";
@@ -257,7 +258,11 @@ const ALL_DAY = Array.from({ length: 7 }, () => [{ start: "00:00", end: "24:00" 
 const CLOSED = Array.from({ length: 7 }, () => []);
 const OFFICE = [[], ...Array.from({ length: 5 }, () => [{ start: "09:00", end: "17:00" }]), []];
 
+let mailLock: WorkspaceMailLock | null = null;
+
 before(async () => {
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   await store.assignmentReady();
   await calendar("open", ALL_DAY);
@@ -309,8 +314,9 @@ after(async () => {
   await pool().query("DELETE FROM notifications WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   calendars.invalidateCalendarCache();
+  await mailLock?.release(email);
   await pool().end();
 });
 

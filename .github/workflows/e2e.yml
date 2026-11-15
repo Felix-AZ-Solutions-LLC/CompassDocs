@@ -54,6 +54,24 @@ jobs:
             echo "::error::integration suite reported no passing tests — did the file pattern match nothing?"
             exit 1
           }
+      # The suite's TAP output runs to tens of thousands of lines and a failing
+      # test's report sits wherever its file finished, far from the end where
+      # the log viewer and the API's log tail look. Repeat each failure (with
+      # its YAML block: error, expected, actual, location, stack) at the end,
+      # and keep the whole log as an artifact.
+      - name: Integration failures
+        if: failure()
+        run: |
+          log="$RUNNER_TEMP/integration.log"
+          [ -f "$log" ] || exit 0
+          grep -n -A45 -E '^\s*not ok ' "$log" | head -n 3000 || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: integration-log
+          path: ${{ runner.temp }}/integration.log
+          if-no-files-found: ignore
+          retention-days: 7
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - name: Start server

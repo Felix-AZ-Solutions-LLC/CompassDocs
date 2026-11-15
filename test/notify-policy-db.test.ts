@@ -84,7 +84,7 @@ after(async () => {
   else await pool().query("DELETE FROM settings WHERE key = $1", [NOTIFY_POLICY_KEY]);
   await pool().query("DELETE FROM notifications WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM notify_digest_queue WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   if (lockClient) {
     await lockClient.query("SELECT pg_advisory_unlock($1)", [POLICY_LOCK]).catch(() => {});
     lockClient.release();

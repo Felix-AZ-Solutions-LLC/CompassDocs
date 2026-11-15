@@ -247,7 +247,7 @@ after(async () => {
   await pool().query("DELETE FROM notifications WHERE user_id = ANY($1)", [ids]);
   await pool().query("DELETE FROM notify_digest_queue WHERE user_id = ANY($1)", [ids]).catch(() => {});
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [ids]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [ids]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [ids]);
   await pool().end();
 });
 

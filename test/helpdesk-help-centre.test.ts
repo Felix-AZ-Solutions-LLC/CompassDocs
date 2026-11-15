@@ -28,6 +28,8 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
+import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
 import Module from "node:module";
 import path from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -241,7 +243,15 @@ async function call(handler: (req: Request, c: any) => Promise<Response>, url: s
   }
 }
 
+let mailLock: WorkspaceMailLock | null = null;
+
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
+  // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
+  mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   uploadDirectory = await mkdtemp(path.join(tmpdir(), "compass-hdhc-"));
   process.env.COMPASSDOCS_UPLOAD_DIR = uploadDirectory;
@@ -329,15 +339,17 @@ after(async () => {
   if (handbookId) await pool().query("DELETE FROM handbooks WHERE id = $1", [handbookId]);
   await pool().query("DELETE FROM training_decks WHERE document_id = ANY($1)", [Object.values(doc)]);
   // Children before parents (parent_id is SET NULL, branch_of CASCADE).
-  await pool().query("DELETE FROM documents WHERE space_id = ANY($1)", [spaceIds]);
+  await fixtureQuery("DELETE FROM documents WHERE space_id = ANY($1)", [spaceIds]);
   await pool().query("DELETE FROM spaces WHERE id = ANY($1)", [spaceIds]);
   await pool().query("DELETE FROM audit_log WHERE actor_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM hd_agent_roles WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await rm(uploadDirectory, { recursive: true, force: true });
+  await mailLock?.release(email);
   await pool().end();
+  await complianceLock?.release();
 });
 
 // --- The rule ---------------------------------------------------------------------------

@@ -556,4 +556,6 @@ if (!threads.isMainThread && threads.parentPort && threads.workerData && threads
     }
     threads.parentPort.postMessage({ id: job.id, result });
   });
+  // Loaded (jsdom and DOMPurify above) and listening: an email's time starts now, not before.
+  threads.parentPort.postMessage({ ready: true });
 }

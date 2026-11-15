@@ -34,6 +34,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import { holdComplianceSettings, type ComplianceSettingsLock } from "./support/compliance-lock";
 import Module from "node:module";
 import path from "node:path";
 import { pool, getSetting, createSession, getUserById } from "../src/lib/db";
@@ -254,7 +255,11 @@ const toolResultsOf = (body: any) => (body.messages as any[]).flatMap((m) => (Ar
 const ticketRow = async (id: number) => (await pool().query("SELECT status, priority, tags, team_id FROM hd_tickets WHERE id = $1", [id])).rows[0];
 const messageCount = async (id: number) => Number((await pool().query("SELECT count(*) AS n FROM hd_messages WHERE ticket_id = $1", [id])).rows[0].n);
 
+let complianceLock: ComplianceSettingsLock | null = null;
+
 before(async () => {
+  // Its policies read the workspace's compliance settings (test/support/compliance-lock).
+  complianceLock = await holdComplianceSettings();
   await getSetting("__schema_bootstrap__");
   fake = await startFakeAnthropic();
   process.env.COMPASSDOCS_ANTHROPIC_BASE_URL = fake.url;
@@ -345,7 +350,7 @@ after(async () => {
   await pool().query("DELETE FROM hd_claude_chats WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM hd_claude_chat_tickets WHERE ticket_id = ANY($1)", [ticketIds]);
   await pool().query("DELETE FROM hd_tickets WHERE id = ANY($1) OR requester_id = ANY($2)", [ticketIds, userIds]);
-  await pool().query("DELETE FROM documents WHERE space_id = $1", [spaceId]);
+  await fixtureQuery("DELETE FROM documents WHERE space_id = $1", [spaceId]);
   await pool().query("DELETE FROM spaces WHERE id = $1", [spaceId]);
   await pool().query("DELETE FROM hd_teams WHERE id = ANY($1)", [[T1, T2, T3]]);
   await pool().query("DELETE FROM notifications WHERE user_id = ANY($1)", [userIds]);
@@ -354,8 +359,9 @@ after(async () => {
   await pool().query("DELETE FROM role_assignments WHERE role_id = ANY($1)", [roleIds]);
   await pool().query("DELETE FROM roles WHERE id = ANY($1)", [roleIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
-  await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+  await fixtureQuery("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().end();
+  await complianceLock?.release();
 });
 
 // --- 1. The core AI features on the new SDK ------------------------------------------------------
