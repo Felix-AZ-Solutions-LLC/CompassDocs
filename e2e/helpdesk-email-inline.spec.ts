@@ -1,4 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
+import { createServer, type Server } from "node:http";
+import { randomBytes } from "node:crypto";
+import { deflateSync } from "node:zlib";
 import { Client } from "pg";
 import { ADMIN, api, ensureUser, login } from "./helpers";
 
@@ -22,6 +25,35 @@ const stamp = `${Date.now()}`;
 const LOCK = 728351;
 const REQUESTER = { username: "e2e_inline_requester", password: "E2eInlineRequester!123" };
 const reqEmail = `rhea.${stamp}@clientco.example`;
+
+/** A real PNG of random pixels (over the 4 KB the desk keeps as an attachment), so a browser can draw it. */
+function noisePng(size = 48): Buffer {
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (b: Buffer) => {
+    let c = 0xffffffff;
+    for (const x of b) c = crcTable[(c ^ x) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type: string, data: Buffer) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type), data]);
+    const c = Buffer.alloc(4);
+    c.writeUInt32BE(crc(td));
+    return Buffer.concat([len, td, c]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  const rows = Buffer.concat(Array.from({ length: size }, () => Buffer.concat([Buffer.from([0]), randomBytes(size * 4)])));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]);
+}
 
 async function licensed(page: Page): Promise<boolean> {
   return (await api(page, "/api/helpdesk/admin/settings")).status !== 402;
@@ -148,7 +180,7 @@ test.describe("Email shows as sent (licensed)", () => {
         const root = f.contentDocument!.documentElement;
         return { frame: f.getBoundingClientRect().height, doc: Math.ceil(root.getBoundingClientRect().height), scroll: root.scrollHeight, client: root.clientHeight };
       });
-    await expect.poll(async () => { const m = await fit(); return Math.abs(m.frame - m.doc) <= 1 && m.scroll <= m.client + 1; }).toBe(true);
+    await expect.poll(async () => { const m = await fit(); return Math.abs(m.frame - m.doc) <= 1 && m.scroll <= m.client + 1; }, { timeout: 20_000 }).toBe(true);
     const closedHeight = (await fit()).frame;
 
     // The quote: folded, then shown (and the frame grows with it).
@@ -158,10 +190,10 @@ test.describe("Email shows as sent (licensed)", () => {
     await frame.getByText("Show quoted text").click();
     await expect(quote).toBeVisible();
     await expect(frame.getByText("Hide quoted text")).toBeVisible();
-    await expect.poll(async () => (await fit()).frame).toBeGreaterThan(closedHeight + 100);
-    await expect.poll(async () => { const m = await fit(); return Math.abs(m.frame - m.doc) <= 1 && m.scroll <= m.client + 1; }).toBe(true);
+    await expect.poll(async () => (await fit()).frame, { timeout: 20_000 }).toBeGreaterThan(closedHeight + 100);
+    await expect.poll(async () => { const m = await fit(); return Math.abs(m.frame - m.doc) <= 1 && m.scroll <= m.client + 1; }, { timeout: 20_000 }).toBe(true);
     await frame.getByText("Hide quoted text").click();
-    await expect.poll(async () => (await fit()).frame).toBeLessThan(closedHeight + 2);
+    await expect.poll(async () => (await fit()).frame, { timeout: 20_000 }).toBeLessThan(closedHeight + 2);
 
     // Remote pictures: hidden, then shown for this message.
     const bar = replyCard.getByTestId("inline-images-bar");
@@ -202,7 +234,7 @@ test.describe("Email shows as sent (licensed)", () => {
     await expect(frameEl).toBeHidden();
     await expect(toggle).toHaveAttribute("aria-label", "Formatted");
     await expect(first.getByTestId("inline-email")).toHaveAttribute("data-state", "ready", { timeout: 5_000 });
-    await expect.poll(async () => (await api(page, "/api/helpdesk/me/notification-prefs")).body.prefs.email_view).toBe("plain");
+    await expect.poll(async () => (await api(page, "/api/helpdesk/me/notification-prefs")).body.prefs.email_view, { timeout: 30_000 }).toBe("plain");
     await page.reload();
     await expect(page.getByRole("heading", { level: 2, name: subject })).toBeVisible({ timeout: 120_000 });
     await expect(card("this morning").getByTestId("inline-email")).toHaveAttribute("data-state", "plain");
@@ -212,12 +244,77 @@ test.describe("Email shows as sent (licensed)", () => {
     // And back.
     await card("this morning").getByTestId("email-view-toggle").click();
     await expect(card("this morning").getByTestId("inline-email")).toHaveAttribute("data-state", "ready", { timeout: 60_000 });
-    await expect.poll(async () => (await api(page, "/api/helpdesk/me/notification-prefs")).body.prefs.email_view).toBe("formatted");
+    await expect.poll(async () => (await api(page, "/api/helpdesk/me/notification-prefs")).body.prefs.email_view, { timeout: 30_000 }).toBe("formatted");
 
-    // The inline document is the desk's frame only: opened as a page it is refused.
+    // 1.20.11 security review: a constant edge around the email, in both themes.
+    await expect(card("this morning").getByTestId("inline-email-paper")).toHaveCSS("border-top-width", "1px");
+    await expect(card("this morning").getByTestId("inline-email-paper")).toHaveCSS("border-top-style", "solid");
+
+    // An email whose height follows its frame's (100vh and a margin) stops growing: frozen well under the cap.
+    expect(
+      (await mailIn({ subject: ref, text: `Tall one ${stamp}.`, html: `<style>.v{height:100vh;margin-bottom:300px;background:#eef}</style><div class="v">Tall one ${stamp}.</div>`, message_id: `<vh-${stamp}@clientco.example>` }))
+        .outcome
+    ).toBe("appended");
+    await page.reload();
+    await expect(page.getByRole("heading", { level: 2, name: subject })).toBeVisible({ timeout: 120_000 });
+    const tall = card(`Tall one ${stamp}.`);
+    await tall.scrollIntoViewIfNeeded();
+    await expect(tall.getByTestId("inline-email")).toHaveAttribute("data-frozen", "1", { timeout: 60_000 });
+    await page.waitForTimeout(1500);
+    const tallHeight = await tall.getByTestId("inline-email-frame").evaluate((f) => f.getBoundingClientRect().height);
+    expect(tallHeight).toBeLessThan(2400);
+    await page.waitForTimeout(1500);
+    expect(await tall.getByTestId("inline-email-frame").evaluate((f) => f.getBoundingClientRect().height)).toBe(tallHeight);
+
+    // A picture on another site that redirects to the desk reaches it signed out (src/proxy.ts): the agent's own
+    // attachment, which loads for them directly, fails through the redirect (401); a public file loads either way.
+    expect(
+      (await mailIn({ subject: ref, text: `With a photo ${stamp}.`, attachments: [{ filename: "photo.png", content_type: "image/png", content: noisePng().toString("base64") }], message_id: `<photo-${stamp}@clientco.example>` }))
+        .outcome
+    ).toBe("appended");
+    const attId = (await db.query("SELECT a.id FROM hd_attachments a JOIN hd_tickets t ON t.id = a.ticket_id WHERE t.number = $1 ORDER BY a.id DESC LIMIT 1", [opened.ticket])).rows[0].id as number;
+    const hits: string[] = [];
+    const redirector: Server = createServer((rq, rs) => {
+      const to = new URL(rq.url ?? "/", "http://127.0.0.1").searchParams.get("to") ?? "/";
+      hits.push(to);
+      rs.writeHead(302, { Location: to });
+      rs.end();
+    });
+    await new Promise<void>((r) => redirector.listen(0, "127.0.0.1", () => r()));
+    // The desk's own policy would refuse a picture from http://127.0.0.1 before any request is made: the same
+    // agent's session in a tab that ignores page policies stands for the email's frame (whose policy allows https
+    // pictures; a local test server has no https). What reaches the desk is the same request.
+    const probeCtx = await browser.newContext({ bypassCSP: true, storageState: await page.context().storageState() });
+    const probe = await probeCtx.newPage();
+    try {
+      await probe.goto(`/desk/tickets/${opened.ticket}`);
+      const port = (redirector.address() as { port: number }).port;
+      const desk = new URL(probe.url()).origin;
+      const loads = (src: string) =>
+        probe.evaluate(
+          (src) =>
+            new Promise<string>((r) => {
+              const i = new Image();
+              i.onload = () => r("load");
+              i.onerror = () => r("error");
+              i.src = src;
+            }),
+          src
+        );
+      expect(await loads(`/api/helpdesk/attachments/${attId}?direct=${stamp}`)).toBe("load");
+      expect(await loads(`http://127.0.0.1:${port}/r?to=${encodeURIComponent(`${desk}/api/helpdesk/attachments/${attId}?via=${stamp}`)}`)).toBe("error");
+      expect(await loads(`http://127.0.0.1:${port}/r?to=${encodeURIComponent(`${desk}/icon.png`)}`)).toBe("load");
+      expect(hits.length).toBe(2);
+    } finally {
+      await probeCtx.close();
+      await new Promise<void>((r) => redirector.close(() => r()));
+    }
+
+    // The inline document is the desk's frame only: opened as a page it is refused, with a small page that says so.
     const msgId = (await db.query("SELECT m.id FROM hd_messages m JOIN hd_tickets t ON t.id = m.ticket_id WHERE t.number = $1 AND m.body LIKE '%this morning%'", [opened.ticket])).rows[0].id;
     const direct = await page.goto(`/api/helpdesk/messages/${msgId}/original?inline=1`);
     expect(direct?.status()).toBe(400);
+    await expect(page.getByText("This email shows in the ticket's conversation in the desk.")).toBeVisible();
 
     // --- The requester's Get help view: text, no frame, no switch ---
     const ctx = await browser.newContext();

@@ -118,7 +118,12 @@ const parse = require("../src/lib/helpdesk/inbound-parse") as typeof import("../
 const m365Message = require("../src/lib/helpdesk/m365/message") as typeof import("../src/lib/helpdesk/m365/message");
 const html = require("../src/lib/helpdesk/email-html") as typeof import("../src/lib/helpdesk/email-html");
 const sanitize = require("../src/lib/helpdesk/email-html-sanitize") as typeof import("../src/lib/helpdesk/email-html-sanitize");
-const worker = require("../src/lib/helpdesk/email-html-worker.cjs") as { cleanCss(css: string): string; cidKey(raw: string): string; SANITIZER_VERSION: number };
+const worker = require("../src/lib/helpdesk/email-html-worker.cjs") as {
+  cleanCss(css: string): string;
+  cidKey(raw: string): string;
+  SANITIZER_VERSION: number;
+  sanitize(html: string, opts: Record<string, unknown>): { ok: boolean; html?: string; quoted?: boolean };
+};
 const shared = require("../src/lib/helpdesk/email-html-shared") as typeof import("../src/lib/helpdesk/email-html-shared");
 const retention = require("../src/lib/helpdesk/retention") as typeof import("../src/lib/helpdesk/retention");
 const retentionShared = require("../src/lib/helpdesk/retention-shared") as typeof import("../src/lib/helpdesk/retention-shared");
@@ -477,6 +482,14 @@ describe("the inline variant", () => {
     assert.doesNotMatch(r.text, /src="https:\/\/localhost/i);
     assert.match(r.text, /src="https:\/\/cdn\.example\/ok\.png"/);
     assert.equal(markOf((await inline(m.id, P.agent.session)).text)!["data-remote-images"], "1");
+    // 1.20.11 security review: a trailing dot, an escaped one, or capitals are the desk's host too.
+    const dotted = await replied(t, '<p>Dots</p><img src="https://localhost./a.png" alt="d1"><img src="https://localhost%2e/b.png" alt="d2"><img src="https://LocalHost../c.png" alt="d3"><img src="https://cdn.example/ok2.png" alt="ok">');
+    const d = await inline(dotted.id, P.agent.session, "&images=1");
+    assert.doesNotMatch(d.text, /src="https:\/\/localhost/i);
+    assert.match(d.text, /src="https:\/\/cdn\.example\/ok2\.png"/);
+    assert.equal(markOf((await inline(dotted.id, P.agent.session)).text)!["data-remote-images"], "1");
+    const viaDot = await original(dotted.id, P.agent.session, "?inline=1&images=1", { ...FRAME, host: "cdn.example." });
+    assert.doesNotMatch(viaDot.text, /cdn\.example\/ok2\.png/, "the desk's own host given with a trailing dot");
     // Behind a proxy the browser's host is the forwarded one.
     const proxied = await original(m.id, P.agent.session, "?inline=1&images=1", { ...FRAME, "x-forwarded-host": "cdn.example" });
     assert.doesNotMatch(proxied.text, /cdn\.example\/ok\.png/);
@@ -560,6 +573,15 @@ describe("who may read the inline variant, and only as the desk's frame", () => 
       assert.ok(!r.text.includes("who can see me"));
     }
     assert.equal((await original(msgId, P.agent.session, "?inline=1")).status, 200);
+    // 1.20.11 security review: the refusal is a small page (never JSON) marked refused; a frame the person reloads
+    // from its own menu (Sec-Fetch-Site: none) is served.
+    const page = await original(msgId, P.agent.session, "?inline=1", { "sec-fetch-dest": "document", "sec-fetch-site": "none" });
+    assert.equal(page.status, 400);
+    assert.match(page.headers.get("content-type") ?? "", /^text\/html/);
+    assert.deepEqual(markOf(page.text), { name: "compass-email", content: "refused", "data-reason": "not_here" });
+    assert.match(page.text, /This email shows in the ticket's conversation in the desk\./);
+    assert.match(page.headers.get("content-security-policy") ?? "", /sandbox/);
+    assert.equal((await original(msgId, P.agent.session, "?inline=1", { "sec-fetch-dest": "iframe", "sec-fetch-site": "none" })).status, 200);
     // The dialog's frame and the info read are not held to it (as in 1.20.8).
     assert.equal((await original(msgId, P.agent.session, "", { "sec-fetch-dest": "document" })).status, 200);
     assert.equal((await original(msgId, P.agent.session, "?inline=1&format=info", { "sec-fetch-dest": "empty" })).status, 200);
@@ -780,6 +802,31 @@ describe("refusals", () => {
     assert.equal(markOf(again.text)!.content, "ok");
   });
 
+  test("a refusal (too complex, or past its time) is kept for the message: every variant, picture choice and agent gets it without new work", async () => {
+    const { first } = await opened(mail(P.req, { html: "<p>Slow inline</p>" + "<span>a</span>".repeat(20_000) }));
+    html.resetOriginalCacheForTests();
+    sanitize.setSanitizeTimeoutForTests(1);
+    try {
+      const r = await call(originalRoute.GET, req(`/messages/${first.id}/original?inline=1`, P.agent.session, { headers: FRAME }), { id: String(first.id) });
+      assert.equal(r.status, 422);
+    } finally {
+      sanitize.setSanitizeTimeoutForTests(60_000);
+    }
+    try {
+      const t0 = Date.now();
+      for (const [q, who] of [["?inline=1&images=1", P.agent], ["", P.agent2], ["?images=1", P.manager], ["?format=info", P.agent]] as const) {
+        const r = await call(originalRoute.GET, req(`/messages/${first.id}/original${q}`, who.session, { headers: q.startsWith("?inline") ? FRAME : {} }), { id: String(first.id) });
+        assert.equal(r.status, 422, q);
+      }
+      assert.ok(Date.now() - t0 < 1500, "kept, not sanitised again");
+      html.resetOriginalCacheForTests();
+      const again = await call(originalRoute.GET, req(`/messages/${first.id}/original?inline=1`, P.agent.session, { headers: FRAME }), { id: String(first.id) });
+      assert.equal(again.status, 200, "worked on again once it is no longer kept");
+    } finally {
+      sanitize.setSanitizeTimeoutForTests(null);
+    }
+  });
+
   test("a message with no original: 404, as before", async () => {
     const { first } = await opened(mail(P.req, { text: "Plain only." }));
     assert.equal((await inline(first.id, P.agent.session)).status, 404);
@@ -837,5 +884,44 @@ describe("everywhere else the text body", () => {
     const full = await tickets.getTicketById(t.id);
     const mine = await detail.requestDetail(P.req, full!, "requester");
     assert.ok(mine.messages.every((x) => !("has_original_html" in x) && !String(x.body).includes("<b>")));
+  });
+});
+
+// --- 1.20.11 security review: folding stays a small constant factor over the sanitise ----------------------------
+
+describe("folding cost on hostile shapes", () => {
+  const chain = (n: number, open: string, close: string) => open.repeat(n) + close.repeat(n);
+  const SHAPES: [string, string][] = [
+    ["nested Outlook-header blocks (30 chains, 399 deep)", "<p>hi</p>" + chain(399, '<div style="border-top:solid">', "</div>").repeat(30)],
+    ["one deep header chain then 50,000 elements", "<p>hi</p>" + chain(399, '<div style="border-top:solid">', "</div>") + "<b>x</b>".repeat(50_000)],
+    ["a style of 27,000 border-top: names", `<p>hi</p><div style="${"border-top:".repeat(27_000)}">x</div>`],
+    ["19,000 On … wrote: and blockquote pairs", "<p>hi</p>" + "<p>On Mon wrote:</p><blockquote>q</blockquote>".repeat(19_000)],
+    ["29,000 blockquote type=cite", "<p>hi</p>" + "<blockquote type=cite>q</blockquote>".repeat(29_000)],
+    ["40 gmail_quote chains, 399 deep", "<p>hi</p>" + chain(399, '<div class="gmail_quote">', "</div>").repeat(40)],
+    ["30,000 yahoo_quoted", "<p>hi</p>" + "<div class=yahoo_quoted></div>".repeat(30_000)],
+    ["40 blockquote chains, 399 deep", "<p>hi</p>" + chain(399, "<blockquote>", "</blockquote>").repeat(40)],
+  ];
+  const time = (html: string, inline: boolean) => {
+    const t0 = process.hrtime.bigint();
+    const r = worker.sanitize(html, { cids: [], ...(inline ? { inline: { collapseQuotes: true, selfHost: "localhost", truncated: false } } : {}) });
+    assert.ok(r.ok);
+    return Number(process.hrtime.bigint() - t0) / 1e6;
+  };
+  for (const [name, html] of SHAPES) {
+    test(name, () => {
+      time("<p>warm</p>", true);
+      const plain = time(html, false);
+      const inline = time(html, true);
+      // Generous for a loaded CI runner; before the fix these were 4x to 60x (and minutes for the first).
+      assert.ok(inline < plain * 2.5 + 1500, `${name}: inline ${inline.toFixed(0)} ms vs plain ${plain.toFixed(0)} ms`);
+    });
+  }
+
+  test("through the route with the production time limit: the worst shape is shown, not refused", async () => {
+    const { t } = await opened(mail(P.req, { html: "<p>Open</p>" }));
+    const m = await replied(t, "<p>hi</p>" + chain(399, '<div style="border-top:solid">', "</div>").repeat(30));
+    sanitize.setSanitizeTimeoutForTests(null);
+    const r = await inline(m.id, P.agent.session);
+    assert.equal(r.status, 200, r.text.slice(0, 200));
   });
 });

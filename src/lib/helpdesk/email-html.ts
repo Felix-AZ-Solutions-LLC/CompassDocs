@@ -204,7 +204,14 @@ const KEPT_BYTES = 48 * 1024 * 1024;
 export function resetOriginalCacheForTests(): void {
   kept.clear();
   working.clear();
+  refusedMessages.clear();
 }
+
+// 1.20.11 security review: an email refused as too complex (or past its time) is refused for the message as a
+// whole, whichever variant, picture choice or host asked, for as long as a result is kept: one hostile reply that
+// every agent opens costs the worker once, not once per view.
+const refusedMessages = new Map<string, { at: number; view: OriginalView }>();
+const REFUSED_MAX = 256;
 
 function keep(key: string, view: OriginalView): void {
   const now = Date.now();
@@ -255,7 +262,10 @@ export async function originalView(messageId: number, opts: { remoteImages?: boo
   const stored = await getOriginalHtml(messageId);
   if (!stored) return refused(404, "This message has no original email.");
   const inline = opts.inline ? `:i:${opts.inline.selfHost.toLowerCase()}` : "";
+  const messageKey = `${messageId}:${EMAIL_HTML_SANITIZER_VERSION}:${new Date(stored.created_at).getTime()}`;
   const key = `${messageId}:${opts.remoteImages ? 1 : 0}:${EMAIL_HTML_SANITIZER_VERSION}:${new Date(stored.created_at).getTime()}${inline}`;
+  const no = refusedMessages.get(messageKey);
+  if (no && Date.now() - no.at < KEPT_MS) return no.view;
   const hit = kept.get(key);
   if (hit && Date.now() - hit.at < KEPT_MS) return hit.view;
   const running = working.get(key);
@@ -277,6 +287,10 @@ export async function originalView(messageId: number, opts: { remoteImages?: boo
     const view = await work;
     // Kept from when the work ended (a slow one is not done again for the next read); a busy desk is not kept.
     if (view.ok || view.status !== 503) keep(key, view);
+    if (!view.ok && view.status === 422) {
+      if (refusedMessages.size >= REFUSED_MAX) refusedMessages.delete(refusedMessages.keys().next().value!);
+      refusedMessages.set(messageKey, { at: Date.now(), view });
+    }
     return view;
   } finally {
     working.delete(key);
@@ -317,9 +331,12 @@ export function originalHeaders(remoteImages: boolean): Record<string, string> {
  * so is any page the frame is navigated to, as the frame's own sandbox attribute stays), and default-src 'none'
  * gives it no script-src, which also blocks a javascript: link opened in a new tab (the initiator's policy
  * applies). Same-origin only goes one way: the desk's scripts may reach the email's document; nothing in the
- * email can run to reach the desk. Pictures: data: (and https: with Show images), never the desk's own host (the
- * sanitiser drops those, so no request from the email carries the desk's cookies by design). Forms: none, and
- * form-action 'none'. Framed only by the desk (frame-ancestors 'self', X-Frame-Options SAMEORIGIN).
+ * email can run to reach the desk. Pictures: data: (and https: with Show images). The sanitiser drops a picture
+ * on the desk's own host, but a picture elsewhere can redirect to the desk, and from a same-origin frame that
+ * request would be same-site and carry the desk's Lax cookies: src/proxy.ts takes the Cookie header off every
+ * cross-site or same-site picture, media, font, style or script request (1.20.11 security review), so it reaches
+ * the desk signed out. Forms: none, and form-action 'none'. Framed only by the desk (frame-ancestors 'self',
+ * X-Frame-Options SAMEORIGIN).
  */
 export function originalInlineCsp(remoteImages: boolean): string {
   return originalHeaders(remoteImages)["Content-Security-Policy"].replace(
@@ -333,6 +350,11 @@ export function originalInlineHeaders(remoteImages: boolean): Record<string, str
 }
 
 /** The inline variant's page when the email is not shown (the desk reads its mark and shows the text instead). */
-export function inlineRefusalPage(reason: "too_complex" | "busy"): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="compass-email" content="refused" data-reason="${reason}"></head><body></body></html>`;
+export function inlineRefusalPage(reason: "too_complex" | "busy" | "not_here"): string {
+  // "not_here": opened as a page or from elsewhere; it says so to whoever sees it (1.20.11 security review).
+  const body =
+    reason === "not_here"
+      ? `<p style="font:14px/1.5 system-ui,sans-serif;color:#475569;margin:12px">${HD_ORIGINAL_COPY.inlineElsewhere}</p>`
+      : "";
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="compass-email" content="refused" data-reason="${reason}"></head><body>${body}</body></html>`;
 }

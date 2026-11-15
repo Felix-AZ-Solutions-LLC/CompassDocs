@@ -26,8 +26,9 @@
 // too). Its document carries <meta name="compass-email" content="ok" data-remote-images data-quoted …>, which the
 // desk reads; when the email is not shown (too complex, busy) the same status as the frame's with an empty page
 // marked content="refused", and the desk shows the text. A browser that says it is opening this as a page or from
-// another site (Sec-Fetch-Dest other than iframe, Sec-Fetch-Site other than same-origin) gets 400: it is the desk's
-// frame and nothing else. inline beside print, or a repeated inline: 400. ?inline=1&format=info is the info, with
+// another site (Sec-Fetch-Dest other than iframe, Sec-Fetch-Site other than same-origin, or none for a frame the
+// person reloaded) gets 400 with a small marked page saying the email shows in the desk: it is the desk's frame
+// and nothing else. inline beside print, or a repeated inline: 400. ?inline=1&format=info is the info, with
 // `quoted`. Not audited.
 
 import { NextResponse } from "next/server";
@@ -73,8 +74,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   if (inline && !info) {
     const dest = req.headers.get("sec-fetch-dest");
     const site = req.headers.get("sec-fetch-site");
-    if ((dest && dest !== "iframe") || (site && site !== "same-origin")) {
-      return NextResponse.json({ error: "This view opens inside the desk only." }, { status: 400, headers: NO_STORE });
+    // 1.20.11 security review: a frame reloaded from its own menu says Sec-Fetch-Site: none (the person did it).
+    if ((dest && dest !== "iframe") || (site && site !== "same-origin" && !(site === "none" && dest === "iframe"))) {
+      // A plain page, as the frame would show it (never the JSON), marked refused: the desk shows the text.
+      return new Response(inlineRefusalPage("not_here"), { status: 400, headers: originalHeaders(false) });
     }
   }
   const view = await originalView(id, { remoteImages: images, ...(inline ? { inline: { selfHost: requestHost(req, url) } } : {}) });
@@ -102,8 +105,8 @@ function requestHost(req: Request, url: URL): string {
   const forwarded = req.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
   const host = forwarded || req.headers.get("host") || url.host;
   try {
-    return new URL(`http://${host}`).hostname.toLowerCase();
+    return new URL(`http://${host}`).hostname.toLowerCase().replace(/\.+$/, "");
   } catch {
-    return url.hostname.toLowerCase();
+    return url.hostname.toLowerCase().replace(/\.+$/, "");
   }
 }

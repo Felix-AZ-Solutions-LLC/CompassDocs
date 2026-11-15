@@ -2855,13 +2855,17 @@ open in its own tab beside CompassDocs. Components live in
   clicks away. The last switch is the agent's default (Settings →
   Notifications, **Emails in the conversation**, a `Segmented` Formatted |
   Plain text); a message on screen keeps its own state. The email is a
-  frame with no border, **edge to edge within the card's padding** (not
-  indented under the avatar like a text body), sized to the email (no
-  scrollbar inside; past 4,000 px a white fade and a `text-xs` **Show the
-  rest** with `ChevronsDown`). Paper: literal `bg-white` in both themes; in
-  light mode it is the card itself, in dark mode a `rounded-lg` white sheet
-  with `p-3` and a `ring-1 ring-white/15` edge; on an internal note's amber
-  card it always has `p-3` and an amber edge. Nothing of the desk's fonts or
+  borderless frame on a sheet of paper **edge to edge within the card's
+  padding** (not indented under the avatar like a text body), sized to the
+  email (no scrollbar inside; past 2,400 px a white fade and a `text-xs`
+  **Show the rest** with `ChevronsDown`; never past 20,000 px, and an email
+  whose height follows its frame's is frozen and scrolls inside). Paper:
+  literal `bg-white` in both themes, `rounded-lg border p-3` with a
+  **constant hairline edge** (`border-slate-200`, dark `border-white/15`;
+  `border-amber-200` on an internal note's amber card). The edge is a
+  safety line, not decoration: the email draws whatever it likes inside it,
+  so it must never be able to pass a fake chip, note or badge off as the
+  desk's (1.20.11 security review). Nothing of the desk's fonts or
   colours reaches the email. The reply's quoted history folds under a slate
   pill **Show quoted text** / **Hide quoted text** drawn inside the email
   (it works without script). Remote pictures: one `text-xs text-slate-500`

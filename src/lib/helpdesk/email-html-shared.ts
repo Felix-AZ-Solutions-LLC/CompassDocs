@@ -51,6 +51,8 @@ export const HD_ORIGINAL_COPY = {
   busy: "The desk is busy showing other emails. Try again in a moment.",
   failed: "The original email couldn't be shown. Try again.",
   frameTitle: "The original email, as its sender wrote it",
+  /** 1.20.11: the conversation's email view opened anywhere but its frame in the desk. */
+  inlineElsewhere: "This email shows in the ticket's conversation in the desk. Open the ticket to read it.",
 } as const;
 
 /**
@@ -72,8 +74,10 @@ export const HD_INLINE_EMAIL_COPY = {
 /** How an agent reads emailed messages in the desk conversation (their desk preference, lib/helpdesk/notify-prefs). */
 export type HdEmailView = "formatted" | "plain";
 
-/** The inline frame's height cap in CSS pixels before "Show the rest". */
-export const INLINE_EMAIL_MAX_HEIGHT = 4000;
+/** The inline frame's height cap in CSS pixels before "Show the rest" (1.20.11 security review: was 4,000). */
+export const INLINE_EMAIL_MAX_HEIGHT = 2400;
+/** Never taller than this, even after "Show the rest": past it the email scrolls inside its frame. */
+export const INLINE_EMAIL_HARD_MAX = 20_000;
 
 /** The inline variant's address (the desk conversation's frame). */
 export function originalInlineHref(id: number, images: boolean): string {

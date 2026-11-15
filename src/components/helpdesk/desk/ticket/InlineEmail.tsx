@@ -8,8 +8,10 @@
 // same-origin with the desk but with no script allowed (lib/helpdesk/
 // email-html originalInlineHeaders says why that is safe). Same-origin is
 // what lets the desk size the frame to the email: a ResizeObserver on the
-// email's root, no polling, capped at 4,000 px with "Show the rest", so the
-// conversation reads as one page and one giant email can't bury the thread.
+// email's root, no polling, capped at 2,400 px with "Show the rest" (and
+// never past 20,000 px; an email whose height follows the frame's is frozen
+// and scrolls inside), so the conversation reads as one page and one giant
+// email can't bury the thread.
 //
 // The text body stays the placeholder until the email has loaded, and the
 // fallback: a refusal, a busy desk (after one retry), a slow answer or
@@ -18,15 +20,15 @@
 // IntersectionObserver, plus loading="lazy"), at most three at a time, so a
 // ticket with forty emails never asks the server for them all at once.
 //
-// The email stays the sender's: white paper in both themes (a subtle edge
-// and a margin of paper in dark mode and on an internal note), no frame
-// border, nothing of the desk's fonts or colours. Remote pictures stay
+// The email stays the sender's: white paper in both themes inside a quiet
+// hairline edge (always visible, so the email can't pass its drawing off as
+// the desk's), nothing of the desk's fonts or colours. Remote pictures stay
 // hidden until "Show images", per message, never remembered.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AppWindow, ChevronsDown, ImageOff, MailOpen, Type } from "lucide-react";
 import { iconButtonClass } from "@/components/Button";
-import { HD_INLINE_EMAIL_COPY, INLINE_EMAIL_MAX_HEIGHT, originalInlineHref, type HdEmailView } from "@/lib/helpdesk/email-html-shared";
+import { HD_INLINE_EMAIL_COPY, INLINE_EMAIL_HARD_MAX, INLINE_EMAIL_MAX_HEIGHT, originalInlineHref, type HdEmailView } from "@/lib/helpdesk/email-html-shared";
 import { rememberEmailView, useEmailViewDefault } from "./email-view";
 
 /** Frames loading at once, across the conversation. */
@@ -149,6 +151,7 @@ function InlineEmailBody({ id, author, tinted, text, formatted, state, setState 
   const [marked, setMarked] = useState<Marked | null>(null);
   const [height, setHeight] = useState(0);
   const [whole, setWhole] = useState(false);
+  const [frozen, setFrozen] = useState(false);
 
   const giveBack = useCallback(() => {
     release.current?.();
@@ -238,11 +241,39 @@ function InlineEmailBody({ id, author, tinted, text, formatted, state, setState 
     }
     const root = doc?.documentElement;
     if (!f || !root) return;
+    // 1.20.11 security review: an email whose height follows the frame's own (100vh plus a margin) would grow
+    // without end. When it grows by the same amount right after each resize, three times running, its height is
+    // frozen where it is and it scrolls inside; and nothing is ever taller than INLINE_EMAIL_HARD_MAX.
+    let lastSet = 0;
+    let lastDelta = -1;
+    let streak = 0;
+    let stopped = false;
+    const scrollInside = () => root.style.setProperty("overflow-y", "auto", "important");
     const measure = () => {
+      if (stopped) return;
       const content = Math.ceil(root.getBoundingClientRect().height);
+      if (content <= 0) return;
       // A wide email scrolls sideways inside: its scrollbar is added, never covers the last line.
       const bar = root.scrollWidth > root.clientWidth ? Math.max(0, f.clientHeight - root.clientHeight) : 0;
-      if (content > 0) setHeight(content + bar);
+      const target = content + bar;
+      const shown = Math.round(f.getBoundingClientRect().height);
+      if (lastSet > 0 && Math.abs(shown - lastSet) <= 1 && target > shown + 1) {
+        const delta = target - shown;
+        streak = Math.abs(delta - lastDelta) <= 1 ? streak + 1 : 0;
+        lastDelta = delta;
+        if (streak >= 2) {
+          stopped = true;
+          scrollInside();
+          setFrozen(true);
+          return;
+        }
+      } else {
+        streak = 0;
+        lastDelta = -1;
+      }
+      if (target > INLINE_EMAIL_HARD_MAX) scrollInside();
+      lastSet = Math.min(target, INLINE_EMAIL_HARD_MAX);
+      setHeight(lastSet);
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -254,10 +285,10 @@ function InlineEmailBody({ id, author, tinted, text, formatted, state, setState 
   // Once loaded the frame stays (hidden in the plain view), so switching back is instant.
   const loadingFrame = state === "loading" || state === "ready";
   const capped = !whole && height > INLINE_EMAIL_MAX_HEIGHT;
-  const shownHeight = capped ? INLINE_EMAIL_MAX_HEIGHT : height;
+  const shownHeight = Math.min(capped ? INLINE_EMAIL_MAX_HEIGHT : height, INLINE_EMAIL_HARD_MAX);
 
   return (
-    <div className="relative min-w-0" data-testid="inline-email" data-state={formatted ? state : "plain"}>
+    <div className="relative min-w-0" data-testid="inline-email" data-state={formatted ? state : "plain"} data-frozen={frozen ? "1" : undefined}>
       {/* The text: the plain view, the placeholder while the email loads, the fallback, and the desk page on paper. */}
       <div className={showFrame ? "hidden print:block" : ""} data-testid="email-text">
         {text}
@@ -282,11 +313,13 @@ function InlineEmailBody({ id, author, tinted, text, formatted, state, setState 
         }
         aria-hidden={showFrame ? undefined : true}
       >
-        {/* The paper: literal white in both themes (STYLEGUIDE §Helpdesk: the desk, "Email shows as sent"). */}
+        {/* The paper: literal white in both themes (STYLEGUIDE §Helpdesk: the desk, "Email shows as sent"), with a constant
+            hairline edge (1.20.11 security review: nothing the email draws can pass for the desk around it). */}
         <div
           className={`relative overflow-hidden bg-white ${
-            tinted ? "rounded-lg border border-amber-200 p-3 dark:border-white/10" : "rounded-md dark:rounded-lg dark:p-3 dark:ring-1 dark:ring-white/15"
-          }`}
+            tinted ? "border-amber-200 dark:border-white/10" : "border-slate-200 dark:border-white/15"
+          } rounded-lg border p-3`}
+          data-testid="inline-email-paper"
         >
           {loadingFrame && (
             <iframe

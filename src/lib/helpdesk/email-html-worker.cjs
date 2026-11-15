@@ -140,6 +140,15 @@ function cidKey(raw) {
   return s.replace(/^</, "").replace(/>$/, "").trim().toLowerCase().slice(0, 500);
 }
 
+/** A URL's host name, lower case, without trailing dots (the form the desk's own host is compared in). */
+function hostName(url) {
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/\.+$/, "");
+  } catch {
+    return "";
+  }
+}
+
 function absoluteUrl(raw, schemes) {
   const v = raw.trim().replace(/[\u0000-\u001f\u007f]/g, "");
   if (!v || v.length > 4000) return null;
@@ -214,7 +223,9 @@ function instance() {
         const url = absoluteUrl(raw, ["https:"]);
         // 1.20.11: the inline variant is same-origin with the desk, so a picture on the desk's own host
         // (which would carry the agent's cookies) is never loaded nor offered.
-        if (url && s.selfHost && new URL(url).hostname.toLowerCase() === s.selfHost) return;
+        // 1.20.11 security review: compared as host names, after the URL parser's decoding, without trailing dots
+        // ("desk.example.", "desk.example%2e" and "DESK.example" are the desk too).
+        if (url && s.selfHost && hostName(url) === s.selfHost) return;
         if (url && s.remote) el.setAttribute("src", url);
         else if (url) s.remoteImages++;
       } else if (/^http:/i.test(raw)) {
@@ -259,10 +270,71 @@ const HEADER_SENT = /(?:^|\s)(?:Sent|Date|Envoyé|Gesendet|Verzonden|Inviato|Env
 const HEADER_TO = /(?:^|\s)(?:To|Subject|À|An|Objet|Betreff|Aan|Onderwerp|Oggetto|Para|Asunto)\s?:/i;
 
 const squash = (s) => String(s || "").replace(/\s+/g, " ").trim();
-const isAttribution = (s) => {
-  const t = squash(s);
-  return t.length > 0 && t.length < 400 && ATTRIBUTION.some((re) => re.test(t));
+
+// 1.20.11 security review: folding is bounded to a small constant factor over the sanitise itself, whatever the
+// email. One walk of the document in order, stopping at the first quote (the first one decides, as before);
+// every text read is capped (limitedText); a style is read declaration by declaration and only when short; at most
+// MAX_HEADER_CHECKS Outlook-header candidates are read, never one inside a block already read; the checks before
+// and after the quote walk the document once each, skipping quote containers whole.
+const MAX_WALK = 400000;
+const MAX_STYLE = 2000;
+const MAX_HEADER_CHECKS = 20;
+const MAX_TEXT_NODES = 3000;
+
+/** The node after `node` in document order inside `root`; with `skip`, after its whole subtree. */
+function following(node, root, skip) {
+  if (!skip && node.firstChild) return node.firstChild;
+  for (let n = node; n && n !== root; n = n.parentNode) if (n.nextSibling) return n.nextSibling;
+  return null;
+}
+
+/**
+ * The text of a node as the eye reads it (a line break or a block between "Sent: …" and "To: …" is a space),
+ * or null when it is longer than `max` characters or has more than MAX_TEXT_NODES nodes.
+ */
+function limitedText(node, max) {
+  if (!node) return null;
+  if (node.nodeType === 3) return node.nodeValue.length > max ? null : squash(node.nodeValue);
+  if (node.nodeType !== 1) return "";
+  let out = "";
+  let seen = 0;
+  for (let n = node.firstChild; n; n = following(n, node, false)) {
+    if (++seen > MAX_TEXT_NODES) return null;
+    if (n.nodeType === 3) out += n.nodeValue;
+    else if (n.nodeName === "BR" || n.nodeName === "P" || n.nodeName === "DIV") out += " ";
+    if (out.length > max * 4) return null;
+  }
+  const t = squash(out);
+  return t.length > max ? null : t;
+}
+
+/** The first `max` characters of a node's text (at most MAX_TEXT_NODES nodes read). */
+function limitedPrefix(node, max) {
+  let out = "";
+  let seen = 0;
+  for (let n = node.firstChild; n && out.length < max && ++seen <= MAX_TEXT_NODES; n = following(n, node, false)) {
+    if (n.nodeType === 3) out += n.nodeValue.slice(0, max);
+    else if (n.nodeName === "BR" || n.nodeName === "P" || n.nodeName === "DIV") out += " ";
+  }
+  return out.slice(0, max);
+}
+
+const isAttribution = (node) => {
+  const t = limitedText(node, 400);
+  return !!t && ATTRIBUTION.some((re) => re.test(t));
 };
+
+/** A style attribute with a solid top border, read declaration by declaration (never a pattern over the whole). */
+function solidTopBorder(style) {
+  if (!style || style.length > MAX_STYLE || !/border-top/i.test(style)) return false;
+  for (const decl of style.split(";")) {
+    const i = decl.indexOf(":");
+    if (i < 0) continue;
+    const name = decl.slice(0, i).trim().toLowerCase();
+    if ((name === "border-top" || name === "border-top-style") && /(^|\s)solid(\s|$)/i.test(decl.slice(i + 1).trim())) return true;
+  }
+  return false;
+}
 
 /** The node before `node` among its siblings, passing over whitespace and line breaks. */
 function previousContent(node) {
@@ -271,73 +343,92 @@ function previousContent(node) {
   return p;
 }
 
-/** Text in the range from `start` to the end of `body`, outside the quote containers listed. */
-function textAfter(doc, body, after) {
-  const r = doc.createRange();
-  r.setStartAfter(after);
-  r.setEnd(body, body.childNodes.length);
-  const frag = r.cloneContents();
-  for (const q of frag.querySelectorAll("blockquote, div.gmail_quote, [class*='yahoo_quoted'], [id*='yahoo_quoted']")) q.remove();
-  return squash(frag.textContent);
+const isQuoteContainer = (el) => {
+  if (el.nodeName === "BLOCKQUOTE") return true;
+  const cls = el.getAttribute("class") || "";
+  return (el.nodeName === "DIV" && el.classList.contains("gmail_quote")) || cls.includes("yahoo_quoted") || (el.getAttribute("id") || "").includes("yahoo_quoted");
+};
+
+/** Whether any text follows `after` (to the end of `body`) outside quote containers. Stops at the first. */
+function textAfter(body, after) {
+  let seen = 0;
+  for (let n = following(after, body, true); n && seen < MAX_WALK; seen++) {
+    if (n.nodeType === 1 && isQuoteContainer(n)) {
+      n = following(n, body, true);
+      continue;
+    }
+    if (n.nodeType === 3 && n.nodeValue.trim()) return true;
+    n = following(n, body, false);
+  }
+  return false;
 }
 
-/** Where the quoted history starts and whether new text may follow it ("container": it must not), or null. */
-function quoteStart(doc, body) {
-  const found = [];
-  const add = (start, end) => start && found.push({ start, end });
-  for (const el of body.querySelectorAll("div.gmail_quote")) if (!el.parentElement.closest("div.gmail_quote")) add(el, el);
-  for (const el of body.querySelectorAll("[class*='yahoo_quoted'], [id*='yahoo_quoted']")) add(el, el);
-  for (const el of body.querySelectorAll("#appendonsend, #mail-editor-reference-message-container")) add(el, null);
-  for (const el of body.querySelectorAll("#divRplyFwdMsg")) {
-    const before = previousContent(el);
-    add(before && before.nodeName === "HR" ? before : el, null);
-  }
-  for (const el of body.querySelectorAll("div[style*='border-top'], p[style*='border-top']")) {
-    const style = el.getAttribute("style") || "";
-    if (!/border-top(?:-style)?\s*:[^;]*\bsolid\b/i.test(style)) continue;
-    if ((el.textContent || "").length > 1500) continue;
-    // Its lines as the eye reads them (a line break between "Sent: …" and "To: …" is a space).
-    const lines = el.cloneNode(true);
-    for (const br of lines.querySelectorAll("br, p, div")) br.before(doc.createTextNode(" "));
-    const t = squash(lines.textContent);
-    if (HEADER_FROM.test(t) && HEADER_SENT.test(t) && HEADER_TO.test(t)) add(el, null);
-  }
-  const walker = doc.createTreeWalker(body, 4 /* text */);
-  for (let n = walker.nextNode(), seen = 0; n && seen < 200000; n = walker.nextNode(), seen++) {
-    if (ORIGINAL_MESSAGE.test(n.nodeValue.trim())) {
-      add(n, null);
-      break;
+/** Where the quoted history starts and what must not have text after it (a container), or null: the first quote in the document. */
+function quoteStart(body) {
+  let headerChecks = 0;
+  let readHeader = null; // the last block read as an Outlook header (not one): blocks inside it are not read again
+  let plainQuote = null; // the last blockquote that was not a reply's: blockquotes inside it are its own
+  let seen = 0;
+  for (let n = body.firstChild; n && seen < MAX_WALK; n = following(n, body, false), seen++) {
+    if (n.nodeType === 3) {
+      if (n.nodeValue.length < 20000 && ORIGINAL_MESSAGE.test(n.nodeValue.trim())) return { start: n, end: null };
+      continue;
+    }
+    if (n.nodeType !== 1) continue;
+    const tag = n.nodeName;
+    const id = n.getAttribute("id") || "";
+    const cls = n.getAttribute("class") || "";
+    if (tag === "DIV" && n.classList.contains("gmail_quote")) return { start: n, end: n };
+    if (cls.includes("yahoo_quoted") || id.includes("yahoo_quoted")) return { start: n, end: n };
+    if (id === "appendonsend" || id === "mail-editor-reference-message-container") return { start: n, end: null };
+    if (id === "divRplyFwdMsg") {
+      const before = previousContent(n);
+      return { start: before && before.nodeName === "HR" ? before : n, end: null };
+    }
+    if ((tag === "DIV" || tag === "P") && headerChecks < MAX_HEADER_CHECKS && !(readHeader && readHeader.contains(n)) && solidTopBorder(n.getAttribute("style"))) {
+      headerChecks++;
+      readHeader = n;
+      const t = limitedText(n, 1500);
+      if (t && HEADER_FROM.test(t) && HEADER_SENT.test(t) && HEADER_TO.test(t)) return { start: n, end: null };
+      continue;
+    }
+    if (tag === "BLOCKQUOTE" && !(plainQuote && plainQuote.contains(n))) {
+      const before = previousContent(n);
+      const prefix = before && before.nodeType === 1 && before.classList.contains("moz-cite-prefix");
+      if (prefix || (before && isAttribution(before))) return { start: before, end: n };
+      if (n.getAttribute("type") === "cite") return { start: n, end: n };
+      plainQuote = n;
     }
   }
-  for (const q of body.querySelectorAll("blockquote")) {
-    if (q.parentElement.closest("blockquote")) continue;
-    const before = previousContent(q);
-    const prefix = before && before.nodeType === 1 && before.classList.contains("moz-cite-prefix");
-    if (prefix || (before && isAttribution(before.textContent))) add(before, q);
-    else if (q.getAttribute("type") === "cite") add(q, q);
+  return null;
+}
+
+/** What comes before `start`: whether it has text or a picture of its own, and its last 2,000 characters. */
+function before(body, start) {
+  let content = false;
+  let tail = "";
+  let seen = 0;
+  for (let n = body.firstChild; n && n !== start && seen < MAX_WALK; n = following(n, body, false), seen++) {
+    if (n.nodeType === 3) {
+      if (n.nodeValue.trim()) content = true;
+      tail = (tail + n.nodeValue).slice(-2000);
+    } else if (n.nodeName === "IMG") content = true;
   }
-  if (!found.length) return null;
-  // The first in the document wins.
-  found.sort((a, b) => (a.start === b.start ? 0 : a.start.compareDocumentPosition(b.start) & 4 ? -1 : 1));
-  return found[0];
+  return { content, tail: squash(tail) };
 }
 
 /** Fold the first quoted history of the email's body. True when something was folded. */
 function foldQuotes(doc, body) {
-  const q = quoteStart(doc, body);
+  const q = quoteStart(body);
   if (!q) return false;
-  const before = doc.createRange();
-  before.setStart(body, 0);
-  before.setEndBefore(q.start);
-  const head = before.cloneContents();
-  const kept = squash(head.textContent);
+  const head = before(body, q.start);
   // Nothing of its own before the quote: shown whole.
-  if (!kept && !head.querySelector("img")) return false;
+  if (!head.content) return false;
   // A forward: its marker before the quote, or at the quote's top.
-  const startText = q.start.nodeType === 3 ? q.start.nodeValue : q.start.textContent;
-  if (FORWARD.test(kept.slice(-2000)) || FORWARD.test(squash(startText).slice(0, 600))) return false;
+  const top = limitedText(q.start, 600) ?? squash(q.start.nodeType === 3 ? q.start.nodeValue.slice(0, 600) : limitedPrefix(q.start, 600));
+  if (FORWARD.test(head.tail) || FORWARD.test(top.slice(0, 600))) return false;
   // An answer written after the quote (below it, or between quoted parts): shown whole.
-  if (q.end && textAfter(doc, body, q.end)) return false;
+  if (q.end && textAfter(body, q.end)) return false;
   const range = doc.createRange();
   range.setStartBefore(q.start);
   range.setEnd(body, body.childNodes.length);
@@ -393,7 +484,7 @@ function sanitize(html, opts) {
   const p = instance();
   // 1.20.11: `inline` (the desk conversation's variant): { collapseQuotes, selfHost, truncated }.
   const inline = o.inline && typeof o.inline === "object" ? o.inline : null;
-  const selfHost = inline && typeof inline.selfHost === "string" ? inline.selfHost.toLowerCase() : "";
+  const selfHost = inline && typeof inline.selfHost === "string" ? inline.selfHost.toLowerCase().replace(/\.+$/, "") : "";
   state = { remote: o.remoteImages === true, cids: new Map(o.cids || []), remoteImages: 0, insecureImages: 0, missingCids: 0, selfHost };
   try {
     const root = p.sanitize(String(html == null ? "" : html), {
