@@ -4,6 +4,39 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.13] - 2026-11-15
+
+Desk settings that are easy to find.
+
+### Added
+- **Search desk settings.** A search box at the top of the desk's settings
+  menu finds any page or setting by its name or by another word for it:
+  "SMTP" or "mailbox" finds Email, "Outlook" finds Microsoft 365 mailboxes,
+  "MFA" or "Duo" finds Sign-in and Duo, "SLA" finds Reply targets, "reply
+  templates" finds Canned responses. Enter opens the top result, which
+  scrolls to the setting and briefly outlines it. People only see results
+  for settings they can open.
+- **A settings overview.** Desk settings opens on an overview with one card
+  per group, listing each page and its tabs.
+
+### Changed
+- **Desk settings are grouped.** The menu has nine groups: General, Teams
+  and people, Email, Tickets, Automation, Requesters, Integrations, Security
+  and data, and You. Related pages are now tabs under one heading: Agents
+  and roles (Agents, Skills and languages, Roles), Assignment (Teams, Rules,
+  On call), Forms and fields (Request types, Categories, Custom fields,
+  Checklists, Before you solve), Reply targets (Targets, Office hours,
+  Holidays, Test a due time), Automations (Automations, Recurring tickets),
+  Macros and replies (Macros, Canned responses) and Customer portal
+  (Settings, Help centre, Customers).
+- **CompassDocs settings search matches better.** The admin settings search
+  now matches words in any order and lands on the setting with the same
+  brief outline.
+
+### Upgrading
+- **Nothing to run, and no schema change.** Every desk settings address
+  keeps working, so bookmarks and links still open the same page.
+
 ## [1.20.12] - 2026-11-15
 
 Scrolling in the desk.

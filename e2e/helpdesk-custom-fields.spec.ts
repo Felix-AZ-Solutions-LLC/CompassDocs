@@ -88,7 +88,8 @@ test.describe("custom fields (licensed)", () => {
 
     // Desk settings → Custom fields: a new field in the dialog.
     await page.goto(SETTINGS);
-    await slow(page.getByRole("heading", { level: 1, name: "Custom fields" })).toBeVisible({ timeout: 120_000 });
+    // 1.20.13: a tab under its section's h1; the tab's own title is an h2.
+    await slow(page.getByRole("heading", { level: 2, name: "Custom fields" })).toBeVisible({ timeout: 120_000 });
     await slow(page.getByRole("link", { name: /^Custom fields/ })).toHaveAttribute("aria-current", "page");
     const dialog = page.getByRole("dialog", { name: "New custom field" });
     // The busy dev rig may still be hydrating: click until the dialog opens.

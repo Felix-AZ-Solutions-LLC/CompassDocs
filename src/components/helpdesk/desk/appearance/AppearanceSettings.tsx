@@ -180,7 +180,7 @@ export function AppearanceSettings() {
     <PageContainer>
       <PageHeader icon={<Sparkle />} title="Appearance" subtitle="How the desk looks for your agents. Each agent can change it for themselves." />
       <div className="flex flex-col gap-4">
-        <Card title="Background artwork" description="Shown behind the desk. JPG, PNG or WebP up to 8 MB, at least 1920 × 1080. It's stored on your server.">
+        <Card id="artwork" className="scroll-mt-6" title="Background artwork" description="Shown behind the desk. JPG, PNG or WebP up to 8 MB, at least 1920 × 1080. It's stored on your server.">
           <ul className="grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))]" aria-label="Artwork library" data-testid="appearance-library">
             {view.library.map((a) => {
               const on = inUse(a.ref);
@@ -231,7 +231,7 @@ export function AppearanceSettings() {
           </div>
         </Card>
 
-        <Card title="Transparency">
+        <Card id="transparency" className="scroll-mt-6" title="Transparency">
           <Segmented<HdDeskLevel>
             label="Transparency"
             value={f.level}

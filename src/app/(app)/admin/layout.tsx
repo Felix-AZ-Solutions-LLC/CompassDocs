@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { Settings } from "lucide-react";
 import { requireUser, reachableSettingsSections } from "@/lib/auth";
 import { SettingsNav } from "@/components/SettingsNav";
+import { SettingsJumpHighlight } from "@/components/SettingsJumpHighlight";
 import { PageContainer } from "@/components/PageWidth";
 import { RAIL_GROUP_TEXT } from "@/components/RailLink";
 import { getAllSettings } from "@/lib/db";
@@ -45,6 +46,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         </div>
         <div className="min-w-0 flex-1">{children}</div>
       </div>
+      {/* 1.20.13: a search result's #anchor scrolls to its card and flashes it. */}
+      <SettingsJumpHighlight />
     </PageContainer>
   );
 }

@@ -110,7 +110,7 @@ export function CalendarSettings() {
     <PageContainer>
       <PageHeader icon={<CalendarDays />} title="Event calendar" subtitle="Reminders about the events on tickets, and the links calendar apps subscribe to." />
       <div className="flex flex-col gap-4">
-        <Card title="Reminders" description="Sent to agents before an event's setup must be ready. A ticket's Event block says when that is.">
+        <Card id="reminders" className="scroll-mt-6" title="Reminders" description="Sent to agents before an event's setup must be ready. A ticket's Event block says when that is.">
           <div className="space-y-5" data-testid="calendar-reminders">
             <fieldset>
               <legend className="text-sm font-medium text-slate-800">Remind this long before setup is due</legend>

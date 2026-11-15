@@ -557,6 +557,41 @@ focus):
   sections, pages and topics as "Section › Topic" rows (`SETTINGS_INDEX`),
   gated by the section's reachability. A new card worth finding gets an
   id and a topic in the same PR; never a hand-rolled tab row.
+- **One settings rail, two settings areas** (1.20.13). The rail's body is
+  `components/SettingsRail`: the "Search settings…" box (`aria-label`
+  "Search settings", a live `sr-only` count), then the groups
+  (`RailGroupLabel` + dense `RailLink`s), which give way to the results
+  while a query is typed. A section result is a `RailLink`; a page or
+  setting result is its name over a `text-2xs text-slate-500` trail
+  joined by `ChevronRight` ("Email › setting"), so its accessible name
+  reads "Microsoft 365 mailboxes Email setting". No match is a
+  `SectionEmpty`: No settings match “…”. Keyboard: Enter opens the first
+  result, Arrow Down moves into the results and Arrow Up and Down walk
+  them (Arrow Up from the first returns to the box), Escape clears and
+  returns to the box. Matching is `lib/settings-search`: every word of the
+  query must appear in the row's label or keywords, in any order, and
+  results rank whole words before word starts, the row's own label before
+  its keywords ("SLA" lists Reply targets before Slack). CompassDocs
+  settings (`SettingsNav`) and the desk (`DeskSettingsNav`) only decide
+  what the rows are and who may see them; neither draws its own.
+- **A result lands on its setting.** A result or link whose address ends
+  in `#anchor` scrolls the card with that id into view once it renders
+  (cards that load after the first paint included) and flashes it:
+  `components/SettingsJumpHighlight`, mounted once in each settings layout,
+  sets `data-settings-flash`, a 2px `compass-500` outline 3px out that
+  fades over 2.4s (globals.css); with reduced motion the outline stays
+  still until it goes. Never colour the card's background for this.
+- **A tab inside a section's chrome** (1.20.13). Where a section's header
+  and `SubNav` are drawn by a layout over pages that were written to stand
+  alone, the layout wraps the page in `<SettingsSubPage>`: the page's
+  `PageContainer` then passes its children through, and its `PageHeader`
+  becomes the tab's intro row: the title as an `sr-only` `h2`, the
+  subtitle in `text-sm text-slate-500`, and the actions (its one Create
+  button) on the right. The section stays the page's one `h1`. A page with
+  a `back` link (a detail page under a tab) is not a tab and keeps its own
+  header. `SubNav` lights one tab: the longest that the address is, or is
+  under, so nested tabs (`/calendars`, `/calendars/holidays`) never both
+  light.
 - **A section with several jobs gets pages, not a longer page.** When one
   settings section holds distinct tasks (the directory: people, fields,
   offices, export, sync), each task is a route under the section
@@ -1255,7 +1290,8 @@ and `py-1.5` (`dense`) in the settings and account rails. Group labels
   chip is `chipClass("label", "sm")` ("New", violet, the product-label
   tone) on the pages of the release's list (`lib/helpdesk/whats-new-shared`
   `DESK_NEW_PAGES`); it goes, per person, the first time they open the
-  page. The release strip ("New in 1.19.3: Assets. The New badge goes
+  page. Since 1.20.13 it sits on the section (its rail row and its
+  overview row) that holds such a page. The release strip ("New in 1.19.3: Assets. The New badge goes
   once you've opened the page.") is the info tint (`border-compass-200
   bg-compass-50`, `Sparkles` in `text-compass-600`, `role="note"`) under
   the Teams page's header, with a quiet `X` icon button (`aria-label`
@@ -2949,8 +2985,8 @@ open in its own tab beside CompassDocs. Components live in
   Save draft appears only while dirty (`useUnsavedChanges`, the leave
   guard); **Publish changes** asks first and says that running requests
   keep their version.
-- **Settings** (`/desk/settings/*`): a desk settings rail (house rail rows,
-  dense; a sideways-scrolling row under `lg`) beside the page, which is a
+- **Settings** (`/desk/settings/*`): a desk settings rail beside the page
+  (§Helpdesk: desk settings for its groups, search and tabs), which is a
   `PageContainer` with its own `PageHeader`. Pages follow §Settings pages:
   one primary create action top-right ("New team", "New macro", "New
   rule", "New request type"), lists in `padding="none"` cards with icon
@@ -3474,9 +3510,11 @@ holidays each team's reply targets count in. Components live in
 `lib/helpdesk/calendars-shared`.
 
 - **Three pages under one header** (§Settings pages: a section with several
-  jobs gets pages): **Office hours**, **Holidays**, **Test a due time**, a
-  `SubNav` row under the `PageHeader` (`CalendarClock`). Gated by the desk
-  capability `sla.manage`; a role without it gets `DeskPageForbidden`.
+  jobs gets pages): **Office hours**, **Holidays**, **Test a due time**.
+  Since 1.20.13 they are tabs of **Reply targets** (after **Targets**,
+  `/desk/settings/sla`; §Helpdesk: desk settings), at the same addresses.
+  Gated by the desk capability `sla.manage`; a role without it gets
+  `DeskPageForbidden`.
 - **Office hours and Holidays are the two-pane recipe** (export presets):
   rail-row buttons on the left (`aria-current="true"`, a **Default** `info`
   chip, the open-hours summary "Mon–Fri 09:00–17:30 · Europe/London" and
@@ -5412,6 +5450,8 @@ addresses 1.20.5 (`lib/helpdesk/send-addresses`).
   they are tiles on one hub page, not rail entries: the rail keeps one
   entry (Integrations), lit on every page under it, and each of those
   pages carries `PageHeader back={{ href: hub, label: "Integrations" }}`.
+  In the desk settings registry the hub is a section with `tabs: false`:
+  its pages are found by the search, never shown as tabs.
   A feature with policy controls of its own (Claude in the desk) keeps
   its rail entry and gets a tile as well.
 - **Groups** are `section`s under a `SectionHeading` (`h2`): Assets,
@@ -5456,6 +5496,51 @@ addresses 1.20.5 (`lib/helpdesk/send-addresses`).
   Offer it only while it has something to create: Intune's is hidden once
   an app registration of its own is saved, because a second run would
   leave a second app in Entra.
+
+## Helpdesk: desk settings
+
+1.20.13 (`lib/helpdesk/desk-settings-registry`, `components/helpdesk/desk/settings/DeskSettingsNav`, `DeskSettingsChrome`, `DeskSettingsHome`).
+
+- **One registry.** Every desk settings page is declared once, in the same
+  shape as CompassDocs settings (§Settings pages): groups of sections, a
+  section's `pages` (its tabs) and each page's `topics` (cards found by
+  anchor), with the words people search for and the desk capabilities that
+  open each page. The rail, its search, the tab rows and the overview all
+  read it; `test/helpdesk-settings-nav.test.ts` fails when a settings
+  route is missing from it, when a registered page has no route, when a
+  topic's anchor is no card's id, or when a page's capabilities differ from
+  its guard. A new settings page, card worth finding or synonym goes in
+  the registry in the same PR.
+- **Groups**, in this order: General, Teams and people, Email, Tickets,
+  Automation, Requesters, Integrations, Security and data, You. A group or
+  section the person's role opens nothing in is not shown, in the rail,
+  the overview or the search.
+- **A section with several pages shows them as tabs** (Agents and roles,
+  Assignment, Forms and fields, Reply targets, Automations, Macros and
+  replies, Customer portal): `DeskSettingsChrome` draws the section's
+  `PageHeader` (the page's one `h1`) and the shared `SubNav` (`aria-label`
+  "<Section> settings") with the tabs the role opens, over the tab's page
+  in `SettingsSubPage` (§Settings pages). One tab the role opens: the
+  header, no tab row. The pages kept their addresses: tabs are routes at
+  the old URLs, so bookmarks and links in emails and docs keep working;
+  an address that moves keeps a redirecting page (`DESK_SETTINGS_MOVED`,
+  §Integrations hub).
+- **The overview** (`/desk/settings`, `Settings` icon): one card per group
+  (`CARD_CLASS p-4`, the group as a `CardTitle as="h2"`), each section a
+  row link: the icon tile (`h-8 w-8 rounded-lg bg-compass-50
+  text-compass-700`), the name in `text-sm font-medium`, its one line,
+  and for a tabbed section the tabs' names joined by " · ", both in
+  `text-xs text-slate-500`. The grid is `md:grid-cols-2 xl:grid-cols-3`.
+  The desk's Settings entry opens it.
+- **On a phone** (under `lg`) the rail is a bar over the page: the search
+  box at full width, then a row with **All settings** (`LayoutGrid`, back
+  to the overview) and the section the page belongs to, lit. The section's
+  tabs scroll sideways under its header as `SubNav` always does.
+- **No "/" for the settings search**: "/" is the desk's ticket search in
+  the top bar on every desk page, settings included.
+- A desk page that lives in CompassDocs settings (Sign-in and Duo,
+  `/admin/sso#duo`) is a registry page with `adminSection`: listed and
+  searchable only for someone who can open that CompassDocs section.
 
 ## Helpdesk: the event calendar
 

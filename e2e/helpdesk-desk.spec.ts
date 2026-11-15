@@ -125,7 +125,7 @@ test.describe("desk (licensed)", () => {
   test("settings pages and approvals render with their titles", async ({ page }) => {
     for (const [path, title] of [
       ["/desk/settings/teams", "Teams"],
-      ["/desk/settings/request-types", "Request types"],
+      ["/desk/settings/request-types", "Forms and fields"], // 1.20.13: a tab of Forms and fields, whose name is the h1
       ["/desk/settings/sla", "Reply targets"],
       ["/desk/settings/email", "Email"],
       ["/desk/settings/automations", "Automations"],

@@ -74,7 +74,8 @@ test.describe("categories (licensed)", () => {
     test.setTimeout(600_000);
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(SETTINGS);
-    await slow(page.getByRole("heading", { level: 1, name: "Categories" })).toBeVisible({ timeout: 120_000 });
+    // 1.20.13: a tab under its section's h1; the tab's own title is an h2.
+    await slow(page.getByRole("heading", { level: 2, name: "Categories" })).toBeVisible({ timeout: 120_000 });
     await slow(page.getByRole("link", { name: /^Categories/ })).toHaveAttribute("aria-current", "page");
 
     // A new category.

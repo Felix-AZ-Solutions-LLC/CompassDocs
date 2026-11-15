@@ -62,7 +62,8 @@ test.describe("checklists (licensed)", () => {
 
     // Desk settings → Checklists: a new checklist.
     await page.goto("/desk/settings/checklists");
-    await slow(page.getByRole("heading", { level: 1, name: "Checklists" })).toBeVisible({ timeout: 60_000 });
+    // 1.20.13: a tab under its section's h1; the tab's own title is an h2.
+    await slow(page.getByRole("heading", { level: 2, name: "Checklists" })).toBeVisible({ timeout: 60_000 });
     await slow(page.getByRole("link", { name: /^Checklists/ })).toHaveAttribute("aria-current", "page");
     const editor = page.locator("#checklist-editor");
     // The busy dev rig may still be hydrating: click until the editor opens.

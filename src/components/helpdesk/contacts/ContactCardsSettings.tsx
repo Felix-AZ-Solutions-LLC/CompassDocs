@@ -305,6 +305,8 @@ export function ContactCardsSettings() {
         </Card>
 
         <Card
+          id="vips"
+          className="scroll-mt-6"
           title="VIPs"
           icon={<Crown />}
           description="A VIP chip on the requester's card, the ticket and the queue, for agents only. Assignment rules and reports can use it too."
@@ -451,6 +453,8 @@ export function ContactCardsSettings() {
         </Card>
 
         <Card
+          id="who-sees-what"
+          className="scroll-mt-6"
           title="Who sees what"
           description="Agents see the cards of the people on a ticket; requesters see the card of the agent working on theirs. Phone numbers are off for requesters until you tick them."
           padding="none"

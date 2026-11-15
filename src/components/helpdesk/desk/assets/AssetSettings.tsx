@@ -341,7 +341,7 @@ function AssetSettings({ part }: { part: Part }) {
         {part === "intune" && <IntuneCard view={view} snipeConnected={connected} onView={(v) => apply(v, false)} />}
 
         {part === "access" && (
-          <Card title="Who sees assets">
+          <Card id="who-sees-assets" className="scroll-mt-6" title="Who sees assets">
             <p className="text-sm text-slate-600">
               Agents see the assets of the people whose tickets they can work. Requesters see their own devices when they raise a request, so they can pick the one with the problem.
             </p>
@@ -637,7 +637,7 @@ function IntuneCard({ view, snipeConnected, onView }: { view: HdAssetSettingsVie
           </p>
         )}
       </section>
-      <Card title="Matching devices to people">
+      <Card id="intune-matching" className="scroll-mt-6" title="Matching devices to people">
         <p className="text-sm text-slate-600">
           A device belongs to the person whose CompassDocs account has the same address as the device&apos;s user in Intune (the email address or the sign-in name). Only an address set by an admin, single
           sign-on or provisioning counts: one a person typed into their own profile never shows them someone else&apos;s devices. No directory sync is needed for this.

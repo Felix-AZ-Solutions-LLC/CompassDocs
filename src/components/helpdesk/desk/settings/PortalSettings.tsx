@@ -194,7 +194,7 @@ export function PortalSettings() {
         </Card>
 
         <div className="grid items-start gap-4 lg:grid-cols-2">
-          <Card title="What customers can ask for" description="Only these request types appear in the portal, each going to the team you choose.">
+          <Card id="portal-requests" className="scroll-mt-6" title="What customers can ask for" description="Only these request types appear in the portal, each going to the team you choose.">
             {data.types.length === 0 ? (
               <SectionEmpty action={{ label: "Add request types", href: "/desk/settings/request-types" }}>No request types yet.</SectionEmpty>
             ) : (
@@ -253,7 +253,7 @@ export function PortalSettings() {
             )}
           </Card>
 
-          <Card title="Who can use it">
+          <Card id="portal-access" className="scroll-mt-6" title="Who can use it">
             <Segmented<PortalAccess>
               label="Who can use the portal"
               value={s.access}

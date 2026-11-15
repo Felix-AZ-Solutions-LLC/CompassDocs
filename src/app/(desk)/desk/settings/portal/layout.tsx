@@ -3,30 +3,17 @@
 // header (STYLEGUIDE §Settings pages: a section with several jobs gets
 // pages). Opens for a desk role holding settings.manage (every API behind
 // these pages checks the same); the (desk) layout gates the licence first.
+// 1.20.13: the header and the tab row are drawn by the settings layout's
+// DeskSettingsChrome from the desk settings registry (section "portal").
 
-import { Globe } from "lucide-react";
 import { requireUser } from "@/lib/auth";
 import { hdCan } from "@/lib/helpdesk/roles";
-import { PageContainer } from "@/components/PageWidth";
-import { PageHeader } from "@/components/PageHeader";
 import { DeskPageForbidden } from "@/components/helpdesk/desk/DeskGate";
-import { PortalSubnav } from "@/components/helpdesk/desk/settings/PortalSubnav";
 
 export const dynamic = "force-dynamic";
 
 export default async function PortalSettingsLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
   if (!(await hdCan(user, "settings.manage").catch(() => false))) return <DeskPageForbidden what="Customer portal" />;
-  return (
-    <PageContainer>
-      <PageHeader
-        icon={<Globe />}
-        title="Customer portal"
-        subtitle="Let people outside your organisation raise and follow requests, without a CompassDocs account."
-        className="mb-4"
-      />
-      <PortalSubnav />
-      {children}
-    </PageContainer>
-  );
+  return <>{children}</>;
 }

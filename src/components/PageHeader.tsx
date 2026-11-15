@@ -1,8 +1,13 @@
+"use client";
+
 // The page-title block every top-level page renders (STYLEGUIDE §Page
 // skeleton): an optional back link, the lucide icon, the h1 at the
 // page-title size, a one-line subtitle, and a right-aligned actions slot.
 // One component so the thirteen title recipes it replaced cannot return.
-// Server-safe.
+// A client component since 1.20.13 (it reads one context): inside a settings
+// section's tab (SettingsSubPage) the section header above is the page's h1,
+// so this renders the tab's intro row instead: the title as an sr-only h2,
+// the subtitle, and the actions on the right.
 //
 // The heading ladder:
 //   1. Page title        h1  text-2xl font-bold + 24px icon      (this)
@@ -13,6 +18,7 @@
 // Two documented exceptions: the dashboard greeting and the editor's sticky bar.
 
 import { BackLink } from "./BackLink";
+import { useSettingsSubPage } from "./SettingsSubPage";
 
 export function PageHeader({
   icon,
@@ -35,6 +41,18 @@ export function PageHeader({
   /** Replaces the default bottom margin. */
   className?: string;
 }) {
+  const sub = useSettingsSubPage();
+  if (sub && !back) {
+    return (
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="sr-only">{title}</h2>
+          {subtitle && <p className="text-sm text-slate-500">{subtitle}</p>}
+        </div>
+        {actions && <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">{actions}</div>}
+      </div>
+    );
+  }
   return (
     <div className={className}>
       {back && <BackLink href={back.href} label={back.label} />}

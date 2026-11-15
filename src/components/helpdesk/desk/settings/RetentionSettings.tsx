@@ -157,7 +157,7 @@ export function RetentionSettings() {
         subtitle="How long helpdesk tickets are kept, and what happens to a person's tickets when their account goes."
       />
       <div className="flex flex-col gap-4">
-        <Card>
+        <Card id="auto-close" className="scroll-mt-6">
           <div className="space-y-5">
             <div>
               <Toggle
@@ -257,7 +257,7 @@ export function RetentionSettings() {
           </div>
         </Card>
 
-        <Card>
+        <Card id="account-removal" className="scroll-mt-6">
           <div className="space-y-4">
             <Toggle
               label="When an account is removed"
