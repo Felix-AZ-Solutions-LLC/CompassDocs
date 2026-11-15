@@ -10,7 +10,8 @@
 //            person's own requests and replies on them, and drafts of
 //            workflows, request types, macros and (1.20.14) checklists
 //   update   also change tickets: status, priority, team, assignee, tags,
-//            and (1.20.14) ticking checklist items and adding checklists
+//            and (1.20.14) ticking checklist items and adding checklists,
+//            and (1.20.15) applying macros (a macro's reply becomes a draft)
 //
 // Whatever the level, three things are never possible (no tool exists and
 // no setting adds one): sending a reply to a requester, deciding an
@@ -38,12 +39,12 @@ export const HD_CLAUDE_LEVEL_LABEL: Record<HdClaudeLevel, string> = {
 export const HD_CLAUDE_LEVEL_HINT: Record<HdClaudeLevel, string> = {
   read: "Find and read requests and tickets the person can see, and summarise them.",
   notes: "Recommended. Drafts wait in the ticket for an agent to send or discard.",
-  update: "Status, priority, team, assignee, tags and checklist items, within the person's role.",
+  update: "Status, priority, team, assignee, tags, checklist items and macros, within the person's role.",
 };
 
 /** The never-list, word for word as Desk settings shows it. */
 export const HD_CLAUDE_NEVER: readonly string[] = [
-  "Send a reply to a requester: Claude saves a draft and a person sends it.",
+  "Send a reply to a requester, a macro's reply included: Claude saves a draft and a person sends it.",
   "Approve or decline: Claude lists what's waiting and links to the approval.",
   "Publish a workflow, request type, macro or checklist: Claude saves a draft for someone to publish.",
 ];
@@ -65,6 +66,8 @@ export const HD_CLAUDE_AUDIT_ACTIONS = [
   "helpdesk.checklist.item_ticked",
   "helpdesk.checklist.item_unticked",
   "helpdesk.checklist.added",
+  // 1.20.15: a macro applied (its reply saved as a draft).
+  "helpdesk.macro.applied",
 ] as const;
 
 /** One line of "Recent activity via Claude". */
@@ -114,6 +117,11 @@ export function claudeActivitySummary(action: string, details: Record<string, un
     case "helpdesk.checklist.added": {
       const list = typeof details?.name === "string" ? ` "${details.name}"` : "";
       return n ? `Added the checklist${list} to ${n}` : `Added the checklist${list}`;
+    }
+    case "helpdesk.macro.applied": {
+      const macro = typeof details?.macro === "string" ? ` "${details.macro}"` : "";
+      const draft = details?.reply === "draft" ? " (reply saved as a draft)" : "";
+      return n ? `Applied the macro${macro} to ${n}${draft}` : `Applied the macro${macro}${draft}`;
     }
     default:
       return name || action;

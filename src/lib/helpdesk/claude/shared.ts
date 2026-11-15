@@ -49,7 +49,7 @@ export const CLAUDE_DESK_CAP_HINT: Record<ClaudeDeskCap, string> = {
   read: "Only what the agent can see, with their desk role and teams.",
   search: "To find what fixed the same problem before.",
   web: "Only the sites you list.",
-  changes: "Status, priority, tags, team and checklist ticks, applied only when the agent clicks Apply.",
+  changes: "Status, priority, tags, team, checklist ticks and macros, applied only when the agent clicks Apply.",
   drafts: "Put in the agent's reply box, or saved as a checklist draft for someone to publish. A person always sends and publishes.",
 };
 
@@ -250,6 +250,8 @@ export interface ClaudeDraftCard {
 export interface ClaudeChangeCard {
   id: number;
   kind: "change";
+  /** Absent: a field change. (1.20.15: "macro" is ClaudeMacroCard.) */
+  action?: undefined;
   number: number;
   /** The desk PATCH body (status, priority, tags, team_id, assignee_id). */
   patch: Record<string, unknown>;
@@ -300,7 +302,33 @@ export interface ClaudeChecklistDraftCard {
   state: "offered" | "applied" | "skipped";
 }
 
-export type ClaudeCard = ClaudeDraftCard | ClaudeChangeCard | ClaudeChecklistCard | ClaudeChecklistTickCard | ClaudeChecklistDraftCard;
+/**
+ * 1.20.15: apply one of the workspace's macros (Apply sends it through the desk's own
+ * macro route with the card's id, so the desk's checks all run then and it is marked "via Claude
+ * in the desk" only for this agent's offered card). Stored as kind "change".
+ */
+export interface ClaudeMacroCard {
+  id: number;
+  kind: "change";
+  action: "macro";
+  number: number;
+  macro_id: number;
+  /** 'Apply the macro "Password reset" to #1047' (review fix: it names the ticket). No hint: Claude's own words never appear on it. */
+  title: string;
+  /** What it will do, in short: "Sends this reply as you", "Sets the status to Solved", … */
+  lines: string[];
+  /** The whole reply it sends, filled for the ticket ("" when it has none). */
+  reply: string;
+  /** The newest message when Claude proposed it: Apply stops if someone wrote since (the send guard). */
+  last_message_id: number;
+  /** The macro sets Solved or Closed. */
+  solves: boolean;
+  /** What the server checked it would write; Apply with this card writes exactly that or nothing (lib/helpdesk/macros MacroPlan). */
+  plan: { macro_updated_at: string; body: string; patch: Record<string, unknown> };
+  state: "offered" | "applied" | "skipped";
+}
+
+export type ClaudeCard = ClaudeDraftCard | ClaudeChangeCard | ClaudeChecklistCard | ClaudeChecklistTickCard | ClaudeChecklistDraftCard | ClaudeMacroCard;
 
 /** One server-sent event of a chat turn (data: JSON). */
 export type ClaudeStreamEvent =

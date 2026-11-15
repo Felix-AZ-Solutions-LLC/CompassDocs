@@ -1,4 +1,4 @@
-// POST /api/helpdesk/tickets/[number]/macro/[macroId]   { preview?: boolean, expect_last_message_id?, force?, solve_answers? }
+// POST /api/helpdesk/tickets/[number]/macro/[macroId]   { preview?: boolean, expect_last_message_id?, force?, solve_answers?, via? }
 // (1.20.5: a macro that solves a ticket a "Before you solve" requirement set matches is refused whole, 409 with the
 // sentence, unless what the set asks for is there; solve_answers carries the closing fields, as on PATCH.)
 // (1.19.1: a reply-sending macro takes the messages route's send guard: a
@@ -13,17 +13,24 @@
 // its status change waits with it), each field change its own capability
 // (lib/helpdesk/patch-caps), and solving a workflow task its required
 // hand-off (409 with `missing`, as PATCH answers). A refusal writes nothing.
+// 1.20.15: the checks and the apply are lib/helpdesk/macros applyMacroAs, which Claude's
+// tools share (same order, same answers). `card_id` from Apply on a Claude in the desk
+// card (a bare `via` is ignored, as 1.20.14's checklist routes): the card is claimed first,
+// in one statement (this agent's, still offered, this ticket and macro), so it applies once;
+// otherwise 409 "This suggestion was already used." and nothing is written. The apply must
+// then match the plan the card showed (the macro's version, the filled reply, the field
+// changes), else 409 and nothing is written; a refusal offers the card again. It is marked
+// "via Claude in the desk" on the timeline and audited (helpdesk.macro.applied).
+// Without card_id it is the agent's own apply, exactly as before.
 
 import { NextResponse } from "next/server";
-import { agentTeamIds, canWorkTicket, readJson } from "@/lib/helpdesk/access";
-import { HD_FORBIDDEN, hdCan, hdCapGate } from "@/lib/helpdesk/roles";
-import { applyMacroToTicket, getMacro, macroVisibleTo } from "@/lib/helpdesk/macros";
-import { hqOne } from "@/lib/helpdesk/db-core";
-import { patchRefusal } from "@/lib/helpdesk/patch-caps";
-import { collisionRefusal } from "@/lib/helpdesk/presence";
+import { ipFrom } from "@/lib/audit";
+import { readJson } from "@/lib/helpdesk/access";
+import { hdCapGate } from "@/lib/helpdesk/roles";
+import { applyMacroAs } from "@/lib/helpdesk/macros";
+import { claimMacroCard, releaseMacroCard } from "@/lib/helpdesk/claude/chats";
 import { HdTicketError } from "@/lib/helpdesk/tickets";
 import { requestOrigin } from "@/lib/oauth";
-import type { HdTicketRow } from "@/lib/helpdesk/types";
 
 export const dynamic = "force-dynamic";
 
@@ -38,54 +45,30 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!Number.isInteger(number) || number <= 0 || !Number.isInteger(macroId) || macroId <= 0) {
     return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
-  const ticket = await hqOne<Pick<HdTicketRow, "id" | "requester_id" | "team_id" | "assignee_id" | "status" | "priority" | "source">>(
-    // 1.19.4 (C7): not a ticket in the recycle bin.
-    "SELECT id, requester_id, team_id, assignee_id, status, priority, source FROM hd_tickets WHERE number = $1 AND deleted_at IS NULL",
-    [number]
-  );
-  if (!ticket || !(await canWorkTicket(gate, ticket))) return NextResponse.json({ error: "Ticket not found." }, { status: 404 });
-  if (!(await hdCan(gate, "macros.use", { teamId: ticket.team_id }))) return NextResponse.json({ error: HD_FORBIDDEN }, { status: 403 });
-  const macro = await getMacro(macroId);
-  if (!macro || !macroVisibleTo(macro, await agentTeamIds(gate), gate.id)) return NextResponse.json({ error: "Macro not found." }, { status: 404 });
-  const body = (await readJson<{ preview?: unknown }>(req, 4 * 1024)) ?? {};
-  const preview = body.preview === true;
-  if (!preview && ticket.status === "closed") return NextResponse.json({ error: "This ticket is closed." }, { status: 409 });
-  // 1.19.1 collision warning (lib/helpdesk/presence): a macro's reply is a send too.
-  if (!preview && macro.body.trim()) {
-    const collided = await collisionRefusal(ticket.id, gate.id, body as Record<string, unknown>);
-    if (collided) return collided;
+  const body = (await readJson<Record<string, unknown>>(req, 4 * 1024)) ?? {};
+  let card: Awaited<ReturnType<typeof claimMacroCard>>;
+  if (body.preview !== true && body.card_id !== undefined && body.card_id !== null) {
+    card = await claimMacroCard(gate.id, body.card_id, { number, macroId });
+    if (!card) return NextResponse.json({ error: "This suggestion was already used." }, { status: 409 });
   }
-  const teamId = ticket.team_id;
-  let result;
+  let r;
   try {
-    result = await applyMacroToTicket(
-      ticket.id,
-      macroId,
-      { id: gate.id, name: gate.name || gate.username, email: gate.email },
-      {
-        preview,
-        origin: requestOrigin(req),
-        // 1.20.5: closing answers for a macro that solves ("Before you solve", lib/helpdesk/solve-requirements).
-        solveAnswers: (body as Record<string, unknown>).solve_answers,
-        authorize: async ({ body: reply, patch }) => {
-          if (reply && !(await hdCan(gate, "tickets.reply_public", { teamId })) && !(await hdCan(gate, "tickets.reply_needs_review", { teamId }))) {
-            return { status: 403, error: HD_FORBIDDEN };
-          }
-          const refused = await patchRefusal(gate, ticket, patch);
-          if (refused) return { status: 403, error: refused };
-          if (ticket.source === "workflow" && (patch.status === "solved" || patch.status === "closed")) {
-            const { validateTaskSolve } = await import("@/lib/helpdesk/engine");
-            const missing = await validateTaskSolve(ticket.id);
-            if (missing) return { status: 409, error: missing.error, missing: missing.missing_keys };
-          }
-          return null;
-        },
-      }
-    );
+    r = await applyMacroAs(gate, number, macroId, {
+      preview: body.preview === true,
+      origin: requestOrigin(req),
+      // 1.20.5: closing answers for a macro that solves ("Before you solve", lib/helpdesk/solve-requirements).
+      solveAnswers: body.solve_answers,
+      guard: body,
+      ...(card ? { via: "claude_desk" as const, ip: ipFrom(req), expect: card.payload.plan ?? null, cardId: card.id } : {}),
+    });
   } catch (e) {
+    // Something may already be written (a reply before a failed field change): the card stays used.
     if (e instanceof HdTicketError) return NextResponse.json({ error: e.message }, { status: e.status });
     throw e;
   }
-  if (!result.ok) return NextResponse.json({ error: result.error, ...(result.missing ? { missing: result.missing } : {}) }, { status: result.status });
-  return NextResponse.json(result);
+  if (!r.ok) {
+    if (card) await releaseMacroCard(gate.id, card.id);
+    return NextResponse.json({ error: r.error, ...(r.missing ? { missing: r.missing } : {}), ...(r.newer ? { newer: r.newer } : {}) }, { status: r.status });
+  }
+  return NextResponse.json(r.result);
 }

@@ -9,6 +9,11 @@
 // 1.20.14: checklist ticks (Apply sends each item through the desk's own
 // tick route) and checklist drafts (Save as draft keeps it unpublished for
 // someone to publish in Desk settings → Checklists).
+// 1.20.15: macro cards ("Apply the macro X" and what it will do): Apply
+// sends the macro through the desk's own macro route with the card's id
+// (marked "via Claude in the desk" only for this agent's offered card), so
+// every desk rule runs then; a macro's reply is sent by
+// the agent's click, never by Claude.
 // History per ticket (the history menu: earlier chats, New chat). Screen
 // readers hear the answer once it is complete (role="log", aria-busy while
 // streaming); focus starts in the question box and returns to the opener.
@@ -34,6 +39,7 @@ import {
   Ticket,
   TriangleAlert,
   X,
+  Zap,
 } from "lucide-react";
 import { buttonClass, iconButtonClass } from "@/components/Button";
 import { chipClass } from "@/components/Chip";
@@ -51,6 +57,7 @@ import {
   type ClaudeIntent,
   type ClaudeSource,
 } from "@/lib/helpdesk/claude/shared";
+import { COLLISION_ERROR } from "@/lib/helpdesk/presence-shared";
 import { getJson, sendJson } from "../api";
 import { useClaudeDesk } from "./ClaudeDesk";
 import { askClaude } from "./stream";
@@ -266,10 +273,43 @@ export function ClaudePanel() {
     void send(p.text, p.intent);
   }, [ctx, loading, streaming, send]);
 
+  // 1.20.15 (review fix): one decision per card at a time; its buttons are disabled while it is in flight.
+  const inFlight = useRef(new Set<number>());
+  const [busyCards, setBusyCards] = useState<number[]>([]);
   async function decide(card: ClaudeCard, how: "applied" | "skipped") {
+    if (inFlight.current.has(card.id)) return;
+    inFlight.current.add(card.id);
+    setBusyCards((b) => [...b, card.id]);
+    try {
+      await decideCard(card, how);
+    } finally {
+      inFlight.current.delete(card.id);
+      setBusyCards((b) => b.filter((x) => x !== card.id));
+    }
+  }
+
+  async function decideCard(card: ClaudeCard, how: "applied" | "skipped") {
+    let done = "";
     try {
       if (how === "applied") {
-        if (card.kind === "change") {
+        if (card.kind === "change" && card.action === "macro") {
+          // 1.20.15: the desk's own macro route, with the card (claimed there, so it applies once)
+          // and the send guard from when Claude proposed it. Only with its ticket open.
+          if (ticket?.number !== card.number) {
+            toast("error", `Open #${card.number} to apply this macro there.`);
+            return;
+          }
+          let r: { held?: boolean; status_unchanged?: string };
+          try {
+            r = await sendJson(`/api/helpdesk/tickets/${card.number}/macro/${card.macro_id}`, "POST", { card_id: card.id, expect_last_message_id: card.last_message_id }, "Couldn't apply the macro.");
+          } catch (e) {
+            if ((e as Error).message === COLLISION_ERROR) throw new Error(`Someone wrote on #${card.number} after Claude suggested this. Nothing was sent. Read it, then ask again.`);
+            throw e;
+          } finally {
+            if (ticket?.number === card.number) ticket.reload();
+          }
+          done = r.held ? "Applied. Your reply waits for a lead's review." : r.status_unchanged ? `Applied. The status wasn't changed: ${r.status_unchanged}` : `${card.title}. Done.`;
+        } else if (card.kind === "change") {
           // Solving goes through the desk's solve flow (time, maintenance, required items), which runs in the open ticket.
           const solves = card.patch.status === "solved" || card.patch.status === "closed";
           if (solves && ticket?.number !== card.number) {
@@ -316,7 +356,7 @@ export function ClaudePanel() {
       const inPanel = !active || active === document.body || !!document.getElementById("claude-desk-panel")?.contains(active);
       if (inPanel) input.current?.focus();
       setTurns((all) => all.map((t) => ({ ...t, cards: t.cards.map((c) => (c.id === card.id ? { ...c, state: how } : c)) })));
-      if (how === "applied" && card.kind === "change") toast("ok", `${card.title}. Done.`);
+      if (how === "applied" && card.kind === "change") toast("ok", done || `${card.title}. Done.`);
       if (how === "applied" && card.kind === "checklist" && card.action === "tick") toast("ok", `${card.title}. Done.`);
       if (how === "applied" && card.kind === "checklist" && card.action === "draft") toast("ok", "Saved as a draft. Someone who manages checklists publishes it in Desk settings.");
     } catch (e) {
@@ -432,7 +472,7 @@ export function ClaudePanel() {
                 {t.text}
               </div>
             ) : (
-              <AssistantTurn key={t.id} t={t} onDecide={decide} filled={filled.current} />
+              <AssistantTurn key={t.id} t={t} onDecide={decide} filled={filled.current} busy={busyCards} />
             )
           )}
         </div>
@@ -497,7 +537,7 @@ export function ClaudePanel() {
   );
 }
 
-function AssistantTurn({ t, onDecide, filled }: { t: LiveTurn; onDecide: (c: ClaudeCard, how: "applied" | "skipped") => void; filled: Set<number> }) {
+function AssistantTurn({ t, onDecide, filled, busy }: { t: LiveTurn; onDecide: (c: ClaudeCard, how: "applied" | "skipped") => void; filled: Set<number>; busy: number[] }) {
   const thinking = t.live && !t.text && !t.notice;
   return (
     <div className="flex flex-col gap-1.5">
@@ -539,7 +579,7 @@ function AssistantTurn({ t, onDecide, filled }: { t: LiveTurn; onDecide: (c: Cla
         </ul>
       )}
       {t.cards.map((c) => (
-        <CardView key={c.id} card={c} onDecide={onDecide} inBox={filled.has(c.id) || c.state === "applied"} />
+        <CardView key={c.id} card={c} onDecide={onDecide} inBox={filled.has(c.id) || c.state === "applied"} busy={busy.includes(c.id)} />
       ))}
       {t.notice && (
         <p role={t.notice.tone === "error" ? "alert" : undefined} className={`flex items-start gap-1.5 text-xs ${t.notice.tone === "error" ? "text-red-600" : "ink-warn"}`}>
@@ -551,7 +591,9 @@ function AssistantTurn({ t, onDecide, filled }: { t: LiveTurn; onDecide: (c: Cla
   );
 }
 
-function CardView({ card, onDecide, inBox }: { card: ClaudeCard; onDecide: (c: ClaudeCard, how: "applied" | "skipped") => void; inBox: boolean }) {
+function CardView({ card, onDecide, inBox, busy }: { card: ClaudeCard; onDecide: (c: ClaudeCard, how: "applied" | "skipped") => void; inBox: boolean; busy: boolean }) {
+  // 1.20.15 (review fix): a macro's whole reply can be read before Apply.
+  const [replyOpen, setReplyOpen] = useState(false);
   const shell = "rounded-xl border border-compass-200 bg-compass-50 px-3 py-2.5 dark:border-compass-500/40 dark:bg-compass-500/10";
   if (card.kind === "reply" || card.kind === "note") {
     return (
@@ -572,10 +614,12 @@ function CardView({ card, onDecide, inBox }: { card: ClaudeCard; onDecide: (c: C
     );
   }
   const decided = card.state !== "offered";
-  const hint = card.kind === "change" || card.kind === "checklist" ? card.hint : "";
+  // A macro card has no hint: Claude's own words never appear on it.
+  const hint = card.kind === "change" ? (card.action === "macro" ? "" : card.hint) : card.kind === "checklist" ? card.hint : "";
   const isDraft = card.kind === "checklist" && card.action === "draft";
+  const isMacro = card.kind === "change" && card.action === "macro";
   // 1.20.14: what a tick or draft card would change, every item (the list scrolls when long);
-  // unticking a required item says so, since it holds the ticket open again.
+  // unticking a required item says so, since it holds the ticket open again. 1.20.15: what a macro will do.
   const lines: { key: string | number; text: string; tag: string; tone: "warn" | "neutral" }[] =
     card.kind === "checklist" && card.action === "tick"
       ? card.items.map((i) => ({
@@ -585,17 +629,25 @@ function CardView({ card, onDecide, inBox }: { card: ClaudeCard; onDecide: (c: C
           tone: !i.done && i.required ? "warn" : "neutral",
         }))
       : card.kind === "checklist" && card.action === "draft"
-        ? card.draft.items.map((i) => ({ key: i.key, text: i.title, tag: i.required ? "Required" : "", tone: "warn" }))
-        : [];
+        ? card.draft.items.map((i) => ({ key: i.key, text: i.title, tag: i.required ? "Required" : "", tone: "warn" as const }))
+        : card.kind === "change" && card.action === "macro"
+          ? card.lines.map((l, i) => ({ key: i, text: l, tag: "", tone: "neutral" as const }))
+          : [];
   return (
     <section aria-label={card.title} className={shell}>
       <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
-        {card.kind === "checklist" ? <ListChecks className="h-3.5 w-3.5 shrink-0" aria-hidden /> : <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" aria-hidden />}
+        {card.kind === "checklist" ? (
+          <ListChecks className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        ) : isMacro ? (
+          <Zap className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        ) : (
+          <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        )}
         <span className="min-w-0 flex-1">{card.title}</span>
       </div>
       {hint && <p className="mt-0.5 text-xs text-slate-500">{hint}</p>}
       {lines.length > 0 && (
-        <ul aria-label={isDraft ? "Items" : "Items to change"} className="mt-1.5 max-h-48 space-y-0.5 overflow-y-auto pr-1 text-xs text-slate-700">
+        <ul aria-label={isDraft ? "Items" : isMacro ? "What it will do" : "Items to change"} className="mt-1.5 max-h-48 space-y-0.5 overflow-y-auto pr-1 text-xs text-slate-700">
           {lines.map((l) => (
             <li key={l.key} className="flex items-start gap-1.5">
               <span className="min-w-0 flex-1">{l.text}</span>
@@ -603,6 +655,28 @@ function CardView({ card, onDecide, inBox }: { card: ClaudeCard; onDecide: (c: C
             </li>
           ))}
         </ul>
+      )}
+      {card.kind === "change" && card.action === "macro" && card.reply && (
+        <>
+          <blockquote
+            id={`claude-macro-reply-${card.id}`}
+            aria-label="The reply it sends"
+            className={`mt-1.5 whitespace-pre-line border-l-2 border-compass-300 pl-2 text-xs text-slate-700 dark:border-compass-500/60 ${replyOpen ? "max-h-80 overflow-y-auto" : "line-clamp-4"}`}
+          >
+            {card.reply}
+          </blockquote>
+          {(card.reply.length > 240 || card.reply.split("\n").length > 4) && (
+            <button
+              type="button"
+              aria-expanded={replyOpen}
+              aria-controls={`claude-macro-reply-${card.id}`}
+              onClick={() => setReplyOpen((o) => !o)}
+              className="mt-0.5 text-xs font-medium text-compass-700 hover:underline"
+            >
+              {replyOpen ? "Show less" : "Show all"}
+            </button>
+          )}
+        </>
       )}
       {decided ? (
         <p className="mt-2 flex flex-wrap items-center gap-2">
@@ -618,10 +692,10 @@ function CardView({ card, onDecide, inBox }: { card: ClaudeCard; onDecide: (c: C
         </p>
       ) : (
         <div className="mt-2 flex gap-2">
-          <button type="button" onClick={() => onDecide(card, "applied")} className={buttonClass("primary", "sm")}>
+          <button type="button" disabled={busy} aria-busy={busy || undefined} onClick={() => onDecide(card, "applied")} className={buttonClass("primary", "sm")}>
             {isDraft ? "Save as draft" : "Apply"}
           </button>
-          <button type="button" onClick={() => onDecide(card, "skipped")} className={buttonClass("secondary", "sm")}>
+          <button type="button" disabled={busy} onClick={() => onDecide(card, "skipped")} className={buttonClass("secondary", "sm")}>
             Skip
           </button>
         </div>

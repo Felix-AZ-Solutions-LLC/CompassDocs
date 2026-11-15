@@ -4611,6 +4611,20 @@ live in `components/helpdesk/desk/checklists`.
   item with a `warn` **Required** chip where it applies, and its primary
   button is **Save as draft** (the decided chip reads "Saved as draft",
   with a "Review in Checklists" link).
+- **Claude in the desk's macro card** (1.20.15) is the same Apply / Skip
+  card with `Zap` (the composer's Macro icon), titled 'Apply the macro
+  "{name}" to #{number}', with no hint line (Claude's own words never
+  appear on it). Under it, what Apply will do as plain lines with no chips
+  ("Sends this reply to the requester as you", "Sets the status to
+  Solved", "Adds the tag vpn"; a newbie's reads "Sends this reply for
+  review first"), then the reply itself as a quote: `border-l-2
+  border-compass-300` (`compass-500/60` dark), `pl-2`, `text-xs`,
+  `line-clamp-4`, `aria-label` "The reply it sends"; a long one has a
+  text button **Show all** / **Show less** (`aria-expanded`, `text-xs
+  font-medium text-compass-700`) that opens it in full (`max-h-80`,
+  scrolls). Claude proposes a macro only for the open ticket, and Apply
+  works only with it open. While a card's decision is in flight its
+  Apply and Skip are `disabled`.
 - **The workflow builder's Task step** has a "Checklists" section like
   "If the team can't do it": rows naming each chosen checklist with its
   item count and a quiet `X`, and a secondary `sm` **Add checklist**

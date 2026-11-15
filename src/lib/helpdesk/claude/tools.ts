@@ -16,7 +16,9 @@
 // session (newbie review, required checklists, legal hold and every other
 // rule apply there). 1.20.14: so are checklist ticks (Apply sends each item
 // through the desk's own tick route) and checklist drafts (Save as draft
-// saves an unpublished draft that someone publishes in Desk settings). Proposals are checked with the same permission
+// saves an unpublished draft that someone publishes in Desk settings), and
+// 1.20.15 macros (Apply sends it through the desk's own macro route, whose
+// checks propose_macro runs first as a dry run). Proposals are checked with the same permission
 // functions the desk's PATCH uses, so Claude is told at once when the agent
 // could not apply them. Server-only.
 
@@ -120,6 +122,10 @@ export async function runDeskTool(name: string, input: Record<string, any>, ctx:
         return await proposeTicks(input, ctx);
       case "draft_checklist":
         return await draftChecklist(input, ctx);
+      case "list_macros":
+        return await listMacros(input, ctx);
+      case "propose_macro":
+        return await proposeMacro(input, ctx);
       case "propose_ticket_change":
         return await proposeChange(input, ctx);
       case "draft_reply":
@@ -293,6 +299,80 @@ async function draftChecklist(a: Record<string, any>, ctx: ToolCtx): Promise<Too
   return done(
     { drafted: true, saved: false, note: "The agent sees the checklist on a card and clicks Save as draft. Nothing is published: someone who manages checklists publishes it in Desk settings → Checklists." },
     { card: { kind: "checklist", ticketId: null, payload: { action: "draft", number: ctx.ticket?.number ?? null, draft, title: `Checklist draft: ${draft.name}`, hint } } }
+  );
+}
+
+/** 1.20.15: the macros the agent can apply on a ticket (the connector's hd_list_macros, as the agent). */
+async function listMacros(a: Record<string, any>, ctx: ToolCtx): Promise<ToolOutcome> {
+  const t = await workTicket(ctx, a.number);
+  if (typeof t === "string") return fail(t);
+  const args: Record<string, unknown> = { number: t.number, limit: 30 };
+  if (typeof a.query === "string" && a.query.trim()) args.query = a.query.trim().slice(0, 200);
+  const r = await viaConnector(ctx, "hd_list_macros", args);
+  if (r.isError) return fail(r.text);
+  // The connector's note is about its own drafts rule; here the agent's Apply runs the macro.
+  const value = r.out && typeof r.out === "object" ? { ...r.out, note: "Offer one with propose_macro. Applying it is the agent's click." } : r.text;
+  return ok(dataBlock("macros", { number: t.number, written_by: "agents of this workspace (saved macros)" }, quoteJson(value)), {
+    activity: { label: "Looked at macros", icon: "list" },
+  });
+}
+
+/**
+ * 1.20.15: propose a macro. The desk route's own checks run now as a dry run (as the agent: the
+ * macro is theirs to use, every change within their role, required checklist items and "Before
+ * you solve" if it solves, newbie review), so the card says what Apply will really do.
+ */
+async function proposeMacro(a: Record<string, any>, ctx: ToolCtx): Promise<ToolOutcome> {
+  const t = await workTicket(ctx, a.number);
+  if (typeof t === "string") return fail(t);
+  // Review fix: a macro card is only ever for the ticket the agent is looking at.
+  if (!ctx.ticket || ctx.ticket.id !== t.id) {
+    return fail(`A macro can be proposed only for the ticket the agent has open${ctx.ticket ? ` (#${ctx.ticket.number})` : ""}. Tell the agent to open #${t.number} and ask again there.`);
+  }
+  const macroId = Number(a.macro_id);
+  const mac = await import("../macros");
+  const r = Number.isSafeInteger(macroId) && macroId > 0 ? await mac.applyMacroAs(ctx.session, t.number, macroId, { dryRun: true, origin: ctx.origin }) : null;
+  if (!r || (!r.ok && r.status === 404 && r.error === "Macro not found.")) return fail(`No macro with id ${String(a.macro_id)} that the agent can use. Call list_macros for the ones they can apply.`);
+  if (!r.ok) {
+    if (r.status === 404) return fail(notFound(a.number));
+    if (r.merged) {
+      const { mergedLock } = await import("../merge");
+      return fail((await mergedLock(t)) ?? "That ticket was merged; a macro can't change it.");
+    }
+    if (r.status === 409 && r.error === "This ticket is closed.") return fail("That ticket is closed; a macro can't change it.");
+    return fail(`The agent can't apply that macro on #${t.number}: ${r.error}`);
+  }
+  const res = r.result;
+  // Whether the macro itself sets Solved or Closed (not whether this dry run would).
+  const solves = r.macro.actions?.status === "solved" || r.macro.actions?.status === "closed";
+  const lines: string[] = [];
+  if (res.body) lines.push(res.held ? "Sends this reply for review first (your replies are checked by a lead)" : "Sends this reply to the requester as you");
+  if (res.patch.status !== undefined) lines.push(`Sets the status to ${HD_STATUS_LABEL[res.patch.status]}`);
+  else if (r.macro.actions?.status && r.macro.actions.status !== t.status && res.held) lines.push("Leaves the status as it is until your reply is approved");
+  if (res.patch.priority !== undefined) lines.push(`Sets the priority to ${HD_PRIORITY_LABEL[res.patch.priority]}`);
+  if (res.patch.team_id !== undefined) {
+    const { listTeams } = await import("../teams");
+    lines.push(`Moves it to the team ${(await listTeams()).find((x) => x.id === res.patch.team_id)?.name ?? "chosen"}`);
+  }
+  if (res.patch.tags) {
+    const added = res.patch.tags.filter((x) => !t.tags.includes(x));
+    if (added.length) lines.push(`Adds ${added.length === 1 ? "the tag" : "the tags"} ${added.join(", ")}`);
+  }
+  if (!lines.length) return fail(`That macro would change nothing on #${t.number}: it has no reply and the ticket already is as it sets it.`);
+  const { hqOne } = await import("../db-core");
+  const last = Number((await hqOne<{ id: number | null }>("SELECT max(id) AS id FROM hd_messages WHERE ticket_id = $1", [t.id]))?.id ?? 0);
+  const title = `Apply the macro "${r.macro.title}" to #${t.number}`;
+  if (!r.plan) return fail("That macro can't be proposed right now. Ask again.");
+  return done(
+    { proposed: true, applied: false, macro: r.macro.title, will: lines, note: "The agent sees a card with what it will do, and Apply and Skip. Nothing changed and nothing was sent." },
+    {
+      card: {
+        kind: "change",
+        ticketId: t.id,
+        // The whole reply (review fix), and the plan Apply must match. Claude's own words (no `when`) are never on the card.
+        payload: { action: "macro", number: t.number, macro_id: r.macro.id, title, lines, reply: res.body, last_message_id: last, solves, plan: r.plan },
+      },
+    }
   );
 }
 

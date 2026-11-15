@@ -4,6 +4,38 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.15] - 2026-11-15
+
+Claude works with macros.
+
+### Added
+- **Claude applies macros through the connector.** `hd_list_macros` lists
+  the macros you can use, with what each one does in plain words, and
+  `hd_apply_macro` applies one as you, with every check the desk makes. The
+  connector never sends a reply: a macro's reply is saved as a draft for an
+  agent to send, and its status change is not made, so a "reply and solve"
+  macro never solves a ticket whose requester has heard nothing.
+- **Claude suggests macros in the desk.** Claude in the desk can suggest a
+  macro for the open ticket. The card names the ticket, lists what the macro
+  will do and shows the whole reply; **Apply** runs it through the desk's
+  own rules, exactly as if you had applied it. A macro that solves is
+  applied only with its ticket open.
+- **Start a reply draft from a canned response.** `hd_draft_reply` takes
+  `canned_id`.
+- **"Applied a macro" in the audit log** for macros applied through Claude.
+
+### Security
+- **A macro suggestion is used once, and only as shown.** Apply refuses if
+  the macro or the ticket changed since Claude suggested it ("The macro
+  changed since Claude suggested it. Ask again."), and a card can't be
+  applied twice.
+
+### Upgrading
+- **Nothing to run, and no schema change.** The connector's macro tools need
+  the "Also update tickets" level to apply and are read-only below it; in
+  Claude in the desk, macro suggestions follow the "Suggest ticket changes"
+  switch.
+
 ## [1.20.14] - 2026-11-15
 
 Claude works with checklists.

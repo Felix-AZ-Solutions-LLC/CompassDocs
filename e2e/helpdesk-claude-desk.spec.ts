@@ -12,7 +12,9 @@ import { startFakeAnthropic, type FakeAnthropic } from "../test/support/fake-ant
 // "via Claude in the desk"); the panel full screen at 390px. 1.20.14: Claude
 // proposes ticking a checklist item and drafts a checklist; Apply ticks it
 // through the desk's route ("via Claude in the desk"), Save as draft keeps
-// the checklist unpublished in Desk settings → Checklists.
+// the checklist unpublished in Desk settings → Checklists. 1.20.15: Claude
+// proposes a macro; the card says what it will do; Apply applies it through
+// the desk's own macro route ("via Claude in the desk", audited).
 //
 // NEVER the real API. The spec starts the fake Messages API
 // (test/support/fake-anthropic) on E2E_FAKE_ANTHROPIC_PORT (default 4917),
@@ -274,6 +276,86 @@ test.describe("claude in the desk (licensed, fake Messages API)", () => {
     } finally {
       const list = await api(page, "/api/helpdesk/admin/checklists");
       for (const t of list.body?.templates ?? []) if (String(t.name).includes(stamp)) await api(page, `/api/helpdesk/admin/checklists/${t.id}`, { method: "DELETE" });
+    }
+  });
+
+  test("macros: Claude proposes a macro, the card says what it will do, Apply applies it through the desk's route", async ({ page, browser }) => {
+    test.setTimeout(300_000);
+    expect(number, "the c1 test made the ticket").toBeGreaterThan(0);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const title = `VPN re-pair ${stamp}`;
+    const made = await api(page, "/api/helpdesk/admin/macros", {
+      method: "POST",
+      body: {
+        title,
+        body: "Hi {{requester.first_name}}, this is the old sign-in token the VPN client keeps after a phone change. Quit the client, remove the saved account and sign in again. {{agent.first_name}}",
+        actions: { priority: "high", tags_add: ["vpn-repair"] },
+        team_id: null,
+      },
+    });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    const macroId = made.body.macro.id as number;
+    try {
+      fake.queue(
+        { content: [{ type: "tool_use", name: "propose_macro", input: { number, macro_id: macroId } }] },
+        { content: [{ type: "text", text: "The VPN re-pair macro fits this one. Apply it when you're ready." }] }
+      );
+      await page.goto(`/desk/tickets/${number}`);
+      await slow(page.getByRole("button", { name: "Claude", exact: true })).toBeVisible({ timeout: 120_000 });
+      await page.keyboard.press("Control+j");
+      const panel = page.getByRole("complementary", { name: "Claude" });
+      await expect(panel).toBeVisible();
+      await slow(panel.getByText("Reply draft for Daniel", { exact: true })).toBeVisible();
+      const box = panel.getByLabel("Ask Claude");
+      await box.fill("Use our VPN re-pair macro.");
+      await expect(box).toHaveValue(/re-pair macro/);
+      await box.press("Enter");
+      const card = panel.getByRole("region", { name: `Apply the macro "${title}" to #${number}` });
+      await slow(card).toBeVisible();
+      for (const line of ["Sends this reply to the requester as you", "Sets the priority to High", "Adds the tag vpn-repair"]) {
+        await expect(card.getByText(line, { exact: true })).toBeVisible();
+      }
+      await expect(card.getByLabel("The reply it sends")).toContainText("Hi Daniel, this is the old sign-in token");
+      const before = (await db.query("SELECT priority FROM hd_tickets WHERE number = $1", [number])).rows[0].priority;
+      expect(before, "nothing changed before Apply").toBe("normal");
+      await card.scrollIntoViewIfNeeded();
+      await shot(page, "claude-macro-card-1440");
+
+      // At 390 (deviceScaleFactor 2): the panel full screen, the card from the chat's history.
+      if (SHOTS) {
+        const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, baseURL: test.info().project.use.baseURL });
+        const small = await ctx.newPage();
+        await login(small, ADMIN);
+        await small.goto(`/desk/tickets/${number}`);
+        await slow(small.getByRole("button", { name: "Claude", exact: true })).toBeVisible({ timeout: 120_000 });
+        await small.keyboard.press("Control+j");
+        const smallCard = small.getByRole("complementary", { name: "Claude" }).getByRole("region", { name: `Apply the macro "${title}" to #${number}` });
+        await slow(smallCard).toBeVisible();
+        await smallCard.scrollIntoViewIfNeeded();
+        expect(await small.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+        await small.addStyleTag({ content: "nextjs-portal{display:none!important}" }).catch(() => {});
+        await small.screenshot({ path: `${SHOTS}/claude-macro-card-390-light.png` });
+        await ctx.close();
+      }
+
+      await card.getByRole("button", { name: "Apply" }).dblclick();
+      await slow(card.getByText("Applied", { exact: true })).toBeVisible();
+      const t = (await db.query("SELECT id, priority, tags FROM hd_tickets WHERE number = $1", [number])).rows[0];
+      expect(t.priority).toBe("high");
+      expect(t.tags).toContain("vpn-repair");
+      const reply = await db.query("SELECT body FROM hd_messages WHERE ticket_id = $1 AND kind = 'public' ORDER BY id DESC LIMIT 1", [t.id]);
+      expect(reply.rows[0]?.body).toMatch(/^Hi Daniel, this is the old sign-in token/);
+      const line = await db.query("SELECT body FROM hd_messages WHERE ticket_id = $1 AND body LIKE '%priority%' ORDER BY id DESC LIMIT 1", [t.id]);
+      expect(line.rows[0]?.body).toMatch(/ via Claude in the desk$/);
+      const audit = await db.query("SELECT details FROM audit_log WHERE action = 'helpdesk.macro.applied' AND target_id = $1 ORDER BY id DESC LIMIT 1", [t.id]);
+      expect(audit.rows[0]?.details).toMatchObject({ macro_id: macroId, reply: "sent", via: "claude_desk" });
+      // A double click applied it once (1.20.15 review: the card is claimed once, Apply is disabled in flight).
+      const sentCount = await db.query("SELECT count(*)::int AS n FROM hd_messages WHERE ticket_id = $1 AND kind = 'public' AND body LIKE 'Hi Daniel, this is the old sign-in token%'", [t.id]);
+      expect(sentCount.rows[0].n).toBe(1);
+      const applies = await db.query("SELECT count(*)::int AS n FROM audit_log WHERE action = 'helpdesk.macro.applied' AND target_id = $1", [t.id]);
+      expect(applies.rows[0].n).toBe(1);
+    } finally {
+      await api(page, `/api/helpdesk/admin/macros/${macroId}`, { method: "DELETE" });
     }
   });
 });
