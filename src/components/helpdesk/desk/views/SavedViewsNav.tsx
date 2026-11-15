@@ -18,6 +18,7 @@ import { railIconClass, railRowClass, RAIL_GROUP_TEXT } from "@/components/RailL
 import type { HdSavedView } from "@/lib/helpdesk/saved-views-shared";
 import { selQs, type QueueSel } from "../queue/views";
 import { filtersFromSel, type SavedViews } from "./saved";
+import { LiveCount } from "../LiveCount"; // 1.20.19: a count that changes live rolls and pulses
 
 export function SavedViewsNav({
   sv,
@@ -90,7 +91,7 @@ function ViewRow({ v, sv, sel, onPick, asMenu }: { v: HdSavedView; sv: SavedView
         <span className="min-w-0 flex-1 truncate">{v.name}</span>
         {v.count != null && (
           <span className={`text-xs tabular-nums text-slate-500 ${menu ? "group-focus-within:invisible group-hover:invisible" : ""}`}>
-            {v.count}
+            <LiveCount value={v.count} />
             <span className="sr-only"> tickets</span>
           </span>
         )}

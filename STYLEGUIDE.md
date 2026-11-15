@@ -1374,6 +1374,50 @@ ease-out starting:-translate-y-1 starting:opacity-0`. No keyframes, no JS
 animation; the global reduced-motion rule collapses it. Headings change
 their words without motion, and nothing on the sign-in cover moves.
 
+### Live updates and motion
+
+(1.20.19, the desk queue.) A list that changes under the reader because
+someone else changed the data (a live update, not their own click) moves
+like this, and nothing else in the app invents its own way:
+
+- **Signal, then reload.** The page hears "your data changed" (the desk:
+  `components/helpdesk/desk/live`, one stream per tab over
+  `GET /api/helpdesk/live`, long poll and then a 30 s poll as fallbacks,
+  the stream retried from them with a jittered back-off) and reloads
+  through its ordinary API. A signal never carries content, so
+  it can't show what the reader isn't allowed to read. One request at a
+  time; a signal during one asks for one more after it.
+- **Never move the reader's place.** If they have scrolled, focused a row
+  (j / k), selected rows, or have a row open beside the list, that row stays
+  exactly where it is on screen; whatever is added or removed above it goes
+  in out of view. Focus is never taken; if the focused row leaves, focus
+  goes to the row now in its place, without scrolling. The browser's own
+  scroll anchoring is off on such a list (`[overflow-anchor:none]`) so only
+  one thing adjusts it.
+- **Above the place: a pill, not a jump.** New items put in above the
+  reader's place show "N new tickets" with lucide `ArrowUp`, centred over
+  the top of the list (`buttonClass("primary", "sm")` + `shadow-float`,
+  inside an `aria-live="polite"` wrapper). A click scrolls up (smoothly
+  unless reduced motion) and highlights them again; reaching the top
+  dismisses it.
+- **The motion itself** (`components/helpdesk/desk/queue/motion`, Web
+  Animations API, no library): a new row grows from no height while it
+  fades and rises 6px in, 260 ms `cubic-bezier(0.2, 0, 0, 1)`, pushing the
+  rows below down; a row that left collapses and fades out in 220 ms
+  `ease-in` (kept as an `inert`, `aria-hidden` ghost meanwhile); a row that
+  changed place moves from its old spot (FLIP, 260 ms). Rows out of view
+  are not animated.
+- **New rows are highlighted** with `.hd-live-new` (globals.css): a
+  `compass-100` background that holds, then fades over 2 s. Never another
+  hue, and never an outline (that is the settings jump).
+- **A changing count** (`<LiveCount>`, the desk's view, team, review and
+  saved-view counts) rolls in from below when it goes up and from above
+  when it goes down (240 ms) and pulses `compass-600` for about a second.
+  The first number shown never animates.
+- **Reduced motion:** nothing grows, slides, rolls or pulses; the rows and
+  numbers change at once, the place is kept the same way, and the new-row
+  highlight shows as a still background that goes after 2.2 s.
+
 ## Notices (persistent inline state banners)
 
 - **A licence gate is `<LicenseGate feature entitlement canManage>`**

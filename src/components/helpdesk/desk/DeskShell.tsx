@@ -140,7 +140,8 @@ export function DeskShell({
   // 1.20.18: the reply pop-out gets the desk's providers (who you are, your role, dialogs) and nothing else:
   // no top bar, no rail, no counts or status polling. The layout's gates (sign-in, licence, Duo) ran as for any desk page.
   const bare = isReplyPopoutPath(pathname);
-  const { counts, refresh } = useCountsPoll(caps.agent && !bare);
+  // 1.20.19: `live` bumps on each live signal (./live), for the queue to reload its list.
+  const { counts, refresh, live } = useCountsPoll(caps.agent && !bare);
   // A reply sent from a pop-out is announced here, in the desk window (the pop-out closes as it sends).
   useReplyPopoutToasts(user.id, caps.agent && !bare);
   // 1.20.18 (security review): a shared computer keeps no one else's desk drafts or hand-offs. 1.20.16's drafts named
@@ -173,7 +174,7 @@ export function DeskShell({
 
   return (
     <DeskMeContext.Provider value={{ id: user.id, name: user.name, agent: caps.agent, admin: caps.admin, reports: caps.reports, role, caps: roleCaps, email_view: emailView }}>
-    <DeskCountsContext.Provider value={{ counts, refresh }}>
+    <DeskCountsContext.Provider value={{ counts, refresh, live }}>
     <TeamStatusProvider enabled={caps.agent}>
     <ClaudeHost claude={claude}>
       {/* 1.20.12: `relative overflow-clip`, not `overflow-hidden`. Every `sr-only` label (a list count's

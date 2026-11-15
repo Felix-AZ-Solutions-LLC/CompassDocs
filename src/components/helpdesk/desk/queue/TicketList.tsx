@@ -4,7 +4,12 @@
 // status chip; subject; requester and the due), the open ticket marked
 // with the accent band and aria-current. Rows are real links, so a middle
 // click opens a ticket in a new tab and j / k move real focus.
+//
+// 1.20.19: a live reload animates (./motion): new rows grow in and wear a
+// fading highlight, rows that left collapse out (kept here as inert,
+// aria-hidden ghosts for the length of it), moved rows glide to their place.
 
+import { useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Inbox } from "lucide-react";
 import { chipClass } from "@/components/Chip";
@@ -19,6 +24,7 @@ import { PRIORITY_DOT, compactDue, priorityLabel, slaInk, statusChip, ticketHref
 import type { RowSelection } from "../merge/selection";
 import { IncidentChip } from "../incidents/IncidentChip";
 import { useDeskMailboxes } from "../mailboxes";
+import { leftRows, prefersReducedMotion, withGhosts, type QueueMotion } from "./motion";
 
 export function TicketList({
   rows,
@@ -28,6 +34,8 @@ export function TicketList({
   onRetry,
   title,
   selection,
+  motion,
+  listKey = "",
 }: {
   rows: HdTicketListRow[] | null;
   error: string;
@@ -37,9 +45,27 @@ export function TicketList({
   title: string;
   /** Row checkboxes for the bulk bar (1.19.1, merge/selection); omitted without tickets.bulk or tickets.merge. */
   selection?: RowSelection;
+  /** 1.20.19: the live update's motion (QueueLayout's), and the list it belongs to. */
+  motion?: QueueMotion;
+  listKey?: string;
 }) {
   // 1.20.2: the address a ticket came in on, beside its requester, while more than one is listed.
   const showAddress = useDeskMailboxes().length > 1;
+  const ul = useRef<HTMLUListElement>(null);
+  // Rows that just left, drawn until they have collapsed (only for an animated live reload).
+  const [ghosts, setGhosts] = useState<{ row: HdTicketListRow; after: number | null }[]>([]);
+  const [prevRows, setPrevRows] = useState(rows);
+  if (rows !== prevRows) {
+    setPrevRows(rows);
+    const animated = !!motion && !!prevRows && !!rows && motion.pendingFor(listKey) && !prefersReducedMotion();
+    const left = animated ? leftRows(prevRows!, rows!) : [];
+    if (left.length || ghosts.length) setGhosts(left);
+  }
+  useLayoutEffect(() => {
+    if (motion && ul.current) motion.play(ul.current, listKey, () => setGhosts([]));
+    // Only a new list plays (the ghosts' own clean-up must not).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
   if (error && !rows) {
     return (
       <div className="px-4 py-6 text-sm">
@@ -60,9 +86,10 @@ export function TicketList({
     );
   }
   return (
-    <ul aria-label={`${title} tickets`}>
-      {rows.map((t) => {
+    <ul ref={ul} aria-label={`${title} tickets`}>
+      {withGhosts(rows, ghosts).map((t) => {
         const on = t.number === selected;
+        const leaving = !!t.leaving;
         const chip = statusChip(t, true);
         // Agent L's calendars: "Paused for Christmas Day, resumes Mon 09:00".
         const clock = t.clock_note ?? null;
@@ -70,7 +97,14 @@ export function TicketList({
         // Agent O's contact cards: the requester is on the VIP list.
         const vip = t;
         return (
-          <li key={t.id} className="relative border-b border-slate-100" data-number={t.number}>
+          <li
+            key={t.id}
+            className="relative border-b border-slate-100"
+            data-number={t.number}
+            data-leaving={leaving ? "" : undefined}
+            aria-hidden={leaving || undefined}
+            inert={leaving || undefined}
+          >
             {selection && <RowCheck t={t} selection={selection} />}
             <Link
               data-row

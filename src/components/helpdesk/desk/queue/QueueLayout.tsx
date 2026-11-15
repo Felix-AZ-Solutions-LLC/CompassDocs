@@ -8,14 +8,19 @@
 //
 // Keyboard (single-key shortcuts, hotkeys.ts): j / k walk the list, Enter
 // opens the row under focus. The ticket's own keys live in TicketPane.
+//
+// 1.20.19 live updates: a live signal (../live, through the counts) reloads
+// the list at once, one request at a time; the reload animates (./motion)
+// and never moves the agent's place: tickets put in above it show as the
+// "N new tickets" pill. The saved views' counts follow, at most every 5 s.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ArrowDownUp, ChevronDown, Filter, MessageSquareText, Plus } from "lucide-react";
+import { ArrowDownUp, ArrowUp, ChevronDown, Filter, MessageSquareText, Plus } from "lucide-react";
 import { chipClass } from "@/components/Chip";
 import { useCan } from "../me";
-import { iconButtonClass } from "@/components/Button";
+import { buttonClass, iconButtonClass } from "@/components/Button";
 import { railIconClass, railRowClass, RAIL_GROUP_TEXT } from "@/components/RailLink";
 import { Popover } from "@/components/Popover";
 import type { HdTicketListRow } from "@/lib/helpdesk/types";
@@ -40,6 +45,8 @@ import { filterSummary } from "@/lib/helpdesk/saved-views-shared";
 import { useDeskFilterFields, useFilterPeopleNames } from "../custom-fields/filters";
 import { ExportCsvButton } from "../views/ExportCsvButton";
 import { CustomFieldChips, withoutCustom } from "../views/CustomFieldChips";
+import { LiveCount } from "../LiveCount";
+import { useQueueMotion, type QueueMotion } from "./motion";
 
 interface QueueCtx {
   rows: HdTicketListRow[] | null;
@@ -62,13 +69,19 @@ export function QueueLayout({ children }: { children: ReactNode }) {
   const selected = params?.number ? Number(params.number) : null;
   // 1.19.4 (C7): /desk/recycle-bin pages bring their own list; the queue's list column stays out.
   const binPage = (usePathname() ?? "").startsWith("/desk/recycle-bin");
-  const { counts, refresh: refreshCounts } = useDeskCounts();
+  const { counts, refresh: refreshCounts, live = 0 } = useDeskCounts();
   const [rows, setRows] = useState<HdTicketListRow[] | null>(null);
   // 1.20.8: every ticket the list holds (all pages), for Export CSV's cap question.
   const [total, setTotal] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [newOpen, setNewOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const motion = useQueueMotion(listRef);
+  const { snapshot: snapshotMotion, reset: resetMotion } = motion;
+  // The list the rows on screen belong to (a reload of the same list animates), and one load at a time.
+  const shownKey = useRef<string | null>(null);
+  const loading = useRef<Promise<void> | null>(null);
+  const loadAgain = useRef(false);
 
   // 1.19.1 saved views (agent V4, ../views): ?saved=12 lists the view's own filters.
   const sv = useSavedViews();
@@ -79,29 +92,70 @@ export function QueueLayout({ children }: { children: ReactNode }) {
   const cfFields = useDeskFilterFields();
   const cfNames = useFilterPeopleNames(sel.drill, cfFields);
 
-  const load = useCallback(() => {
+  const load = useCallback((): void => {
     if (!listQs) {
       if (savedGone) setError("This saved view was deleted, or it isn't shared with you any more.");
       return;
     }
-    getJson(`/api/helpdesk/tickets?${listQs}`, "Couldn't load the tickets.")
+    if (loading.current) {
+      loadAgain.current = true;
+      return;
+    }
+    const key = listQs;
+    const req: Promise<void> = getJson(`/api/helpdesk/tickets?${key}`, "Couldn't load the tickets.")
       .then((d) => {
+        if (loading.current !== req) return; // the list changed meanwhile: this answer is for another one
+        if (shownKey.current === key) snapshotMotion(key);
+        shownKey.current = key;
         setRows(listOf<HdTicketListRow>(d, "tickets", "rows"));
         const n = (d as { total?: unknown } | null)?.total;
         setTotal(typeof n === "number" ? n : null);
         setError("");
       })
-      .catch((e: Error) => setError(e.message));
-  }, [listQs, savedGone]);
+      .catch((e: Error) => {
+        if (loading.current === req) setError(e.message);
+      })
+      .finally(() => {
+        if (loading.current !== req) return;
+        loading.current = null;
+        if (loadAgain.current) {
+          loadAgain.current = false;
+          loadRef.current();
+        }
+      });
+    loading.current = req;
+  }, [listQs, savedGone, snapshotMotion]);
+  const loadRef = useRef(load);
+  loadRef.current = load;
 
   useEffect(() => {
     setRows(null);
+    shownKey.current = null;
+    loading.current = null;
+    loadAgain.current = false;
+    resetMotion();
     load();
     const t = setInterval(() => document.visibilityState === "visible" && load(), 60_000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [load, resetMotion]);
 
   const refreshViews = sv.refresh;
+
+  // A live signal: the list now; the saved views' counts (a count per view) at most every 5 s.
+  const viewsAt = useRef(0);
+  const viewsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!live) return;
+    loadRef.current();
+    if (viewsTimer.current) return;
+    const wait = Math.max(0, viewsAt.current + 5_000 - Date.now());
+    viewsTimer.current = setTimeout(() => {
+      viewsTimer.current = null;
+      viewsAt.current = Date.now();
+      refreshViews();
+    }, wait);
+  }, [live, refreshViews]);
+  useEffect(() => () => void (viewsTimer.current && clearTimeout(viewsTimer.current)), []);
   const refresh = useCallback(() => {
     load();
     refreshCounts();
@@ -161,7 +215,7 @@ export function QueueLayout({ children }: { children: ReactNode }) {
             <span className="min-w-0 flex-1 truncate">{v.label}</span>
             {n !== undefined && (
               <span className={`text-xs tabular-nums ${v.alarm && n > 0 ? "font-semibold text-red-600" : "text-slate-500"}`}>
-                {n}
+                <LiveCount value={n} />
                 <span className="sr-only"> tickets</span>
               </span>
             )}
@@ -179,7 +233,7 @@ export function QueueLayout({ children }: { children: ReactNode }) {
           <span className="min-w-0 flex-1 truncate">Reviews</span>
           {reviews > 0 && (
             <span className={chipClass("accent", "sm")}>
-              {reviews}
+              <LiveCount value={reviews} />
               <span className="sr-only"> replies to review</span>
             </span>
           )}
@@ -209,7 +263,7 @@ export function QueueLayout({ children }: { children: ReactNode }) {
                 </span>
                 <span className="min-w-0 flex-1 truncate">{t.name}</span>
                 <span className="text-xs tabular-nums text-slate-500">
-                  {t.open}
+                  <LiveCount value={t.open} />
                   <span className="sr-only"> open tickets</span>
                 </span>
               </Link>
@@ -293,8 +347,22 @@ export function QueueLayout({ children }: { children: ReactNode }) {
           {/* A followed Status page service in trouble (1.19.2, agent W6, ../team-status). */}
           {sel.team && !sel.drill && <TeamStatusBanner teamId={sel.team} />}
           {selectable && <BulkBar selection={selection} shown={rows?.length ?? 0} onDone={refresh} />}
-          <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto">
-            <TicketList rows={rows} error={error} selected={selected} qs={qs} onRetry={load} title={title} selection={selectable ? selection : undefined} />
+          {/* 1.20.19: the pill sits over the list; the browser's own scroll anchoring is off (./motion keeps the place). */}
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <NewAbovePill motion={motion} />
+            <div ref={listRef} onScroll={motion.onScroll} className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]">
+              <TicketList
+                rows={rows}
+                error={error}
+                selected={selected}
+                qs={qs}
+                onRetry={load}
+                title={title}
+                selection={selectable ? selection : undefined}
+                motion={motion}
+                listKey={listQs ?? ""}
+              />
+            </div>
           </div>
         </section>
         <div className={`min-h-0 min-w-0 flex-1 ${selected || binPage ? "flex" : "hidden lg:flex"}`}>{children}</div>
@@ -302,6 +370,26 @@ export function QueueLayout({ children }: { children: ReactNode }) {
       <NewTicketModal open={newOpen} onClose={() => setNewOpen(false)} onCreated={(n) => { setNewOpen(false); refresh(); router.push(`/desk/tickets/${n}${qs}`); }} />
       <ViewDialogs sv={sv} sel={sel} teams={counts?.teams ?? []} title={title} basePath={selected ? `/desk/tickets/${selected}` : "/desk"} />
     </Ctx.Provider>
+  );
+}
+
+/** 1.20.19: "3 new tickets ↑" over the list when tickets came in above the agent's place; a click goes up to them. */
+function NewAbovePill({ motion }: { motion: QueueMotion }) {
+  const n = motion.above.length;
+  return (
+    <div aria-live="polite" className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center print:hidden">
+      {n > 0 && (
+        <button
+          type="button"
+          onClick={motion.showAbove}
+          data-testid="queue-new-above"
+          className={buttonClass("primary", "sm", "pointer-events-auto shadow-float starting:-translate-y-1 starting:opacity-0")}
+        >
+          <ArrowUp className="h-3.5 w-3.5" aria-hidden />
+          {n === 1 ? "1 new ticket" : `${n} new tickets`}
+        </button>
+      )}
+    </div>
   );
 }
 
