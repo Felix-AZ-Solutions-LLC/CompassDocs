@@ -244,7 +244,8 @@ test.describe("checklists (licensed)", () => {
     expect((lib.body.templates as { id: number }[]).some((x) => x.id === id)).toBe(false);
 
     await page.goto(`/desk/settings/checklists?id=${id}`);
-    await slow(page.getByRole("heading", { level: 1, name: "Checklists" })).toBeVisible({ timeout: 60_000 });
+    // 1.20.13: Checklists is a tab of Forms and fields; the tab's own heading is level 2.
+    await slow(page.getByRole("heading", { level: 2, name: "Checklists" })).toBeVisible({ timeout: 60_000 });
     const row = page.getByRole("row").filter({ hasText: draftName });
     await slow(row.getByText("Draft from Claude", { exact: true })).toBeVisible();
     const editor = page.locator("#checklist-editor");
