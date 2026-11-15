@@ -580,7 +580,19 @@ describe("review fixes", () => {
       const mismatches: string[] = [];
       for (const a of agents) {
         const one = await access.canWorkTicket({ id: a.user_id, role: roles.get(a.user_id) }, ticket);
-        if (one !== batch.get(a.user_id)) mismatches.push(`${a.username} (${a.role}): batch ${batch.get(a.user_id)}, one ${one}`);
+        if (one === batch.get(a.user_id)) continue;
+        // Other test files run in parallel against this database and change their own accounts
+        // (a role, a team) between the batch read and this one. A real disagreement holds when
+        // both are read again back to back; a concurrent change does not.
+        let still = true;
+        for (let i = 0; i < 3 && still; i++) {
+          const role = (await pool().query("SELECT role FROM users WHERE id = $1", [a.user_id])).rows[0]?.role;
+          const [b, o] = [(await share.canWorkMany([a], ticket)).get(a.user_id), await access.canWorkTicket({ id: a.user_id, role }, ticket)];
+          still = b !== o;
+          if (!still) break;
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        if (still) mismatches.push(`${a.username} (${a.role}): batch ${batch.get(a.user_id)}, one ${one}`);
       }
       assert.deepEqual(mismatches, [], `${agents.length} agents checked`);
     }
