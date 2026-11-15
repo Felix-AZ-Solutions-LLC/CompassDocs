@@ -1,4 +1,6 @@
-// POST /api/helpdesk/reviews/[id]  { decision: 'approve'|'return', edited_body?, note? } → { review }
+// POST /api/helpdesk/reviews/[id]  { decision: 'approve'|'return', edited_body?, note?, force? } → { review }
+//   1.20.20: approving while someone else replied publicly since → 409 { code: "collision", newer } unless force;
+//   while someone else holds the reply lock → 409.
 //   Approve a held reply (optionally edited; it is sent now) or return it
 //   to its author with a note. Helpdesk 1.19.0 desk roles (agent J);
 //   replies.review for the ticket's team. Audited helpdesk.reply.reviewed.
@@ -25,7 +27,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const review = await decideReview(gate, id, parsed.value, { origin: originOf(req), ip: ipFrom(req) });
     return NextResponse.json({ review });
   } catch (e) {
-    if (e instanceof ReviewError) return NextResponse.json({ error: e.message }, { status: e.status });
+    if (e instanceof ReviewError) return NextResponse.json({ error: e.message, ...e.extra }, { status: e.status });
     throw e;
   }
 }

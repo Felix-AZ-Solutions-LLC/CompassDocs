@@ -35,6 +35,9 @@ import { latestMessageId } from "../presence/presence";
 import { SolveMaintenanceHost } from "../assets/SolveMaintenance";
 import { BeforeYouSolveHost } from "../solve/BeforeYouSolve";
 import { usePopoutOwner } from "./useReplyPopout";
+import { readHandoff } from "./reply-popout";
+import { adoptDeskTabId } from "../reply-lock/tab";
+import { inheritReplyTouch } from "../reply-lock/reply-lock";
 
 /** How many of the latest messages the window shows. */
 const LATEST = 3;
@@ -76,6 +79,16 @@ export function ReplyPopout({ number }: { number: number }) {
   // 1.20.18: a send, an upload or a solve question in progress: the reply is not given back meanwhile.
   const busy = useRef(false);
   const onBusy = useCallback((b: boolean) => void (busy.current = b), []);
+  // 1.20.20: the reply lock came with the reply. Before the composer mounts, this window takes the tab id the desk
+  // handed the lock to (and the desk tab's, to hand it back to when it closes unsent), from the hand-off record.
+  useState(() => {
+    const h = readHandoff(me.id, number);
+    if (h?.lock_tab) {
+      adoptDeskTabId(h.lock_tab, h.lock_home);
+      if (h.lock_at) inheritReplyTouch(number, h.lock_at);
+    }
+    return null;
+  });
   const owner = usePopoutOwner(number, me.id, {
     save: () => composer.current?.persist(),
     busy: () => busy.current,

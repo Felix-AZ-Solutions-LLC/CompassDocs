@@ -537,19 +537,18 @@ export async function processInboundEmail(
           // An agent answering an internal-note notice (agent S3's
           // hd_internal_note mail) writes an internal note, never to the requester.
           const toNote = Boolean(isAgent) && [email.inReplyTo, ...email.references].some((id) => isNoteNoticeMessageId(id));
-          await beforeAppendForTests?.(t.id);
-          let r: Awaited<ReturnType<typeof addMessage>>;
-          try {
-            r = await addMessage(
+          // 1.20.20: an agent's emailed reply while someone else holds the reply lock is kept as an internal note
+          // (lib/helpdesk/reply-lock), never sent to the requester and never lost: asked first, and again if the
+          // lock was taken between the question and the append (addMessage's own check refuses it then).
+          const lockedBy = isAgent && !toNote ? await (await import("./reply-lock")).replyLockCheck(t.id, author.id) : null;
+          const asNote = async (holder: string) => ({
+            kind: "internal" as const,
+            body: `${(await import("./reply-lock-shared")).emailedWhileLocked(mdInline(holder))}\n\n${inboundBody(email, { reply: true }) || "_(empty reply)_"}`,
+          });
+          const append = async (what: { kind: "public" | "internal"; body: string }) =>
+            addMessage(
               t.id,
-              {
-                kind: toNote ? "internal" : "public",
-                body: inboundBody(email, { reply: true }) || "_(empty reply)_",
-                author,
-                via: "email",
-                asRequester: Boolean(isRequester || isCc),
-                email_message_id: messageId,
-              },
+              { ...what, author, via: "email", asRequester: Boolean(isRequester || isCc), email_message_id: messageId },
               {
                 origin: opts.origin,
                 actorId: author.id,
@@ -558,16 +557,27 @@ export async function processInboundEmail(
                 directRecipients: threadTicketId ? (await import("./reply-all")).directRecipients(email) : undefined,
               }
             );
+          await beforeAppendForTests?.(t.id);
+          let r: Awaited<ReturnType<typeof addMessage>>;
+          try {
+            r = await append(
+              lockedBy ? await asNote(lockedBy.holder.name) : { kind: toNote ? "internal" : "public", body: inboundBody(email, { reply: true }) || "_(empty reply)_" }
+            );
           } catch (e) {
-            // 1.19.1: a merge committed between the lookup above and the
-            // message (tickets assertNotMergedTx, before anything was
-            // written). Once: the whole decision again, so the thread now
-            // leads to the kept ticket under the checks any reply there
-            // meets (requester, agent, CC; closed: a follow-up). Anything
-            // else fails as before.
-            if (opts.mergeRetry || !(await mergeRaced(e))) throw e;
-            logEvent("info", "helpdesk.inbound_merge_retry", { ticket: t.number, from: email.from.email });
-            return processInboundEmail(email, { ...opts, outsideSenders, trustUnverified, mergeRetry: true });
+            const lockHolder = (e as { extra?: { code?: unknown; holder?: { name?: string } } } | null)?.extra;
+            if (lockHolder?.code === "reply_locked") {
+              r = await append(await asNote(lockHolder.holder?.name || "someone else"));
+            } else {
+              // 1.19.1: a merge committed between the lookup above and the
+              // message (tickets assertNotMergedTx, before anything was
+              // written). Once: the whole decision again, so the thread now
+              // leads to the kept ticket under the checks any reply there
+              // meets (requester, agent, CC; closed: a follow-up). Anything
+              // else fails as before.
+              if (opts.mergeRetry || !(await mergeRaced(e))) throw e;
+              logEvent("info", "helpdesk.inbound_merge_retry", { ticket: t.number, from: email.from.email });
+              return processInboundEmail(email, { ...opts, outsideSenders, trustUnverified, mergeRetry: true });
+            }
           }
           if (r) await keepFromEmail(email, t.id, r.message.id, author.id);
           // 1.20.6: the invite it carried updates or cancels the ticket's event, or fills it in when there is none.

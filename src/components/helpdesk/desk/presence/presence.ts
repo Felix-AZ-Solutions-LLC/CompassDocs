@@ -18,6 +18,7 @@
 import { useEffect, useState } from "react";
 import { PRESENCE_HEARTBEAT_MS, type HdNewerMessage, type HdPresence, type HdPresenceState } from "@/lib/helpdesk/presence-shared";
 import { ApiError, noteDuoRequired } from "../api";
+import { deskTabId } from "../reply-lock/tab";
 
 const REPLYING_MS = 20_000;
 /** A remount of the same ticket (a reload of the pane) within this cancels the leave. */
@@ -77,7 +78,7 @@ export function useTicketPresence(number: number, enabled = true): HdPresence[] 
         const res = await fetch(url, {
           method: "POST",
           headers: { "content-type": "application/json", accept: "application/json" },
-          body: JSON.stringify({ state }),
+          body: JSON.stringify({ state, tab: deskTabId() }), // 1.20.20: per tab (reply-lock/tab)
           cache: "no-store",
           signal: ctrl.signal,
         });
@@ -99,7 +100,8 @@ export function useTicketPresence(number: number, enabled = true): HdPresence[] 
     };
     const leave = () => {
       try {
-        void fetch(url, { method: "DELETE", keepalive: true, headers: { accept: "application/json" } }).catch(() => {});
+        // 1.20.20: this tab leaves; the row stays while another tab of theirs still has the ticket open.
+        void fetch(`${url}?tab=${encodeURIComponent(deskTabId())}`, { method: "DELETE", keepalive: true, headers: { accept: "application/json" } }).catch(() => {});
       } catch {
         /* the page is going away */
       }

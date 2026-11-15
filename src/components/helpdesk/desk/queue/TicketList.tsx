@@ -25,6 +25,9 @@ import type { RowSelection } from "../merge/selection";
 import { IncidentChip } from "../incidents/IncidentChip";
 import { useDeskMailboxes } from "../mailboxes";
 import { leftRows, prefersReducedMotion, withGhosts, type QueueMotion } from "./motion";
+// 1.20.20: who is replying on each row (lib/helpdesk/reply-lock).
+import { useQueueReplyLocks } from "../reply-lock/reply-lock";
+import { ReplyLockBadge } from "../reply-lock/ReplyLock";
 
 export function TicketList({
   rows,
@@ -66,6 +69,7 @@ export function TicketList({
     // Only a new list plays (the ghosts' own clean-up must not).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows]);
+  const locks = useQueueReplyLocks((rows ?? []).map((r) => r.number));
   if (error && !rows) {
     return (
       <div className="px-4 py-6 text-sm">
@@ -124,7 +128,8 @@ export function TicketList({
                 <span className="text-xs text-slate-500">#{t.number}</span>
                 {t.parent_ticket_id && <span className="text-xs text-slate-500">· Task</span>}
                 <IncidentChip chip={t.incident} />
-                <span className={chipClass(chip.tone, "sm", "ml-auto")}>{chip.label}</span>
+                {locks.get(t.number) && <ReplyLockBadge lock={locks.get(t.number)!} className="ml-auto" />}
+                <span className={chipClass(chip.tone, "sm", locks.get(t.number) ? "" : "ml-auto")}>{chip.label}</span>
               </span>
               <span className="mt-1 block truncate text-sm font-semibold text-slate-900">{t.subject}</span>
               <span className="mt-0.5 flex items-center justify-between gap-3 text-xs">

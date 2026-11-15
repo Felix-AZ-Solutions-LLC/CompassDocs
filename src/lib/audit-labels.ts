@@ -422,6 +422,11 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.reply_draft.created": "Saved a reply draft",
   "helpdesk.reply_draft.used": "Used a reply draft",
   "helpdesk.reply_draft.discarded": "Discarded a reply draft",
+  // The reply lock (1.20.20, lib/helpdesk/reply-lock): a lead took a reply over (details: both people), and the settings.
+  "helpdesk.reply_lock.taken_over": "Took over a reply",
+  "helpdesk.reply_lock.settings_updated": "Changed the reply lock settings",
+  "helpdesk.reply_lock.released": "Released someone's reply lock",
+  "helpdesk.reply_lock.cap_released": "Released an older reply lock (at most three at once)",
   // Claude in the desk (1.20.0, lib/helpdesk/claude): a turn (token counts, tools, the ticket
   // number; never content) and the agent's Apply or Skip on a card. Applied changes are
   // helpdesk.ticket.updated / helpdesk.checklist.added with details.via "claude_desk".

@@ -30,6 +30,8 @@ export type { HdPendingReview, HdReviewState };
 export const REVIEW_LIMITS = { note: 2000, body: 50_000, list: 200 } as const;
 
 export class ReviewError extends Error {
+  /** 1.20.20: more for the route's JSON body beside `error` (the collision warning's `code` and `newer`). */
+  extra?: Record<string, unknown>;
   constructor(
     message: string,
     public status: number
@@ -196,6 +198,8 @@ export interface ReviewDecision {
   decision: "approve" | "return";
   edited_body?: string;
   note?: string;
+  /** 1.20.20: approve even though someone else replied publicly since it was written. */
+  force?: boolean;
 }
 
 export interface ReviewOutcome {
@@ -226,6 +230,7 @@ export function parseDecision(raw: Record<string, unknown>): { ok: true; value: 
     out.note = n;
   }
   if (out.decision === "return" && !out.note) return { ok: false, error: "Say what to change: a returned reply needs a note." };
+  if (raw.force === true && out.decision === "approve") out.force = true;
   return { ok: true, value: out };
 }
 
@@ -264,6 +269,26 @@ export async function decideReview(
       client
     );
     if (!t) throw new ReviewError("That reply doesn't exist.", 404);
+    if (d.decision === "approve") {
+      // 1.20.20: approving sends the reply to the requester, so it waits while someone other than the reviewer and the
+      // reply's author holds the ticket's reply lock (lib/helpdesk/reply-lock), asked here under the ticket's row lock
+      // with the lock row FOR SHARE, so a take over can't slip in between. Returning it sends nothing.
+      const locked = await (await import("./reply-lock")).activeReplyLock(t.id, client, "share");
+      if (locked && locked.user_id !== user.id && locked.user_id !== m.author_id) {
+        throw new ReviewError(`${locked.name} is replying to this ticket. Approve this reply once they have sent theirs.`, 409);
+      }
+      // 1.20.20 (review): someone else replied publicly after this was written: ask first, as the send guard does
+      // (lib/helpdesk/presence), unless the reviewer already said send anyway (`force`).
+      if (!d.force) {
+        const newer = (await (await import("./presence")).newerMessages(t.id, m.id, m.author_id ?? 0)).filter((x) => x.kind === "public");
+        if (newer.length) {
+          const who = newer[newer.length - 1].author_name;
+          const err = new ReviewError(`${who} replied after this was written. Send anyway?`, 409);
+          err.extra = { code: "collision", newer };
+          throw err;
+        }
+      }
+    }
     const edited = d.decision === "approve" && d.edited_body !== undefined && d.edited_body !== m.body;
     if (d.decision === "approve") {
       // Sent now: it takes its place in the conversation at the time it was sent.

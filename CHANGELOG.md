@@ -4,6 +4,51 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.20] - 2026-11-15
+
+One agent writes a ticket's reply at a time.
+
+### Added
+- **Reply lock.** The first agent to start a reply holds the ticket's reply:
+  typing, pasting, or inserting a macro, canned response, article, Claude
+  draft or file takes it. Everyone else sees the reply box read-only with
+  the holder's avatar and "Sam Lee is replying"; hovering the avatar shows
+  "Sam Lee · replying since 10:42". The same avatar shows on the ticket's
+  row in the queue and in the ticket header. Internal notes are never
+  locked, so anyone can still add one.
+- **The lock lets go by itself** when the holder sends, empties the box,
+  presses **Let go**, closes the ticket, or doesn't touch the reply for the
+  idle time (2 minutes by default). A lock is never held more than 60
+  minutes without a send, and each agent holds at most 3; a fourth releases
+  their oldest.
+- **Take over and Release.** Managers and admins, and team leads in the
+  teams they lead, can take over a reply after confirming; the person
+  writing sees "Priya took over this reply. Your text is kept as a draft."
+  with **Copy my text**. They can also release a lock, and admins can
+  release all of one person's locks from Desk settings, Reply lock.
+  Take-overs and releases are in the audit log.
+- **Works with the pop-out and live updates.** The lock moves with a reply
+  into its own window and back, and others see a lock appear or clear within
+  a couple of seconds.
+- **Desk settings, Reply lock:** on or off, the idle time (1 to 15 minutes),
+  and the replies being written now.
+
+### Changed
+- **A reply from anyone but the holder is refused** on every path: the desk,
+  API v1, macros, Claude, incident updates and review approval. An agent's
+  reply by email while someone else holds the lock is kept as an internal
+  note, so nothing is lost. Automations an agent's own action sets off meet
+  the lock as that agent; system automations, requesters and imports are not
+  affected.
+- **Approving a held newbie reply** warns if someone else has replied since
+  it was written.
+
+### Upgrading
+- **Nothing to run.** Reply locks start **off** on existing desks (switch
+  them on in Desk settings, Reply lock) and on for brand-new ones. A new
+  capability, "Take over a reply", is on for Team lead and Manager. New
+  tables and columns are added on start.
+
 ## [1.20.19] - 2026-11-15
 
 The queue updates live.

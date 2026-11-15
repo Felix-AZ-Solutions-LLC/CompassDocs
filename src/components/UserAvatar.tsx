@@ -2,6 +2,9 @@
 // Server-safe (no hooks) so it renders in both server and client components.
 
 const SIZES = {
+  // 1.20.20: the desk's reply-lock badges (a queue row, the presence strip).
+  "2xs": "h-5 w-5 text-3xs",
+  xs: "h-7 w-7 text-2xs",
   sm: "h-8 w-8 text-xs",
   md: "h-12 w-12 text-lg",
   lg: "h-20 w-20 text-2xl",

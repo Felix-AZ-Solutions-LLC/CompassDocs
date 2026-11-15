@@ -733,7 +733,7 @@ async function matchTarget(event: HdAutomationEvent, t: HdTicketRow): Promise<Ma
  * caused it committed). Never throws: a failing rule is logged and the next
  * one runs.
  */
-export async function runAutomations(event: HdAutomationEvent, ticketId: number): Promise<RunResult> {
+export async function runAutomations(event: HdAutomationEvent, ticketId: number, opts: { triggeredBy?: number | null } = {}): Promise<RunResult> {
   const parent = chainStore.getStore();
   const chain: Chain = parent ? { depth: parent.depth + 1, fired: parent.fired } : { depth: 0, fired: new Set() };
   if (chain.depth >= MAX_DEPTH) {
@@ -757,7 +757,7 @@ export async function runAutomations(event: HdAutomationEvent, ticketId: number)
         const t = await hqOne<HdTicketRow>("SELECT * FROM hd_tickets WHERE id = $1", [ticketId]);
         if (!t) break;
         if (!automationMatches(rule.conditions ?? {}, await matchTarget(event, t))) continue;
-        const acted = await applyRule(rule, t);
+        const acted = await applyRule(rule, t, opts.triggeredBy ?? null);
         if (!acted) continue;
         chain.fired.add(key);
         result.ran.push(rule.id);
@@ -770,8 +770,19 @@ export async function runAutomations(event: HdAutomationEvent, ticketId: number)
   });
 }
 
+/** 1.20.20: the agent whose action set an automation off, for the reply lock: someone who works the ticket and isn't its requester. */
+async function agentWhoSetItOff(userId: number | null, t: HdTicketRow): Promise<number | null> {
+  if (!userId || userId === t.requester_id) return null;
+  const { getUserById } = await import("../db");
+  const { toSessionUser } = await import("../auth");
+  const u = await getUserById(userId);
+  if (!u) return null;
+  const { canWorkTicket } = await import("./access");
+  return (await canWorkTicket(toSessionUser(u), t)) ? userId : null;
+}
+
 /** Apply one rule's actions. Answers whether it did anything. Exported for tests (1.19.2, W3). */
-export async function applyRule(rule: HdAutomation, t: HdTicketRow): Promise<boolean> {
+export async function applyRule(rule: HdAutomation, t: HdTicketRow, triggeredBy: number | null = null): Promise<boolean> {
   const a = rule.actions ?? {};
   const patch = effectivePatch(a, t);
   const actor = { id: null, name: `Automation: ${rule.name}` };
@@ -820,8 +831,16 @@ export async function applyRule(rule: HdAutomation, t: HdTicketRow): Promise<boo
   }
   if (a.macro_id) {
     const { applyMacroToTicket } = await import("./macros");
-    const r = await applyMacroToTicket(t.id, a.macro_id, { id: null, name: actor.name, email: "" }, { fromAutomation: true });
-    if (r.ok) acted = true;
+    // 1.20.20: set off by an agent's action (not the requester's, not the system's): the macro's reply meets the reply
+    // lock as that agent's (lib/helpdesk/reply-lock). Refused, the rest of the rule still runs.
+    const lockAs = await agentWhoSetItOff(triggeredBy, t);
+    try {
+      const r = await applyMacroToTicket(t.id, a.macro_id, { id: null, name: actor.name, email: "" }, { fromAutomation: true, lockAs });
+      if (r.ok) acted = true;
+    } catch (e) {
+      if (!(e instanceof Error && (e as { extra?: { code?: unknown } }).extra?.code === "reply_locked")) throw e;
+      logEvent("info", "helpdesk.automation_reply_locked", { automation: rule.id, ticket_id: t.id });
+    }
   }
   if (a.notify) {
     const { notifyFromAutomation } = await import("./notify");

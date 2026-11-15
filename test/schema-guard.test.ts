@@ -53,6 +53,7 @@ import { HD_DESK_CALENDAR_SCHEMA } from "../src/lib/helpdesk/desk-calendar-schem
 import { HD_CUSTOM_FIELDS_SCHEMA } from "../src/lib/helpdesk/custom-fields-schema";
 import { HD_EMAIL_HTML_SCHEMA } from "../src/lib/helpdesk/email-html-schema";
 import { HD_LIVE_SCHEMA } from "../src/lib/helpdesk/live-schema";
+import { HD_REPLY_LOCK_SCHEMA } from "../src/lib/helpdesk/reply-lock-schema";
 
 /** The schema blocks db.ts interpolates into SCHEMA_SQL (1.19.0). */
 const INTERPOLATED: Record<string, string> = {
@@ -98,6 +99,7 @@ const INTERPOLATED: Record<string, string> = {
   HD_CUSTOM_FIELDS_SCHEMA,
   HD_EMAIL_HTML_SCHEMA,
   HD_LIVE_SCHEMA,
+  HD_REPLY_LOCK_SCHEMA,
 };
 
 const COLUMN_PREDICATE = (table: string, column: string) =>

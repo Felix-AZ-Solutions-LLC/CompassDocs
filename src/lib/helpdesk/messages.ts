@@ -67,6 +67,8 @@ export interface AddMessageInput {
    * in the status change's own transaction; ignored when the status doesn't change.
    */
   solve?: { answers?: unknown; fields?: import("./solve-requirements").SolveFieldPatch };
+  /** 1.20.20: a system send an agent's action set off (an automation's macro): the reply lock is checked as theirs. */
+  lockAs?: number | null;
 }
 
 export interface AddMessageResult {
@@ -111,6 +113,21 @@ export async function addMessage(ticketId: number, input: AddMessageInput, ctx: 
     if (!t) return undefined;
     // 1.19.1: re-checked under the lock a merge takes (HdTicketError 409, messageUnsent).
     await assertNotMergedTx(client, t, { messageUnsent: true });
+    // 1.20.20: a public reply by an agent while someone else holds the ticket's reply lock is refused before anything
+    // is written (lib/helpdesk/reply-lock; 409, code "reply_locked"), the lock row held FOR SHARE until this commits so
+    // a take over waits for this send. Requesters are exempt; a system send too, unless an agent's action set it off
+    // (`lockAs`, an automation's macro): then it is checked as that agent's.
+    const agentReply = input.kind === "public" && !asRequester && !!input.author.id && input.via !== "system";
+    const lockUser = agentReply ? input.author.id : input.kind === "public" && !asRequester && input.lockAs ? input.lockAs : null;
+    if (lockUser) {
+      const refused = await (await import("./reply-lock")).replyLockCheck(ticketId, lockUser, client);
+      if (refused) {
+        const err = new HdTicketError(refused.error, 409);
+        err.extra = { code: refused.code, holder: refused.holder };
+        err.messageUnsent = true;
+        throw err;
+      }
+    }
     // 1.19.2: "Send and set Solved" with required checklist items open is refused before anything is written (agent W3).
     if (!held && !asRequester && solvesForChecklists(t.status, input.then_status)) {
       const blocked = await (await import("./checklists")).checklistSolveRefusal(ticketId, client);
@@ -154,6 +171,8 @@ export async function addMessage(ticketId: number, input: AddMessageInput, ctx: 
       ],
       client
     );
+    // 1.20.20: sent (or sent for review): the author's reply lock on this ticket goes with it.
+    if (agentReply) await (await import("./reply-lock")).releaseReplyLock(ticketId, input.author.id!, client);
     const firstReply = !held && !asRequester && input.kind === "public" && !t.first_replied_at;
     await client.query(
       `UPDATE hd_tickets SET updated_at = now()${firstReply ? ", first_replied_at = now()" : ""}

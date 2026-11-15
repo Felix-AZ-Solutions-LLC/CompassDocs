@@ -130,6 +130,8 @@ export const SETTINGS_CAP: Record<string, string[]> = {
   api: ["settings.manage"],
   // Claude in the desk (1.20.0, lib/helpdesk/claude).
   "claude-desk": ["settings.manage"],
+  // The reply lock (1.20.20, lib/helpdesk/reply-lock).
+  "reply-lock": ["settings.manage"],
 };
 
 /** May this person open that settings page? */

@@ -3186,6 +3186,59 @@ someone else's (1.19.1, mock-ups #3 and #5). Components live in
   for a note). Keep editing marks those messages seen, so Send does not
   warn about them twice. The conversation reloads behind the dialog.
 
+## Helpdesk: the reply lock
+
+One agent at a time writes a ticket's public reply (1.20.20; components in
+`components/helpdesk/desk/reply-lock`, rules in `lib/helpdesk/reply-lock`).
+
+- **The holder's face is `ReplyLockAvatar`**: `UserAvatar` (their directory
+  photo when there is one, else initials) with a 16px `bg-compass-600` pen
+  badge (`PenLine`, `ring-2 ring-surface`) at its lower right. Its `data-tt`
+  is "**Sam Lee · replying since 10:42**" (the workspace's zone and clock)
+  and its `aria-label` says the same in words ("Sam Lee is replying, since
+  10:42"); it is focusable (`tabIndex 0`, `role="img"`) so the tooltip shows
+  on keyboard focus. Inside a link (a queue row) it takes `inLink`: hover
+  tooltip only, nothing focusable, an `sr-only` "Sam Lee is replying" in the
+  row instead.
+- **Three places, three sizes.** The composer's bar: `sm` (32px). The ticket
+  header's presence line: `xs` (28px) with the emerald presence ring, first
+  in the line, and the holder counts as replying there. A queue row: `2xs`
+  (20px) just before the status chip (the badge takes the chip's `ml-auto`).
+- **Someone else's lock** shows above the Reply box as a neutral strip
+  (`rounded-lg border border-slate-200 bg-slate-50 px-3 py-2`, `role=status`):
+  the avatar, "**Sam Lee** is replying." and, in `text-slate-500`, "You can
+  add an internal note meanwhile." The box is `readOnly` (its text stays
+  selectable), and Macro, Canned response, Article, Attach and both halves of
+  Send are disabled; the Internal note tab works as ever. Whoever may take
+  it over gets **Take over** (secondary, `sm`, `UserRoundCheck`) at the
+  strip's end, which asks first: a `Modal` (`max-w-md`), "Take over Sam
+  Lee's reply?", one sentence on what happens to their text, **Cancel**
+  (secondary, focused first) and **Take over** (primary).
+- **The holder** sees a quiet line in the composer's header row
+  (`LockKeyhole`, `text-xs text-slate-500`): "Others see you're replying."
+  with a **Let go** link button.
+- **Taken over**: the previous holder's strip turns `notice-warn`: the new
+  holder's avatar, "Priya took over this reply. Your text is kept as a
+  draft.", **Copy my text** (secondary, `sm`, `Copy`) and an icon-only
+  Dismiss (`X`, `data-tt` and `aria-label` "Dismiss"). Their text stays in
+  the read-only box and in their browser's draft.
+- **In the reply pop-out** (1.20.18) the lock goes with the reply: the
+  pop-out's composer shows the same strip, avatar, tooltip and Take
+  over/Release when someone else holds it, and the holder's line when it
+  is theirs. The pane shows its usual "Replying in another window" state
+  meanwhile, never a second lock line.
+- **Release** (secondary, `sm`) sits before Take over for the same people:
+  it asks first (`confirmDialog`, "Release Sam Lee's reply?") and leaves
+  nobody holding it.
+- **Desk settings → Reply lock** (Tickets group): the on/off `Toggle` card
+  (`#reply-lock`), the idle time `Select` card (`#reply-lock-idle`), and
+  **Replies being written now** (`#reply-lock-now`): one bordered group per
+  holder (name, then **Release all of Sam Lee's locks**, secondary `sm`),
+  each ticket a row (`#1234 subject` link, "since … , last edit …" in
+  `text-xs text-slate-500` with `RelativeTime`, **Release**); `SectionEmpty`
+  "Nobody is writing a reply right now." when there are none. Both releases
+  ask first.
+
 ## Helpdesk: saved views
 
 Personal and team queue views (1.19.1, mock-up #1). Components live in

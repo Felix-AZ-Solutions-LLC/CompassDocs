@@ -55,6 +55,8 @@ export const POPOUT_SIZE = { width: 720, height: 780 };
 const MAX_FILES = 10;
 const TOKEN_RE = /^[a-f0-9]{16,64}$/;
 export const SEND_ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
+/** 1.20.20: a browser tab's id for the reply lock (../reply-lock/tab). */
+const TAB_ID_RE = /^[A-Za-z0-9_-]{6,64}$/;
 
 type Base = { n: number; u: number };
 export type PopoutMessage =
@@ -150,6 +152,13 @@ export interface ReplyHandoff {
   macro: HdMacro | null;
   /** The send's idempotency key, kept until it goes through. */
   send_id: string | null;
+  /**
+   * 1.20.20, the reply lock (../reply-lock): the browser tab id the pane handed the lock to (the pop-out adopts it),
+   * the pane's own tab id (the lock goes back there), and when the reply was last touched (idle keeps counting).
+   */
+  lock_tab?: string | null;
+  lock_home?: string | null;
+  lock_at?: number | null;
   /** When it was written (ms). */
   at: number;
 }
@@ -209,7 +218,9 @@ export function parseHandoff(raw: unknown, uid: number, now = Date.now()): Reply
     }
   }
   const send_id = typeof o.send_id === "string" && SEND_ID_RE.test(o.send_id) ? o.send_id : null;
-  return { u: uid, mode: o.mode, files, macro: cleanMacro(o.macro), send_id, at };
+  const tab = (v: unknown) => (typeof v === "string" && TAB_ID_RE.test(v) ? v : null);
+  const lock_at = typeof o.lock_at === "number" && Number.isFinite(o.lock_at) && o.lock_at > 0 && o.lock_at <= now + 60_000 ? o.lock_at : null;
+  return { u: uid, mode: o.mode, files, macro: cleanMacro(o.macro), send_id, lock_tab: tab(o.lock_tab), lock_home: tab(o.lock_home), lock_at, at };
 }
 
 // --- Addresses and window names (never any draft text) ------------------------------
@@ -313,7 +324,10 @@ export function readHandoff(u: number, n: number): ReplyHandoff | null {
 }
 
 export function writeHandoff(u: number, n: number, h: Omit<ReplyHandoff, "at" | "u">): void {
-  set(stateKey(u, n), JSON.stringify({ u, mode: h.mode, files: h.files, macro: h.macro, send_id: h.send_id, at: Date.now() }));
+  set(
+    stateKey(u, n),
+    JSON.stringify({ u, mode: h.mode, files: h.files, macro: h.macro, send_id: h.send_id, lock_tab: h.lock_tab ?? null, lock_home: h.lock_home ?? null, lock_at: h.lock_at ?? null, at: Date.now() })
+  );
 }
 
 export function clearHandoff(u: number, n: number): void {

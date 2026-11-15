@@ -377,7 +377,7 @@ export type MacroApplyResult =
       /** 1.20.15: every check passed and nothing was written (dryRun). */
       dry_run?: true;
     }
-  | { ok: false; status: 403 | 404 | 409; error: string; missing?: string[] };
+  | { ok: false; status: 403 | 404 | 409; error: string; missing?: string[]; code?: string; holder?: { user_id: number; name: string } };
 
 /**
  * The route's say on what a macro would write, before anything is: the
@@ -386,7 +386,7 @@ export type MacroApplyResult =
  */
 export type MacroAuthorize = (
   what: { body: string; patch: import("./types").HdTicketPatch }
-) => Promise<{ status: 403 | 409; error: string; missing?: string[] } | null>;
+) => Promise<{ status: 403 | 409; error: string; missing?: string[]; code?: string; holder?: { user_id: number; name: string } } | null>;
 
 /**
  * Fill a macro for a ticket and, unless `preview`, post its reply (public,
@@ -409,6 +409,8 @@ export async function applyMacroToTicket(
     replyAs?: "send" | "draft";
     /** 1.20.15: run every check (authorize, required checklist items, "Before you solve", newbie review) and write nothing. */
     dryRun?: boolean;
+    /** 1.20.20: an automation an agent's action set off: its reply meets the reply lock as that agent's (lib/helpdesk/reply-lock). */
+    lockAs?: number | null;
   } = {}
 ): Promise<MacroApplyResult> {
   const macro = await getMacro(macroId);
@@ -494,7 +496,7 @@ export async function applyMacroToTicket(
     const { addMessage } = await import("./messages");
     const r = await addMessage(
       ticketId,
-      { kind: "public", body, author: { id: actor.id, name: actor.name, email: actor.email ?? "" }, via: actor.id ? "desk" : "system", asRequester: false },
+      { kind: "public", body, author: { id: actor.id, name: actor.name, email: actor.email ?? "" }, via: actor.id ? "desk" : "system", asRequester: false, lockAs: opts.lockAs ?? null },
       hook
     );
     messageId = r?.message.id ?? null;
@@ -568,7 +570,7 @@ function stableJson(v: unknown): string {
 }
 
 export type MacroAsOutcome =
-  | { ok: false; status: 400 | 403 | 404 | 409; error: string; missing?: string[]; newer?: unknown[]; merged?: boolean }
+  | { ok: false; status: 400 | 403 | 404 | 409; error: string; missing?: string[]; newer?: unknown[]; merged?: boolean; code?: string; holder?: { user_id: number; name: string } }
   | {
       ok: true;
       result: Extract<MacroApplyResult, { ok: true }>;
@@ -664,6 +666,14 @@ export async function applyMacroAs(
         }
         if (reply && !(await hdCan(user, "tickets.reply_public", { teamId })) && !(await hdCan(user, "tickets.reply_needs_review", { teamId }))) {
           return { status: 403, error: HD_FORBIDDEN };
+        }
+        // 1.20.20: a macro whose filled reply is not empty, on a ticket whose reply lock someone else holds, is refused
+        // whole, field changes too (lib/helpdesk/reply-lock; 409 with code and holder, as every send path). A draft sends
+        // nothing; a dry run (Claude in the desk's proposal) is told now, so the card is never offered. addMessage asks
+        // again under its transaction.
+        if (reply && opts.replyAs !== "draft") {
+          const locked = await (await import("./reply-lock")).replyLockCheck(ticket.id, user.id);
+          if (locked) return { status: 409, error: locked.error, code: locked.code, holder: locked.holder };
         }
         const refused = await patchRefusal(user, ticket, patch);
         if (refused) return { status: 403, error: refused };
