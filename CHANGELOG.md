@@ -51,6 +51,9 @@ Claude drafts categories, automations and recurring tickets.
   stays published and unchanged. Draft tools need the connector's "notes"
   level or above; in Claude in the desk they follow the "Draft replies and
   internal notes" switch, and only for people who can manage that setting.
+- **Rules that assign or notify someone who isn't a desk agent keep
+  running,** but must be changed to a desk agent before they can be saved
+  again.
 
 ## [1.20.15] - 2026-11-15
 
