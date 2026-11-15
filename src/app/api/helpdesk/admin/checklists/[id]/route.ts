@@ -4,12 +4,16 @@
 //        Tickets keep their copies. Audited (helpdesk.checklist_template.deleted).
 // Helpdesk 1.19.2 (agent W3). Desk capability settings.manage, request_types.manage or
 // workflows.manage (lib/helpdesk/checklists-caps).
-// 1.20.14, drafts from Claude: PUT { …, publish: true } saves and publishes an unpublished
-//        draft (helpdesk.checklist_template.published). Saving a published checklist that has
-//        changes waiting publishes what the editor shows and clears the draft (also .published).
-//        PUT { discard_draft: true } drops the changes waiting on a published checklist
-//        (helpdesk.checklist_template.draft_discarded; 409 when there are none). An unpublished
-//        draft is discarded with DELETE.
+// 1.20.14, drafts from Claude (review fixes: a save never publishes or clears a draft it
+//        wasn't asked to, and each publish names the draft the person reviewed):
+//        PUT { …, publish: true, draft_at } saves and publishes an unpublished draft;
+//        PUT { …, publish_draft: true, draft_at } publishes the changes waiting on a published
+//        checklist (fields not sent come from that draft). Both audited
+//        helpdesk.checklist_template.published; 409 when draft_at isn't the current draft's.
+//        A plain PUT edits the live copy (or the unpublished draft) and keeps a pending draft.
+//        PUT { discard_draft: true, draft_at? } drops the changes waiting on a published checklist
+//        (helpdesk.checklist_template.draft_discarded; 409 when there are none or a newer one).
+//        An unpublished draft is discarded with DELETE.
 
 import { NextResponse } from "next/server";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
@@ -37,7 +41,7 @@ export async function PUT(req: Request, { params }: Ctx) {
   if (!b) return NextResponse.json({ error: "Send the checklist as JSON." }, { status: 400 });
   try {
     if (b.discard_draft === true) {
-      const gone = await discardTemplateDraft(id);
+      const gone = await discardTemplateDraft(id, b.draft_at);
       if (!gone) return (await getTemplate(id)) ? NextResponse.json({ error: "There are no changes waiting on this checklist." }, { status: 409 }) : notFound();
       await audit({
         actor: actorFrom(gate),
@@ -50,11 +54,11 @@ export async function PUT(req: Request, { params }: Ctx) {
       });
       return NextResponse.json({ template: await getTemplate(id) });
     }
-    const r = await updateTemplate(id, b, { publish: b.publish === true });
+    const r = await updateTemplate(id, b, { publish: b.publish === true, publishDraft: b.publish_draft === true, draftAt: b.draft_at });
     if (!r) return notFound();
     const changed = (["name", "items", "request_type_ids"] as const).filter((k) => JSON.stringify(r.before[k]) !== JSON.stringify(r.after[k]));
-    // 1.20.14: a Claude draft made live (a new one published, or the changes waiting on a published one saved).
-    if ((!r.before.published && r.after.published) || (r.before.published && r.before.draft)) {
+    // 1.20.14: a Claude draft made live, only on an explicit publish (a new one, or the changes waiting on a published one).
+    if (r.published) {
       await audit({
         actor: actorFrom(gate),
         action: "helpdesk.checklist_template.published",

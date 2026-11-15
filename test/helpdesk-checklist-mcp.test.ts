@@ -30,7 +30,7 @@ import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
 import Module from "node:module";
 import path from "node:path";
-import { pool, getSetting, createSession, getUserById } from "../src/lib/db";
+import { pool, getSetting, createSession, getUserById, createApiToken } from "../src/lib/db";
 import { newToken } from "../src/lib/password";
 import { fixtureQuery } from "./support/retry";
 import { startFakeAnthropic, type FakeAnthropic } from "./support/fake-anthropic";
@@ -95,6 +95,9 @@ const desk = require("../src/lib/helpdesk/claude/shared") as typeof import("../s
 const prompt = require("../src/lib/helpdesk/claude/prompt") as typeof import("../src/lib/helpdesk/claude/prompt");
 const deskTools = require("../src/lib/helpdesk/claude/tools") as typeof import("../src/lib/helpdesk/claude/tools");
 const turnLib = require("../src/lib/helpdesk/claude/turn") as typeof import("../src/lib/helpdesk/claude/turn");
+const chats = require("../src/lib/helpdesk/claude/chats") as typeof import("../src/lib/helpdesk/claude/chats");
+const shared = require("../src/lib/helpdesk/checklists-shared") as typeof import("../src/lib/helpdesk/checklists-shared");
+const mcpRoute = require("../src/app/api/mcp/route") as typeof import("../src/app/api/mcp/route");
 const adminRoute = require("../src/app/api/helpdesk/admin/checklists/route") as typeof import("../src/app/api/helpdesk/admin/checklists/route");
 const adminOneRoute = require("../src/app/api/helpdesk/admin/checklists/[id]/route") as typeof import("../src/app/api/helpdesk/admin/checklists/[id]/route");
 const libraryRoute = require("../src/app/api/helpdesk/checklists/route") as typeof import("../src/app/api/helpdesk/checklists/route");
@@ -235,6 +238,12 @@ function toolCtx(u: Awaited<ReturnType<typeof user>>, cfg = CFG(), open: import(
   return { user: u, session: toSessionUser(u), origin: "http://localhost", ip: IP, cfg, chatId: 0, ticket: open, includeNotes: false, touched: new Set<number>(), notesSeen: [] as string[] };
 }
 
+/** A Claude in the desk card offered to `who` (as a turn would store it); its id. */
+async function offerCard(who: string, ticketId: number | null, payload: Record<string, unknown>): Promise<number> {
+  const chat = await pool().query("INSERT INTO hd_claude_chats (user_id, ticket_id, title) VALUES ($1, $2, $3) RETURNING id", [P[who].id, ticketId, `card ${STAMP}`]);
+  return chats.createCard({ chatId: chat.rows[0].id, userId: P[who].id, ticketId, kind: "checklist", payload });
+}
+
 before(async () => {
   await getSetting("__schema_bootstrap__");
   fake = await startFakeAnthropic();
@@ -279,6 +288,7 @@ after(async () => {
   await pool().query("DELETE FROM role_assignments WHERE role_id = ANY($1)", [roleIds]);
   await pool().query("DELETE FROM roles WHERE id = ANY($1)", [roleIds]);
   await pool().query("DELETE FROM sessions WHERE user_id = ANY($1)", [userIds]);
+  await pool().query("DELETE FROM api_tokens WHERE user_id = ANY($1)", [userIds]);
   await pool().query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
   await pool().end();
 });
@@ -380,8 +390,11 @@ describe("hd_draft_checklist: a draft a person publishes", () => {
     assert.equal((await checklists.templateOptions()).some((o) => o.id === draftId), false);
     // An agent can't publish.
     assert.equal((await call(adminOneRoute.PUT, "agent", `/admin/checklists/${draftId}`, "PUT", { publish: true }, { id: String(draftId) })).status, 403);
-    const pub = await call(adminOneRoute.PUT, "manager", `/admin/checklists/${draftId}`, "PUT", { publish: true }, { id: String(draftId) });
-    assert.equal(pub.status, 200);
+    // Publishing names the draft that was reviewed (draft_at); without it, or with an older one, 409.
+    assert.equal((await call(adminOneRoute.PUT, "manager", `/admin/checklists/${draftId}`, "PUT", { publish: true }, { id: String(draftId) })).status, 409);
+    const shownAt = (await checklists.getTemplate(draftId))!.draft_at;
+    const pub = await call(adminOneRoute.PUT, "manager", `/admin/checklists/${draftId}`, "PUT", { publish: true, draft_at: shownAt }, { id: String(draftId) });
+    assert.equal(pub.status, 200, JSON.stringify(pub.body));
     assert.equal(pub.body.template.published, true);
     assert.equal(pub.body.template.draft_by_name, "");
     const audit = await auditRows("helpdesk.checklist_template.published", P.manager.id, draftId);
@@ -428,11 +441,12 @@ describe("hd_draft_checklist: a draft a person publishes", () => {
     assert.equal((await call(adminOneRoute.PUT, "manager", `/admin/checklists/${live}`, "PUT", { discard_draft: true }, { id: String(live) })).status, 409);
     assert.equal((await auditRows("helpdesk.checklist_template.draft_discarded", P.manager.id, live)).length, 1);
 
-    // Draft again, then the person saves what the editor shows (the draft): published.
+    // Draft again, then the person publishes what the review editor shows (publish_draft, naming that draft).
     await tool("manager", "hd_draft_checklist", { id: live, name: `Starter v2 ${STAMP}` });
     row = await tplRow(live);
     assert.equal(row.draft.items.length, 2);
-    const pub = await call(adminOneRoute.PUT, "manager", `/admin/checklists/${live}`, "PUT", { items: [...row.draft.items, { title: "Book a welcome call" }] }, { id: String(live) });
+    const shownAt = (await checklists.getTemplate(live))!.draft_at;
+    const pub = await call(adminOneRoute.PUT, "manager", `/admin/checklists/${live}`, "PUT", { items: [...row.draft.items, { title: "Book a welcome call" }], publish_draft: true, draft_at: shownAt }, { id: String(live) });
     assert.equal(pub.status, 200);
     assert.equal(pub.body.template.name, `Starter v2 ${STAMP}`, "the draft's name, as the editor showed it");
     assert.equal(pub.body.template.items.length, 3);
@@ -710,8 +724,9 @@ describe("Claude in the desk", () => {
     assert.deepEqual((out.card?.payload.items as any[]).map((i) => i.id), [items[0].id, items[1].id]);
     assert.equal((await checklists.ticketChecklists(t.id))[0].done, 0, "nothing changed");
     // Apply: the panel PATCHes each item with via "claude_desk".
+    const cardId = await offerCard("agent", t.id, out.card!.payload);
     for (const it of out.card!.payload.items as { id: number; done: boolean }[]) {
-      assert.equal((await tickRoute("agent", t.number, it.id, { done: it.done, via: "claude_desk" })).status, 200);
+      assert.equal((await tickRoute("agent", t.number, it.id, { done: it.done, card_id: cardId })).status, 200);
     }
     const l = (await lines(t.id)).filter((x) => /ticked/.test(x.body));
     assert.ok(l.every((x) => x.body.endsWith(" via Claude in the desk")), JSON.stringify(l));
@@ -752,8 +767,9 @@ describe("Claude in the desk", () => {
     const bad = await deskTools.runDeskTool("draft_checklist", { ...input, items: [{ title: "x", required: false, team_id: null, due_days: 61 }] }, toolCtx(await user("manager")));
     assert.match(bad.content, /0 to 60 business days/);
     // Save as draft: the settings route, with the agent's session.
-    assert.equal((await call(adminRoute.POST, "agent", "/admin/checklists", "POST", { ...draft, draft: true })).status, 403);
-    const saved = await call(adminRoute.POST, "manager", "/admin/checklists", "POST", { ...draft, draft: true });
+    const cardId = await offerCard("manager", null, out.card!.payload);
+    assert.equal((await call(adminRoute.POST, "agent", "/admin/checklists", "POST", { ...draft, draft: true, card_id: cardId })).status, 403);
+    const saved = await call(adminRoute.POST, "manager", "/admin/checklists", "POST", { ...draft, draft: true, card_id: cardId });
     assert.equal(saved.status, 201, JSON.stringify(saved.body));
     assert.equal(saved.body.template.published, false);
     assert.equal(saved.body.template.draft_via, "claude_desk");
@@ -812,5 +828,217 @@ describe("Claude in the desk", () => {
     } finally {
       config.setClaudeDeskConfigForTests(CFG());
     }
+  });
+});
+
+// --- 1.20.14 security review: regression tests for probes R1 to R6 ------------------------------
+
+describe("review fixes (R1 to R6)", () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const MCP = () => ({ id: P.manager.id, name: P.manager.name, via: "mcp" as const });
+
+  test("R1: a draft Claude saves while a person publishes never lands in the live copy", async () => {
+    const rt = typeIds[0];
+    const d = await checklists.saveTemplateDraft({ name: `Race ${STAMP}`, items: [{ title: "Draft item" }], request_type_ids: [] }, MCP());
+    const c = await pool().connect();
+    let r: Awaited<ReturnType<typeof checklists.saveTemplateDraft>>;
+    try {
+      await c.query("BEGIN");
+      await c.query("SELECT 1 FROM hd_checklist_templates WHERE id = $1 FOR UPDATE", [d.template.id]);
+      const p = checklists.saveTemplateDraft({ items: [{ title: "UNREVIEWED from Claude", required: true }], request_type_ids: [rt] }, MCP(), d.template.id);
+      await sleep(400);
+      await c.query(`UPDATE hd_checklist_templates SET published = 1, items = '[{"key":"i1","title":"Reviewed item"}]', request_type_ids = '{}' WHERE id = $1`, [d.template.id]);
+      await c.query("COMMIT");
+      r = await p;
+    } finally {
+      c.release();
+    }
+    assert.equal(r.kind, "changes", "it waited for the publish, then went beside the live copy");
+    const row = await tplRow(d.template.id);
+    assert.deepEqual(row.items.map((i: { title: string }) => i.title), ["Reviewed item"]);
+    assert.deepEqual(row.request_type_ids, []);
+    assert.deepEqual(row.draft.items.map((i: { title: string }) => i.title), ["UNREVIEWED from Claude"]);
+    const t = await ticket("Race victim", "A", { request_type_id: rt });
+    await checklists.addRequestTypeChecklists(t.id);
+    assert.ok(!(await checklists.ticketChecklists(t.id)).some((c) => c.template_id === d.template.id), "the unreviewed request type doesn't attach it");
+  });
+
+  test("R2: a save never publishes or drops a draft it didn't show; publishing names the reviewed draft", async () => {
+    // (a) A stale editor of the live copy saves: the live copy changes, Claude's draft stays, nothing is "published".
+    const id = await liveTemplate("Stale", [{ title: "Live A" }]);
+    await checklists.saveTemplateDraft({ items: [{ title: "Claude B" }] }, MCP(), id);
+    const r = await call(adminOneRoute.PUT, "manager", `/admin/checklists/${id}`, "PUT", { name: `Stale ${STAMP}`, items: [{ title: "Live A edited" }], request_type_ids: [] }, { id: String(id) });
+    assert.equal(r.status, 200);
+    let row = await tplRow(id);
+    assert.deepEqual(row.items.map((i: { title: string }) => i.title), ["Live A edited"]);
+    assert.deepEqual(row.draft.items.map((i: { title: string }) => i.title), ["Claude B"], "the draft is kept");
+    assert.equal((await auditRows("helpdesk.checklist_template.published", P.manager.id, id)).length, 0);
+    assert.deepEqual((await auditRows("helpdesk.checklist_template.updated", P.manager.id, id)).at(-1)!.details.changed, ["items"]);
+    // (b) A partial save (rename only) keeps the live items, not Claude's.
+    const id2 = await liveTemplate("Partial", [{ title: "Live A" }]);
+    await checklists.saveTemplateDraft({ items: [{ title: "Claude ITEMS", required: true }] }, MCP(), id2);
+    assert.equal((await call(adminOneRoute.PUT, "manager", `/admin/checklists/${id2}`, "PUT", { name: `Partial renamed ${STAMP}` }, { id: String(id2) })).status, 200);
+    row = await tplRow(id2);
+    assert.deepEqual(row.items.map((i: { title: string }) => i.title), ["Live A"]);
+    assert.equal(row.name, `Partial renamed ${STAMP}`);
+    assert.ok(row.draft, "the draft is kept");
+    // (c) Publishing the draft the person reviewed; a newer one since is refused (409), and so is publishing with none waiting.
+    const seen = (await checklists.getTemplate(id2))!.draft_at;
+    await sleep(20);
+    await checklists.saveTemplateDraft({ items: [{ title: "Claude NEWER" }] }, MCP(), id2);
+    const stale = await call(adminOneRoute.PUT, "manager", `/admin/checklists/${id2}`, "PUT", { publish_draft: true, draft_at: seen }, { id: String(id2) });
+    assert.equal(stale.status, 409);
+    assert.match(stale.body.error, /newer draft/);
+    assert.deepEqual((await tplRow(id2)).items.map((i: { title: string }) => i.title), ["Live A"]);
+    const staleDiscard = await call(adminOneRoute.PUT, "manager", `/admin/checklists/${id2}`, "PUT", { discard_draft: true, draft_at: seen }, { id: String(id2) });
+    assert.equal(staleDiscard.status, 409, "nor is a newer draft discarded unseen");
+    const now = (await checklists.getTemplate(id2))!.draft_at;
+    const ok = await call(adminOneRoute.PUT, "manager", `/admin/checklists/${id2}`, "PUT", { publish_draft: true, draft_at: now }, { id: String(id2) });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.deepEqual(ok.body.template.items.map((i: { title: string }) => i.title), ["Claude NEWER"]);
+    assert.equal(ok.body.template.draft, null);
+    assert.equal((await auditRows("helpdesk.checklist_template.published", P.manager.id, id2)).length, 1, "published only on the explicit publish");
+    assert.equal((await call(adminOneRoute.PUT, "manager", `/admin/checklists/${id2}`, "PUT", { publish_draft: true, draft_at: now }, { id: String(id2) })).status, 409);
+  });
+
+  test("R3: a client's via is ignored; only an offered card of this agent's for exactly this change marks it", async () => {
+    const id = await liveTemplate("Forge", LEAVER);
+    const { t, items } = await withChecklist("Forge", id);
+    const other = await withChecklist("Forge other", id);
+    // A bare via, and a via of "mcp": the agent's own ticks.
+    assert.equal((await tickRoute("agent", t.number, items[0].id, { done: true, via: "claude_desk" })).status, 200);
+    assert.equal((await tickRoute("agent", t.number, items[1].id, { done: true, via: "mcp" })).status, 200);
+    // Cards that don't fit: another agent's, another ticket's, another item's, the opposite tick, a draft card.
+    const mine = { action: "tick", number: t.number, items: [{ id: items[2].id, title: "x", checklist: "y", done: true }], title: "t", hint: "" };
+    const foreignUser = await offerCard("lead", t.id, mine);
+    const foreignTicket = await offerCard("agent", other.t.id, mine);
+    const wrongItem = await offerCard("agent", t.id, { ...mine, items: [{ id: items[0].id, title: "x", checklist: "y", done: true }] });
+    const untick = await offerCard("agent", t.id, { ...mine, items: [{ id: items[2].id, title: "x", checklist: "y", done: false }] });
+    const draftCard = await offerCard("agent", t.id, { action: "draft", number: t.number, draft: { name: "n", items: [], request_type_ids: [] }, title: "d", hint: "" });
+    for (const cardId of [foreignUser, foreignTicket, wrongItem, untick, draftCard, 999999999]) {
+      assert.equal((await tickRoute("agent", t.number, items[2].id, { done: true, card_id: cardId })).status, 200);
+      assert.equal((await tickRoute("agent", t.number, items[2].id, { done: false, card_id: cardId === untick ? 0 : cardId })).status, 200);
+    }
+    const l = (await lines(t.id)).map((x) => x.body).filter((b) => /ticked/.test(b));
+    assert.ok(l.length >= 4);
+    assert.ok(l.every((b) => !/via Claude/.test(b)), JSON.stringify(l));
+    assert.ok((await auditRows("helpdesk.checklist.item_ticked", P.agent.id, t.id)).every((a) => !("via" in a.details)));
+    // The right card: marked. Once decided, the same card marks nothing.
+    const right = await offerCard("agent", t.id, mine);
+    assert.equal((await tickRoute("agent", t.number, items[2].id, { done: true, card_id: right })).status, 200);
+    assert.match((await lines(t.id)).at(-1)!.body, /via Claude in the desk$/);
+    assert.equal((await auditRows("helpdesk.checklist.item_ticked", P.agent.id, t.id)).at(-1)!.details.via, "claude_desk");
+    assert.equal((await call(cardRoute.POST, "agent", `/claude/cards/${right}`, "POST", { state: "applied" }, { id: String(right) })).status, 200);
+    await tickRoute("agent", t.number, items[2].id, { done: false });
+    await tickRoute("agent", t.number, items[2].id, { done: true, card_id: right });
+    assert.doesNotMatch((await lines(t.id)).at(-1)!.body, /via Claude/);
+    // The add route (1.20.0's pattern): a bare via is ignored; the offered add card marks it.
+    const id2 = await liveTemplate("Forge add", [{ title: "One" }]);
+    const id3 = await liveTemplate("Forge add 2", [{ title: "Two" }]);
+    const add = (who: string, body: Record<string, unknown>) => call(ticketListsRoute.POST, who, `/tickets/${t.number}/checklists`, "POST", body, { number: String(t.number) });
+    assert.equal((await add("agent", { template_id: id2, via: "claude_desk" })).status, 201);
+    assert.ok(!("via" in (await auditRows("helpdesk.checklist.added", P.agent.id, t.id)).at(-1)!.details));
+    assert.doesNotMatch((await lines(t.id)).at(-1)!.body, /via Claude/);
+    const addCard = await offerCard("agent", t.id, { number: t.number, template_id: id3, title: "Add", hint: "" });
+    assert.equal((await add("agent", { template_id: id3, card_id: addCard })).status, 201);
+    assert.equal((await auditRows("helpdesk.checklist.added", P.agent.id, t.id)).at(-1)!.details.via, "claude_desk");
+    // A draft "from Claude" without its card (or with a card for another checklist) is refused, nothing saved.
+    const before = await myTemplates();
+    const body = { name: `Forged draft ${STAMP}`, items: [{ title: "x" }], request_type_ids: [] };
+    assert.equal((await call(adminRoute.POST, "manager", "/admin/checklists", "POST", { ...body, draft: true })).status, 400);
+    assert.equal((await call(adminRoute.POST, "manager", "/admin/checklists", "POST", { ...body, draft: true, via: "claude_desk" })).status, 400);
+    const otherDraft = await offerCard("manager", null, { action: "draft", number: null, draft: { name: `Other ${STAMP}`, items: [{ key: "i1", title: "x" }], request_type_ids: [] }, title: "d", hint: "" });
+    assert.equal((await call(adminRoute.POST, "manager", "/admin/checklists", "POST", { ...body, draft: true, card_id: otherDraft })).status, 400);
+    assert.equal(await myTemplates(), before);
+  });
+
+  test("R4: foreign items, other teams, requesters, the connector level and the recycle bin are all refused, nothing ticked", async () => {
+    const id = await liveTemplate("Idor", LEAVER);
+    const a = await withChecklist("Idor A", id, "A");
+    const b = await withChecklist("Idor B", id, "B");
+    assert.equal((await tool("agent", "hd_update_checklist", { number: a.t.number, items: [{ id: a.items[0].id, done: true }, { id: b.items[0].id, done: true }] })).isError, true);
+    assert.equal((await tool("agent", "hd_update_checklist", { number: a.t.number, items: [{ id: b.items[0].id, done: true }] })).isError, true);
+    assert.equal((await tickRoute("agent", a.t.number, b.items[0].id, { done: true })).status, 404);
+    assert.equal((await tool("outsider", "hd_update_checklist", { number: a.t.number, items: [{ id: a.items[0].id, done: true }] })).isError, true);
+    assert.equal((await tool("req", "hd_update_checklist", { number: a.t.number, items: [{ id: a.items[0].id, done: true }] })).isError, true);
+    connector.setClaudeLevelForTests("notes");
+    try {
+      assert.equal((await tool("agent", "hd_update_checklist", { number: a.t.number, items: [{ id: a.items[0].id, done: true }] })).isError, true);
+    } finally {
+      connector.setClaudeLevelForTests("update");
+    }
+    await pool().query("UPDATE hd_tickets SET deleted_at = now() WHERE id = $1", [a.t.id]);
+    try {
+      assert.equal((await tool("agent", "hd_update_checklist", { number: a.t.number, items: [{ id: a.items[0].id, done: true }] })).isError, true);
+    } finally {
+      await pool().query("UPDATE hd_tickets SET deleted_at = NULL WHERE id = $1", [a.t.id]);
+    }
+    const dn = (await pool().query("SELECT done_at FROM hd_ticket_checklist_items WHERE id = ANY($1)", [[a.items[0].id, b.items[0].id]])).rows;
+    assert.ok(dn.every((r) => r.done_at === null));
+  });
+
+  test("R5: a batch is all or nothing: an item that disappears mid-way rolls back the earlier ticks", async () => {
+    const id = await liveTemplate("Atomic", LEAVER);
+    const { t, items } = await withChecklist("Atomic", id);
+    const c = await pool().connect();
+    let outcome = "";
+    try {
+      await c.query("BEGIN");
+      await c.query("SELECT 1 FROM hd_ticket_checklist_items WHERE id = $1 FOR UPDATE", [items[1].id]);
+      const tk = (await pool().query("SELECT id, number, subject, status, merged_into FROM hd_tickets WHERE id = $1", [t.id])).rows[0];
+      const p = checklists.tickItemsAs(await user("agent"), tk, [{ id: items[0].id, done: true }, { id: items[1].id, done: true }], { ip: IP, via: "mcp" }).then(
+        () => "ok",
+        (e: Error) => `err ${e.message}`
+      );
+      await sleep(400);
+      await c.query("DELETE FROM hd_ticket_checklist_items WHERE id = $1", [items[1].id]);
+      await c.query("COMMIT");
+      outcome = await p;
+    } finally {
+      c.release();
+    }
+    assert.match(outcome, /^err Item \d+ isn't on this ticket any more\. Nothing was changed\./);
+    assert.equal((await pool().query("SELECT done_at FROM hd_ticket_checklist_items WHERE id = $1", [items[0].id])).rows[0].done_at, null);
+    assert.equal((await auditRows("helpdesk.checklist.item_ticked", P.agent.id, t.id)).length, 0);
+    assert.ok(!(await lines(t.id)).some((l) => /ticked/.test(l.body)));
+    // The ticket closed between the check and the batch: refused inside the transaction.
+    const tk2 = (await pool().query("SELECT id, number, subject, status, merged_into FROM hd_tickets WHERE id = $1", [t.id])).rows[0];
+    await pool().query("UPDATE hd_tickets SET status = 'closed' WHERE id = $1", [t.id]);
+    await assert.rejects(checklists.tickItemsAs(await user("agent"), tk2, [{ id: items[0].id, done: true }], { ip: IP }), /can't change any more/);
+  });
+
+  test("R6: long id lists are refused before they are walked; /api/mcp refuses an oversized body", async () => {
+    for (const n of [51, 80_000]) {
+      const s = Date.now();
+      const r = shared.checkTemplateInput({ name: "x", items: [{ title: "a" }], request_type_ids: Array.from({ length: n }, (_, i) => i + 1) });
+      assert.deepEqual(r, { ok: false, error: "Up to 50 request types." });
+      assert.ok(Date.now() - s < 200, `${n} ids checked in ${Date.now() - s} ms`);
+    }
+    assert.deepEqual(shared.checkTemplateInput({ name: "x", items: [{ title: "a" }], request_type_ids: [3, 3, 4] }).ok && "ok", "ok");
+    assert.equal(shared.checkTaskChecklistIds(Array.from({ length: 80_000 }, () => 1), "T").ok, false);
+    const s = Date.now();
+    const r = await tool("manager", "hd_draft_checklist", { name: `Dos ${STAMP}`, items: [{ title: "a" }], request_type_ids: Array.from({ length: 40_000 }, (_, i) => i + 1) });
+    assert.equal(r.isError, true);
+    assert.match(r.text, /Up to 50 request types/);
+    assert.ok(Date.now() - s < 1000, `answered in ${Date.now() - s} ms`);
+    // The MCP endpoint: a body over its limit is never parsed (JSON-RPC error, 413); a normal one works.
+    const token = (await createApiToken(P.manager.id, `${STAMP} mcp`, ["read", "write"])).token;
+    const post = async (raw: string, headers: Record<string, string> = {}) => {
+      currentRequest = new Request("http://localhost/api/mcp", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...headers }, body: raw });
+      try {
+        const res = await mcpRoute.POST(currentRequest);
+        return { status: res.status, body: await res.json().catch(() => null) };
+      } finally {
+        currentRequest = null;
+      }
+    };
+    const huge = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: { pad: "x".repeat(20 * 1024 * 1024) } });
+    const big = await post(huge);
+    assert.equal(big.status, 413);
+    assert.equal(big.body.error.code, -32600);
+    assert.match(big.body.error.message, /Request too large/);
+    const ok = await post(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }));
+    assert.equal(ok.status, 200);
+    assert.ok(Array.isArray(ok.body.result.tools));
   });
 });

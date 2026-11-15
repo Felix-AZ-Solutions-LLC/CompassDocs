@@ -256,12 +256,12 @@ async function proposeTicks(a: Record<string, any>, ctx: ToolCtx): Promise<ToolO
   if (raw.length > 50) return fail("Up to 50 items at once.");
   const lists = await ticketChecklists(t.id);
   const byId = new Map(lists.flatMap((c) => c.items.map((i) => [i.id, { ...i, checklist: c.name }] as const)));
-  const items: { id: number; title: string; checklist: string; done: boolean }[] = [];
+  const items: { id: number; title: string; checklist: string; done: boolean; required: boolean }[] = [];
   for (const r of raw) {
     const it = byId.get(r.id);
     if (!it) return fail(`Item ${r.id} isn't on #${t.number}'s checklists. Read the ticket's checklists for the item ids.`);
     if (items.some((x) => x.id === r.id)) continue;
-    if (it.done !== r.done) items.push({ id: it.id, title: it.title, checklist: it.checklist, done: r.done });
+    if (it.done !== r.done) items.push({ id: it.id, title: it.title, checklist: it.checklist, done: r.done, required: it.required });
   }
   if (!items.length) return fail(`Those items on #${t.number} are already as asked. Nothing to propose.`);
   const ticks = items.filter((i) => i.done).length;

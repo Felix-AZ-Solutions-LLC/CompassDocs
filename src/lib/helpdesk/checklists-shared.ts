@@ -181,6 +181,7 @@ export function checkTemplateInput(raw: unknown): Checked<HdChecklistTemplateInp
   if (raw.items.length > CHECKLIST_LIMITS.items) return { ok: false, error: `A checklist holds up to ${CHECKLIST_LIMITS.items} items.` };
   const items: HdChecklistTemplateItem[] = [];
   const keys = new Set<string>();
+  const rawKeys = raw.items.map((x) => (isObj(x) && typeof x.key === "string" ? x.key : ""));
   for (const [i, r] of raw.items.entries()) {
     const where = `Item ${i + 1}`;
     if (!isObj(r)) return { ok: false, error: `${where} must be an object.` };
@@ -188,7 +189,7 @@ export function checkTemplateInput(raw: unknown): Checked<HdChecklistTemplateInp
     if (!title) return { ok: false, error: `${where} needs a title.` };
     if (title.length > CHECKLIST_LIMITS.itemTitle) return { ok: false, error: `${where} is longer than ${CHECKLIST_LIMITS.itemTitle} characters.` };
     let key = typeof r.key === "string" && KEY_RE.test(r.key) ? r.key : "";
-    if (!key || keys.has(key)) key = newItemKey([...keys, ...raw.items.map((x) => (isObj(x) && typeof x.key === "string" ? x.key : ""))]);
+    if (!key || keys.has(key)) key = newItemKey([...keys, ...rawKeys]);
     keys.add(key);
     const item: HdChecklistTemplateItem = { key, title };
     if (r.required === true) item.required = true;
@@ -207,29 +208,31 @@ export function checkTemplateInput(raw: unknown): Checked<HdChecklistTemplateInp
     }
     items.push(item);
   }
-  const rts: number[] = [];
+  // 1.20.14 (review fix): the length is checked before the list is walked, and duplicates go through a Set.
+  const rts = new Set<number>();
   if (raw.request_type_ids !== undefined && raw.request_type_ids !== null) {
     if (!Array.isArray(raw.request_type_ids)) return { ok: false, error: "Request types are a list of ids." };
+    if (raw.request_type_ids.length > CHECKLIST_LIMITS.requestTypes) return { ok: false, error: `Up to ${CHECKLIST_LIMITS.requestTypes} request types.` };
     for (const v of raw.request_type_ids) {
       const id = posInt(v);
       if (!id) return { ok: false, error: "Request types are a list of ids." };
-      if (!rts.includes(id)) rts.push(id);
+      rts.add(id);
     }
-    if (rts.length > CHECKLIST_LIMITS.requestTypes) return { ok: false, error: `Up to ${CHECKLIST_LIMITS.requestTypes} request types.` };
   }
-  return { ok: true, value: { name, items, request_type_ids: rts } };
+  return { ok: true, value: { name, items, request_type_ids: [...rts] } };
 }
 
 /** A workflow task's `checklist_ids` (shape only; lib/helpdesk/checklists checks they exist). Undefined when none. */
 export function checkTaskChecklistIds(raw: unknown, where: string): Checked<number[] | undefined> {
   if (raw === undefined || raw === null) return { ok: true, value: undefined };
   if (!Array.isArray(raw)) return { ok: false, error: `${where}: the checklists are a list of ids.` };
-  const ids: number[] = [];
+  // 1.20.14 (review fix): length first, duplicates through a Set.
+  if (raw.length > CHECKLIST_LIMITS.perTask) return { ok: false, error: `${where}: a task adds up to ${CHECKLIST_LIMITS.perTask} checklists.` };
+  const ids = new Set<number>();
   for (const v of raw) {
     const id = posInt(v);
     if (!id) return { ok: false, error: `${where}: the checklists are a list of ids.` };
-    if (!ids.includes(id)) ids.push(id);
+    ids.add(id);
   }
-  if (ids.length > CHECKLIST_LIMITS.perTask) return { ok: false, error: `${where}: a task adds up to ${CHECKLIST_LIMITS.perTask} checklists.` };
-  return { ok: true, value: ids.length ? ids : undefined };
+  return { ok: true, value: ids.size ? [...ids] : undefined };
 }

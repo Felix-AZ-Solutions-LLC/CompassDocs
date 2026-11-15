@@ -3,17 +3,19 @@
 //      Audited (helpdesk.checklist_template.created).
 // Helpdesk 1.19.2 (agent W3; mock-up c2): Desk settings → Checklists. Desk capability
 // settings.manage, request_types.manage or workflows.manage (lib/helpdesk/checklists-caps).
-// 1.20.14: POST { draft: true, id?, name, items, request_type_ids } is "Save as draft" on a
-//      Claude in the desk card: a new unpublished checklist, or (with id) changes proposed
-//      beside the live one, for a person to publish (lib/helpdesk/checklists saveTemplateDraft).
-//      Audited like the connector's drafts, with via "claude_desk".
+// 1.20.14: POST { draft: true, card_id, name, items, request_type_ids } is "Save as draft" on a
+//      Claude in the desk card: a new unpublished checklist for a person to publish
+//      (lib/helpdesk/checklists saveTemplateDraft). Only with card_id naming this person's offered
+//      draft card with exactly this checklist (400 otherwise; review fix). Audited like the
+//      connector's drafts, with via "claude_desk".
 
 import { NextResponse } from "next/server";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { readJson } from "@/lib/helpdesk/access";
 import { hdAnyCapGate } from "@/lib/helpdesk/roles";
 import { hq } from "@/lib/helpdesk/db-core";
-import { ChecklistError, createTemplate, listTemplateRows, saveTemplateDraft } from "@/lib/helpdesk/checklists";
+import { checkTemplateInput, ChecklistError, createTemplate, listTemplateRows, saveTemplateDraft } from "@/lib/helpdesk/checklists";
+import { offeredChecklistCard } from "@/lib/helpdesk/claude/chats";
 import { CHECKLIST_MANAGE_CAPS } from "@/lib/helpdesk/checklists-caps";
 
 export const dynamic = "force-dynamic";
@@ -38,6 +40,12 @@ export async function POST(req: Request) {
     if (b.draft === true) {
       const id = b.id === undefined || b.id === null ? undefined : typeof b.id === "number" && Number.isInteger(b.id) && b.id > 0 ? b.id : null;
       if (id === null) return NextResponse.json({ error: "No such checklist." }, { status: 404 });
+      // Review fix: a draft "from Claude" needs the Claude card it came from, offered to this person, with exactly this checklist.
+      const shape = checkTemplateInput(b);
+      if (!shape.ok) return NextResponse.json({ error: shape.error }, { status: 400 });
+      if (id !== undefined || !(await offeredChecklistCard(gate.id, b.card_id, { action: "draft", draft: shape.value }))) {
+        return NextResponse.json({ error: "Save as draft works from the Claude card it came from. Create a checklist with New checklist instead." }, { status: 400 });
+      }
       const r = await saveTemplateDraft(b, { id: gate.id, name: gate.name || gate.username, via: "claude_desk" }, id);
       const d = r.template.draft ?? r.template;
       const counts = { items: d.items.length, required: d.items.filter((i) => i.required).length, request_type_ids: d.request_type_ids, draft: true, via: "claude_desk", via_label: "via Claude in the desk" };

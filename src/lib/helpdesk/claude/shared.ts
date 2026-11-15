@@ -278,7 +278,8 @@ export interface ClaudeChecklistTickCard {
   kind: "checklist";
   action: "tick";
   number: number;
-  items: { id: number; title: string; checklist: string; done: boolean }[];
+  /** done: true ticks, false unticks; required: a required item (unticking it holds the ticket open again). */
+  items: { id: number; title: string; checklist: string; done: boolean; required?: boolean }[];
   /** 'Tick "Disable sign-in"', 'Tick 3 items'. */
   title: string;
   hint: string;

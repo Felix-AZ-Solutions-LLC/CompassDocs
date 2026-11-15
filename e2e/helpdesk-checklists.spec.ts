@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { Client } from "pg";
 import { ADMIN, login, api } from "./helpers";
 
 // Checklists (1.19.2, agent W3; mock-ups c1 and c2). Desk settings →
@@ -226,13 +227,18 @@ test.describe("checklists (licensed)", () => {
     test.setTimeout(300_000);
     await page.setViewportSize({ width: 1440, height: 900 });
     const draftName = `Starter kit ${stamp}`;
-    const made = await api(page, "/api/helpdesk/admin/checklists", {
-      method: "POST",
-      body: { draft: true, name: draftName, items: [{ title: "Order a laptop", required: true }, { title: "Create the accounts" }, { title: "Book a welcome call", due_days: 2 }] },
-    });
-    expect(made.status, JSON.stringify(made.body)).toBe(201);
-    const id = made.body.template.id as number;
-    expect(made.body.template.published).toBe(false);
+    // The drafts are saved as the Claude connector saves them (hd_draft_checklist): straight into the
+    // library row, unpublished, and (below) as changes beside a published checklist. Save as draft on
+    // a Claude in the desk card is covered by helpdesk-claude-desk.spec.
+    const db = new Client({ connectionString: process.env.DATABASE_URL || "postgresql://postgres@127.0.0.1:5599/compass_e2e" });
+    await db.connect();
+    const items = [{ key: "i1", title: "Order a laptop", required: true }, { key: "i2", title: "Create the accounts" }, { key: "i3", title: "Book a welcome call", due_days: 2 }];
+    const id = (
+      await db.query(
+        "INSERT INTO hd_checklist_templates (name, items, published, draft_by_name, draft_at, draft_via) VALUES ($1, $2, 0, 'E2E Claude', now(), 'mcp') RETURNING id",
+        [draftName, JSON.stringify(items)]
+      )
+    ).rows[0].id as number;
     // Not offered to agents while it is a draft.
     const lib = await api(page, "/api/helpdesk/checklists");
     expect((lib.body.templates as { id: number }[]).some((x) => x.id === id)).toBe(false);
@@ -259,8 +265,11 @@ test.describe("checklists (licensed)", () => {
     expect((live.body.templates as { id: number; items: number }[]).find((x) => x.id === id)?.items).toBe(3);
 
     // Changes proposed to the live checklist, then discarded.
-    const changes = await api(page, "/api/helpdesk/admin/checklists", { method: "POST", body: { draft: true, id, items: [{ title: "Order a laptop", required: true }] } });
-    expect(changes.status, JSON.stringify(changes.body)).toBe(200);
+    await db.query("UPDATE hd_checklist_templates SET draft = $2, draft_by_name = 'E2E Claude', draft_at = now(), draft_via = 'mcp' WHERE id = $1", [
+      id,
+      JSON.stringify({ name: draftName, items: [{ key: "i1", title: "Order a laptop", required: true }], request_type_ids: [] }),
+    ]);
+    await db.end();
     await page.reload();
     await slow(row.getByText("Changes from Claude", { exact: true })).toBeVisible({ timeout: 60_000 });
     const changed = page.locator("#checklist-editor").getByRole("region", { name: "Draft from Claude" });

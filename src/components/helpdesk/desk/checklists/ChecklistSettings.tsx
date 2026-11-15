@@ -256,7 +256,9 @@ function Editor({
 
   async function save(publish = false) {
     setError("");
-    const body = { ...draft, name: draft.name.trim(), items: draft.items.filter((i) => i.title.trim()), ...(publish ? { publish: true } : {}) };
+    // 1.20.14 (review fix): publishing names the draft this editor showed (draft_at); a newer one is refused (409) so it is never published unseen.
+    const publishing = publish && claude ? (claude.published ? { publish_draft: true, draft_at: claude.draft_at } : { publish: true, draft_at: claude.draft_at }) : {};
+    const body = { ...draft, name: draft.name.trim(), items: draft.items.filter((i) => i.title.trim()), ...publishing };
     if (!body.name) return setError("Give the checklist a name.");
     if (!body.items.length) return setError("Add at least one item.");
     setBusy(true);
@@ -314,7 +316,7 @@ function Editor({
     if (!template) return;
     setBusy(true);
     try {
-      const r = await sendJson<{ template: HdChecklistTemplate }>(`/api/helpdesk/admin/checklists/${template.id}`, "PUT", { discard_draft: true }, "Couldn't discard the changes.");
+      const r = await sendJson<{ template: HdChecklistTemplate }>(`/api/helpdesk/admin/checklists/${template.id}`, "PUT", { discard_draft: true, draft_at: template.draft_at }, "Couldn't discard the changes.");
       markClean(JSON.stringify(draft));
       toast("ok", "Changes discarded. The published checklist is unchanged.");
       onSaved(r.template);
@@ -491,7 +493,7 @@ function Editor({
             <Button variant="secondary" busy={busy} onClick={discardChanges}>
               Discard changes
             </Button>
-            <Button busy={busy} onClick={() => save(false)}>
+            <Button busy={busy} onClick={() => save(true)}>
               Publish changes
             </Button>
           </>

@@ -1903,13 +1903,56 @@ async function handleRpc(user: User, msg: any, origin: string, ip: string | null
   }
 }
 
+/**
+ * 1.20.14 (review fix): the request body, read up to `max` bytes. A larger one
+ * is never read whole: null, answered with a JSON-RPC error. The declared
+ * Content-Length is checked first; a body without one is read in chunks.
+ */
+async function readCapped(req: Request, max: number): Promise<string | null> {
+  const declared = Number(req.headers.get("content-length") || 0);
+  if (declared > max) return null;
+  if (!req.body) return "";
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * The largest MCP request: 1 MB, or more when the workspace's attachment limit
+ * needs it (add_image's base64 `data` is the only big argument; base64 is 4/3
+ * of the bytes, plus room for the rest of the call).
+ */
+async function mcpBodyLimit(): Promise<number> {
+  const mb = 1024 * 1024;
+  try {
+    const { max_attachment_mb } = await getAppSettings();
+    return Math.max(mb, Math.ceil((Number(max_attachment_mb) || 0) * mb * (4 / 3)) + 256 * 1024);
+  } catch {
+    return mb;
+  }
+}
+
 export async function POST(req: Request) {
   const user = await authenticate(req);
   if (user instanceof Response) return user;
 
   let body: any;
+  const limit = await mcpBodyLimit();
+  const text = await readCapped(req, limit).catch(() => null);
+  if (text === null) return json(rpcError(null, -32600, `Request too large (over ${Math.round(limit / 1024)} KB).`), 413);
   try {
-    body = await req.json();
+    body = JSON.parse(text);
   } catch {
     return json(rpcError(null, -32700, "Parse error"), 400);
   }

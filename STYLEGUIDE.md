@@ -4604,12 +4604,13 @@ live in `components/helpdesk/desk/checklists`.
   changes**. A draft is in no picker and adds itself to nothing ("Request
   type X (once published)" in the table).
 - **Claude in the desk's checklist cards** (1.20.14) are the panel's Apply /
-  Skip cards with `ListChecks`: a tick card lists up to six items, each
-  with a `neutral` `sm` **Tick** / **Untick** chip; a draft card lists the
-  items with a `warn` **Required** chip where it applies, and its primary
+  Skip cards with `ListChecks`: a tick card lists every item (the list
+  scrolls past `max-h-48`), each with a `neutral` `sm` **Tick** /
+  **Untick** chip, and a `warn` **Untick (required)** for a required item
+  (unticking it holds the ticket open again); a draft card lists every
+  item with a `warn` **Required** chip where it applies, and its primary
   button is **Save as draft** (the decided chip reads "Saved as draft",
-  with a "Review in Checklists" link). "and N more" in `text-slate-500`
-  under six.
+  with a "Review in Checklists" link).
 - **The workflow builder's Task step** has a "Checklists" section like
   "If the team can't do it": rows naming each chosen checklist with its
   item count and a quiet `X`, and a secondary `sm` **Add checklist**
