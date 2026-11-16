@@ -23,7 +23,11 @@
 // settings would; Save as draft sends the card's id to the desk's own
 // settings route, which saves it unpublished, off or paused). Proposals are checked with the same permission
 // functions the desk's PATCH uses, so Claude is told at once when the agent
-// could not apply them. Server-only.
+// could not apply them. 1.20.22: list_startable_workflows and suggest_workflow
+// (only when the agent holds workflows.start in the open ticket's team): the
+// types 1.20.21's own rule offers, and a card suggesting one with Claude's
+// answers checked (claude/workflow-cards); the agent reviews and starts it
+// through the desk's start-workflow route. Server-only.
 
 import "server-only";
 import type { SessionUser, User } from "../../types";
@@ -54,6 +58,8 @@ export interface ToolCtx {
   touched: Set<number>;
   /** Internal notes Claude has seen this turn. */
   notesSeen: string[];
+  /** 1.20.22: suggest_workflow already made its one card this turn. */
+  workflowSuggested?: boolean;
 }
 
 type Activity = Extract<ClaudeStreamEvent, { type: "activity" }>;
@@ -137,6 +143,10 @@ export async function runDeskTool(name: string, input: Record<string, any>, ctx:
         return await draftRecurring(input, ctx);
       case "propose_macro":
         return await proposeMacro(input, ctx);
+      case "list_startable_workflows":
+        return await listStartableWorkflows(input, ctx);
+      case "suggest_workflow":
+        return await suggestWorkflow(input, ctx);
       case "propose_ticket_change":
         return await proposeChange(input, ctx);
       case "draft_reply":
@@ -562,6 +572,81 @@ async function proposeMacro(a: Record<string, any>, ctx: ToolCtx): Promise<ToolO
         payload: { action: "macro", number: t.number, macro_id: r.macro.id, title, lines, reply: res.body, last_message_id: last, solves, plan: r.plan },
       },
     }
+  );
+}
+
+// --- Workflows (1.20.22) ------------------------------------------------------------------------
+
+/**
+ * The open ticket, for the workflow tools: the agent works it, Claude is on for its team, and the
+ * agent holds workflows.start there (the start route's own gate; the turn offers these tools only then).
+ */
+async function workflowTicket(ctx: ToolCtx, raw: unknown): Promise<HdTicket | string> {
+  const t = await workTicket(ctx, raw);
+  if (typeof t === "string") return t;
+  if (!ctx.ticket || ctx.ticket.id !== t.id) {
+    return `A workflow can be suggested only for the ticket the agent has open${ctx.ticket ? ` (#${ctx.ticket.number})` : ""}. Tell the agent to open #${t.number} and ask again there.`;
+  }
+  if (!(await hdCan(ctx.user, "workflows.start", { teamId: t.team_id }))) return `The agent can't start workflows on #${t.number}'s team (desk role).`;
+  return t;
+}
+
+/** 1.20.22: what could be started for the open ticket: 1.20.21's own list for the agent, never a directory value. */
+async function listStartableWorkflows(a: Record<string, any>, ctx: ToolCtx): Promise<ToolOutcome> {
+  const t = await workflowTicket(ctx, a.number);
+  if (typeof t === "string") return fail(t);
+  const wc = await import("./workflow-cards");
+  const s = await wc.startableForClaude(ctx.user, t);
+  const o = s.options;
+  const value = {
+    number: t.number,
+    can_start: o.eligible,
+    ...(o.reason ? { why_not: o.reason } : {}),
+    requester: o.requester.name,
+    ...(o.requester.portal ? { requester_is_portal_contact: true } : {}),
+    runs_on: o.mode === "this" ? "this ticket (it becomes the request)" : "a new request for the requester, linked to this ticket",
+    current_request_type: t.request_type_title ?? null,
+    runs_workflow: s.running ? s.running.title : null,
+    startable_types: o.eligible ? wc.typesForClaude(t, s) : [],
+    note: o.eligible
+      ? o.types.length
+        ? "Suggest at most one with suggest_workflow, and only when the requester clearly asks for what it covers. The agent reviews and starts it."
+        : "No request type's workflow can be started for this requester."
+      : "No workflow can be started from this ticket.",
+  };
+  // Security review (7): who wrote what is in it (still untrusted data).
+  const writtenBy = "workspace admins (request types, their questions, team names) and the ticket (the requester's name)";
+  return ok(dataBlock("startable_workflows", { number: t.number, written_by: writtenBy }, quoteJson(value)), {
+    activity: { label: "Checked which workflows can start", icon: "list" },
+  });
+}
+
+/** 1.20.22: a card suggesting one type's workflow, with Claude's answers checked; nothing starts. */
+async function suggestWorkflow(a: Record<string, any>, ctx: ToolCtx): Promise<ToolOutcome> {
+  if (ctx.workflowSuggested) return fail("You already suggested a workflow in this answer. One suggestion at a time: let the agent decide on it first.");
+  const t = await workflowTicket(ctx, a.number);
+  if (typeof t === "string") return fail(t);
+  const wc = await import("./workflow-cards");
+  const s = await wc.startableForClaude(ctx.user, t);
+  if (!s.options.eligible) return fail(s.options.reason ?? `No workflow can be started from #${t.number}.`);
+  const type = s.options.types.find((x) => x.id === Number(a.request_type_id));
+  if (!type || !type.workflow) return fail(`No request type with id ${String(a.request_type_id)} can be started for #${t.number}. Call list_startable_workflows for the ones that can.`);
+  const already = wc.alreadyStarted(t, type, s);
+  if (already) return fail(`${already} Don't suggest it again.`);
+  const checked = await wc.checkSuggestedAnswers(type, a.answers, s.options.requester.name, { agent: ctx.user });
+  ctx.workflowSuggested = true;
+  return done(
+    {
+      suggested: true,
+      started: false,
+      request_type: type.title,
+      runs_on: s.options.mode === "this" ? "this ticket" : "a new request",
+      answers_kept: checked.lines.map((l) => l.label),
+      left_out: checked.dropped,
+      still_to_answer: checked.missing,
+      note: "The agent sees a card with Review and start, and Dismiss. Nothing was started: they check the answers, fill in the rest and start it themselves.",
+    },
+    { card: { kind: "change", ticketId: t.id, payload: wc.workflowCardPayload(t, type, s, checked, String(a.reason ?? "")) as unknown as Record<string, unknown> } }
   );
 }
 

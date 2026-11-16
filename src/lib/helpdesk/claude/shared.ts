@@ -4,6 +4,8 @@
 // table the usage estimate reads, and the events the chat route streams.
 // The page, the panel, the server and the tests read the same words here.
 
+import type { HdStartMode } from "../workflow-start-shared";
+
 // --- Settings -----------------------------------------------------------------------
 
 export const HD_CLAUDE_DESK_KEY = "hd_claude_desk";
@@ -49,7 +51,7 @@ export const CLAUDE_DESK_CAP_HINT: Record<ClaudeDeskCap, string> = {
   read: "Only what the agent can see, with their desk role and teams.",
   search: "To find what fixed the same problem before.",
   web: "Only the sites you list.",
-  changes: "Status, priority, tags, team, checklist ticks and macros, applied only when the agent clicks Apply.",
+  changes: "Status, priority, tags, team, checklist ticks, macros and starting a workflow, applied only when the agent clicks Apply or starts it.",
   drafts: "Put in the agent's reply box, or saved as a draft of a checklist, category change, automation or recurring ticket for someone to publish. A person always sends and publishes.",
 };
 
@@ -363,7 +365,72 @@ export const SETTINGS_DRAFT_HREF: Record<ClaudeSettingsDraftTarget, { href: stri
   recurring: { href: "/desk/settings/recurring", label: "Review in Recurring tickets" },
 };
 
-export type ClaudeCard = ClaudeDraftCard | ClaudeChangeCard | ClaudeChecklistCard | ClaudeChecklistTickCard | ClaudeChecklistDraftCard | ClaudeMacroCard | ClaudeSettingsDraftCard;
+/** 1.20.22: what became of a workflow suggestion (ClaudeWorkflowCard.outcome). */
+export type ClaudeWorkflowOutcome =
+  /** The agent started it from the card (the run's request: this ticket, or the new one). `started` false: set or opened, but its run didn't start. */
+  | { kind: "started"; mode: HdStartMode; number: number; started: boolean | null; workflow?: { title: string; version: number } | null }
+  | { kind: "dismissed" }
+  /** No longer true when the agent came to it (the ticket changed, the type is no longer startable, it already runs). */
+  | { kind: "stale"; reason: string };
+
+/**
+ * 1.20.22: Claude suggests starting a request type's workflow for the open ticket
+ * (suggest_workflow). Nothing is started: Review and start claims the card (one tab,
+ * one review) and opens 1.20.21's Start a workflow dialog prefilled with Claude's
+ * answers; the agent's own submit goes through the start-workflow route with the
+ * card's id and claim, which records the outcome. Stored as kind "change".
+ */
+export interface ClaudeWorkflowCard {
+  id: number;
+  kind: "change";
+  action: "workflow";
+  number: number;
+  /** 'Start "New starter"'. */
+  title: string;
+  request_type_id: number;
+  request_type_title: string;
+  /** The published workflow it starts, as it was when Claude suggested it. */
+  workflow: { id: number; title: string; version: number };
+  /** Where it would run (lib/helpdesk/workflow-start startModeFor), when Claude suggested it. */
+  mode: HdStartMode;
+  /** Claude's answers, checked against the form (invalid ones left out, people checked). */
+  answers: Record<string, string | number | boolean | null>;
+  /** The answers as a person reads them; `person`: a person question, which the agent is asked to check. */
+  lines: { key: string; label: string; text: string; person?: boolean }[];
+  /** What Claude proposed that was left out, and why. */
+  dropped: { label: string; why: string }[];
+  /** Required questions nobody has answered yet (the agent fills them in the dialog). */
+  missing: string[];
+  /** Claude's short reason. */
+  hint: string;
+  state: "offered" | "applied" | "skipped";
+  /** Open in a Review (in this tab or another) and not yet decided. */
+  claimed?: boolean;
+  outcome?: ClaudeWorkflowOutcome | null;
+}
+
+/** 1.20.22: machine-readable refusals of the workflow card route and of a start from a card. */
+export const WORKFLOW_CARD_CODES = {
+  /** The suggestion no longer holds; the card now says why. */
+  stale: "claude_card_stale",
+  /** Reviewed in another tab, already used or dismissed. */
+  taken: "claude_card_taken",
+  /** It can't start right now (the ticket solved for now, the type not offered here now); the card stays usable. */
+  notNow: "claude_card_not_now",
+} as const;
+
+/** 1.20.22: a Review claim lapses after this long (a tab closed with its dialog open frees the card again). */
+export const WORKFLOW_CARD_CLAIM_MINUTES = 10;
+
+export type ClaudeCard =
+  | ClaudeDraftCard
+  | ClaudeChangeCard
+  | ClaudeChecklistCard
+  | ClaudeChecklistTickCard
+  | ClaudeChecklistDraftCard
+  | ClaudeMacroCard
+  | ClaudeSettingsDraftCard
+  | ClaudeWorkflowCard;
 
 /** One server-sent event of a chat turn (data: JSON). */
 export type ClaudeStreamEvent =

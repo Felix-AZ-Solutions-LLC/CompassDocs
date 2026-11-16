@@ -4,6 +4,38 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.22] - 2026-11-16
+
+Claude in the desk suggests starting a workflow.
+
+### Added
+- **Workflow suggestions from Claude.** Ask Claude about a ticket and it can
+  suggest a request type's workflow for it, with the answers it took from
+  the conversation. It only suggests types the agent could start for that
+  requester (the same rule as Start a workflow), never one already running
+  on or opened from the ticket, and at most one per question.
+- **The card** shows the request type, the workflow and its version, whether
+  it runs on this ticket or on a new request, Claude's reason, the proposed
+  answers, answers it left out and why, and questions still to answer.
+  Person answers are marked **Check this person**.
+- **Review and start** opens the Start a workflow dialog with Claude's
+  answers filled in, all editable; nothing starts until the agent starts it.
+  **Dismiss** closes the card. A card starts at most once, shows **In
+  review** in the agent's other tabs, and shows **Out of date** when the
+  requester changed or the workflow already started.
+- **Attribution.** The note and audit entry for a start from a card read "·
+  suggested by Claude".
+
+### Changed
+- **Claude's tools follow the agent.** The workflow tools are offered only
+  with a ticket open, to agents who can start a workflow in its team, while
+  **Suggest ticket changes** is on.
+- **Person answers from Claude** match one active account by exact full
+  name, or by email only where the agent can see emails; numbers and
+  usernames are never taken as a person.
+- **Erasing a person's data** now locks the affected tickets before removing
+  their Claude cards.
+
 ## [1.20.21] - 2026-11-16
 
 Agents start a workflow from the desk.

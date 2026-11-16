@@ -7,6 +7,9 @@
 // (fake.respond(...)); without one, the "desk" scenario below answers the way
 // the c1 mock-up shows (tool calls for "has this happened before", a reply
 // draft and a status proposal for "draft a reply", a summary otherwise).
+// 1.20.22: "start a workflow" (or "new starter") lists what can be started
+// (list_startable_workflows), then suggests the type the conversation names
+// (suggest_workflow) with answers from "Label: value" lines in the ticket.
 //
 // Prompt caching is simulated: a request whose system prompt carries a
 // cache_control breakpoint caches the bytes of {model, tools, system}; the
@@ -78,6 +81,19 @@ function lastUserText(body: any): { text: string; toolResults: any[]; allText: s
   return { text: "", toolResults: [], allText: "" };
 }
 
+/** 1.20.22: the agent's question of this turn (the last user message with words, past any tool results). */
+function lastAgentText(body: any): string {
+  const msgs: any[] = Array.isArray(body?.messages) ? body.messages : [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.role !== "user") continue;
+    if (typeof m.content === "string") return m.content;
+    const texts = (m.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text as string);
+    if (texts.length) return texts[texts.length - 1];
+  }
+  return "";
+}
+
 function allPrompt(body: any): string {
   return JSON.stringify(body?.messages ?? []);
 }
@@ -92,6 +108,13 @@ export const deskScenario: Responder = (body) => {
   if (toolResults.length) {
     const results = toolResults.map((r) => String(typeof r.content === "string" ? r.content : JSON.stringify(r.content)));
     const joined = results.join("\n");
+    // 1.20.22: the workflow suggestion, step two (after list_startable_workflows) and its answer.
+    const startable = startableFrom(joined);
+    if (startable && tools.includes("suggest_workflow")) return suggestFrom(startable, prompt, lastAgentText(body));
+    if (/"suggested":true,"started":false/.test(joined)) {
+      return { content: [{ type: "text", text: "This looks like a request one of your workflows covers. I've suggested starting it with the answers from the conversation: review them and start it when you're ready." }] };
+    }
+    if (/<startable_workflows/.test(joined)) return { content: [{ type: "text", text: "No workflow fits this ticket that you could start here." }] };
     if (/"drafted":true/.test(joined) || /"proposed":true/.test(joined)) {
       return { content: [{ type: "text", text: "Here's a draft. I've put it in your reply box so you can edit it before you send." }] };
     }
@@ -133,11 +156,63 @@ export const deskScenario: Responder = (body) => {
     }
     return { content, stop_reason: "tool_use" };
   }
+  // 1.20.22: "start a workflow" / "new starter": step one lists what can be started for the open ticket.
+  if (/workflow|new starter|onboard|new laptop/.test(q) && tools.includes("list_startable_workflows") && num) {
+    return { content: [{ type: "tool_use", name: "list_startable_workflows", input: { number: num } }] };
+  }
   if (/summar/.test(q)) {
     return { content: [{ type: "text", text: `**#${num || "?"}** ${subject || "This ticket"}: the requester can't connect to the VPN from home since a phone change. An internal note says MFA was re-enrolled yesterday. Next step: ask them to re-pair the VPN client.` }] };
   }
   return { content: [{ type: "text", text: `You asked: ${text.slice(0, 200)}` }] };
 };
+
+// --- 1.20.22: the workflow suggestion -------------------------------------------------------------
+
+interface StartableList {
+  number: number;
+  requester: string;
+  startable_types: { id: number; title: string; already_started: string | null; questions: { key: string; label: string; type: string; filled_from_directory?: boolean }[] }[];
+}
+
+/** list_startable_workflows' result (quoted JSON inside <startable_workflows>), or null. */
+export function startableFrom(joined: string): StartableList | null {
+  const m = /<startable_workflows[^>]*>\n([\s\S]*?)\n<\/startable_workflows>/.exec(joined);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[1].replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&")) as StartableList;
+  } catch {
+    return null;
+  }
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * suggest_workflow for the type the agent or the ticket names (else the first not already
+ * started), answered from "Label: value" lines anywhere in the conversation, as Claude would draw
+ * them from what the requester wrote. Questions the directory fills are left to it.
+ */
+export function suggestFrom(list: StartableList, prompt: string, agentText: string): FakeReply {
+  const open = list.startable_types.filter((t) => !t.already_started);
+  if (!open.length) return { content: [{ type: "text", text: "Every workflow that fits is already running for this ticket." }] };
+  // The type the agent's words name (its whole title, else one of its longer words), else the first.
+  const said = agentText.toLowerCase();
+  const words = (t: { title: string }) => t.title.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+  const type = open.find((t) => said.includes(t.title.toLowerCase())) ?? open.find((t) => words(t).some((w) => said.includes(w))) ?? open[0];
+  const answers: { key: string; value: string }[] = [];
+  for (const q of type.questions) {
+    if (q.filled_from_directory) continue;
+    // In the JSON-encoded prompt a line ends at an escaped newline (a backslash) or a tag.
+    const m = new RegExp(`${escapeRe(q.label)}:\\s*([^\\\\<"]{1,120})`, "i").exec(prompt);
+    if (m) answers.push({ key: q.key, value: m[1].trim() });
+  }
+  return {
+    content: [
+      { type: "thinking", thinking: "", signature: "sig-wf" },
+      { type: "tool_use", name: "suggest_workflow", input: { number: list.number, request_type_id: type.id, answers, reason: `${list.requester} is asking for what ${type.title} covers.` } },
+    ],
+  };
+}
 
 export async function startFakeAnthropic(opts: { port?: number; host?: string } = {}): Promise<FakeAnthropic> {
   const requests: RecordedRequest[] = [];

@@ -88,7 +88,13 @@ export function startButtonLabel(mode: HdStartMode): string {
   return mode === "this" ? "Start on this ticket" : "Open a request and start";
 }
 
-/** "Workflow started by Sam Lee: New starter (version 3)." The words the timeline note and the audit share. */
-export function startedLine(agent: string, workflowTitle: string, version: number): string {
-  return `Workflow started by ${agent}: ${workflowTitle} (version ${version})`;
+/** 1.20.22: the words added when the start came from a Claude in the desk suggestion card. */
+export const SUGGESTED_BY_CLAUDE = "suggested by Claude";
+
+/**
+ * "Workflow started by Sam Lee: New starter (version 3)." The words the timeline note and the audit share.
+ * 1.20.22: "… (version 3) · suggested by Claude" when the agent started it from Claude's suggestion card.
+ */
+export function startedLine(agent: string, workflowTitle: string, version: number, opts: { suggested?: boolean } = {}): string {
+  return `Workflow started by ${agent}: ${workflowTitle} (version ${version})${opts.suggested ? ` · ${SUGGESTED_BY_CLAUDE}` : ""}`;
 }

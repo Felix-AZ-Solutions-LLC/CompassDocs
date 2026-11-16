@@ -18,10 +18,15 @@
 // key and the server starts nothing twice. If the ticket changed meanwhile the
 // server answers 409 and the dialog reloads its outcome before anything is
 // done.
+//
+// 1.20.22: opened from a Claude in the desk suggestion card (`suggestion`),
+// it starts with Claude's type chosen and its answers over the directory
+// prefill, says so in a note, and sends the card's id and claim with the
+// submit so the start records itself on the card ("· suggested by Claude").
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { TicketPlus, Workflow, X } from "lucide-react";
+import { Sparkle, TicketPlus, Workflow, X } from "lucide-react";
 import { Modal } from "@/components/Modal";
 import { Button, iconButtonClass } from "@/components/Button";
 import { Field, FormError, SectionEmpty, Select } from "@/components/form";
@@ -82,16 +87,31 @@ export function useStartWorkflowMenu(
   };
 }
 
+/**
+ * 1.20.22: the dialog opened from a Claude in the desk suggestion card (Review and start): the
+ * type chosen and Claude's answers over the directory prefill, all editable; the submit sends the
+ * card's id and claim with it. Choosing another type leaves the suggestion behind (the start is
+ * then the agent's own).
+ */
+export interface StartWorkflowSuggestion {
+  cardId: number;
+  claim: string;
+  requestTypeId: number;
+  answers: HdFormAnswers;
+}
+
 export function StartWorkflowDialog({
   open,
   onClose,
   number,
   onStarted,
+  suggestion,
 }: {
   open: boolean;
   onClose: () => void;
   number: number;
   onStarted?: (r: HdStartWorkflowResult) => void;
+  suggestion?: StartWorkflowSuggestion | null;
 }) {
   const titleId = useId();
   const ledeId = useId();
@@ -107,6 +127,11 @@ export function StartWorkflowDialog({
   const [error, setError] = useState("");
   const startId = useRef("");
   const refs = useRef(new Map<string, HTMLElement | null>());
+  // 1.20.22: the Claude suggestion this opening is for (read when it opens), and the type it still applies to.
+  const suggestionRef = useRef(suggestion ?? null);
+  suggestionRef.current = suggestion ?? null;
+  const [claudeFor, setClaudeFor] = useState<number | null>(null);
+  const [suggestionGone, setSuggestionGone] = useState(false);
 
   const load = useCallback(async () => {
     setLoadError("");
@@ -130,7 +155,21 @@ export function StartWorkflowDialog({
     setTried(false);
     setBusy(false);
     setError("");
-    void load();
+    setClaudeFor(null);
+    setSuggestionGone(false);
+    void load().then((o) => {
+      // 1.20.22: from a Claude card: its type chosen, Claude's answers over the directory prefill.
+      const s = suggestionRef.current;
+      if (!o || !s) return;
+      const t = o.eligible ? o.types.find((x) => x.id === s.requestTypeId) : undefined;
+      if (!t) {
+        setSuggestionGone(o.eligible);
+        return;
+      }
+      setTypeId(t.id);
+      setAnswers({ ...t.defaults, ...s.answers });
+      setClaudeFor(t.id);
+    });
   }, [open, load]);
 
   const type: HdStartableType | null = opts?.types.find((x) => x.id === typeId) ?? null;
@@ -140,8 +179,12 @@ export function StartWorkflowDialog({
   function pick(id: number | null) {
     setTypeId(id);
     const t = opts?.types.find((x) => x.id === id);
+    // 1.20.22: back on Claude's type, its answers again; any other type is the agent's own start.
+    const s = suggestionRef.current;
+    const claude = !!t && !!s && s.requestTypeId === t.id;
+    setClaudeFor(claude ? t.id : null);
     // The requester's directory prefill, as Get help fills it for them.
-    setAnswers(t ? { ...t.defaults } : {});
+    setAnswers(t ? { ...t.defaults, ...(claude ? s.answers : {}) } : {});
     setTried(false);
     setError("");
   }
@@ -171,6 +214,7 @@ export function StartWorkflowDialog({
           client_start_id: startId.current,
           expect: opts.mode,
           ...(opts.mode === "new" ? { subject: deriveSubject(type, answers) } : {}),
+          ...(suggestion && claudeFor === type.id ? { claude_card: { id: suggestion.cardId, claim: suggestion.claim } } : {}),
         },
         "Couldn't start the workflow."
       );
@@ -265,6 +309,27 @@ export function StartWorkflowDialog({
                   </Select>
                 </Field>
                 {type?.description && <p className="-mt-3 text-sm text-slate-600">{type.description}</p>}
+                {suggestionGone && !type && (
+                  <p className="notice-warn -mt-2 rounded-lg border px-3 py-2 text-sm">
+                    The request type Claude suggested no longer starts a workflow here. Choose another, or close this.
+                  </p>
+                )}
+                {type && claudeFor === type.id && (
+                  // 1.20.22: Claude's answers are a suggestion: said plainly, and every one is editable below.
+                  <p role="note" data-testid="start-workflow-from-claude" className="-mt-2 flex items-start gap-2 rounded-lg border border-compass-200 bg-compass-50 px-3 py-2 text-sm text-slate-700 dark:border-compass-500/40 dark:bg-compass-500/10">
+                    <Sparkle className="mt-0.5 h-4 w-4 shrink-0 text-compass-600" aria-hidden />
+                    <span>
+                      {Object.keys(suggestion?.answers ?? {}).length
+                        ? "Claude suggested this and filled in answers from the conversation. Check them before you start."
+                        : "Claude suggested this request type. Fill in its questions before you start."}
+                      {/* Security review (5): a person Claude chose is named, so the agent checks it is the right one. */}
+                      {(() => {
+                        const people = type.form.filter((f) => f.type === "user" && suggestion && f.key in suggestion.answers && answers[f.key] === suggestion.answers[f.key]).map((f) => f.label);
+                        return people.length ? <span className="mt-0.5 block font-medium">Check the person Claude chose for {people.join(", ")}.</span> : null;
+                      })()}
+                    </span>
+                  </p>
+                )}
                 {type && type.form.length > 0 && (
                   <FormFields
                     fields={type.form}
