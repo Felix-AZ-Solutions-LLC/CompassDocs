@@ -69,7 +69,7 @@ pricing on the core product, ever.
 - **Groups** — manual or synced from Microsoft Entra ID (enterprise); **custom domain with automatic HTTPS**; a system console with storage and resource usage.
 - **Claude connector (MCP)** — connect the Claude app with one click and draft, search, and revise docs from Claude; approvals still apply. Claude can also read the handbooks you can read, tell you where you stand, and build draft handbooks and training decks — it never publishes a handbook or confirms a policy for you.
 
-**Enterprise** *(separate licensed build — [pricing](https://compassdocs.io/pricing): flat $599/yr, unlimited users, Helpdesk included)*
+**Enterprise** *(separate licensed build — [pricing](https://compassdocs.io/pricing): $499.99/yr, unlimited users; the Helpdesk includes 3 agents, extra agents $125/yr each)*
 - **Helpdesk** — employees ask in **Get help** inside CompassDocs; IT, HR, and Facilities work tickets in the **desk**, which installs as an app with push notifications. Workflows across teams with approvals, tasks, and hand-offs; office hours, holidays, and reply targets per team; assignment rules and on-call rotas; tickets from email, monitoring alerts, and API bots; contact cards from the directory; and dashboards you build.
 - **Read confirmations & compliance** — who must confirm each policy, due dates, automatic reminders and escalation, typed signatures, whole-handbook confirmation, a compliance portal, team views for leads, and tamper-evident snapshots and audit packages.
 - **Training & onboarding** — turn any doc into a slide deck with quizzes, assign it, bundle onboarding programs for new hires, and keep completion records.
