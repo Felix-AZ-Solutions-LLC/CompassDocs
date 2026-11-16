@@ -313,7 +313,8 @@ export function ChecklistsSideCard({ number, canWork }: { number: number; canWor
     label: t.name,
     hint: `${t.items} ${t.items === 1 ? "item" : "items"}${t.required ? ` · ${t.required} required` : ""}${onTicket.has(t.name) ? " · on this ticket" : ""}`,
   }));
-  const mayManage = can$("settings.manage") || can$("request_types.manage") || can$("workflows.manage");
+  // 1.20.23: "Manage a desk department" manages its departments' checklists too.
+  const mayManage = can$("settings.manage") || can$("request_types.manage") || can$("workflows.manage") || can$("departments.manage");
   return (
     <section aria-labelledby={`checklists-side-${number}`} className={`${CARD_CLASS} px-4 py-3.5`} data-testid="checklists-side">
       <h3 id={`checklists-side-${number}`} className={EYEBROW_TEXT}>

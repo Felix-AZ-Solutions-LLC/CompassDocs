@@ -14,6 +14,14 @@
 //                (an Agent with every team's queue sees every team's)
 //   workspace  neither: every agent                     macros.manage_all
 // Someone else's personal response is never listed, read or used.
+//
+// 1.20.23 (lib/helpdesk/desk-departments): "workspace" is everyone in the
+// response's desk department (desk_department_id; NULL = All departments,
+// shared desk-wide, desk Admin only). An agent sees it in one of their
+// departments; a team's response is in its team's department (moving the
+// team takes it along) and keeps its team's rule; a personal one has none.
+// Managing a shared one also needs its department to be one they manage,
+// where "Manage a desk department" stands in for the macro capabilities.
 
 import "server-only";
 import { hq, hqOne } from "./db-core";
@@ -58,11 +66,15 @@ interface Row {
   owner_id: number | null;
   team_id: number | null;
   team_name: string | null;
+  desk_department_id: number | null;
   uses_30d: number;
   created_by: number | null;
   created_at: string;
   updated_at: string;
 }
+
+type DeptScope = import("./desk-departments-shared").HdDeskDepartmentScope;
+type DeptAccess = import("./desk-departments").DeskDepartmentAccess;
 
 export function cannedScope(c: { owner_id: number | null; team_id: number | null }): HdCannedScope {
   if (c.owner_id) return "personal";
@@ -79,29 +91,31 @@ function out(r: Row): HdCanned {
     owner_id: r.owner_id,
     team_id: r.team_id,
     team_name: r.team_name,
+    desk_department_id: r.owner_id ? null : (r.desk_department_id ?? null),
     uses_30d: Number(r.uses_30d) || 0,
     updated_at: r.updated_at,
   };
 }
 
 const SELECT = `
-  SELECT c.id, c.title, c.body, c.folder, c.owner_id, c.team_id, t.name AS team_name, c.created_by, c.created_at, c.updated_at,
+  SELECT c.id, c.title, c.body, c.folder, c.owner_id, c.team_id, t.name AS team_name, c.desk_department_id, c.created_by, c.created_at, c.updated_at,
          (SELECT count(*) FROM hd_canned_uses u WHERE u.canned_id = c.id AND u.used_at > now() - interval '30 days')::int AS uses_30d
     FROM hd_canned_responses c LEFT JOIN hd_teams t ON t.id = c.team_id`;
 
 /**
  * The responses a person may see: the workspace's, those of `teams` ("all"
  * = every team's) and their own personal ones. Nobody else's personal
- * responses are ever listed.
+ * responses are ever listed. 1.20.23: the workspace's only in `depts` (their
+ * desk departments) and All departments.
  */
-export async function listCanned(teams: number[] | "all", ownerId: number): Promise<HdCanned[]> {
+export async function listCanned(teams: number[] | "all", ownerId: number, depts: DeptScope): Promise<HdCanned[]> {
   const rows = await hq<Row>(
     `${SELECT}
       WHERE c.owner_id = $2::int
-         OR (c.owner_id IS NULL AND c.team_id IS NULL)
+         OR (c.owner_id IS NULL AND c.team_id IS NULL AND (c.desk_department_id IS NULL OR $3::int[] IS NULL OR c.desk_department_id = ANY($3::int[])))
          OR (c.owner_id IS NULL AND c.team_id IS NOT NULL AND ($1::int[] IS NULL OR c.team_id = ANY($1::int[])))
       ORDER BY lower(c.title), c.id`,
-    [teams === "all" ? null : teams, ownerId]
+    [teams === "all" ? null : teams, ownerId, depts === "all" ? null : depts]
   );
   return rows.map(out);
 }
@@ -112,10 +126,22 @@ export async function getCanned(id: number): Promise<HdCanned | undefined> {
   return r ? out(r) : undefined;
 }
 
-/** May this person see (and so use) the response? `extraTeamId`: the team of a ticket they work. */
-export function cannedVisibleTo(c: { owner_id: number | null; team_id: number | null }, userId: number, teams: number[] | "all", extraTeamId: number | null = null): boolean {
+/**
+ * May this person see (and so use) the response? `extraTeamId`: the team of a ticket they work.
+ * 1.20.23: a workspace one only in `depts` (their desk departments) or All departments.
+ */
+export function cannedVisibleTo(
+  c: { owner_id: number | null; team_id: number | null; desk_department_id?: number | null },
+  userId: number,
+  teams: number[] | "all",
+  extraTeamId: number | null,
+  depts: DeptScope
+): boolean {
   if (c.owner_id) return c.owner_id === userId;
-  if (c.team_id === null) return true;
+  if (c.team_id === null) {
+    const d = c.desk_department_id ?? null;
+    return d === null || depts === "all" || depts.includes(d);
+  }
   return teams === "all" || teams.includes(c.team_id) || c.team_id === extraTeamId;
 }
 
@@ -127,30 +153,51 @@ export function cannedManageCap(c: { owner_id: number | null; team_id: number | 
   return { cap: "macros.manage_all", teamId: null };
 }
 
-/** May this person create, edit or delete a response shared this way? A personal one only ever its owner. */
-export async function mayManageCanned(user: U, c: { owner_id: number | null; team_id: number | null }): Promise<boolean> {
+/**
+ * May this person create, edit or delete a response shared this way? A personal one only ever its owner.
+ * 1.20.23: a shared one only in a desk department they manage (`access`: desk-departments
+ * deskDepartmentAccess "canned"; All departments: desk Admin only), where "Manage a desk
+ * department" stands in for the team and workspace capabilities.
+ */
+export async function mayManageCanned(
+  user: U,
+  c: { owner_id: number | null; team_id: number | null; desk_department_id?: number | null },
+  access: DeptAccess
+): Promise<boolean> {
   if (c.owner_id && c.owner_id !== user.id) return false;
   const { cap, teamId } = cannedManageCap(c);
-  return hdCan(user, cap, { teamId });
+  if (c.owner_id) return hdCan(user, cap);
+  const { mayManageDept } = await import("./desk-departments");
+  if (!mayManageDept(access, c.desk_department_id ?? null)) return false;
+  return access.admin || access.departmentManager || hdCan(user, cap, { teamId });
 }
 
-export const CANNED_MANAGE_CAPS: HdCap[] = ["macros.manage_personal", "macros.manage_team", "macros.manage_all"];
+export const CANNED_MANAGE_CAPS: HdCap[] = ["macros.manage_personal", "macros.manage_team", "macros.manage_all", "departments.manage"];
 
-/** The Shared with choices this person may save: Only me, each team they may write for, Workspace. */
-export async function shareOptionsFor(user: U): Promise<{ value: string; label: string }[]> {
+/**
+ * The Shared with choices this person may save: Only me, each team they may write for, Workspace.
+ * 1.20.23: a team only when its desk department is one they manage ("Manage a desk department"
+ * writes for every team there); Workspace (everyone in the response's desk department, chosen in
+ * the Department field) when they may write one in some department.
+ */
+export async function shareOptionsFor(user: U, access: DeptAccess): Promise<{ value: string; label: string }[]> {
   const opts: { value: string; label: string }[] = [];
   if (await hdCan(user, "macros.manage_personal")) opts.push({ value: "me", label: "Only me" });
-  if (await hdCan(user, "macros.manage_team")) {
-    const all = await hdCan(user, "macros.manage_all");
-    const teams = await hq<{ id: number; name: string }>(
-      all
-        ? "SELECT id, name FROM hd_teams ORDER BY position, lower(name)"
-        : "SELECT t.id, t.name FROM hd_teams t JOIN hd_team_members m ON m.team_id = t.id AND m.user_id = $1 ORDER BY t.position, lower(t.name)",
-      all ? [] : [user.id]
+  const lifted = access.admin || access.departmentManager || (await hdCan(user, "macros.manage_all"));
+  if (lifted || (await hdCan(user, "macros.manage_team"))) {
+    const teams = await hq<{ id: number; name: string; desk_department_id: number }>(
+      lifted
+        ? "SELECT id, name, desk_department_id FROM hd_teams ORDER BY position, lower(name)"
+        : "SELECT t.id, t.name, t.desk_department_id FROM hd_teams t JOIN hd_team_members m ON m.team_id = t.id AND m.user_id = $1 ORDER BY t.position, lower(t.name)",
+      lifted ? [] : [user.id]
     );
-    for (const t of teams) if (await hdCan(user, "macros.manage_team", { teamId: t.id })) opts.push({ value: `team:${t.id}`, label: t.name });
+    for (const t of teams) {
+      if (await mayManageCanned(user, { owner_id: null, team_id: t.id, desk_department_id: t.desk_department_id }, access)) opts.push({ value: `team:${t.id}`, label: t.name });
+    }
   }
-  if (await hdCan(user, "macros.manage_all")) opts.push({ value: "workspace", label: "Workspace" });
+  if ((access.admin || access.departmentManager || (await hdCan(user, "macros.manage_all"))) && (access.admin || access.manage === "all" || access.manage.length > 0)) {
+    opts.push({ value: "workspace", label: "Everyone in the desk department" });
+  }
   return opts;
 }
 
@@ -162,6 +209,8 @@ export interface CannedInput {
   folder: string;
   owner_id: number | null;
   team_id: number | null;
+  /** 1.20.23: set by the route (checked there); a team's response is in its team's desk department, a personal one in none. */
+  desk_department_id?: number | null;
 }
 
 /**
@@ -229,12 +278,22 @@ async function assertRoom(ownerId: number | null, exceptId: number | null = null
   }
 }
 
+/** 1.20.23: a team's (or a personal) response's desk department, whatever the input says; else the input's. */
+async function deptFor(owner: number | null, team: number | null, wanted: number | null | undefined): Promise<number | null | undefined> {
+  if (owner) return null;
+  if (team) return (await import("./desk-departments")).teamDeskDepartmentId(team);
+  return wanted;
+}
+
 export async function createCanned(input: CannedInput, createdBy: number | null): Promise<HdCanned> {
   await assertRoom(input.owner_id);
+  const { deptArg, deptInsertSql } = await import("./desk-departments");
+  const team = input.owner_id ? null : input.team_id;
+  const dept = await deptFor(input.owner_id, team, input.desk_department_id);
   const r = await hqOne<{ id: number }>(
-    `INSERT INTO hd_canned_responses (title, body, folder, owner_id, team_id, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-    [input.title, input.body, input.folder, input.owner_id, input.owner_id ? null : input.team_id, createdBy]
+    `INSERT INTO hd_canned_responses (title, body, folder, owner_id, team_id, created_by, desk_department_id)
+     VALUES ($1, $2, $3, $4, $5, $6, ${deptInsertSql(7)}) RETURNING id`,
+    [input.title, input.body, input.folder, input.owner_id, team, createdBy, deptArg(dept)]
   );
   return (await getCanned(r!.id))!;
 }
@@ -248,10 +307,11 @@ export async function createCanned(input: CannedInput, createdBy: number | null)
 export async function updateCanned(
   id: number,
   patch: Partial<CannedInput>,
-  expected: { owner_id: number | null; team_id: number | null }
+  /** 1.20.23 review L3: with desk_department_id, the write also needs the department the caller read. */
+  expected: { owner_id: number | null; team_id: number | null; desk_department_id?: number | null }
 ): Promise<HdCanned | undefined> {
   const sets: string[] = [];
-  const params: unknown[] = [id, expected.owner_id, expected.team_id];
+  const params: unknown[] = [id, expected.owner_id, expected.team_id, expected.desk_department_id ?? null, expected.desk_department_id !== undefined];
   const set = (col: string, v: unknown) => {
     params.push(v);
     sets.push(`${col} = $${params.length}`);
@@ -259,22 +319,26 @@ export async function updateCanned(
   if (patch.title !== undefined) set("title", patch.title);
   if (patch.body !== undefined) set("body", patch.body);
   if (patch.folder !== undefined) set("folder", patch.folder);
-  if (patch.owner_id !== undefined || patch.team_id !== undefined) {
+  if (patch.owner_id !== undefined || patch.team_id !== undefined || patch.desk_department_id !== undefined) {
     const owner = patch.owner_id !== undefined ? patch.owner_id : expected.owner_id;
     const team = owner ? null : patch.team_id !== undefined ? patch.team_id : expected.team_id;
     if (owner !== expected.owner_id) await assertRoom(owner, id);
     set("owner_id", owner);
     set("team_id", team);
+    // 1.20.23: the desk department follows the sharing (a team's, none for a personal one), else the patch's.
+    const dept = await deptFor(owner, team, patch.desk_department_id);
+    if (dept !== undefined) set("desk_department_id", dept);
   }
   if (sets.length) {
     const r = await hq<{ id: number }>(
       `UPDATE hd_canned_responses SET ${sets.join(", ")}, updated_at = now()
-        WHERE id = $1 AND owner_id IS NOT DISTINCT FROM $2::int AND team_id IS NOT DISTINCT FROM $3::int RETURNING id`,
+        WHERE id = $1 AND owner_id IS NOT DISTINCT FROM $2::int AND team_id IS NOT DISTINCT FROM $3::int
+          AND (NOT $5::boolean OR desk_department_id IS NOT DISTINCT FROM $4::int) RETURNING id`,
       params
     );
     if (!r.length) {
       if (!(await getCanned(id))) return undefined;
-      throw new CannedError("Someone changed who this canned response is shared with just now. Reload and try again.", 409);
+      throw new CannedError("Someone changed who this canned response is shared with just now, or moved it to another desk department. Reload and try again.", 409);
     }
   }
   return getCanned(id);
@@ -287,6 +351,7 @@ export function changedFields(before: HdCanned, after: HdCanned): string[] {
   if (before.body !== after.body) out.push("body");
   if (before.folder !== after.folder) out.push("folder");
   if (shareOf(before) !== shareOf(after)) out.push("share");
+  if ((before.desk_department_id ?? null) !== (after.desk_department_id ?? null)) out.push("desk_department");
   return out;
 }
 
@@ -392,7 +457,9 @@ export async function pickerCanned(user: U, ticket: TicketRef | null): Promise<{
     ticketTeamId = ticket.team_id;
     if (scope !== "all" && ticket.team_id && !scope.includes(ticket.team_id)) scope = [...scope, ticket.team_id];
   }
-  return { items: await listCanned(scope, user.id), ticketTeamId };
+  // 1.20.23: the workspace's only in the agent's desk departments (and All departments).
+  const { deskDepartmentScope } = await import("./desk-departments");
+  return { items: await listCanned(scope, user.id, await deskDepartmentScope(user)), ticketTeamId };
 }
 
 /**
@@ -402,7 +469,8 @@ export async function pickerCanned(user: U, ticket: TicketRef | null): Promise<{
 export async function insertCanned(user: U, cannedId: number, ticket: TicketRef): Promise<{ body: string; canned: HdCanned }> {
   if (!(await canWorkTicket(user, ticket))) throw new CannedError("Ticket not found.", 404);
   const c = await getCanned(cannedId);
-  if (!c || !cannedVisibleTo(c, user.id, await agentTeamIds(user), ticket.team_id)) throw new CannedError("Canned response not found.", 404);
+  const { deskDepartmentScope } = await import("./desk-departments");
+  if (!c || !cannedVisibleTo(c, user.id, await agentTeamIds(user), ticket.team_id, await deskDepartmentScope(user))) throw new CannedError("Canned response not found.", 404);
   const body = await renderCannedFor(c, ticket, user);
   await recordCannedUse(c.id, user.id, ticket.id);
   return { body, canned: c };

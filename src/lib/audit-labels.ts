@@ -145,6 +145,14 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.team.updated": "Edited helpdesk team",
   "helpdesk.team.deleted": "Deleted helpdesk team",
   "helpdesk.team.members_changed": "Changed helpdesk team members",
+  // 1.20.23 (lib/helpdesk/desk-departments): desk departments, not the requester's directory department.
+  // team_moved: details from/to and the team macros and canned responses that went with it; item_moved:
+  // a macro, canned response, checklist, workflow, request type or automation moved (details.kind, from, to).
+  "helpdesk.desk_department.created": "Created desk department",
+  "helpdesk.desk_department.renamed": "Renamed desk department",
+  "helpdesk.desk_department.deleted": "Deleted desk department",
+  "helpdesk.desk_department.team_moved": "Moved a team to another desk department",
+  "helpdesk.desk_department.item_moved": "Moved to another desk department",
   "helpdesk.request_type.created": "Created request type",
   "helpdesk.request_type.updated": "Edited request type",
   "helpdesk.request_type.deleted": "Deleted request type",

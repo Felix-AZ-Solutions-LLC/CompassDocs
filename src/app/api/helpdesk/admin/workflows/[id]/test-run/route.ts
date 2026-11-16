@@ -7,7 +7,7 @@
 
 import { NextResponse } from "next/server";
 import { readJson } from "@/lib/helpdesk/access";
-import { hdCapGate } from "@/lib/helpdesk/roles";
+import { deskDepartmentGate, maySeeDept } from "@/lib/helpdesk/desk-departments";
 import { getWorkflow, simulateWorkflow, workingDefinition } from "@/lib/helpdesk/workflows";
 import type { HdFormAnswers } from "@/lib/helpdesk/types";
 
@@ -18,11 +18,13 @@ type Ctx = { params: Promise<{ id: string }> };
 const optId = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v > 0 ? v : undefined);
 
 export async function POST(req: Request, ctx: Ctx) {
-  const gate = await hdCapGate("workflows.manage");
-  if (gate instanceof NextResponse) return gate;
+  // 1.20.23: "Manage a desk department" too, for a workflow of a desk department they see.
+  const g = await deskDepartmentGate("workflows");
+  if (g instanceof NextResponse) return g;
+  const gate = g.user;
   const raw = (await ctx.params).id;
   const workflow = /^\d{1,9}$/.test(raw) ? await getWorkflow(Number(raw)) : undefined;
-  if (!workflow) return NextResponse.json({ error: "Not found." }, { status: 404 });
+  if (!workflow || !maySeeDept(g.access, workflow.desk_department_id)) return NextResponse.json({ error: "Not found." }, { status: 404 });
   const body = await readJson(req, 256 * 1024);
   if (!body) return NextResponse.json({ error: "Send the test as JSON." }, { status: 400 });
   const answers = body.answers && typeof body.answers === "object" && !Array.isArray(body.answers) ? (body.answers as HdFormAnswers) : {};

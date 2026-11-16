@@ -40,6 +40,8 @@ export interface HdCanned {
   owner_id: number | null;
   team_id: number | null;
   team_name: string | null;
+  /** 1.20.23: its desk department (null = All departments; a personal one has none). */
+  desk_department_id?: number | null;
   /** Inserts in the last 30 days (every agent's). */
   uses_30d: number;
   updated_at: string;

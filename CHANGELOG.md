@@ -4,6 +4,46 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.23] - 2026-11-16
+
+Desk departments.
+
+### Added
+- **Desk departments.** Group teams into desk departments such as IT, HR and
+  Facilities. A desk department holds teams and their macros, canned
+  responses, checklists, request types, workflows and automations; recurring
+  tickets follow their team. A team is in exactly one desk department, and
+  an agent is in every desk department one of their teams is in.
+- **Agents see their own departments' content**, plus items in All
+  departments, everywhere they use it: the reply box, macros, checklists,
+  Start a workflow, New ticket, Claude in the desk and the Claude connector.
+  Anyone who sees every team's tickets sees every department's content.
+  Queues don't change.
+- **Automations per department.** A ticket runs its team's desk department's
+  rules plus All departments' rules.
+- **Desk settings, Teams, Desk departments:** create, rename and delete desk
+  departments and move teams. A team move lists what changes first and asks
+  to confirm; the team's own macros and canned responses go with it.
+- **Manage a desk department**, a new capability (Manager by default):
+  manage every kind of content in your own teams' desk departments. Feature
+  capabilities now work only in your own teams' desk departments; items in
+  All departments are admin-only.
+- **A Desk department field** on every content editor, with a filter when
+  you see more than one.
+
+### Changed
+- **On upgrade** every team and item goes into one desk department, General,
+  so nothing changes until an admin splits it up. Customised Manager roles
+  get the new capability only if they already manage macros, automations,
+  request types, workflows and team members.
+- **Nothing points across desk departments:** a workflow's request type, a
+  checklist's request types and workflow checklists, an automation's macro
+  and a recurring ticket's request type must be in the same desk department
+  or All departments. A move that would break this is refused with a list.
+- **API v1 /me** reports the desk departments the token's teams are in.
+- **README:** Enterprise is $499.99 a year with unlimited users and 3
+  helpdesk agents included; extra agents are $125 a year each.
+
 ## [1.20.22] - 2026-11-16
 
 Claude in the desk suggests starting a workflow.

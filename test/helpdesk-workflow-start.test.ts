@@ -318,7 +318,8 @@ describe("the capability (matrix v5)", () => {
     assert.equal(rolesShared.HD_CAPABILITIES["workflows.start"].label, "Start a workflow");
     assert.equal(rolesShared.HD_CAPABILITIES["workflows.start"].section, "tickets");
     assert.equal(rolesShared.HD_CAP_SCOPE["workflows.start"], "tickets.view_all", "checked on the ticket's team");
-    assert.equal(rolesShared.HD_MATRIX_VERSION, 5);
+    // 1.20.23: v6 added "Manage a desk department"; workflows.start stays a v5 capability.
+    assert.ok(rolesShared.HD_MATRIX_VERSION >= 5);
     assert.equal(rolesShared.HD_CAPS_SINCE["workflows.start"], 5);
   });
 

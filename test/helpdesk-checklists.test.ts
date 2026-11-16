@@ -204,9 +204,10 @@ before(async () => {
   await person("admin", "manager");
   await person("req", null);
   await pool().query(
-    "INSERT INTO hd_team_members (team_id, user_id, role) VALUES ($1, $2, 'agent'), ($1, $3, 'agent'), ($1, $4, 'agent'), ($5, $6, 'agent'), ($7, $2, 'agent')",
-    [T.A, P.agent.id, P.agent2.id, P.newbie.id, T.B, P.other.id, T.Fac]
+    "INSERT INTO hd_team_members (team_id, user_id, role) VALUES ($1, $2, 'agent'), ($1, $3, 'agent'), ($1, $4, 'agent'), ($5, $6, 'agent'), ($7, $2, 'agent'), ($1, $8, 'agent')",
+    [T.A, P.agent.id, P.agent2.id, P.newbie.id, T.B, P.other.id, T.Fac, P.admin.id]
   );
+  // 1.20.23 review M3: a Manager manages the content of their own teams' desk departments (General here).
 });
 
 after(async () => {
@@ -663,7 +664,8 @@ describe("added automatically", () => {
     // Review fix: the request's owner (else its team) hears of it, and the Finish step's survey choice is kept for the later solve.
     const owner = (await pool().query("SELECT assignee_id FROM hd_tickets WHERE id = $1", [t.id])).rows[0].assignee_id as number | null;
     const told = await pool().query("SELECT user_id FROM notifications WHERE title = $1", [`Checklist to finish on #${t.number}`]);
-    const expected = owner ? [owner] : [P.agent.id, P.agent2.id, P.newbie.id];
+    // (The Manager is on team A too since 1.20.23's review M3: managing follows team membership.)
+    const expected = owner ? [owner] : [P.agent.id, P.agent2.id, P.newbie.id, P.admin.id];
     assert.ok(told.rows.length > 0 && told.rows.every((r) => expected.includes(r.user_id)), JSON.stringify(told.rows));
     assert.equal(await checklists.heldFinishCsat(t.id), false);
     const reqItem = (await checklists.ticketChecklists(t.id))[0].items[0];

@@ -81,18 +81,22 @@ export const deskRoleCaps = cache(async (user: SessionUser): Promise<DeskRoleCap
 });
 
 /** The settings pages and the capability each needs (the nav and the pages read this). */
+// 1.20.23 (lib/helpdesk/desk-departments): "Manage a desk department" (departments.manage) opens
+// every page whose content lives in desk departments, for its holder's own departments; the
+// departments themselves (Desk departments) are desk Admin's.
 export const SETTINGS_CAP: Record<string, string[]> = {
   setup: ["settings.manage"],
   teams: ["teams.manage"],
-  "request-types": ["request_types.manage"],
+  departments: ["settings.manage"],
+  "request-types": ["request_types.manage", "departments.manage"],
   sla: ["sla.manage"],
   email: ["channels.manage"],
-  automations: ["automations.manage"],
-  macros: ["macros.manage_all", "macros.manage_team", "macros.manage_personal"],
+  automations: ["automations.manage", "departments.manage"],
+  macros: ["macros.manage_all", "macros.manage_team", "macros.manage_personal", "departments.manage"],
   // Canned responses (1.19.2, agent W4).
-  canned: ["macros.manage_all", "macros.manage_team", "macros.manage_personal"],
+  canned: ["macros.manage_all", "macros.manage_team", "macros.manage_personal", "departments.manage"],
   // Checklists (1.19.2, agent W3, lib/helpdesk/checklists-caps).
-  checklists: ["settings.manage", "request_types.manage", "workflows.manage"],
+  checklists: ["settings.manage", "request_types.manage", "workflows.manage", "departments.manage"],
   // "Before you solve" requirement sets (1.20.5, lib/helpdesk/solve-requirements).
   "before-you-solve": ["settings.manage"],
   // Managed categories and sub-categories (1.20.6, lib/helpdesk/categories).
@@ -102,7 +106,7 @@ export const SETTINGS_CAP: Record<string, string[]> = {
   // Custom fields per team (1.20.6, lib/helpdesk/custom-fields).
   "custom-fields": ["settings.manage"],
   csat: ["csat.manage"],
-  workflows: ["workflows.manage"],
+  workflows: ["workflows.manage", "departments.manage"],
   "contact-cards": ["settings.manage"],
   // Team settings, people and on call: agents.manage_team (a lead for their own teams); rules: automations.manage (agent N).
   assignment: ["agents.manage_team", "automations.manage"],
@@ -110,7 +114,7 @@ export const SETTINGS_CAP: Record<string, string[]> = {
   skills: ["agents.manage_team", "teams.manage"],
   integrations: ["settings.manage", "channels.manage"],
   // Recurring tickets: every team (settings.manage) or a lead's own teams (1.19.1, agent V8).
-  recurring: ["settings.manage", "agents.manage_team"],
+  recurring: ["settings.manage", "agents.manage_team", "departments.manage"],
   // The Claude connector's workspace level (1.19.1, agent V1).
   claude: ["settings.manage"],
   // The customer portal for outside requesters (1.19.1, agent V6).

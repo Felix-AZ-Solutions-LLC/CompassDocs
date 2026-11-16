@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronRight, Plus, Users } from "lucide-react";
+import { Building2, ChevronRight, Plus, Users } from "lucide-react";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { Chip } from "@/components/Chip";
@@ -27,6 +27,8 @@ import { itemOf, sendJson } from "../api";
 import { useTeams } from "../admin-data";
 import { useDeskCounts } from "../counts";
 import { TEAM_ICON_NAMES, TeamIcon } from "../TeamIcon";
+import { useDeskDepartmentChoices } from "./DeskDepartmentField";
+import { deskDepartmentLabel } from "@/lib/helpdesk/desk-departments-shared";
 
 export const TEAM_ICON_HELP = `A lucide icon name: ${TEAM_ICON_NAMES.slice(0, 8).join(", ")}…`;
 /** The filter box appears once the list is longer than this. */
@@ -49,6 +51,9 @@ function leadsLine(team: HdTeamWithMembers): string {
 export function TeamsSettings() {
   const router = useRouter();
   const { teams, error, reload } = useTeams();
+  // 1.20.23: each row names its desk department once there is more than one (Desk departments moves teams).
+  const depts = useDeskDepartmentChoices("macros");
+  const deptNames = depts && depts.departments.length > 1 ? depts.departments : null;
   const { refresh: refreshCounts } = useDeskCounts();
   const [q, setQ] = useState("");
 
@@ -133,7 +138,7 @@ export function TeamsSettings() {
           ) : (
             <ul role="list" className="divide-y divide-slate-100" data-testid="hd-teams">
               {shown.map((t) => (
-                <TeamRow key={t.id} team={t} />
+                <TeamRow key={t.id} team={t} department={deptNames ? deskDepartmentLabel(t.desk_department_id, deptNames) : null} />
               ))}
             </ul>
           )}
@@ -146,7 +151,7 @@ export function TeamsSettings() {
   );
 }
 
-function TeamRow({ team }: { team: HdTeamWithMembers }) {
+function TeamRow({ team, department }: { team: HdTeamWithMembers; department: string | null }) {
   const leads = leadsLine(team);
   const open = team.open_tickets ?? 0;
   return (
@@ -158,6 +163,13 @@ function TeamRow({ team }: { team: HdTeamWithMembers }) {
         <span className="min-w-0 flex-1">
           <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="min-w-0 truncate text-sm font-semibold text-slate-900">{team.name}</span>
+            {department && (
+              <Chip tone="neutral" size="sm">
+                <Building2 className="h-3 w-3" aria-hidden />
+                <span className="sr-only">Desk department: </span>
+                {department}
+              </Chip>
+            )}
             {team.members.length === 0 && (
               <Chip tone="warn" size="sm">
                 No members

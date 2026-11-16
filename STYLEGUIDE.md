@@ -5829,6 +5829,109 @@ addresses 1.20.5 (`lib/helpdesk/send-addresses`).
   `/admin/sso#duo`) is a registry page with `adminSection`: listed and
   searchable only for someone who can open that CompassDocs section.
 
+## Helpdesk: desk departments
+
+1.20.23 (`lib/helpdesk/desk-departments`, `-shared`, `-schema`;
+`components/helpdesk/desk/settings/DeskDepartmentsSettings`,
+`DeskDepartmentField`). A desk department groups teams (each team is in
+exactly one) and holds macros, canned responses, checklists, workflows,
+request types and automations; recurring tickets are their team's.
+
+- **Vocabulary.** "Department" already means the requester's directory
+  department (VIP lists, contact cards, the report filter). The desk's own is
+  a **desk department** in every label, help line, toast, audit label and
+  empty state where the two could be mixed up; in code, the API and the
+  database it is always `desk_department` (`desk_department_id`,
+  `?desk_department=`, `hd_desk_departments`). The shared choice is **All
+  departments** (`ALL_DESK_DEPARTMENTS_LABEL`), never "Everyone" or
+  "Workspace" on its own.
+- **The page** is a tab of Teams (Desk settings → Teams → Desk departments,
+  desk Admin only), `Building2` icon. Two cards, both reachable from the
+  settings search: **Desk departments** (`#desk-departments`): one row per
+  department with the `h-9 w-9` accent icon tile, the name, a neutral
+  **Default** chip on the default one, and what it holds as one
+  `text-xs text-slate-500` line ("2 teams · 12 macros · 3 automations");
+  Rename (`Pencil`) and Delete (`Trash2`, `hover-danger`) are icon buttons
+  with `aria-label` and `data-tt`; the default department has no Delete.
+  **Which team is in which desk department** (`#desk-department-teams`): one
+  row per team, the team's name as the `<label>` of a dense `Select` of the
+  departments. Changing it moves the team when nothing else changes; when
+  the move changes what applies to the team (other departments' automations
+  naming it, request types, checklists and workflows routing to it,
+  recurring tickets whose request type the new department doesn't see, its
+  agents who lose the old department's content), a `confirmDialog` titled
+  "Move Payroll to HR?" lists them, one bold group line and a bulleted list
+  (eight, then "and N more") per kind (`data-testid hd-team-move-affected`),
+  with **Move team**; the server answers 409 `confirm_team_move` until then.
+  The toast names the new department and the team macros and canned
+  responses that went along. No
+  teams: `SectionEmpty` linking to Teams. A muted line under the cards says
+  queues don't change and that this is not the directory's department.
+- **Delete** with nothing in it: the usual `confirmDialog`. With teams in
+  it: a `Modal` whose `notice-warn` line names the teams to move first, and
+  only Close. With content: a `Modal` with "Move its content to" (a
+  `Select`, the default department first) and the danger primary **Move
+  content and delete**. Never delete content with a department.
+- **The Desk department field** (`DeskDepartmentSelect`, `data-testid
+  hd-desk-department`) sits beside the item's name or in its routing group in
+  every editor: Macros (macros for every agent of the department only; a
+  team's macro is its team's department and shows no field), Canned
+  responses (with "Everyone in the desk department"), Checklists, Request
+  types (Routing), Automations, and under the workflow builder's header
+  (saved at once, like Rename). It offers the departments the person
+  manages, plus All departments for a desk Admin; a new item starts in
+  `default_id`. Its help says who sees the item ("Agents of this desk
+  department's teams see and use it."). Recurring tickets have no field:
+  the Team field's help says the schedule is in its team's department.
+- **Lists** show the **Desk department filter** (`DeskDepartmentFilter`,
+  "Every desk department" / each department / "All departments (shared)")
+  and a row chip (`DeskDepartmentChip`: neutral with `Building2`, `info` for
+  All departments, an `sr-only` "Desk department:" prefix) only when the
+  person sees more than one department; one department, no filter, no chip.
+  A filter that leaves nothing is a `SectionEmpty` with "Show every desk
+  department".
+- **Read-only items.** An item of a department the person sees but doesn't
+  manage (All departments for a non-Admin) shows no Edit, Delete or move
+  controls in a list; opened in an editor, a neutral strip (`rounded-lg
+  border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700`,
+  `role="note"`) says which department it belongs to and that they can read
+  it, not change it. The server refuses the same (403, `code:
+  "desk_department"`); another department's item they can't see is a 404.
+- **Agent pickers** (the composer's macro menu and canned responses, a
+  ticket's Add checklist, Start a workflow, New ticket's request type,
+  Claude's lists and cards) don't label items with a department: they simply
+  list the agent's departments' items and All departments'. Only an empty
+  state that says when an item shows names the rule ("…and it belongs to one
+  of your desk departments", Start a workflow). Module caches drop their
+  copy on `deskDepartmentsChanged()` (a window event every editor fires
+  after a save).
+- **Rules** (route headers carry the detail): agents see their teams'
+  departments' items and All departments'; a desk Admin and anyone who sees
+  every team's tickets see and use all. Managing follows team membership
+  only: a feature capability (Automations, Workflows, …) manages items in
+  the departments of the teams one belongs to; **Manage a desk department**
+  (`departments.manage`, Configuration, Manager and Admin by default) grants
+  every department-held feature there. A Manager who sees every queue still
+  edits only their own teams' departments' content. Only a desk Admin
+  manages every department, sets or clears All departments, creates,
+  renames or deletes departments, or moves teams.
+- **References stay in a department.** An item used by another (the macro
+  an automation sends, the workflow a request type starts or whose trigger
+  names it, a checklist a request type or a workflow task adds, a recurring
+  ticket's request type) is in the user's department or in All departments.
+  A save that breaks it is a 400 with the sentence; a move that would break
+  it is a 409 (`code: "desk_department_dependents"`, `dependents`) whose
+  sentence names up to five of them ("…the automation VPN reset and the
+  request type Laptop would then use something of another desk department.
+  Move or change them first."), shown where the editor shows its errors.
+  The check runs only when the reference or the department changes, so
+  switching an item off always works; an automation whose macro was moved
+  away skips it and leaves an internal note on the ticket.
+- **Races.** A macro or canned response saved from a stale copy after an
+  Admin moved it is a 409 asking to reload; a save racing a department's
+  deletion is a 409 "That desk department was deleted just now. Pick another
+  and save again." (`code: "desk_department_gone"`), never a 500.
+
 ## Helpdesk: the event calendar
 
 1.20.6 (`components/helpdesk/desk/calendar`, `lib/helpdesk/desk-calendar*`).

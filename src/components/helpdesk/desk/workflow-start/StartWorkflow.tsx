@@ -279,11 +279,13 @@ export function StartWorkflowDialog({
             {opts.types.length === 0 ? (
               <SectionEmpty
                 className="mt-4"
-                action={can("request_types.manage") ? { href: "/desk/settings/request-types", label: "Request types" } : undefined}
+                action={can("request_types.manage") || can("departments.manage") ? { href: "/desk/settings/request-types", label: "Request types" } : undefined}
               >
                 No request type starts a workflow for {requester}. One shows here when it&apos;s switched on, its workflow is published, {requester} could
                 choose it in {opts.requester.portal ? "the customer portal" : "Get help"}
-                {mode === "new" ? ", and its team is one of yours" : ""}.
+                {mode === "new" ? ", and its team is one of yours" : ""}
+                {/* 1.20.23: and it is one of the agent's desk departments' (lib/helpdesk/workflow-start typeInAgentDepartments). */}
+                , and it belongs to one of your desk departments.
               </SectionEmpty>
             ) : (
               <div className="mt-4 flex flex-col gap-5">

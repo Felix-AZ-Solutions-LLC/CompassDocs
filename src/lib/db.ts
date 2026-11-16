@@ -43,6 +43,7 @@ import { HD_EMAIL_HTML_SCHEMA } from "./helpdesk/email-html-schema";
 import { HD_LIVE_SCHEMA } from "./helpdesk/live-schema";
 import { HD_REPLY_LOCK_SCHEMA } from "./helpdesk/reply-lock-schema";
 import { HD_WORKFLOW_START_SCHEMA } from "./helpdesk/workflow-start-schema";
+import { HD_DESK_DEPARTMENTS_SCHEMA } from "./helpdesk/desk-departments-schema";
 import { createHash, randomBytes } from "node:crypto";
 import { SEED_SPACES, SEED_DOCS } from "./seed-data";
 import { hashPassword } from "./password";
@@ -2430,6 +2431,10 @@ const SCHEMA_SQL = `
   ${HD_REPLY_LOCK_SCHEMA}
   -- Start a workflow from the desk: a start's idempotency keys (1.20.21, lib/helpdesk/workflow-start-schema; after hd_tickets, users).
   ${HD_WORKFLOW_START_SCHEMA}
+  -- Desk departments: teams and their content grouped per department, "General" by default (1.20.23,
+  -- lib/helpdesk/desk-departments-schema; after hd_teams, hd_macros, hd_automations, hd_workflows,
+  -- hd_request_types, hd_canned_responses and hd_checklist_templates).
+  ${HD_DESK_DEPARTMENTS_SCHEMA}
   --- end Helpdesk 1.19.0 ---------------------------------------------------
   ${EMAIL_PARTS_SCHEMA}
   ${NOTIFY_POLICY_SCHEMA}

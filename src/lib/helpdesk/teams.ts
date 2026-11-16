@@ -8,7 +8,9 @@ import type { HdAvailability, HdTeam, HdTeamMember, HdTeamRole, HdTeamWithMember
 
 export const TEAM_LIMITS = { name: 60, description: 300, icon: 40, email_alias: 200, teams: 100, members: 500 } as const;
 
-const TEAM_COLS = "t.id, t.name, t.description, t.icon, t.email_alias, t.position, t.created_at";
+// 1.20.23: with the team's desk department (lib/helpdesk/desk-departments).
+const TEAM_COLS = "t.id, t.name, t.description, t.icon, t.email_alias, t.position, t.created_at, t.desk_department_id";
+const RETURNING = "id, name, description, icon, email_alias, position, created_at, desk_department_id";
 
 export async function listTeams(): Promise<HdTeam[]> {
   return hq<HdTeam>(`SELECT ${TEAM_COLS} FROM hd_teams t ORDER BY t.position, t.name, t.id`);
@@ -70,16 +72,19 @@ export function validateTeamInput(raw: Record<string, unknown>, partial = false)
   return { ok: true, value: out };
 }
 
-/** Create a team; null when the name is taken. */
-export async function createTeam(input: TeamInput): Promise<HdTeam | null> {
+/**
+ * Create a team; null when the name is taken. 1.20.23: in `deskDepartmentId`, or the
+ * default desk department ("General") when not given: a team is always in one.
+ */
+export async function createTeam(input: TeamInput, deskDepartmentId?: number): Promise<HdTeam | null> {
   const count = await hqOne<{ n: number }>("SELECT count(*)::int AS n FROM hd_teams");
   if ((count?.n ?? 0) >= TEAM_LIMITS.teams) throw new Error(`A helpdesk has at most ${TEAM_LIMITS.teams} teams.`);
   const row = await hqOne<HdTeam>(
-    `INSERT INTO hd_teams (name, description, icon, email_alias, position)
-     VALUES ($1, $2, $3, $4, COALESCE($5, (SELECT COALESCE(max(position) + 1, 0) FROM hd_teams)))
+    `INSERT INTO hd_teams (name, description, icon, email_alias, position, desk_department_id)
+     VALUES ($1, $2, $3, $4, COALESCE($5, (SELECT COALESCE(max(position) + 1, 0) FROM hd_teams)), COALESCE($6::int, hd_default_desk_department()))
      ON CONFLICT (name) DO NOTHING
-     RETURNING id, name, description, icon, email_alias, position, created_at`,
-    [input.name, input.description ?? "", input.icon ?? "", input.email_alias ?? "", input.position ?? null]
+     RETURNING ${RETURNING}`,
+    [input.name, input.description ?? "", input.icon ?? "", input.email_alias ?? "", input.position ?? null, deskDepartmentId ?? null]
   );
   return row ?? null;
 }
@@ -91,7 +96,7 @@ export async function updateTeam(id: number, patch: Partial<TeamInput>): Promise
       `UPDATE hd_teams SET name = COALESCE($2, name), description = COALESCE($3, description),
               icon = COALESCE($4, icon), email_alias = COALESCE($5, email_alias), position = COALESCE($6, position)
         WHERE id = $1
-        RETURNING id, name, description, icon, email_alias, position, created_at`,
+        RETURNING ${RETURNING}`,
       [id, patch.name ?? null, patch.description ?? null, patch.icon ?? null, patch.email_alias ?? null, patch.position ?? null]
     );
   } catch (e) {
@@ -104,7 +109,7 @@ export async function updateTeam(id: number, patch: Partial<TeamInput>): Promise
 export async function deleteTeam(id: number): Promise<HdTeam | undefined> {
   return withTx(async (client) => {
     const r = await client.query(
-      "DELETE FROM hd_teams WHERE id = $1 RETURNING id, name, description, icon, email_alias, position, created_at",
+      `DELETE FROM hd_teams WHERE id = $1 RETURNING ${RETURNING}`,
       [id]
     );
     if (!r.rows[0]) return undefined;

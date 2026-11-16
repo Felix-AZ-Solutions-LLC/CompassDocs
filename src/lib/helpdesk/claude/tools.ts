@@ -257,7 +257,9 @@ async function suggestChecklist(a: Record<string, any>, ctx: ToolCtx): Promise<T
   if (typeof t === "string") return fail(t);
   const { checklistsEditable, templateOptions, ticketChecklists } = await import("../checklists");
   if (!checklistsEditable(t)) return fail(t.merged_into ? "That ticket was merged; checklists go on the ticket it joined." : "That ticket is closed.");
-  const tpl = (await templateOptions()).find((x) => x.id === Number(a.template_id));
+  // 1.20.23: only the agent's desk departments' checklists and All departments' (as their picker lists them).
+  const { deskDepartmentScope } = await import("../desk-departments");
+  const tpl = (await templateOptions(await deskDepartmentScope(ctx.session))).find((x) => x.id === Number(a.template_id));
   if (!tpl) return fail("No checklist template with that id. Call list_checklists for the ones that can be added.");
   if ((await ticketChecklists(t.id)).some((c) => c.name === tpl.name)) return fail(`#${t.number} already has the "${tpl.name}" checklist.`);
   return done(
@@ -305,7 +307,8 @@ async function proposeTicks(a: Record<string, any>, ctx: ToolCtx): Promise<ToolO
 async function draftChecklist(a: Record<string, any>, ctx: ToolCtx): Promise<ToolOutcome> {
   const { CHECKLIST_MANAGE_CAPS } = await import("../checklists-caps");
   let may = false;
-  for (const c of CHECKLIST_MANAGE_CAPS) if (await hdCan(ctx.user, c)) may = true;
+  // 1.20.23: "Manage a desk department" too (the draft goes into their starting desk department).
+  for (const c of [...CHECKLIST_MANAGE_CAPS, "departments.manage" as const]) if (await hdCan(ctx.user, c)) may = true;
   if (!may) return fail("The agent can't manage checklists (desk role), so there is nowhere to save a checklist draft. Suggest they ask someone who manages checklists.");
   const { checkTemplateDraft, ChecklistError } = await import("../checklists");
   let draft: Awaited<ReturnType<typeof checkTemplateDraft>>;
@@ -399,11 +402,15 @@ function automationInput(a: Record<string, any>): Record<string, unknown> {
 
 /** An automation rule, checked as Desk settings would; Save as draft saves it off (or beside the live rule). */
 async function draftAutomation(a: Record<string, any>, ctx: ToolCtx): Promise<ToolOutcome> {
-  if (!(await hdCan(ctx.user, "automations.manage"))) return fail(CANT("automations"));
+  // 1.20.23: automations.manage or "Manage a desk department", in a desk department they manage (lib/helpdesk/desk-departments).
+  const dd = await import("../desk-departments");
+  const access = await dd.deskDepartmentAccess(ctx.user, "automations");
+  if (!access.admin && (access.manage === "all" ? false : access.manage.length === 0)) return fail(CANT("automations"));
   const au = await import("../automations");
   const id = Number.isSafeInteger(a.id) && a.id > 0 ? (a.id as number) : null;
   const live = id ? await au.getAutomation(id) : undefined;
-  if (id && !live) return fail(`No automation with id ${id}. Call list_desk_settings for the rules.`);
+  if (id && (!live || !dd.maySeeDept(access, live.desk_department_id))) return fail(`No automation with id ${id}. Call list_desk_settings for the rules.`);
+  if (live && !dd.mayManageDept(access, live.desk_department_id)) return fail(CANT("that rule's desk department"));
   let draft: Awaited<ReturnType<typeof au.checkAutomationDraft>>;
   try {
     draft = await au.checkAutomationDraft(automationInput(a));

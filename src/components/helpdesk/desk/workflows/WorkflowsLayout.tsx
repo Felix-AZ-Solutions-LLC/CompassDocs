@@ -4,6 +4,9 @@
 // and how many requests it ran this month) beside the builder. Under lg
 // the rail and the builder stack: the rail alone at /desk/workflows, the
 // builder alone (with a link back) once a workflow is open.
+// 1.20.23: the rail lists the person's desk departments' workflows and All
+// departments'; with more than one department, a Desk department filter and
+// each row's department under its name (settings/DeskDepartmentField).
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
@@ -20,6 +23,8 @@ import type { HdWorkflowListRow } from "@/lib/helpdesk/workflows";
 import { getJson, itemOf, listOf, sendJson } from "../api";
 import { useRequestTypes } from "../admin-data";
 import { TeamIcon } from "../TeamIcon";
+import { DeskDepartmentFilter, byDeskDepartment, useDeskDepartmentChoices } from "../settings/DeskDepartmentField";
+import { deskDepartmentLabel } from "@/lib/helpdesk/desk-departments-shared";
 
 interface Ctx {
   workflows: HdWorkflowListRow[] | null;
@@ -41,6 +46,8 @@ export function WorkflowsLayout({ children }: { children: ReactNode }) {
   const params = useParams<{ slug?: string }>();
   const router = useRouter();
   const open = params?.slug ? decodeURIComponent(params.slug) : null;
+  const depts = useDeskDepartmentChoices("workflows");
+  const [deptFilter, setDeptFilter] = useState("");
 
   const reload = useCallback(() => {
     getJson("/api/helpdesk/admin/workflows", "Couldn't load the workflows.")
@@ -91,8 +98,18 @@ export function WorkflowsLayout({ children }: { children: ReactNode }) {
               <Plus aria-hidden />
             </button>
           </div>
+          {depts?.filter && (
+            <div className="px-4 pb-2">
+              <DeskDepartmentFilter choices={depts} value={deptFilter} onChange={setDeptFilter} />
+            </div>
+          )}
           <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
             {error && <p className="px-2 py-3 text-sm text-red-600">{error}</p>}
+            {workflows && workflows.length > 0 && byDeskDepartment(workflows, deptFilter).length === 0 && (
+              <SectionEmpty className="px-2 py-3" action={{ onClick: () => setDeptFilter(""), label: "Show every desk department" }}>
+                No workflow in this desk department.
+              </SectionEmpty>
+            )}
             {!error && workflows === null && <LoadingRow className="py-6" />}
             {workflows && workflows.length === 0 && (
               <SectionEmpty className="px-2 py-3" action={{ onClick: create, label: "New workflow" }}>
@@ -100,7 +117,7 @@ export function WorkflowsLayout({ children }: { children: ReactNode }) {
               </SectionEmpty>
             )}
             <ul className="flex flex-col gap-0.5">
-              {workflows?.map((w) => {
+              {(workflows ? byDeskDepartment(workflows, deptFilter) : null)?.map((w) => {
                 const on = open === w.slug || open === String(w.id);
                 return (
                   <li key={w.id}>
@@ -113,6 +130,7 @@ export function WorkflowsLayout({ children }: { children: ReactNode }) {
                         <span className="block text-xs font-normal text-slate-500">
                           {w.runs_recent} this month
                           {!w.published ? " · draft" : w.has_changes ? " · unpublished changes" : ""}
+                          {depts?.filter ? ` · ${deskDepartmentLabel(w.desk_department_id, depts.departments)}` : ""}
                         </span>
                       </span>
                     </Link>

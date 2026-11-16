@@ -50,12 +50,24 @@ import {
 import { getJson, itemOf, listOf, sendJson } from "../api";
 import { draftChipLabel, waitsForReview } from "@/lib/helpdesk/claude-drafts-shared";
 import { ClaudeDraftStrip } from "../settings/ClaudeDraftStrip";
+// 1.20.23: a schedule is its team's, so it is in its team's desk department (no field of its own).
+import { DeskDepartmentFilter, byDeskDepartment, useDeskDepartmentChoices } from "../settings/DeskDepartmentField";
+import { deskDepartmentLabel } from "@/lib/helpdesk/desk-departments-shared";
 
 interface TeamOption {
   id: number;
   name: string;
   timezone: string;
   members: { id: number; name: string }[];
+  /** 1.20.23: the team's desk department; a schedule's request type is one it sees. */
+  desk_department_id: number;
+}
+
+interface TypeOption {
+  id: number;
+  title: string;
+  team_id: number | null;
+  desk_department_id: number | null;
 }
 
 type Kind = "daily" | "weekly" | "monthly" | "interval";
@@ -219,12 +231,14 @@ export function RecurringSettings() {
   const sp = useSearchParams();
   const [schedules, setSchedules] = useState<HdRecurring[] | null>(null);
   const [teams, setTeams] = useState<TeamOption[]>([]);
-  const [types, setTypes] = useState<{ id: number; title: string; team_id: number | null }[]>([]);
+  const [types, setTypes] = useState<TypeOption[]>([]);
   const [error, setError] = useState("");
+  const depts = useDeskDepartmentChoices("recurring");
+  const [deptFilter, setDeptFilter] = useState("");
 
   const load = useCallback(
     () =>
-      getJson<{ schedules: HdRecurring[]; teams: TeamOption[]; request_types: { id: number; title: string; team_id: number | null }[] }>(
+      getJson<{ schedules: HdRecurring[]; teams: TeamOption[]; request_types: TypeOption[] }>(
         "/api/helpdesk/admin/recurring",
         "Couldn't load the recurring tickets."
       )
@@ -283,6 +297,12 @@ export function RecurringSettings() {
       )}
       {schedules && (schedules.length > 0 || isNew) && (
         <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+          <div className="min-w-0">
+          {depts?.filter && schedules.length > 0 && (
+            <div className="mb-3 flex justify-end">
+              <DeskDepartmentFilter choices={depts} value={deptFilter} onChange={setDeptFilter} />
+            </div>
+          )}
           <Card padding="none" className="overflow-hidden">
             {schedules.length === 0 ? (
               <p className="px-4 py-6 text-sm text-slate-500">Your first schedule appears here once it's saved.</p>
@@ -299,7 +319,7 @@ export function RecurringSettings() {
                   </tr>
                 </thead>
                 <tbody>
-                  {schedules.map((s) => {
+                  {byDeskDepartment(schedules, deptFilter).map((s) => {
                     const on = !isNew && s.id === chosenId;
                     return (
                       <tr
@@ -320,7 +340,8 @@ export function RecurringSettings() {
                               </span>
                             )}
                             <span className="mt-0.5 block truncate text-xs text-slate-500">
-                              {s.team_name} · {patternSummary(s.pattern)}
+                              {s.team_name}
+                              {depts?.filter ? ` (${deskDepartmentLabel(s.desk_department_id, depts.departments)})` : ""} · {patternSummary(s.pattern)}
                             </span>
                           </button>
                         </td>
@@ -340,6 +361,7 @@ export function RecurringSettings() {
               </Table>
             )}
           </Card>
+          </div>
           <div className="@container min-w-0">
             {(isNew || chosen) && teams.length > 0 && (
               <Editor
@@ -373,7 +395,7 @@ function Editor({
 }: {
   schedule: HdRecurring | null;
   teams: TeamOption[];
-  types: { id: number; title: string; team_id: number | null }[];
+  types: TypeOption[];
   onSaved: (s: HdRecurring) => void;
   onDeleted: () => void;
 }) {
@@ -528,7 +550,11 @@ function Editor({
     }
   }
 
-  const teamTypes = types.filter((t) => t.team_id === null || t.team_id === d.team_id);
+  // 1.20.23 review L2: and of the team's desk department or All departments (the server checks it too).
+  const teamDept = teams.find((t) => t.id === d.team_id)?.desk_department_id;
+  const teamTypes = types.filter(
+    (t) => (t.team_id === null || t.team_id === d.team_id) && (t.desk_department_id === null || teamDept === undefined || t.desk_department_id === teamDept)
+  );
   const time = (
     <TextInput type="time" aria-label="Time of day" value={d.time} onChange={(e) => set({ time: e.target.value || "09:00" })} className="w-32" />
   );
@@ -554,7 +580,7 @@ function Editor({
           <Textarea rows={3} value={d.body} onChange={(e) => set({ body: e.target.value })} />
         </Field>
         <div className="grid gap-4 @md:grid-cols-2">
-          <Field label="Team">
+          <Field label="Team" help="The schedule is in its team's desk department, and its tickets meet that department's automations.">
             <Select
               value={d.team_id}
               onChange={(e) => {

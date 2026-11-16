@@ -6,7 +6,7 @@
 // on Tue Dec 29 (Dec 31 and Jan 1 are holidays)." Reads only.
 
 import { NextResponse } from "next/server";
-import { hdCapGate } from "@/lib/helpdesk/roles";
+import { hdAnyCapGate } from "@/lib/helpdesk/roles";
 import { hoursForTeam } from "@/lib/helpdesk/calendars";
 import { countExample } from "@/lib/helpdesk/business-waits-shared";
 import { hqOne } from "@/lib/helpdesk/db-core";
@@ -14,7 +14,8 @@ import { hqOne } from "@/lib/helpdesk/db-core";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const gate = await hdCapGate("workflows.manage");
+  // 1.20.23: and "Manage a desk department" (the builder opens for their own teams' departments' workflows; review M3).
+  const gate = await hdAnyCapGate(["workflows.manage", "departments.manage"]);
   if (gate instanceof NextResponse) return gate;
   const url = new URL(req.url);
   const teamRaw = Number(url.searchParams.get("team") || 0);

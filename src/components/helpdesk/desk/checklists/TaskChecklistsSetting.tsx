@@ -15,10 +15,15 @@ import { CHECKLIST_LIMITS } from "@/lib/helpdesk/checklists-shared";
 import type { HdTaskStepDefB } from "@/lib/helpdesk/types";
 import { getJson } from "../api";
 import { PickMenu } from "../PickMenu";
+import { onDeskDepartmentsChanged } from "../settings/DeskDepartmentField";
 
 type Option = { id: number; name: string; items: number; required: number };
 
 let cache: Promise<Option[]> | null = null;
+// 1.20.23: the library is the person's desk departments' checklists (and All departments'): a change drops this copy.
+onDeskDepartmentsChanged(() => {
+  cache = null;
+});
 function library(): Promise<Option[]> {
   if (!cache) {
     cache = getJson<{ templates: Option[] }>("/api/helpdesk/checklists", "Couldn't load the checklists.")

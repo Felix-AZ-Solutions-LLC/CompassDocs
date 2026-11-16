@@ -15,6 +15,13 @@
 //
 // Visibility: a macro with no team is everyone's; a team macro is its
 // team's (and every agent_all agent's).
+// 1.20.23 (lib/helpdesk/desk-departments): a macro with no team is everyone's
+// in its desk department (or, desk_department_id NULL, in All departments):
+// an agent sees it when the department is one of theirs. A team macro is
+// always in its team's department (moving the team takes it along) and keeps
+// its team's rule; a personal macro has no department. Listing, the composer,
+// applying (applyMacroAs: the desk's route, Claude, the connector) all ask
+// the same (macroVisibleTo / listMacros).
 //
 // 1.20.15: applying as an agent is one library function, applyMacroAs,
 // which the desk's route (POST …/macro/[id]) and Claude share: the same
@@ -276,22 +283,29 @@ export function macroScope(m: { owner_id?: number | null; team_id: number | null
   return m.team_id ? "team" : "everyone";
 }
 
-const COLS = "id, title, body, actions, team_id, owner_id, created_by, created_at, updated_at";
+const COLS = "id, title, body, actions, team_id, owner_id, created_by, created_at, updated_at, desk_department_id";
 const MCOLS = COLS.split(", ").map((c) => `m.${c}`).join(", ");
 
 /**
  * Macros for a list. `teams` "all" = every shared macro; an array = the
  * everyone macros and those teams'. `ownerId` adds that person's personal
- * macros (nobody else's are ever listed).
+ * macros (nobody else's are ever listed). 1.20.23: `depts` (the person's desk
+ * departments, desk-departments deskDepartmentScope) limits the macros with
+ * no team to those departments and All departments.
  */
-export async function listMacros(teams: number[] | "all" = "all", ownerId: number | null = null): Promise<(HdMacroRow & { scope: MacroScope })[]> {
+export async function listMacros(
+  teams: number[] | "all",
+  ownerId: number | null,
+  depts: import("./desk-departments-shared").HdDeskDepartmentScope
+): Promise<(HdMacroRow & { scope: MacroScope })[]> {
   await ensureMacroSchema();
   const rows = await hq<HdMacroRow>(
     `SELECT ${MCOLS}, t.name AS team_name FROM hd_macros m LEFT JOIN hd_teams t ON t.id = m.team_id
-      WHERE (m.owner_id IS NULL AND ($1::int[] IS NULL OR m.team_id IS NULL OR m.team_id = ANY($1::int[])))
+      WHERE (m.owner_id IS NULL AND m.team_id IS NULL AND (m.desk_department_id IS NULL OR $3::int[] IS NULL OR m.desk_department_id = ANY($3::int[])))
+         OR (m.owner_id IS NULL AND m.team_id IS NOT NULL AND ($1::int[] IS NULL OR m.team_id = ANY($1::int[])))
          OR (m.owner_id IS NOT NULL AND m.owner_id = $2::int)
       ORDER BY lower(m.title), m.id`,
-    [teams === "all" ? null : teams, ownerId]
+    [teams === "all" ? null : teams, ownerId, depts === "all" ? null : depts]
   );
   return rows.map((m) => ({ ...m, scope: macroScope(m) }));
 }
@@ -301,29 +315,66 @@ export async function getMacro(id: number): Promise<HdMacroRow | undefined> {
   return hqOne<HdMacroRow>(`SELECT ${COLS} FROM hd_macros WHERE id = $1`, [id]);
 }
 
-export async function createMacro(input: MacroInput & { owner_id?: number | null }, createdBy: number | null): Promise<HdMacroRow> {
+/**
+ * 1.20.23: `desk_department_id` (null = All departments) is the caller's, already checked;
+ * left out, a shared macro goes into the default desk department (a team macro: its team's).
+ * A personal macro never has one.
+ */
+export async function createMacro(
+  input: MacroInput & { owner_id?: number | null; desk_department_id?: number | null },
+  createdBy: number | null
+): Promise<HdMacroRow> {
   await ensureMacroSchema();
   const count = await hqOne<{ n: number }>("SELECT count(*)::int AS n FROM hd_macros");
   if ((count?.n ?? 0) >= MACRO_LIMITS.macros) throw new MacroLimitError(`A workspace can keep up to ${MACRO_LIMITS.macros} macros.`);
   const owner = input.owner_id ?? null;
+  const team = owner ? null : input.team_id;
+  const { deptArg, deptInsertSql } = await import("./desk-departments");
+  const dept = owner ? null : team ? await teamDept(team) : input.desk_department_id;
   const row = await hqOne<HdMacroRow>(
-    `INSERT INTO hd_macros (title, body, actions, team_id, owner_id, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING ${COLS}`,
-    [input.title, input.body, JSON.stringify(input.actions ?? {}), owner ? null : input.team_id, owner, createdBy]
+    `INSERT INTO hd_macros (title, body, actions, team_id, owner_id, created_by, desk_department_id) VALUES ($1, $2, $3, $4, $5, $6, ${deptInsertSql(7)}) RETURNING ${COLS}`,
+    [input.title, input.body, JSON.stringify(input.actions ?? {}), team, owner, createdBy, deptArg(dept)]
   );
   return row!;
 }
 
+/** 1.20.23: a team's desk department (a team macro is always in it). */
+async function teamDept(teamId: number): Promise<number> {
+  const { teamDeskDepartmentId } = await import("./desk-departments");
+  return teamDeskDepartmentId(teamId);
+}
+
 export class MacroLimitError extends Error {}
 
-export async function updateMacro(id: number, patch: Partial<MacroInput> & { owner_id?: number | null }): Promise<HdMacroRow | undefined> {
+/** 1.20.23: `desk_department_id` in the patch moves it (checked by the caller); a team macro follows its team, a personal one has none. */
+/** 1.20.23 review L3: the macro was moved or reshared after the caller read it; nothing was saved. */
+export const MACRO_MOVED_MEANWHILE = "This macro was moved or shared differently while you were editing it. Reload it and try again.";
+
+/**
+ * `expect` (1.20.23 review L3): the sharing the caller checked (department, team, owner). The
+ * write happens only while the row still has it, so a stale save never reverts a move an Admin
+ * made meanwhile (say, out of All departments). Returns "changed" when it no longer has it.
+ */
+export async function updateMacro(
+  id: number,
+  patch: Partial<MacroInput> & { owner_id?: number | null; desk_department_id?: number | null },
+  expect?: { desk_department_id: number | null; team_id: number | null; owner_id: number | null }
+): Promise<HdMacroRow | undefined | "changed"> {
   const cur = await getMacro(id);
   if (!cur) return undefined;
   const next = { ...cur, ...patch };
   const owner = next.owner_id ?? null;
-  return hqOne<HdMacroRow>(
-    `UPDATE hd_macros SET title = $2, body = $3, actions = $4, team_id = $5, owner_id = $6, updated_at = now() WHERE id = $1 RETURNING ${COLS}`,
-    [id, next.title, next.body, JSON.stringify(next.actions ?? {}), owner ? null : next.team_id, owner]
+  const team = owner ? null : next.team_id;
+  const dept = owner ? null : team ? await teamDept(team) : next.desk_department_id === undefined ? null : next.desk_department_id;
+  const ex = expect ?? { desk_department_id: cur.desk_department_id ?? null, team_id: cur.team_id ?? null, owner_id: cur.owner_id ?? null };
+  const row = await hqOne<HdMacroRow>(
+    `UPDATE hd_macros SET title = $2, body = $3, actions = $4, team_id = $5, owner_id = $6, desk_department_id = $7, updated_at = now()
+      WHERE id = $1 AND desk_department_id IS NOT DISTINCT FROM $8::int AND team_id IS NOT DISTINCT FROM $9::int AND owner_id IS NOT DISTINCT FROM $10::int
+      RETURNING ${COLS}`,
+    [id, next.title, next.body, JSON.stringify(next.actions ?? {}), team, owner, dept, ex.desk_department_id, ex.team_id, ex.owner_id]
   );
+  if (row) return row;
+  return (await getMacro(id)) ? "changed" : undefined;
 }
 
 export async function deleteMacro(id: number): Promise<HdMacroRow | undefined> {
@@ -331,10 +382,23 @@ export async function deleteMacro(id: number): Promise<HdMacroRow | undefined> {
   return hqOne<HdMacroRow>(`DELETE FROM hd_macros WHERE id = $1 RETURNING ${COLS}`, [id]);
 }
 
-/** May this agent (with these teams) use the macro? A personal macro is its owner's only. */
-export function macroVisibleTo(macro: { team_id: number | null; owner_id?: number | null }, teams: number[] | "all", userId?: number | null): boolean {
+/**
+ * May this agent (with these teams) use the macro? A personal macro is its owner's only.
+ * 1.20.23: a macro with no team only in one of `depts` (their desk departments) or in All
+ * departments; a team macro keeps its team's rule (the team is in its department).
+ */
+export function macroVisibleTo(
+  macro: { team_id: number | null; owner_id?: number | null; desk_department_id?: number | null },
+  teams: number[] | "all",
+  userId: number | null | undefined,
+  depts: import("./desk-departments-shared").HdDeskDepartmentScope
+): boolean {
   if (macro.owner_id) return macro.owner_id === userId;
-  return macro.team_id === null || teams === "all" || teams.includes(macro.team_id);
+  if (macro.team_id === null) {
+    const d = macro.desk_department_id ?? null;
+    return d === null || depts === "all" || depts.includes(d);
+  }
+  return teams === "all" || teams.includes(macro.team_id);
 }
 
 /** The capability (agent J) that writes a macro of this scope, and the team it is checked in. */
@@ -343,6 +407,26 @@ export function macroManageCap(m: { owner_id?: number | null; team_id: number | 
   if (scope === "personal") return { cap: "macros.manage_personal", teamId: null };
   if (scope === "team") return { cap: "macros.manage_team", teamId: m.team_id };
   return { cap: "macros.manage_all", teamId: null };
+}
+
+/**
+ * 1.20.23: may `user` create, edit or delete a macro shared this way, in this desk department
+ * (Desk settings → Macros)? Personal: its owner, with Personal macros. Shared: the department
+ * must be one they manage (desk-departments mayManageDept: never All departments unless desk
+ * Admin), and then a team macro needs Team macros in that team, or "Manage a desk department";
+ * a macro for everyone in the department needs Everyone's macros, or "Manage a desk department".
+ */
+export async function macroManageable(
+  user: { id: number; role: import("../types").Role },
+  access: import("./desk-departments").DeskDepartmentAccess,
+  m: { owner_id?: number | null; team_id: number | null; desk_department_id?: number | null }
+): Promise<boolean> {
+  const { hdCan } = await import("./roles");
+  const { cap, teamId } = macroManageCap(m);
+  if (m.owner_id) return m.owner_id === user.id && (await hdCan(user, cap));
+  const { mayManageDept } = await import("./desk-departments");
+  if (!mayManageDept(access, m.desk_department_id ?? null)) return false;
+  return access.admin || access.departmentManager || (await hdCan(user, cap, { teamId }));
 }
 
 // --- Applying --------------------------------------------------------------------
@@ -633,7 +717,9 @@ export async function applyMacroAs(
   if (!ticket || !(await canWorkTicket(user, ticket))) return { ok: false, status: 404, error: "Ticket not found." };
   if (!(await hdCan(user, "macros.use", { teamId: ticket.team_id }))) return { ok: false, status: 403, error: HD_FORBIDDEN };
   const macro = await getMacro(macroId);
-  if (!macro || !macroVisibleTo(macro, await agentTeamIds(user), user.id)) return { ok: false, status: 404, error: "Macro not found." };
+  // 1.20.23: and in one of the agent's desk departments (or All departments): another department's macro is not found.
+  const { deskDepartmentScope } = await import("./desk-departments");
+  if (!macro || !macroVisibleTo(macro, await agentTeamIds(user), user.id, await deskDepartmentScope(user))) return { ok: false, status: 404, error: "Macro not found." };
   if (opts.expect !== undefined && (!opts.expect || isoOf(opts.expect.macro_updated_at) !== isoOf(macro.updated_at))) {
     return { ok: false, status: 409, error: MACRO_CHANGED };
   }

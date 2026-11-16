@@ -193,12 +193,31 @@ function requesterMayUse(rt: Pick<HdRequestType, "active" | "visibility" | "grou
   return (rt.group_ids ?? []).some((g) => groups.has(Number(g)));
 }
 
+/**
+ * 1.20.23 (lib/helpdesk/desk-departments): an agent is offered a request type, and may start or
+ * file it, only when the type and the workflow it starts are each in one of the agent's desk
+ * departments or in All departments. A requester's own choices (Get help, the portal) are never
+ * filtered: this is the desk side only.
+ */
+export async function typeInAgentDepartments(
+  agent: { id: number; role: Role },
+  rt: { desk_department_id?: number | null },
+  w: { desk_department_id?: number | null } | null | undefined
+): Promise<boolean> {
+  const { deskDepartmentScope, deskDepartmentInScope } = await import("./desk-departments");
+  const scope = await deskDepartmentScope(agent);
+  return deskDepartmentInScope(rt.desk_department_id ?? null, scope) && (!w || deskDepartmentInScope(w.desk_department_id ?? null, scope));
+}
+
+/** The refusal for a type outside the agent's desk departments (as for a type no longer offered). */
+export const NOT_IN_AGENT_DEPARTMENTS = "That request type isn't one of your desk departments'. Choose another.";
+
 async function teamNames(): Promise<Map<number, string>> {
   return new Map((await hq<{ id: number; name: string }>("SELECT id, name FROM hd_teams")).map((r) => [r.id, r.name]));
 }
 
-/** A portal contact's types (portal offeredTypes), as this module lists them. */
-async function portalTypes(workflowOnly: boolean): Promise<HdStartableType[]> {
+/** A portal contact's types (portal offeredTypes), as this module lists them. 1.20.23: `viewer`'s desk departments' only. */
+async function portalTypes(workflowOnly: boolean, viewer?: { id: number; role: Role }): Promise<HdStartableType[]> {
   const { offeredTypes } = await import("./portal");
   const [offered, names] = await Promise.all([offeredTypes(), teamNames()]);
   const out: HdStartableType[] = [];
@@ -207,6 +226,7 @@ async function portalTypes(workflowOnly: boolean): Promise<HdStartableType[]> {
     if (!w && workflowOnly) continue;
     const rt = await getRequestType(o.id);
     if (!rt || Number(rt.active) !== 1) continue;
+    if (viewer && !(await typeInAgentDepartments(viewer, rt, w))) continue;
     out.push({
       id: o.id,
       slug: rt.slug,
@@ -229,6 +249,8 @@ async function portalTypes(workflowOnly: boolean): Promise<HdStartableType[]> {
  * a workflow; without it (New ticket) every type an account may use.
  * `viewer`: who will see the prefilled answers (never a directory value
  * hidden from them). `team_id` is where a new request of the type goes.
+ * 1.20.23: with a `viewer`, only the types (and workflows) of their desk
+ * departments and All departments (typeInAgentDepartments).
  */
 export async function startableTypes(
   requester: StartRequester | { kind: "account"; id: number; name?: string } | null,
@@ -237,7 +259,7 @@ export async function startableTypes(
   const workflowOnly = opts.workflowOnly ?? true;
   // A requester with no account (the 1.20.21 first pass's `null`): the portal path or nothing.
   if (!requester || requester.kind === "none") return [];
-  if (requester.kind === "portal") return portalTypes(workflowOnly);
+  if (requester.kind === "portal") return portalTypes(workflowOnly, opts.viewer);
   const [all, groups] = await Promise.all([listRequestTypes({ activeOnly: true }), requesterGroups(requester.id)]);
   const out: HdStartableType[] = [];
   const { directoryDefaults } = await import("./detail");
@@ -245,6 +267,7 @@ export async function startableTypes(
     if (!requesterMayUse(rt, groups)) continue;
     const w = await workflowForRequestType(rt.id);
     if (!w && workflowOnly) continue;
+    if (opts.viewer && !(await typeInAgentDepartments(opts.viewer, rt, w))) continue;
     const form: HdFormField[] = Array.isArray(rt.form) ? rt.form : [];
     out.push({
       id: rt.id,
@@ -475,6 +498,10 @@ export async function startWorkflowFromTicket(
   if (cardRef === "bad") return { ok: false, status: 400, error: "claude_card is the { id, claim } that Review and start gave." };
   const rt0 = await getRequestType(typeId);
   if (!rt0) return { ok: false, status: 400, error: "That request type no longer exists.", code: WORKFLOW_START_CODES.typeUnavailable };
+  // 1.20.23: the type and its workflow in the agent's desk departments (or All departments), as the dialog offers them.
+  if (!(await typeInAgentDepartments(agent, rt0, await workflowForRequestType(typeId)))) {
+    return { ok: false, status: 409, error: NOT_IN_AGENT_DEPARTMENTS, code: WORKFLOW_START_CODES.typeUnavailable };
+  }
   // Required fields and every value's type, as Get help's own POST checks them (again under the lock below).
   const first = await validateAnswers(rt0.form ?? [], raw.answers ?? {});
   if (!first.ok) return { ok: false, status: 400, error: first.error };
@@ -486,7 +513,7 @@ export async function startWorkflowFromTicket(
   const pre = (await getTicketRow(ticketId)) as Locked | undefined;
   if (!pre || pre.deleted_at) return { ok: false, status: 404, error: "Not found." };
   const requester = await requesterOf(pre);
-  const portalOffer = requester.kind === "portal" ? (await portalTypes(true)).find((x) => x.id === typeId) ?? null : null;
+  const portalOffer = requester.kind === "portal" ? (await portalTypes(true, agent)).find((x) => x.id === typeId) ?? null : null;
   const destination = requester.kind === "none" ? null : await mayFileInto(agent, portalOffer ? portalOffer.team_id : rt0.team_id);
 
   type Done =
@@ -701,6 +728,8 @@ export async function newTicketWorkflowCheck(
   | { ok: true; workflow: boolean; onWorkflowStarted?: HdHookContext["onWorkflowStarted"]; after: (ticket: { number: number }) => Promise<void> }
 > {
   const w = await workflowForRequestType(rt.id);
+  // 1.20.23: New ticket files only its desk departments' types (and All departments'), with or without a workflow.
+  if (!(await typeInAgentDepartments(agent, rt, w))) return { ok: false, status: 403, error: NOT_IN_AGENT_DEPARTMENTS };
   if (!w) return { ok: true, workflow: false, after: async () => undefined };
   const { hdCan, HD_FORBIDDEN } = await import("./roles");
   if (!(await hdCan(agent, "workflows.start", { teamId }))) return { ok: false, status: 403, error: HD_FORBIDDEN };

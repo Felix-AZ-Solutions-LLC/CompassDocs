@@ -93,6 +93,7 @@ interface Row {
   id: number;
   team_id: number;
   team_name: string;
+  desk_department_id: number;
   subject: string;
   body: string;
   priority: string;
@@ -123,7 +124,7 @@ interface Row {
 /** 1.20.16 review fix: publishing changes over a schedule a person edited after Claude drafted them. */
 export const SCHEDULE_CHANGED_SINCE = "The schedule changed since this draft was made. Review it again: discard the changes, or ask Claude for new ones.";
 
-const SELECT = `SELECT r.*, t.name AS team_name, u.name AS assignee_name,
+const SELECT = `SELECT r.*, t.name AS team_name, t.desk_department_id, u.name AS assignee_name,
        (SELECT tk.number FROM hd_recurring_runs rr JOIN hd_tickets tk ON tk.id = rr.ticket_id
          WHERE rr.recurring_id = r.id AND tk.deleted_at IS NULL ORDER BY rr.created_at DESC LIMIT 1) AS last_ticket_number
   FROM hd_recurring r JOIN hd_teams t ON t.id = r.team_id LEFT JOIN users u ON u.id = r.assignee_id`;
@@ -133,6 +134,7 @@ function toApi(r: Row): HdRecurring {
     id: r.id,
     team_id: r.team_id,
     team_name: r.team_name,
+    desk_department_id: r.desk_department_id,
     subject: r.subject,
     body: r.body,
     priority: r.priority,
@@ -180,11 +182,44 @@ export function canManageAllRecurring(user: SessionUser): Promise<boolean> {
   return hdCan(user, "settings.manage");
 }
 
-/** May this person manage this team's schedules (settings.manage, or agents.manage_team in it)? */
-export async function canManageRecurringTeam(user: SessionUser, teamId: number): Promise<boolean> {
-  if (await hdCan(user, "settings.manage")) return true;
-  return hdCan(user, "agents.manage_team", { teamId });
+/**
+ * May this person manage this team's schedules (settings.manage, or agents.manage_team in it)?
+ * 1.20.23 (lib/helpdesk/desk-departments): a schedule is its team's and so in its team's desk
+ * department; "Manage a desk department" manages every schedule of the teams in the departments
+ * of the teams they belong to (review M3: membership, never "sees every team's tickets").
+ * Review N1: for anyone but a desk Admin the team's department must be one of their own teams'
+ * FIRST; only then does agents.manage_team in the team (which teams.manage widens to every
+ * team) or "Manage a desk department" count.
+ */
+export async function canManageRecurringTeam(user: SessionUser, teamId: number, ctx?: RecurringManageContext): Promise<boolean> {
+  const c = ctx ?? (await recurringManageContext(user));
+  if (c.all) return true;
+  if (!c.departments.length) return false;
+  const deptId = c.teamDept?.get(teamId) ?? (await hqOne<{ desk_department_id: number }>("SELECT desk_department_id FROM hd_teams WHERE id = $1", [teamId]))?.desk_department_id;
+  if (deptId === undefined || !c.departments.includes(deptId)) return false;
+  return c.departmentManager || hdCan(user, "agents.manage_team", { teamId });
 }
+
+/** What canManageRecurringTeam needs about the person, worked out once per request (review L5). */
+export interface RecurringManageContext {
+  /** settings.manage: every team. */
+  all: boolean;
+  /** The desk departments of the teams they belong to (review N1: the only ones whose schedules they manage). */
+  departments: number[];
+  /** They hold "Manage a desk department": every team of those departments. */
+  departmentManager: boolean;
+  /** Teams' departments already loaded (recurringTeams), to skip a lookup per team. */
+  teamDept?: Map<number, number>;
+}
+
+export async function recurringManageContext(user: SessionUser): Promise<RecurringManageContext> {
+  if (await hdCan(user, "settings.manage")) return { all: true, departments: [], departmentManager: true };
+  const { deskDepartmentMemberScope } = await import("./desk-departments");
+  return { all: false, departments: await deskDepartmentMemberScope(user), departmentManager: await hdCan(user, "departments.manage") };
+}
+
+/** 1.20.23: who opens Desk settings → Recurring tickets and the recurring routes (any one). */
+export const RECURRING_GATE_CAPS = ["settings.manage", "agents.manage_team", "departments.manage"] as const;
 
 export interface RecurringTeam {
   id: number;
@@ -193,20 +228,23 @@ export interface RecurringTeam {
   timezone: string;
   /** Who a schedule can assign to: the team's active members. */
   members: { id: number; name: string }[];
+  /** 1.20.23: the team's desk department (a schedule's request type is one it sees). */
+  desk_department_id: number;
 }
 
 /** The teams whose schedules this person manages, with each team's calendar zone and members. */
 export async function recurringTeams(user: SessionUser): Promise<RecurringTeam[]> {
-  const teams = await hq<{ id: number; name: string; members: { id: number; name: string }[] }>(
-    `SELECT t.id, t.name,
+  const teams = await hq<{ id: number; name: string; desk_department_id: number; members: { id: number; name: string }[] }>(
+    `SELECT t.id, t.name, t.desk_department_id,
             COALESCE((SELECT json_agg(json_build_object('id', u.id, 'name', COALESCE(NULLIF(u.name, ''), u.username)) ORDER BY u.name)
                         FROM hd_team_members m JOIN users u ON u.id = m.user_id AND u.status = 'active' WHERE m.team_id = t.id), '[]') AS members
        FROM hd_teams t ORDER BY t.position, t.name`
   );
-  const all = await canManageAllRecurring(user);
+  // Review L5: the person's side once, not per team.
+  const ctx: RecurringManageContext = { ...(await recurringManageContext(user)), teamDept: new Map(teams.map((t) => [t.id, t.desk_department_id])) };
   const out: RecurringTeam[] = [];
   for (const t of teams) {
-    if (!all && !(await hdCan(user, "agents.manage_team", { teamId: t.id }))) continue;
+    if (!(await canManageRecurringTeam(user, t.id, ctx))) continue;
     out.push({ ...t, timezone: (await hoursForTeam(t.id)).timezone });
   }
   return out;
@@ -259,6 +297,13 @@ export async function validateRecurringInput(raw: Record<string, unknown>, base?
     if (typeof rtRaw !== "number" || !Number.isInteger(rtRaw)) return { ok: false, error: "Choose a request type." };
     if (!(await hqOne("SELECT 1 FROM hd_request_types WHERE id = $1", [rtRaw]))) return { ok: false, error: "That request type does not exist." };
     requestTypeId = rtRaw;
+    // 1.20.23 review L2: a request type of the team's desk department or of All departments. Checked
+    // when the type or the team changes, so switching an older schedule off always works.
+    if (!base || base.request_type_id !== requestTypeId || base.team_id !== teamId) {
+      const { recurringTypeRefusal } = await import("./desk-departments");
+      const refusal = await recurringTypeRefusal(teamId, requestTypeId);
+      if (refusal) return { ok: false, error: refusal };
+    }
   }
 
   const mode = pick("assign_mode") ?? "team_rules";

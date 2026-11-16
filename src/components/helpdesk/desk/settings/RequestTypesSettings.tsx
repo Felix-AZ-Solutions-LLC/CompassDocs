@@ -6,6 +6,11 @@
 // Off and Some groups), the chosen type's editor on the right in grouped
 // cards (About, Routing, Who can use it, Questions) with one Save row.
 // New request type creates a draft type and opens it.
+// 1.20.23: each type is in a desk department (or All departments, a desk
+// Admin's choice; Routing's Desk department field). It decides which agents
+// are offered it (Start a workflow, New ticket), never who may ask for it in
+// Get help (Who can use it). Its workflow must be of the same department or
+// All departments. The list's filter and chip: settings/DeskDepartmentField.
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -31,19 +36,33 @@ import { FormBuilder } from "./FormBuilder";
 import { CategoryFields } from "../categories/CategoryFields";
 import { RequestTypeCalendarCard } from "../calendar/RequestTypeCalendarCard";
 import { checkRequestTypeCalendar } from "@/lib/helpdesk/desk-calendar-shared";
+import {
+  DeskDepartmentChip,
+  DeskDepartmentFilter,
+  DeskDepartmentSelect,
+  byDeskDepartment,
+  deptPayload,
+  deptValue,
+  deskDepartmentsChanged,
+  useDeskDepartmentChoices,
+} from "./DeskDepartmentField";
+import { deskDepartmentLabel, type HdDeskDepartmentChoices } from "@/lib/helpdesk/desk-departments-shared";
 
 export function RequestTypesSettings() {
-  const { types, error, reload } = useRequestTypes();
+  const { types: allTypes, error, reload } = useRequestTypes();
+  const depts = useDeskDepartmentChoices("request_types");
+  const [deptFilter, setDeptFilter] = useState("");
+  const types = allTypes ? byDeskDepartment(allTypes, deptFilter) : null;
   const { teams } = useTeams();
   const router = useRouter();
   const sp = useSearchParams();
-  const [workflows, setWorkflows] = useState<{ id: number; title: string }[]>([]);
+  const [workflows, setWorkflows] = useState<{ id: number; title: string; desk_department_id?: number | null }[]>([]);
   const [groups, setGroups] = useState<{ id: number; name: string }[] | null>(null);
   const chosenId = Number(sp?.get("type")) || types?.[0]?.id || null;
   const chosen = types?.find((t) => t.id === chosenId) ?? null;
 
   useEffect(() => {
-    getJson("/api/helpdesk/admin/workflows").then((d) => setWorkflows(listOf<{ id: number; title: string }>(d, "workflows"))).catch(() => setWorkflows([]));
+    getJson("/api/helpdesk/admin/workflows").then((d) => setWorkflows(listOf<{ id: number; title: string; desk_department_id?: number | null }>(d, "workflows"))).catch(() => setWorkflows([]));
     getJson("/api/admin/groups").then((d) => setGroups(listOf<{ id: number; name: string }>(d, "groups"))).catch(() => setGroups([]));
   }, []);
 
@@ -81,7 +100,20 @@ export function RequestTypesSettings() {
       />
       {error && <p className="notice-error mb-4 rounded-lg border px-3 py-2 text-sm">{error}</p>}
       {types === null && <LoadingRow className="py-10" />}
-      {types && types.length === 0 && (
+      {allTypes && allTypes.length > 0 && depts?.filter && (
+        <div className="mb-3 flex justify-end">
+          <DeskDepartmentFilter choices={depts} value={deptFilter} onChange={setDeptFilter} />
+        </div>
+      )}
+      {types && types.length === 0 && allTypes && allTypes.length > 0 && (
+        <EmptyState
+          icon={<ListChecks />}
+          title="No request type in this desk department"
+          body="Pick another desk department, or show them all."
+          action={{ onClick: () => setDeptFilter(""), label: "Show every desk department" }}
+        />
+      )}
+      {types && types.length === 0 && !(allTypes && allTypes.length > 0) && (
         <EmptyState
           icon={<ListChecks />}
           title="No request types yet"
@@ -108,6 +140,7 @@ export function RequestTypesSettings() {
                   <span className="min-w-0 flex-1 truncate">{t.title}</span>
                   {!t.active && <span className={chipClass("neutral", "sm")}>Off<span className="sr-only">,</span></span>}
                   {t.visibility === "groups" && <span className={chipClass("info", "sm")}>Some groups</span>}
+                  {depts?.filter && <DeskDepartmentChip id={t.desk_department_id} choices={depts} />}
                 </button>
               );
             })}
@@ -120,7 +153,11 @@ export function RequestTypesSettings() {
                 teams={(teams ?? []).map((t) => ({ id: t.id, name: t.name }))}
                 workflows={workflows}
                 groups={groups}
-                onSaved={reload}
+                depts={depts}
+                onSaved={() => {
+                  deskDepartmentsChanged();
+                  reload();
+                }}
                 onDeleted={() => {
                   reload();
                   router.replace("/desk/settings/request-types");
@@ -139,17 +176,20 @@ function TypeEditor({
   teams,
   workflows,
   groups,
+  depts,
   onSaved,
   onDeleted,
 }: {
-  rt: HdRequestType;
+  rt: HdRequestType & { can_edit?: boolean };
   teams: { id: number; name: string }[];
-  workflows: { id: number; title: string }[];
+  workflows: { id: number; title: string; desk_department_id?: number | null }[];
   groups: { id: number; name: string }[] | null;
+  depts: HdDeskDepartmentChoices | null;
   onSaved: () => void;
   onDeleted: () => void;
 }) {
   const [v, setV] = useState<HdRequestType>(rt);
+  const readOnly = rt.can_edit === false;
   const [busy, setBusy] = useState(false);
   const [tried, setTried] = useState(false);
   const snap = JSON.stringify(v);
@@ -195,6 +235,7 @@ function TypeEditor({
           eta_label: v.eta_label,
           form: v.form,
           ...(calendarCheck.ok ? { calendar: calendarCheck.value } : {}),
+          desk_department_id: v.desk_department_id ?? null,
         },
         "Couldn't save the request type."
       );
@@ -246,10 +287,17 @@ function TypeEditor({
           </span>
           {v.title || "Untitled"}
         </h2>
-        <Button variant="danger" size="sm" icon={<Trash2 />} onClick={remove}>
-          Delete
-        </Button>
+        {!readOnly && (
+          <Button variant="danger" size="sm" icon={<Trash2 />} onClick={remove}>
+            Delete
+          </Button>
+        )}
       </div>
+      {readOnly && (
+        <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700" role="note">
+          This request type belongs to {deskDepartmentLabel(rt.desk_department_id, depts?.departments ?? [])}, which you don&apos;t manage. You can read it, not change it.
+        </p>
+      )}
       <Card title="About" description="What people see on the card in Get help.">
         <div className="grid gap-4 @2xl:grid-cols-2">
           <Field label="Name" error={tried ? titleError : undefined}>
@@ -297,10 +345,17 @@ function TypeEditor({
               ))}
             </Select>
           </Field>
-          <Field label="Workflow" help="Approvals and tasks that run when someone sends it.">
+          <DeskDepartmentSelect
+            choices={depts}
+            value={deptValue(v.desk_department_id)}
+            onChange={(d) => set({ desk_department_id: deptPayload(d) })}
+            disabled={readOnly}
+            help="Agents of this desk department's teams are offered it (Start a workflow, New ticket). Who can ask for it in Get help is set below."
+          />
+          <Field label="Workflow" help="Approvals and tasks that run when someone sends it. Its own desk department's, or one shared with all departments.">
             <Select value={v.workflow_id ?? ""} onChange={(e) => set({ workflow_id: e.target.value ? Number(e.target.value) : null })}>
               <option value="">None: a ticket for the team</option>
-              {workflows.map((w) => (
+              {workflows.filter((w) => w.id === v.workflow_id || w.desk_department_id == null || w.desk_department_id === v.desk_department_id).map((w) => (
                 <option key={w.id} value={w.id}>
                   {w.title}
                 </option>

@@ -96,7 +96,8 @@ function viaSuffix(actor: ChecklistActor | null): string {
 // --- Templates ------------------------------------------------------------------------
 
 // 1.20.14: published, draft and who asked for it (Claude's drafts).
-const TEMPLATE_COLS = "id, name, items, request_type_ids, created_at, updated_at, (published = 1) AS published, draft, draft_by_name, draft_at, draft_via";
+// 1.20.23: and its desk department (lib/helpdesk/desk-departments; NULL = All departments).
+const TEMPLATE_COLS = "id, name, items, request_type_ids, created_at, updated_at, (published = 1) AS published, draft, draft_by_name, draft_at, draft_via, desk_department_id";
 
 export async function listTemplates(): Promise<HdChecklistTemplate[]> {
   return hq<HdChecklistTemplate>(`SELECT ${TEMPLATE_COLS} FROM hd_checklist_templates ORDER BY lower(name), id`);
@@ -160,8 +161,13 @@ export async function listTemplateRows(): Promise<HdChecklistTemplateRow[]> {
   });
 }
 
-/** Teams and request types the input names exist. */
-async function checkTemplateRefs(input: HdChecklistTemplateInput): Promise<void> {
+/**
+ * Teams and request types the input names exist. 1.20.23 review M2: and the request types it is
+ * added to are in the checklist's desk department `dept` (unless it is in All departments: null),
+ * so another department's required items never block solving. Only types not already on it
+ * (`had`) are checked, so a save that keeps an older list always works.
+ */
+async function checkTemplateRefs(input: HdChecklistTemplateInput, dept: number | null, had: readonly number[] = []): Promise<void> {
   const teamIds = [...new Set(input.items.map((i) => i.team_id).filter((x): x is number => !!x))];
   if (teamIds.length) {
     const found = await hq<{ id: number }>("SELECT id FROM hd_teams WHERE id = ANY($1::int[])", [teamIds]);
@@ -170,7 +176,15 @@ async function checkTemplateRefs(input: HdChecklistTemplateInput): Promise<void>
   if (input.request_type_ids.length) {
     const found = await hq<{ id: number }>("SELECT id FROM hd_request_types WHERE id = ANY($1::int[])", [input.request_type_ids]);
     if (found.length !== input.request_type_ids.length) throw new ChecklistError("One of the request types no longer exists.");
+    const added = input.request_type_ids.filter((id) => !had.includes(id));
+    const refusal = await (await import("./desk-departments")).checklistRefsRefusal(dept, added);
+    if (refusal) throw new ChecklistError(refusal);
   }
+}
+
+/** A new checklist's department: the caller's choice, or the default one when left out. */
+async function newTemplateDept(deskDepartmentId: number | null | undefined): Promise<number | null> {
+  return deskDepartmentId !== undefined ? deskDepartmentId : (await import("./desk-departments")).defaultDeskDepartmentId();
 }
 
 function checked(raw: unknown): HdChecklistTemplateInput {
@@ -179,14 +193,16 @@ function checked(raw: unknown): HdChecklistTemplateInput {
   return c.value;
 }
 
-export async function createTemplate(raw: unknown, actor: ChecklistActor): Promise<HdChecklistTemplate> {
+/** 1.20.23: `deskDepartmentId` (checked by the caller; null = All departments, left out = the default desk department). */
+export async function createTemplate(raw: unknown, actor: ChecklistActor, deskDepartmentId?: number | null): Promise<HdChecklistTemplate> {
   const input = checked(raw);
-  await checkTemplateRefs(input);
+  await checkTemplateRefs(input, await newTemplateDept(deskDepartmentId));
   const n = await hqOne<{ n: number }>("SELECT count(*)::int AS n FROM hd_checklist_templates");
   if ((n?.n ?? 0) >= CHECKLIST_LIMITS.templates) throw new ChecklistError(`Up to ${CHECKLIST_LIMITS.templates} checklists. Delete one you no longer use.`, 409);
+  const { deptArg, deptInsertSql } = await import("./desk-departments");
   return (await hqOne<HdChecklistTemplate>(
-    `INSERT INTO hd_checklist_templates (name, items, request_type_ids, created_by) VALUES ($1, $2, $3, $4) RETURNING ${TEMPLATE_COLS}`,
-    [input.name, JSON.stringify(input.items), input.request_type_ids, actor.id]
+    `INSERT INTO hd_checklist_templates (name, items, request_type_ids, created_by, desk_department_id) VALUES ($1, $2, $3, $4, ${deptInsertSql(5)}) RETURNING ${TEMPLATE_COLS}`,
+    [input.name, JSON.stringify(input.items), input.request_type_ids, actor.id, deptArg(deskDepartmentId)]
   ))!;
 }
 
@@ -217,7 +233,8 @@ const CLEAR_DRAFT = "draft = NULL, draft_by = NULL, draft_by_name = '', draft_at
 export async function updateTemplate(
   id: number,
   raw: unknown,
-  opts: { publish?: boolean; publishDraft?: boolean; draftAt?: unknown } = {}
+  /** 1.20.23: `dept`, the department it is in after this save (a PATCH that moves it); left out, its own. */
+  opts: { publish?: boolean; publishDraft?: boolean; draftAt?: unknown; dept?: number | null } = {}
 ): Promise<{ before: HdChecklistTemplate; after: HdChecklistTemplate; published: boolean } | undefined> {
   const r = (raw ?? {}) as Record<string, unknown>;
   return withTx(async (client) => {
@@ -234,7 +251,7 @@ export async function updateTemplate(
       items: r.items ?? base.items,
       request_type_ids: r.request_type_ids ?? base.request_type_ids,
     });
-    await checkTemplateRefs(input);
+    await checkTemplateRefs(input, opts.dept !== undefined ? opts.dept : (before.desk_department_id ?? null), before.request_type_ids ?? []);
     const after = await hqOne<HdChecklistTemplate>(
       `UPDATE hd_checklist_templates SET name = $2, items = $3, request_type_ids = $4, updated_at = now()${publish ? ", published = 1" : ""}${
         publish || publishDraft ? `, ${CLEAR_DRAFT}` : ""
@@ -243,6 +260,11 @@ export async function updateTemplate(
       [id, input.name, JSON.stringify(input.items), input.request_type_ids],
       client
     );
+    // 1.20.23 review N4: the department in the same transaction as the edit.
+    if (after && opts.dept !== undefined) {
+      await (await import("./desk-departments")).setItemDeskDepartment("checklists", id, opts.dept, client);
+      after.desk_department_id = opts.dept;
+    }
     return after ? { before, after, published: publish || publishDraft } : undefined;
   });
 }
@@ -261,19 +283,22 @@ export async function updateTemplate(
 export async function saveTemplateDraft(
   raw: unknown,
   actor: ChecklistActor & { via: HdChecklistDraftVia },
-  id?: number
+  id?: number,
+  /** 1.20.23: a new draft's desk department (checked by the caller; left out = the default one). */
+  deskDepartmentId?: number | null
 ): Promise<{ template: HdChecklistTemplate; kind: "new" | "replaced" | "changes" }> {
   const r = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
   const meta = [actor.id, actor.name, actor.via];
   if (id === undefined) {
     const input = checked(r);
-    await checkTemplateRefs(input);
+    await checkTemplateRefs(input, await newTemplateDept(deskDepartmentId));
     const n = await hqOne<{ n: number }>("SELECT count(*)::int AS n FROM hd_checklist_templates");
     if ((n?.n ?? 0) >= CHECKLIST_LIMITS.templates) throw new ChecklistError(`The library holds up to ${CHECKLIST_LIMITS.templates} checklists. Ask an admin to delete one first.`, 409);
+    const { deptArg, deptInsertSql } = await import("./desk-departments");
     const t = await hqOne<HdChecklistTemplate>(
-      `INSERT INTO hd_checklist_templates (name, items, request_type_ids, created_by, published, draft_by, draft_by_name, draft_at, draft_via)
-       VALUES ($1, $2, $3, $4, 0, $4, $5, now(), $6) RETURNING ${TEMPLATE_COLS}`,
-      [input.name, JSON.stringify(input.items), input.request_type_ids, ...meta]
+      `INSERT INTO hd_checklist_templates (name, items, request_type_ids, created_by, published, draft_by, draft_by_name, draft_at, draft_via, desk_department_id)
+       VALUES ($1, $2, $3, $4, 0, $4, $5, now(), $6, ${deptInsertSql(7)}) RETURNING ${TEMPLATE_COLS}`,
+      [input.name, JSON.stringify(input.items), input.request_type_ids, ...meta, deptArg(deskDepartmentId)]
     );
     return { template: t!, kind: "new" };
   }
@@ -282,7 +307,7 @@ export async function saveTemplateDraft(
     if (!before) throw new ChecklistError(`No checklist with id ${id}.`, 404);
     const base = before.draft ?? before;
     const input = checked({ name: r.name ?? base.name, items: r.items ?? base.items, request_type_ids: r.request_type_ids ?? base.request_type_ids });
-    await checkTemplateRefs(input);
+    await checkTemplateRefs(input, before.desk_department_id ?? null, before.request_type_ids ?? []);
     if (!before.published) {
       const t = await hqOne<HdChecklistTemplate>(
         `UPDATE hd_checklist_templates SET name = $2, items = $3, request_type_ids = $4, updated_at = now(), draft_by = $5, draft_by_name = $6, draft_at = now(), draft_via = $7
@@ -305,7 +330,7 @@ export async function saveTemplateDraft(
 /** 1.20.14: check a new checklist as Desk settings would, without saving it (a Claude in the desk card before Save as draft). */
 export async function checkTemplateDraft(raw: unknown): Promise<HdChecklistTemplateInput> {
   const input = checked(raw);
-  await checkTemplateRefs(input);
+  await checkTemplateRefs(input, null); // Existence only: the save checks its department (M2).
   return input;
 }
 
@@ -755,6 +780,10 @@ export async function addChecklistAs(
   opts: { ip: string | null; via?: HdChecklistDraftVia }
 ): Promise<{ checklist_id: number; name: string }> {
   if (!checklistsEditable(t)) throw new ChecklistError(t.merged_into ? "This ticket was merged. Add the checklist to the ticket it joined." : "This ticket is closed.", 409);
+  // 1.20.23: only a checklist of one of the agent's desk departments (or All departments), as the picker lists them.
+  const { deskDepartmentScope, deskDepartmentInScope } = await import("./desk-departments");
+  const tpl = await getTemplate(templateId);
+  if (tpl && !deskDepartmentInScope(tpl.desk_department_id ?? null, await deskDepartmentScope(user))) throw new ChecklistError("That checklist no longer exists.", 404);
   const r = await addChecklistToTicket(t.id, templateId, { id: user.id, name: user.name || user.username, ...(opts.via ? { via: opts.via } : {}) });
   const { audit, actorFrom } = await import("../audit");
   await audit({
@@ -862,11 +891,19 @@ export async function checklistsForMcp(ticketId: number) {
   }));
 }
 
-/** The templates an agent may add by hand (the ticket's picker, the workflow builder). */
-export async function templateOptions(): Promise<{ id: number; name: string; items: number; required: number }[]> {
+/**
+ * The templates an agent may add by hand (the ticket's picker, the workflow builder).
+ * 1.20.23: only those of `depts` (the person's desk departments, desk-departments
+ * deskDepartmentScope) and All departments. A request type or a workflow task adds its
+ * checklists whatever the department (configuration, not an agent's pick).
+ */
+export async function templateOptions(
+  depts: import("./desk-departments-shared").HdDeskDepartmentScope
+): Promise<{ id: number; name: string; items: number; required: number }[]> {
   // 1.20.14: published ones only; a draft is offered nowhere until a person publishes it.
   return (await listTemplates())
     .filter((t) => t.published)
+    .filter((t) => t.desk_department_id === null || t.desk_department_id === undefined || depts === "all" || depts.includes(t.desk_department_id))
     .map((t) => ({ id: t.id, name: t.name, items: t.items.length, required: t.items.filter((i) => i.required).length }));
 }
 
@@ -883,10 +920,11 @@ export async function ticketChecklistView(
   ticket: { id: number; team_id: number | null; status: HdStatus; merged_into?: number | null }
 ): Promise<import("./checklists-shared").HdTicketChecklists & { templates: Awaited<ReturnType<typeof templateOptions>>; solve_block: string | null }> {
   const { hdCan } = await import("./roles");
+  const { deskDepartmentScope } = await import("./desk-departments");
   const editable = checklistsEditable(ticket);
   const [checklists, templates, mayStatus] = await Promise.all([
     ticketChecklists(ticket.id),
-    editable ? templateOptions() : Promise.resolve([]),
+    editable ? deskDepartmentScope(user).then(templateOptions) : Promise.resolve([]),
     editable ? hdCan(user, "tickets.change_status", { teamId: ticket.team_id }) : Promise.resolve(false),
   ]);
   // What a Solve would answer now (the desk asks before it stops a timer or posts anything).

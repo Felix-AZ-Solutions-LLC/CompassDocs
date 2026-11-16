@@ -189,7 +189,10 @@ describe("permissions", () => {
       ["/desk/settings/sla", "/desk/settings/calendars", "/desk/settings/calendars/holidays", "/desk/settings/calendars/test"]
     );
     assert.equal(reg.deskTabbedSectionAt("/desk/settings/before-you-solve/12", ADMIN), undefined);
-    assert.equal(reg.deskTabbedSectionAt("/desk/settings/teams", ADMIN), undefined);
+    // 1.20.23: Teams has two tabs (Teams, Desk departments) for an Admin; a team's own page is a detail page under it.
+    assert.deepEqual(reg.deskTabbedSectionAt("/desk/settings/teams", ADMIN)?.tabs.map((t) => t.href), ["/desk/settings/teams", "/desk/settings/departments"]);
+    assert.equal(reg.deskTabbedSectionAt("/desk/settings/teams/7", ADMIN), undefined);
+    assert.equal(reg.deskTabbedSectionAt("/desk/settings/reply-lock", ADMIN), undefined, "a one-page section");
     assert.equal(reg.deskTabbedSectionAt("/desk/settings/integrations/chat", ADMIN), undefined, "the hub's pages keep their back link");
     assert.equal(reg.deskSettingsPageFor("/desk/settings/teams/7")?.section.key, "teams");
     assert.equal(reg.deskSettingsPageFor("/desk/settings/integrations/12")?.section.key, "integrations");

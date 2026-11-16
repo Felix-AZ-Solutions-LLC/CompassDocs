@@ -528,10 +528,25 @@ async function linkedForm(workflowId: number | null, def: HdWorkflowDefinition):
 }
 
 /** Shape and references together (what save and publish run). */
-export async function validateWorkflowDefinition(raw: unknown, workflowId: number | null = null): Promise<Checked<HdWorkflowDefinition>> {
+/**
+ * 1.20.23 review (M1, M2): `dept` is the workflow's desk department (null = All departments); left
+ * out, the saved workflow's, or the default one for a new workflow. The trigger's request type and
+ * every task's checklists must fit it (desk-departments workflowRefsRefusal).
+ */
+export async function validateWorkflowDefinition(raw: unknown, workflowId: number | null = null, dept?: number | null): Promise<Checked<HdWorkflowDefinition>> {
   const parsed = parseWorkflowDefinition(raw);
   if (!parsed.ok) return parsed;
-  return checkWorkflowRefs(parsed.value, await linkedForm(workflowId, parsed.value));
+  const checked = await checkWorkflowRefs(parsed.value, await linkedForm(workflowId, parsed.value));
+  if (!checked.ok) return checked;
+  const dd = await import("./desk-departments");
+  const workflowDept =
+    dept !== undefined
+      ? dept
+      : workflowId !== null
+        ? ((await hqOne<{ d: number | null }>("SELECT desk_department_id AS d FROM hd_workflows WHERE id = $1", [workflowId]))?.d ?? null)
+        : await dd.defaultDeskDepartmentId();
+  const refusal = await dd.workflowRefsRefusal(workflowDept, checked.value);
+  return refusal ? { ok: false, error: refusal } : checked;
 }
 
 // --- Reads ---------------------------------------------------------------------------
@@ -591,12 +606,16 @@ export async function validateWorkflowMeta(raw: unknown, base?: HdWorkflow): Pro
   return { ok: true, value: { title, slug, description } };
 }
 
-/** A new workflow: unpublished, its steps in the draft (version 1 once published). */
-export async function createWorkflow(meta: WorkflowMetaInput, draft: HdWorkflowDefinition): Promise<HdWorkflowListRow> {
+/**
+ * A new workflow: unpublished, its steps in the draft (version 1 once published).
+ * 1.20.23: `deskDepartmentId` (checked by the caller; null = All departments, left out = the default desk department).
+ */
+export async function createWorkflow(meta: WorkflowMetaInput, draft: HdWorkflowDefinition, deskDepartmentId?: number | null): Promise<HdWorkflowListRow> {
+  const { deptArg, deptInsertSql } = await import("./desk-departments");
   const r = await hqOne<{ id: number }>(
-    `INSERT INTO hd_workflows (slug, title, description, definition, draft, published, version)
-     VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, 0, 1) RETURNING id`,
-    [meta.slug, meta.title, meta.description, JSON.stringify(EMPTY_DEFINITION), JSON.stringify(draft)]
+    `INSERT INTO hd_workflows (slug, title, description, definition, draft, published, version, desk_department_id)
+     VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, 0, 1, ${deptInsertSql(6)}) RETURNING id`,
+    [meta.slug, meta.title, meta.description, JSON.stringify(EMPTY_DEFINITION), JSON.stringify(draft), deptArg(deskDepartmentId)]
   );
   return (await getWorkflow(r!.id))!;
 }
@@ -608,13 +627,16 @@ export async function createWorkflow(meta: WorkflowMetaInput, draft: HdWorkflowD
 export async function saveWorkflowDraft(
   id: number,
   meta: WorkflowMetaInput,
-  draft: HdWorkflowDefinition | undefined
+  draft: HdWorkflowDefinition | undefined,
+  /** 1.20.23 review N4: a PATCH's desk department, written in the same statement as the edit. */
+  dept?: number | null
 ): Promise<HdWorkflowListRow | undefined> {
   const r = await hq(
     `UPDATE hd_workflows SET title = $2, slug = $3, description = $4,
-            draft = CASE WHEN $5::jsonb IS NULL THEN draft ELSE $5::jsonb END, updated_at = now()
+            draft = CASE WHEN $5::jsonb IS NULL THEN draft ELSE $5::jsonb END, updated_at = now(),
+            desk_department_id = CASE WHEN $6::boolean THEN $7::int ELSE desk_department_id END
       WHERE id = $1 RETURNING id`,
-    [id, meta.title, meta.slug, meta.description, draft === undefined ? null : JSON.stringify(draft)]
+    [id, meta.title, meta.slug, meta.description, draft === undefined ? null : JSON.stringify(draft), dept !== undefined, dept ?? null]
   );
   return r.length ? getWorkflow(id) : undefined;
 }

@@ -466,12 +466,14 @@ async function writeGroups(client: PoolClient, id: number, groupIds: number[]) {
   }
 }
 
-export async function createRequestType(input: RequestTypeInput): Promise<HdRequestType> {
+/** 1.20.23: `deskDepartmentId` (checked by the caller; null = All departments, left out = the default desk department). */
+export async function createRequestType(input: RequestTypeInput, deskDepartmentId?: number | null): Promise<HdRequestType> {
+  const { deptArg, deptInsertSql } = await import("./desk-departments");
   const id = await withTx(async (client) => {
     const r = await client.query<{ id: number }>(
       `INSERT INTO hd_request_types
-         (slug, title, description, icon, team_id, category, form, workflow_id, sla_priority, visibility, active, position, eta_label, subcategory)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
+         (slug, title, description, icon, team_id, category, form, workflow_id, sla_priority, visibility, active, position, eta_label, subcategory, desk_department_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, ${deptInsertSql(15)}) RETURNING id`,
       [
         input.slug,
         input.title,
@@ -487,6 +489,7 @@ export async function createRequestType(input: RequestTypeInput): Promise<HdRequ
         input.position,
         input.eta_label,
         input.category ? (input.subcategory ?? "") : "",
+        deptArg(deskDepartmentId),
       ]
     );
     await writeGroups(client, r.rows[0].id, input.group_ids);
@@ -496,7 +499,8 @@ export async function createRequestType(input: RequestTypeInput): Promise<HdRequ
   return (await getRequestType(id))!;
 }
 
-export async function updateRequestType(id: number, input: RequestTypeInput): Promise<HdRequestType | undefined> {
+/** 1.20.23 review N4: `dept` (a PATCH's desk department) is written in the same transaction as the edit. */
+export async function updateRequestType(id: number, input: RequestTypeInput, dept?: number | null): Promise<HdRequestType | undefined> {
   const found = await withTx(async (client) => {
     const r = await client.query(
       `UPDATE hd_request_types SET slug = $2, title = $3, description = $4, icon = $5, team_id = $6, category = $7,
@@ -522,6 +526,7 @@ export async function updateRequestType(id: number, input: RequestTypeInput): Pr
       ]
     );
     if (!r.rowCount) return false;
+    if (dept !== undefined) await (await import("./desk-departments")).setItemDeskDepartment("request_types", id, dept, client);
     await writeGroups(client, id, input.group_ids);
     await (await import("./desk-calendar")).writeRequestTypeCalendarTx(client, id, input.calendar); // 1.20.6
     return true;

@@ -13,6 +13,7 @@ import { NextResponse } from "next/server";
 import { ipFrom } from "@/lib/audit";
 import { hdAnyCapGate } from "@/lib/helpdesk/roles";
 import { hq } from "@/lib/helpdesk/db-core";
+import { deskDepartmentScope, requestTypeOptions } from "@/lib/helpdesk/desk-departments";
 import { auditDraftCardApplied, claimDraftCard, releaseDraftCard } from "@/lib/helpdesk/claude/draft-cards";
 import { draftViaDetails } from "@/lib/helpdesk/claude-drafts-shared";
 import type { SessionUser } from "@/lib/types";
@@ -27,6 +28,7 @@ import {
   canManageRecurringTeam,
   createRecurring,
   listRecurring,
+  RECURRING_GATE_CAPS,
   recurringTeams,
   validateRecurringInput,
 } from "@/lib/helpdesk/recurring";
@@ -34,7 +36,10 @@ import { RECURRING_LIMITS, scheduleTitle } from "@/lib/helpdesk/recurring-shared
 
 export const dynamic = "force-dynamic";
 
-const GATE = ["settings.manage", "agents.manage_team"] as const;
+// 1.20.23: "Manage a desk department" too, for the teams in the desk departments of their own teams
+// (review M3: membership; recurring canManageRecurringTeam). A schedule's request type is one its
+// team's department sees (review L2: validateRecurringInput).
+const GATE = RECURRING_GATE_CAPS;
 
 export async function GET() {
   const gate = await hdAnyCapGate([...GATE]);
@@ -42,7 +47,9 @@ export async function GET() {
   const [all, teams] = await Promise.all([canManageAllRecurring(gate), recurringTeams(gate)]);
   const [schedules, requestTypes] = await Promise.all([
     listRecurring(all ? "all" : teams.map((t) => t.id)),
-    hq<{ id: number; title: string; team_id: number | null }>("SELECT id, title, team_id FROM hd_request_types ORDER BY position, title"),
+    // Review L1/L2: the request types of the caller's desk departments and All departments', each with
+    // its department so the form offers a schedule's team only those its department sees.
+    deskDepartmentScope(gate).then(requestTypeOptions).then((l) => l.map(({ id, title, team_id, desk_department_id }) => ({ id, title, team_id, desk_department_id }))),
   ]);
   return NextResponse.json({ schedules, teams, request_types: requestTypes, can_manage_all: all });
 }
