@@ -127,6 +127,18 @@ export const HD_CAPABILITIES = {
   "automations.manage": { section: "configuration", label: "Automations", hint: "When/if/then rules" },
   "request_types.manage": { section: "configuration", label: "Request types", hint: "The forms people use in Get help" },
   "workflows.manage": { section: "configuration", label: "Workflows", hint: "Approvals, tasks and waits behind request types" },
+  // 1.20.23 (lib/helpdesk/desk-departments): create, edit and delete the macros, canned responses,
+  // checklists, workflows, request types, automations and recurring tickets of their own desk
+  // departments: those of the teams they belong to (review M3: membership, never "See every team's
+  // tickets", which widens only what they see and use). It grants those features' management
+  // there, for whoever lacks the feature's own capability; the feature capability alone is limited
+  // to the same departments. Never "All departments" (desk Admin only), and never the departments
+  // themselves (Desk settings → Desk departments is Admin's).
+  "departments.manage": {
+    section: "configuration",
+    label: "Manage a desk department",
+    hint: "Create and edit the macros, canned responses, checklists, workflows, request types, automations and recurring tickets of the desk departments of their own teams",
+  },
   "csat.manage": { section: "configuration", label: "Satisfaction survey", hint: "Turn the survey on solve on or off" },
   "channels.manage": { section: "configuration", label: "Email channel", hint: "Inbound email address and outside senders" },
   "templates.manage": { section: "configuration", label: "Email templates", hint: "The helpdesk's email wording" },
@@ -227,6 +239,8 @@ const MANAGER: HdCap[] = [
   "csat.manage",
   "teams.manage",
   "agents.assign_roles",
+  // 1.20.23: Manager and Admin by default.
+  "departments.manage",
 ];
 
 // Admin holds every capability except "Reply after review": that one makes
@@ -264,7 +278,7 @@ export type HdRoleOverrides = Partial<Record<Exclude<HdRole, "admin">, HdCap[]>>
  * The lift is worked out on every read from the stored lists, so it never
  * comes back once an admin has saved the matrix (v 2).
  */
-export const HD_MATRIX_VERSION = 5;
+export const HD_MATRIX_VERSION = 6;
 export const HD_CAPS_SINCE: Partial<Record<HdCap, number>> = {
   "tickets.merge": 2,
   "tickets.bulk": 2,
@@ -272,6 +286,7 @@ export const HD_CAPS_SINCE: Partial<Record<HdCap, number>> = {
   "incidents.manage": 3,
   "replies.take_over": 4,
   "workflows.start": 5,
+  "departments.manage": 6,
 };
 
 /** What a role customised before a capability existed must hold for it to be lifted on: every one of `all`, at least one of `any`. */
@@ -291,6 +306,16 @@ export const HD_CAPS_SINCE_NEEDS: Partial<Record<HdCap, { all?: readonly HdCap[]
   // workflow"; a column whose replies wait for review (Newbie-like) is not lifted, as Newbie's default
   // lacks it. Admin always holds it.
   "workflows.start": { all: ["tickets.reply_public"], any: ["tickets.view_team", "tickets.view_all"] },
+  // 1.20.23 (v6): only Manager's default holds it, so only a customised Manager column is lifted, and
+  // only while it still holds EVERY feature capability "Manage a desk department" stands in for
+  // (review H1), so the lift grants nothing the column couldn't already do (macros and canned:
+  // manage_all; checklists: request_types.manage; recurring: agents.manage_team). A column whose
+  // admin removed any of them (say automations) is not lifted, so the upgrade never hands that
+  // feature back. Admin always holds it.
+  "departments.manage": {
+    // teams.manage too (review N2): it widens agents.manage_team to every team, as recurring tickets need.
+    all: ["macros.manage_all", "automations.manage", "request_types.manage", "workflows.manage", "agents.manage_team", "teams.manage"],
+  },
 };
 
 function liftable(cap: HdCap, held: readonly HdCap[]): boolean {

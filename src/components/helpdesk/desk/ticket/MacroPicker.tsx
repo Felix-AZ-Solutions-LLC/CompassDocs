@@ -14,6 +14,7 @@ import { SectionEmpty, controlClass } from "@/components/form";
 import type { HdMacro } from "@/lib/helpdesk/types";
 import { getJson, listOf } from "../api";
 import { firstName } from "../ui";
+import { onDeskDepartmentsChanged } from "../settings/DeskDepartmentField";
 
 /** The placeholders a macro body may use. */
 export const MACRO_PLACEHOLDERS = [
@@ -38,6 +39,10 @@ export function fillMacro(body: string, v: { requesterName: string; agentName: s
 }
 
 let cache: HdMacro[] | null = null;
+// 1.20.23: a desk department change (Desk settings) drops the cached list; it is fetched again on every open anyway.
+onDeskDepartmentsChanged(() => {
+  cache = null;
+});
 
 export function MacroPicker({
   open,

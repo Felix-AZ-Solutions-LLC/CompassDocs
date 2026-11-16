@@ -10,7 +10,9 @@
 // JSON in, JSON out. Errors: { "error": "<sentence>" }.
 //
 //   GET   /me
-//         → { token: {id, name, expires_at}, acts_as: {name, role, role_label, teams:[{id,name}]}, can: "<line>", capabilities: [...] }
+//         → { token: {id, name, expires_at}, acts_as: {name, role, role_label, teams:[{id,name}], desk_departments}, can: "<line>", capabilities: [...] }
+//         1.20.23: desk_departments is [{id,name}] or "all": a team-limited token's teams' desk
+//         departments (within its account's), else its account's ("all" when it sees every team).
 //   GET   /tickets?view=&status=&priority=&team=&assignee=&tag=&category=&subcategory=&q=&created_from=&created_to=&sort=&limit=&cursor=
 //         view: open (default; a q without a view searches every status) | all | mine | unassigned | overdue | waiting | workflow | solved_week | team:<id>
 //         assignee: <user id> | none.  sort: updated (default) | created | number.  limit 1..100 (25).
@@ -389,11 +391,22 @@ export async function getMe(ctx: ApiCtx): Promise<ApiOut> {
   const teams = ctx.p.team_ids.length
     ? await hq<{ id: number; name: string }>("SELECT id, name FROM hd_teams WHERE id = ANY($1::int[]) ORDER BY position, name", [ctx.p.team_ids])
     : [];
+  // 1.20.23 (additive): the desk departments whose content the token sees. A team-limited token
+  // (team_ids): its teams' departments, within its account's (review L4); otherwise its account's
+  // ("all" for one that sees every team's tickets). The API serves no macros, canned responses,
+  // checklists or workflows itself.
+  const dd = await import("./desk-departments");
+  const account = await dd.deskDepartmentScope(ctx.user);
+  const scope: import("./desk-departments").HdDeskDepartmentScope = ctx.p.team_ids.length
+    ? (await dd.departmentsOfTeams(ctx.p.team_ids)).filter((id) => account === "all" || account.includes(id))
+    : account;
+  const deps = await dd.listDeskDepartments();
+  const desk_departments = scope === "all" ? "all" : deps.filter((d) => scope.includes(d.id)).map((d) => ({ id: d.id, name: d.name }));
   return {
     status: 200,
     body: {
       token: { id: ctx.p.token_id, name: ctx.p.token_name, expires_at: ctx.p.expires_at },
-      acts_as: { name: ctx.user.name, role: ctx.p.role, role_label: HD_ROLE_LABEL[ctx.p.role], teams },
+      acts_as: { name: ctx.user.name, role: ctx.p.role, role_label: HD_ROLE_LABEL[ctx.p.role], teams, desk_departments },
       can: apiCanLine(v.caps),
       capabilities: v.caps,
     },

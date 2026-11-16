@@ -7,12 +7,13 @@
 
 import { NextResponse } from "next/server";
 import { hdAnyCapGate } from "@/lib/helpdesk/roles";
-import { RecurringDraftError, auditRecurring, canManageRecurringTeam, getRecurring, openRecurringNow } from "@/lib/helpdesk/recurring";
+import { RecurringDraftError, RECURRING_GATE_CAPS, auditRecurring, canManageRecurringTeam, getRecurring, openRecurringNow } from "@/lib/helpdesk/recurring";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const gate = await hdAnyCapGate(["settings.manage", "agents.manage_team"]);
+  // 1.20.23: and "Manage a desk department" (the teams in their own teams' desk departments; review M3).
+  const gate = await hdAnyCapGate([...RECURRING_GATE_CAPS]);
   if (gate instanceof NextResponse) return gate;
   const id = Number((await ctx.params).id);
   const s = Number.isInteger(id) && id > 0 && id < 2 ** 31 ? await getRecurring(id) : undefined;

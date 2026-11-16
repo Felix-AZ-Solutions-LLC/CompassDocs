@@ -32,6 +32,16 @@
 // explicit and names the reviewed draft (updateAutomation publish /
 // publishDraft with draftAt). Every save locks the row. Validation is the
 // settings API's own (validateAutomationInput).
+//
+// 1.20.23, desk departments (lib/helpdesk/desk-departments): each rule is in
+// one desk department (desk_department_id) or in All departments (NULL). The
+// rules that run on a ticket are its department's and All departments': the
+// department of the ticket's team at the moment each rule is checked (a rule
+// that moves the ticket to another department's team hands the rest of the
+// run to that department's rules), or the default desk department for a
+// ticket with no team, so an unrouted ticket meets the rules it always did.
+// A team moved to another department takes its tickets to that department's
+// rules from then on; nothing already done is undone.
 // Server-only.
 
 import "server-only";
@@ -396,7 +406,8 @@ export async function validateAutomationInput(raw: Record<string, unknown>, part
 // --- Storage ---------------------------------------------------------------------
 
 // 1.20.16: with the draft columns (Claude's drafts).
-const COLS = `id, name, event, conditions, actions, active, position, created_at, updated_at, last_run_at, ${DRAFT_COLS_SQL}`;
+// 1.20.23: and its desk department.
+const COLS = `id, name, event, conditions, actions, active, position, created_at, updated_at, last_run_at, desk_department_id, ${DRAFT_COLS_SQL}`;
 /** 1.20.16 review fix: the row as a save reads it, with the live rule's updated_at when the changes were drafted. */
 const LOCK_COLS = `${COLS}, draft_base_at`;
 type LockedRule = HdAutomation & { draft_base_at: string | null };
@@ -418,8 +429,10 @@ export class AutomationDraftError extends Error {
   }
 }
 
-export async function createAutomation(input: AutomationInput): Promise<HdAutomation> {
+/** 1.20.23: `deskDepartmentId` (checked by the caller; null = All departments, left out = the default desk department). */
+export async function createAutomation(input: AutomationInput, deskDepartmentId?: number | null): Promise<HdAutomation> {
   await categoriesReady();
+  const { deptArg, deptInsertSql } = await import("./desk-departments");
   return withTx(async (client) => {
     // 1.20.16 review fix: rule writes take the category list's lock, shared, first (a rename or merge
     // rewriting the rules waits for them, and they for it), then the rows: one order everywhere.
@@ -428,8 +441,8 @@ export async function createAutomation(input: AutomationInput): Promise<HdAutoma
     if ((n?.n ?? 0) >= AUTOMATION_LIMITS.rules) throw new AutomationLimitError(`A workspace can keep up to ${AUTOMATION_LIMITS.rules} automations.`);
     const position = input.position ?? (n?.max ?? -1) + 1;
     return (await hqOne<HdAutomation>(
-      `INSERT INTO hd_automations (name, event, conditions, actions, active, position) VALUES ($1, $2, $3, $4, $5, $6) RETURNING ${COLS}`,
-      [input.name, input.event, JSON.stringify(input.conditions), JSON.stringify(input.actions), input.active, position],
+      `INSERT INTO hd_automations (name, event, conditions, actions, active, position, desk_department_id) VALUES ($1, $2, $3, $4, $5, $6, ${deptInsertSql(7)}) RETURNING ${COLS}`,
+      [input.name, input.event, JSON.stringify(input.conditions), JSON.stringify(input.actions), input.active, position, deptArg(deskDepartmentId)],
       client
     ))!;
   });
@@ -458,7 +471,8 @@ const draftOf = (a: Pick<HdAutomation, "name" | "event" | "conditions" | "action
 export async function updateAutomation(
   id: number,
   patch: Partial<AutomationInput>,
-  opts: { publish?: boolean; publishDraft?: boolean; draftAt?: unknown } = {}
+  /** 1.20.23 review N4: `dept` (a PATCH's desk department) is written in the same transaction as the edit. */
+  opts: { publish?: boolean; publishDraft?: boolean; draftAt?: unknown; dept?: number | null } = {}
 ): Promise<{ before: HdAutomation; after: HdAutomation; published: boolean } | undefined> {
   // The list's adoption takes its lock outright: never from inside a transaction that holds it shared.
   await categoriesReady();
@@ -500,6 +514,10 @@ export async function updateAutomation(
       [id, next.name, next.event, JSON.stringify(next.conditions ?? {}), JSON.stringify(next.actions ?? {}), active, next.position],
       client
     );
+    if (after && opts.dept !== undefined) {
+      await (await import("./desk-departments")).setItemDeskDepartment("automations", id, opts.dept, client);
+      after.desk_department_id = opts.dept;
+    }
     return after ? { before: cur, after, published: publish || publishDraft } : undefined;
   });
 }
@@ -540,21 +558,24 @@ export async function checkAutomationDraft(raw: unknown, base?: HdAutomationDraf
 export async function saveAutomationDraft(
   raw: unknown,
   actor: { id: number | null; name: string; via: HdDraftVia },
-  id?: number
+  id?: number,
+  /** 1.20.23: a new draft's desk department (checked by the caller; left out = the default one). */
+  deskDepartmentId?: number | null
 ): Promise<{ automation: HdAutomation; kind: "new" | "replaced" | "changes" }> {
   const meta = [actor.id, actor.name, actor.via];
   if (id === undefined) {
     const input = await checkAutomationDraft(raw);
     await categoriesReady();
+    const { deptArg, deptInsertSql } = await import("./desk-departments");
     return withTx(async (client) => {
       await client.query(CATEGORY_LIST_SHARED_LOCK_SQL);
       await client.query("LOCK TABLE hd_automations IN SHARE ROW EXCLUSIVE MODE");
       const n = await hqOne<{ n: number; max: number | null }>("SELECT count(*)::int AS n, max(position) AS max FROM hd_automations", [], client);
       if ((n?.n ?? 0) >= AUTOMATION_LIMITS.rules) throw new AutomationDraftError(`A workspace can keep up to ${AUTOMATION_LIMITS.rules} automations.`, 409);
       const a = await hqOne<HdAutomation>(
-        `INSERT INTO hd_automations (name, event, conditions, actions, active, position, published, draft_by, draft_by_name, draft_at, draft_via)
-         VALUES ($1, $2, $3, $4, 0, $5, 0, $6, $7, now(), $8) RETURNING ${COLS}`,
-        [input.name, input.event, JSON.stringify(input.conditions), JSON.stringify(input.actions), (n?.max ?? -1) + 1, ...meta],
+        `INSERT INTO hd_automations (name, event, conditions, actions, active, position, published, draft_by, draft_by_name, draft_at, draft_via, desk_department_id)
+         VALUES ($1, $2, $3, $4, 0, $5, 0, $6, $7, now(), $8, ${deptInsertSql(9)}) RETURNING ${COLS}`,
+        [input.name, input.event, JSON.stringify(input.conditions), JSON.stringify(input.actions), (n?.max ?? -1) + 1, ...meta, deptArg(deskDepartmentId)],
         client
       );
       return { automation: a!, kind: "new" as const };
@@ -750,12 +771,20 @@ export async function runAutomations(event: HdAutomationEvent, ticketId: number,
       logEvent("error", "helpdesk.automation_failed", { event, error: String(e) });
       return result;
     }
+    // 1.20.23: a team's desk department, read once per team for this run (the default department for no team).
+    const deptOfTeam = new Map<number | null, number>();
+    const { teamDeskDepartmentId } = await import("./desk-departments");
     for (const rule of rules) {
       const key = `${rule.id}:${ticketId}`;
       if (chain.fired.has(key)) continue;
       try {
         const t = await hqOne<HdTicketRow>("SELECT * FROM hd_tickets WHERE id = $1", [ticketId]);
         if (!t) break;
+        // 1.20.23: only the ticket's desk department's rules and All departments' (NULL), the department as it is now.
+        if (rule.desk_department_id !== null && rule.desk_department_id !== undefined) {
+          if (!deptOfTeam.has(t.team_id)) deptOfTeam.set(t.team_id, await teamDeskDepartmentId(t.team_id));
+          if (deptOfTeam.get(t.team_id) !== rule.desk_department_id) continue;
+        }
         if (!automationMatches(rule.conditions ?? {}, await matchTarget(event, t))) continue;
         const acted = await applyRule(rule, t, opts.triggeredBy ?? null);
         if (!acted) continue;
@@ -829,7 +858,26 @@ export async function applyRule(rule: HdAutomation, t: HdTicketRow, triggeredBy:
     );
     acted = true;
   }
-  if (a.macro_id) {
+  // 1.20.23 review M4 (c): a macro no longer of the rule's desk department (or All departments), say
+  // after an Admin moved it, is skipped, with a note on the ticket and a log line; the rest runs.
+  const macroDept = a.macro_id ? await hqOne<{ d: number | null }>("SELECT desk_department_id AS d FROM hd_macros WHERE id = $1", [a.macro_id]) : undefined;
+  const { fitsDept } = await import("./desk-departments");
+  // (A rule read without its department, undefined, is not checked; a stored rule always has the column.)
+  if (a.macro_id && macroDept && rule.desk_department_id !== undefined && !fitsDept(macroDept.d, rule.desk_department_id)) {
+    logEvent("warn", "helpdesk.automation_macro_skipped", { automation: rule.id, ticket_id: t.id, macro: a.macro_id, reason: "desk_department" });
+    const { addMessage } = await import("./messages");
+    await addMessage(
+      t.id,
+      {
+        kind: "internal",
+        body: `The automation "${rule.name}" skipped its macro reply: the macro is no longer in the rule's desk department. Ask a desk admin to pick another macro for the rule.`,
+        author: { id: null, name: actor.name, email: "" },
+        via: "system",
+        asRequester: false,
+      },
+      ctx
+    );
+  } else if (a.macro_id) {
     const { applyMacroToTicket } = await import("./macros");
     // 1.20.20: set off by an agent's action (not the requester's, not the system's): the macro's reply meets the reply
     // lock as that agent's (lib/helpdesk/reply-lock). Refused, the rest of the rule still runs.

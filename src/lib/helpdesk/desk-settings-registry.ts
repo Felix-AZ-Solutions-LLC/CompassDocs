@@ -21,6 +21,7 @@ import {
   BellRing,
   BookOpen,
   Bot,
+  Building2,
   CalendarClock,
   CalendarDays,
   ClipboardCheck,
@@ -118,7 +119,10 @@ export interface DeskSettingsGroup {
 
 const S = "/desk/settings";
 const ADMIN_CAPS = ["settings.manage"] as const;
-const MACRO_CAPS = ["macros.manage_all", "macros.manage_team", "macros.manage_personal"] as const;
+// 1.20.23: "Manage a desk department" opens every page whose content lives in desk departments
+// (for its holder's own departments: lib/helpdesk/desk-departments).
+const DEPT = "departments.manage" as const;
+const MACRO_CAPS = ["macros.manage_all", "macros.manage_team", "macros.manage_personal", DEPT] as const;
 
 export const DESK_SETTINGS_GROUPS: DeskSettingsGroup[] = [
   {
@@ -138,8 +142,13 @@ export const DESK_SETTINGS_GROUPS: DeskSettingsGroup[] = [
   {
     label: "Teams and people",
     sections: [
-      { key: "teams", label: "Teams", icon: Users, tabs: false, description: "Who answers for what. Membership decides which queues an agent works.", keywords: "teams queues groups departments members hours targets", pages: [
+      { key: "teams", label: "Teams", icon: Users, tabs: true, description: "Who answers for what. Membership decides which queues an agent works.", keywords: "teams queues groups desk departments members hours targets", pages: [
           { href: `${S}/teams`, label: "Teams", icon: Users, caps: ["teams.manage"], keywords: "team queue members people hours" },
+          // 1.20.23 (lib/helpdesk/desk-departments): desk Admin only.
+          { href: `${S}/departments`, label: "Desk departments", icon: Building2, caps: ADMIN_CAPS, keywords: "desk departments divisions it hr facilities group teams content macros automations workflows", topics: [
+              { anchor: "desk-departments", label: "Desk departments", keywords: "create rename delete desk department" },
+              { anchor: "desk-department-teams", label: "Which team is in which desk department", keywords: "move team assign team desk department" },
+            ] },
         ] },
       { key: "agents", label: "Agents and roles", icon: UsersRound, tabs: true, description: "Who works on the desk, at which role, with which skills and languages.", keywords: "agents people staff roles permissions capabilities newbie lead manager admin skills languages", pages: [
           { href: `${S}/agents`, label: "Agents", icon: UsersRound, caps: ["agents.manage_team", "agents.assign_roles"], keywords: "agents people staff add remove desk role newbie team lead manager" },
@@ -177,10 +186,10 @@ export const DESK_SETTINGS_GROUPS: DeskSettingsGroup[] = [
     label: "Tickets",
     sections: [
       { key: "fields", label: "Forms and fields", icon: List, tabs: true, description: "What people pick and answer when they ask for help, and what agents fill in.", keywords: "forms fields request types categories custom fields checklists before you solve", pages: [
-          { href: `${S}/request-types`, label: "Request types", icon: List, caps: ["request_types.manage"], keywords: "request types forms questions get help intake ticket type" },
+          { href: `${S}/request-types`, label: "Request types", icon: List, caps: ["request_types.manage", DEPT], keywords: "request types forms questions get help intake ticket type" },
           { href: `${S}/categories`, label: "Categories", icon: FolderTree, caps: ADMIN_CAPS, keywords: "categories sub-categories subcategories classification tags drafts from claude" },
           { href: `${S}/custom-fields`, label: "Custom fields", icon: TextCursorInput, caps: ADMIN_CAPS, keywords: "custom fields extra fields attributes per team public agent only" },
-          { href: `${S}/checklists`, label: "Checklists", icon: ListChecks, caps: CHECKLIST_MANAGE_CAPS, keywords: "checklists steps tasks to-do required items" },
+          { href: `${S}/checklists`, label: "Checklists", icon: ListChecks, caps: [...CHECKLIST_MANAGE_CAPS, DEPT], keywords: "checklists steps tasks to-do required items" },
           { href: `${S}/before-you-solve`, label: "Before you solve", icon: ClipboardCheck, caps: ADMIN_CAPS, keywords: "before you solve solve requirements closing fields required mandatory resolution" },
         ] },
       // 1.20.20: the reply lock (lib/helpdesk/reply-lock).
@@ -215,8 +224,8 @@ export const DESK_SETTINGS_GROUPS: DeskSettingsGroup[] = [
     label: "Automation",
     sections: [
       { key: "automations", label: "Automations", icon: Bot, tabs: true, description: "Rules that sort and answer tickets for you, and tickets that open on a schedule.", keywords: "automations rules triggers auto recurring scheduled", pages: [
-          { href: `${S}/automations`, label: "Automations", icon: Bot, caps: ["automations.manage"], keywords: "rules triggers when then conditions actions auto reply route drafts from claude" },
-          { href: `${S}/recurring`, label: "Recurring tickets", icon: Repeat, caps: ["settings.manage", "agents.manage_team"], keywords: "recurring scheduled repeat every week month routine maintenance drafts from claude" },
+          { href: `${S}/automations`, label: "Automations", icon: Bot, caps: ["automations.manage", DEPT], keywords: "rules triggers when then conditions actions auto reply route drafts from claude" },
+          { href: `${S}/recurring`, label: "Recurring tickets", icon: Repeat, caps: ["settings.manage", "agents.manage_team", DEPT], keywords: "recurring scheduled repeat every week month routine maintenance drafts from claude" },
         ] },
       { key: "macros", label: "Macros and replies", icon: Zap, tabs: true, description: "Macros and canned responses: one-click actions and saved replies, for you, your team or everyone.", keywords: "macros canned responses saved replies reply templates snippets quick replies", pages: [
           { href: `${S}/macros`, label: "Macros", icon: Zap, caps: MACRO_CAPS, keywords: "macros one click actions reply templates shortcuts" },

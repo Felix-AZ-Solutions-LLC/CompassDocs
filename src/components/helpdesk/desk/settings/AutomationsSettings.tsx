@@ -17,13 +17,17 @@
 // (Assign to, Notify one person by name, a shared macro by name even when the
 // reviewer can't manage it), and a draft's strip lists "What this rule will
 // do" from the server's plain words (every trigger, condition and action).
+// 1.20.23: each rule is in a desk department (or All departments, a desk
+// Admin's choice) and runs on that department's tickets: the dialog's Desk
+// department field, the list's filter and chip. Rules the person doesn't
+// manage show without controls; Move up / Move down swap their own rules only.
 
 import { useEffect, useId, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Bot, Pencil, Plus, Trash2, X } from "lucide-react";
 import { Button, iconButtonClass } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { Chip, chipClass } from "@/components/Chip";
-import { EmptyState, Field, FormError, Select, TextInput, Textarea } from "@/components/form";
+import { EmptyState, Field, FormError, SectionEmpty, Select, TextInput, Textarea } from "@/components/form";
 import { Modal } from "@/components/Modal";
 import { PageHeader } from "@/components/PageHeader";
 import { PageContainer } from "@/components/PageWidth";
@@ -53,10 +57,22 @@ import { CategoryChecks, type CategoryPairs } from "../categories/CategoryChecks
 import { CategoryFields } from "../categories/CategoryFields";
 import { draftChipLabel, waitsForReview } from "@/lib/helpdesk/claude-drafts-shared";
 import { ClaudeDraftStrip } from "./ClaudeDraftStrip";
+import {
+  ALL_DEPTS,
+  DeskDepartmentChip,
+  DeskDepartmentFilter,
+  DeskDepartmentSelect,
+  byDeskDepartment,
+  deptPayload,
+  deptValue,
+  deskDepartmentsChanged,
+  useDeskDepartmentChoices,
+} from "./DeskDepartmentField";
+import type { HdDeskDepartmentChoices } from "@/lib/helpdesk/desk-departments-shared";
 
-/** 1.20.16: a rule as GET lists it, with its plain words (and its draft's). */
+/** 1.20.16: a rule as GET lists it, with its plain words (and its draft's). 1.20.23: can_edit (its desk department is one the person manages). */
 type RuleWords = { when: string; if: string[]; then: string[] };
-type RuleRow = HdAutomation & { in_words?: RuleWords; draft_in_words?: RuleWords | null };
+type RuleRow = HdAutomation & { in_words?: RuleWords; draft_in_words?: RuleWords | null; can_edit?: boolean };
 
 const EVENT_FALLBACK: Record<HdAutomationEvent, string> = {
   ticket_created: "A ticket is created",
@@ -78,6 +94,11 @@ export function AutomationsSettings() {
   const asked = useRef(false);
   const { teams } = useTeams();
   const { types } = useRequestTypes();
+  // 1.20.23: rules by desk department (settings/DeskDepartmentField).
+  const depts = useDeskDepartmentChoices("automations");
+  const [deptFilter, setDeptFilter] = useState("");
+  const shown = rows ? byDeskDepartment(rows, deptFilter) : null;
+  const mine = (rows ?? []).filter((r) => r.can_edit !== false).map((r) => r.id);
 
   const load = () =>
     getJson<{ automations: RuleRow[]; events?: Record<string, string>; people?: { id: number; name: string }[]; macros?: { id: number; title: string; shared: boolean }[] }>(
@@ -118,16 +139,18 @@ export function AutomationsSettings() {
     }
   }
 
-  async function move(i: number, dir: -1 | 1) {
+  /** 1.20.23: the rules this person manages swap places among themselves; others' order is never touched (the reorder route). */
+  async function move(id: number, dir: -1 | 1) {
     if (!rows) return;
-    const ids = rows.map((r) => r.id);
+    const ids = [...mine];
+    const i = ids.indexOf(id);
     const j = i + dir;
-    if (j < 0 || j >= ids.length) return;
+    if (i < 0 || j < 0 || j >= ids.length) return;
     [ids[i], ids[j]] = [ids[j], ids[i]];
     setBusy(true);
     try {
-      const d = await sendJson<{ automations: HdAutomation[] }>("/api/helpdesk/admin/automations/reorder", "POST", { ids }, "Couldn't change the order.");
-      setRows(listOf<RuleRow>(d, "automations"));
+      await sendJson<{ automations: HdAutomation[] }>("/api/helpdesk/admin/automations/reorder", "POST", { ids }, "Couldn't change the order.");
+      await load();
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
@@ -188,16 +211,27 @@ export function AutomationsSettings() {
       {rows && rows.length === 0 && (
         <EmptyState icon={<Bot />} title="No rules yet" body="For example: when a ticket mentions VPN, move it to IT and set it High." action={{ onClick: () => setEditing("new"), label: "New rule", icon: <Plus /> }} />
       )}
-      {rows && rows.length > 0 && (
+      {rows && rows.length > 0 && depts?.filter && (
+        <div className="mb-3 flex justify-end">
+          <DeskDepartmentFilter choices={depts} value={deptFilter} onChange={setDeptFilter} />
+        </div>
+      )}
+      {rows && rows.length > 0 && shown && (
         <Card padding="none">
+          {shown.length === 0 && (
+            <SectionEmpty className="px-4 py-6" action={{ label: "Show every desk department", onClick: () => setDeptFilter("") }}>
+              No rule in this desk department.
+            </SectionEmpty>
+          )}
           <ol className="divide-y divide-slate-100">
-            {rows.map((a, i) => (
+            {shown.map((a) => (
               <li key={a.id} className="flex flex-wrap items-start gap-3 px-4 py-3 sm:flex-nowrap">
-                <span className="mt-0.5 w-5 shrink-0 text-right text-xs tabular-nums text-slate-500">{i + 1}</span>
+                <span className="mt-0.5 w-5 shrink-0 text-right text-xs tabular-nums text-slate-500">{rows.indexOf(a) + 1}</span>
                 <div className="min-w-0 flex-1">
                   <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-900">
                     {a.name}
                     {!a.active && <Chip tone="neutral" size="sm">Off</Chip>}
+                    <DeskDepartmentChip id={a.desk_department_id} choices={depts} />
                     {draftChipLabel({ published: a.published !== false, draft: a.draft }) && (
                       <span className={chipClass("accent", "sm")}>{draftChipLabel({ published: a.published !== false, draft: a.draft })}</span>
                     )}
@@ -206,7 +240,7 @@ export function AutomationsSettings() {
                     When {(events[a.event] ?? a.event).charAt(0).toLowerCase() + (events[a.event] ?? a.event).slice(1)}. {summary(a)}
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-1">
+                <div className={`flex shrink-0 items-center gap-1 ${a.can_edit === false ? "hidden" : ""}`}>
                   {a.published === false ? (
                     // Only a person's publish switches a draft on (the dialog's Publish rule).
                     <Button variant="secondary" size="sm" onClick={() => setEditing(a)}>
@@ -219,10 +253,10 @@ export function AutomationsSettings() {
                       <span className="sr-only"> {a.name}</span>
                     </Button>
                   )}
-                  <button type="button" disabled={busy || i === 0} onClick={() => move(i, -1)} aria-label={`Move ${a.name} up`} data-tt="Move up" className={iconButtonClass("quiet", "sm")}>
+                  <button type="button" disabled={busy || mine.indexOf(a.id) <= 0} onClick={() => move(a.id, -1)} aria-label={`Move ${a.name} up`} data-tt="Move up" className={iconButtonClass("quiet", "sm")}>
                     <ArrowUp aria-hidden />
                   </button>
-                  <button type="button" disabled={busy || i === rows.length - 1} onClick={() => move(i, 1)} aria-label={`Move ${a.name} down`} data-tt="Move down" className={iconButtonClass("quiet", "sm")}>
+                  <button type="button" disabled={busy || mine.indexOf(a.id) === mine.length - 1} onClick={() => move(a.id, 1)} aria-label={`Move ${a.name} down`} data-tt="Move down" className={iconButtonClass("quiet", "sm")}>
                     <ArrowDown aria-hidden />
                   </button>
                   <button type="button" onClick={() => setEditing(a)} aria-label={`Edit ${a.name}`} data-tt="Edit" className={iconButtonClass("quiet", "sm")}>
@@ -244,9 +278,11 @@ export function AutomationsSettings() {
         types={(types ?? []).map((t) => ({ id: t.id, name: t.title }))}
         people={people}
         ruleMacros={ruleMacros}
+        depts={depts}
         onClose={() => setEditing(null)}
         onSaved={() => {
           setEditing(null);
+          deskDepartmentsChanged();
           void load();
         }}
       />
@@ -263,6 +299,7 @@ function RuleDialog({
   types,
   people,
   ruleMacros,
+  depts,
   onClose,
   onSaved,
 }: {
@@ -272,6 +309,7 @@ function RuleDialog({
   types: { id: number; name: string }[];
   people: { id: number; name: string }[];
   ruleMacros: { id: number; title: string; shared: boolean }[];
+  depts: HdDeskDepartmentChoices | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -285,6 +323,8 @@ function RuleDialog({
   const [x, setX] = useState<HdAutomationActions>({});
   const [tags, setTags] = useState("");
   const [macros, setMacros] = useState<HdMacro[]>([]);
+  // 1.20.23: the rule's desk department: it runs on that department's tickets (All departments: every ticket).
+  const [dept, setDept] = useState(ALL_DEPTS);
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -303,10 +343,16 @@ function RuleDialog({
     setCategories({ categories: r?.conditions?.categories ?? [], subcategories: r?.conditions?.subcategories ?? [] });
     setX(r?.actions ?? {});
     setTags((r?.actions?.tags_add ?? []).join(", "));
+    setDept(deptValue(rule === "new" ? (depts?.default_id ?? null) : rule.desk_department_id));
     setTried(false);
     setError("");
     getJson("/api/helpdesk/admin/macros").then((d) => setMacros(listOf<HdMacro>(d, "macros"))).catch(() => setMacros([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when another rule opens, not when the choices load
   }, [rule]);
+  const startDept = depts?.default_id ?? null;
+  useEffect(() => {
+    if (rule === "new") setDept(deptValue(startDept));
+  }, [rule, startDept]);
 
   const actions: HdAutomationActions = { ...x, tags_add: split(tags).length ? split(tags).map((t) => t.toLowerCase()) : undefined };
   for (const k of Object.keys(actions) as (keyof HdAutomationActions)[]) {
@@ -343,7 +389,7 @@ function RuleDialog({
     setBusy(true);
     setError("");
     try {
-      const payload = { name: name.trim(), event, conditions, actions };
+      const payload = { name: name.trim(), event, conditions, actions, desk_department_id: deptPayload(dept) };
       // 1.20.16: publishing names the draft this dialog showed (draft_at); a newer one is refused (409), never published unseen.
       const publishing = mode.current === "publish" && claude ? (changesWaiting ? { publish_draft: true, draft_at: claude.draft_at } : { publish: true, draft_at: claude.draft_at }) : {};
       if (existing) await sendJson(`/api/helpdesk/admin/automations/${existing.id}`, "PATCH", { ...payload, ...publishing }, "Couldn't save the rule.");
@@ -421,6 +467,12 @@ function RuleDialog({
           <Field label="Name" error={tried ? errs.name : undefined}>
             <TextInput value={name} onChange={(e) => setName(e.target.value)} maxLength={120} placeholder="VPN and network" />
           </Field>
+          <DeskDepartmentSelect
+            choices={depts}
+            value={dept}
+            onChange={setDept}
+            help="It runs on tickets of this desk department's teams; a ticket with no team counts as the default department's. Shared with all departments, it runs on every ticket."
+          />
           <Field label="When">
             <Select value={event} onChange={(e) => setEvent(e.target.value as HdAutomationEvent)}>
               {Object.entries(events).map(([k, l]) => (

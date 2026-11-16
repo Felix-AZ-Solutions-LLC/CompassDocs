@@ -78,7 +78,8 @@ export default async function DeskLayout({ children }: { children: React.ReactNo
           agent: access.agent,
           admin: access.admin,
           reports,
-          workflows: role.can("workflows.manage"),
+          // 1.20.23: "Manage a desk department" opens the builder for its holder's desk departments.
+          workflows: role.can("workflows.manage") || role.can("departments.manage"),
           settingsHref: firstSettingsHref(role.caps),
         }}
         role={role.role}

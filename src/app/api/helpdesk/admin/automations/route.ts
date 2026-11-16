@@ -7,12 +7,29 @@
 //      (lib/helpdesk/automations saveAutomationDraft): a new rule switched off and unpublished, or
 //      changes beside the rule the card names. Checked as Desk settings checks a rule. Audited
 //      helpdesk.automation.created / .updated with draft and via "claude_desk"; the card is used once.
+// 1.20.23 (lib/helpdesk/desk-departments): a rule is in one desk department (desk_department_id;
+//      null = All departments, desk Admin only; left out, the caller's starting department) and
+//      runs on that department's tickets. The list shows the caller's departments' rules and All
+//      departments' (?desk_department=<id>|all filters), each with can_edit; "Manage a desk
+//      department" opens it for their own teams' departments (review M3). A rule's macro must be of its department or
+//      All departments (400). A card's new draft goes into the caller's starting department.
 
 import { NextResponse } from "next/server";
 import type { SessionUser } from "@/lib/types";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { readJson } from "@/lib/helpdesk/access";
-import { hdCapGate } from "@/lib/helpdesk/roles";
+import {
+  automationMacroRefusal,
+  deskDepartmentFieldOr,
+  deskDepartmentGate,
+  filterByDeskDepartment,
+  guardDeptRace,
+  itemRefusal,
+  mayManageDept,
+  maySeeDept,
+  parseDeskDepartmentFilter,
+  type DeskDepartmentAccess,
+} from "@/lib/helpdesk/desk-departments";
 import { auditDraftCardApplied, claimDraftCard, releaseDraftCard } from "@/lib/helpdesk/claude/draft-cards";
 import { draftViaDetails } from "@/lib/helpdesk/claude-drafts-shared";
 import {
@@ -21,6 +38,7 @@ import {
   saveAutomationDraft,
   HD_AUTOMATION_EVENT_LABEL,
   createAutomation,
+  getAutomation,
   listAutomations,
   validateAutomationInput,
   automationsInWords,
@@ -31,16 +49,25 @@ import { hq } from "@/lib/helpdesk/db-core";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const gate = await hdCapGate("automations.manage");
-  if (gate instanceof NextResponse) return gate;
+export async function GET(req: Request) {
+  const g = await deskDepartmentGate("automations");
+  if (g instanceof NextResponse) return g;
   // 1.20.16 (additive): each rule in plain words (and its draft's), the desk agents a rule can assign
   // or notify, and the names of the macros rules send, so a reviewer sees every action.
-  const automations = await listAutomations();
+  const automations = filterByDeskDepartment(
+    (await listAutomations()).filter((a) => maySeeDept(g.access, a.desk_department_id)),
+    parseDeskDepartmentFilter(new URL(req.url).searchParams.get("desk_department"))
+  );
   const shapes = automations.flatMap((a) => (a.draft ? [a, a.draft] : [a]));
   const words = await automationsInWords(shapes);
   let k = 0;
-  const withWords = automations.map((a) => ({ ...a, in_words: words[k++], draft_in_words: a.draft ? words[k++] : null }));
+  const withWords = automations.map((a) => ({
+    ...a,
+    desk_department_id: a.desk_department_id ?? null,
+    can_edit: mayManageDept(g.access, a.desk_department_id),
+    in_words: words[k++],
+    draft_in_words: a.draft ? words[k++] : null,
+  }));
   const macroIds = [...new Set(shapes.map((a) => a.actions?.macro_id).filter((x): x is number => !!x))];
   const [agents, macros] = await Promise.all([
     listDeskAgents(),
@@ -54,17 +81,22 @@ export async function GET() {
   });
 }
 
-export async function POST(req: Request) {
-  const gate = await hdCapGate("automations.manage");
-  if (gate instanceof NextResponse) return gate;
+async function postHandler(req: Request) {
+  const g = await deskDepartmentGate("automations");
+  if (g instanceof NextResponse) return g;
+  const gate = g.user;
   const body = await readJson(req, 64 * 1024);
   if (!body) return NextResponse.json({ error: "Send the automation as JSON." }, { status: 400 });
-  if (body.draft === true) return saveDraftFromCard(req, gate, body.card_id);
+  if (body.draft === true) return saveDraftFromCard(req, gate, g.access, body.card_id);
+  const dept = await deskDepartmentFieldOr(g.access, body.desk_department_id);
+  if (dept instanceof NextResponse) return dept;
   const input = await validateAutomationInput(body);
   if (!input.ok) return NextResponse.json({ error: input.error }, { status: 400 });
+  const mismatch = await automationMacroRefusal(dept.value, input.value.actions?.macro_id);
+  if (mismatch) return NextResponse.json({ error: mismatch, code: "desk_department" }, { status: 400 });
   let automation;
   try {
-    automation = await createAutomation(input.value as AutomationInput);
+    automation = await createAutomation(input.value as AutomationInput, dept.value);
   } catch (e) {
     if (e instanceof AutomationLimitError) return NextResponse.json({ error: e.message }, { status: 409 });
     throw e;
@@ -75,18 +107,40 @@ export async function POST(req: Request) {
     targetType: "helpdesk_automation",
     targetId: automation.id,
     targetLabel: automation.name,
-    details: { event: automation.event, conditions: automation.conditions, actions: Object.keys(automation.actions), active: automation.active },
+    details: {
+      event: automation.event,
+      conditions: automation.conditions,
+      actions: Object.keys(automation.actions),
+      active: automation.active,
+      desk_department_id: automation.desk_department_id ?? null,
+    },
     ip: ipFrom(req),
   });
   return NextResponse.json({ automation }, { status: 201 });
 }
 
-/** 1.20.16: Save as draft on a Claude in the desk card. */
-async function saveDraftFromCard(req: Request, gate: SessionUser, cardId: unknown) {
+/** 1.20.16: Save as draft on a Claude in the desk card. 1.20.23: only on a rule they manage; a new one in their starting desk department. */
+async function saveDraftFromCard(req: Request, gate: SessionUser, access: DeskDepartmentAccess, cardId: unknown) {
   const card = await claimDraftCard(gate.id, cardId, "automation");
   if (!card) return NextResponse.json({ error: "Save as draft works from the Claude card it came from. Create a rule with New rule instead." }, { status: 400 });
+  let dept: number | null | undefined;
+  if (card.target_id) {
+    const target = await getAutomation(card.target_id);
+    const refused = target ? itemRefusal(access, target.desk_department_id, "Automation not found.") : null;
+    if (refused) {
+      await releaseDraftCard(gate.id, card.id);
+      return refused;
+    }
+  } else {
+    const d = await deskDepartmentFieldOr(access, undefined);
+    if (d instanceof NextResponse) {
+      await releaseDraftCard(gate.id, card.id);
+      return d;
+    }
+    dept = d.value;
+  }
   try {
-    const r = await saveAutomationDraft(card.draft, { id: gate.id, name: gate.name || gate.username, via: "claude_desk" }, card.target_id ?? undefined);
+    const r = await saveAutomationDraft(card.draft, { id: gate.id, name: gate.name || gate.username, via: "claude_desk" }, card.target_id ?? undefined, dept);
     const a = r.automation;
     const shape = a.draft ?? a;
     const details = { event: shape.event, conditions: shape.conditions, actions: Object.keys(shape.actions ?? {}), draft: true, ...draftViaDetails("claude_desk"), card_id: card.id };
@@ -103,3 +157,6 @@ async function saveDraftFromCard(req: Request, gate: SessionUser, cardId: unknow
     throw e;
   }
 }
+
+// 1.20.23 review L3: a save racing a desk department's deletion answers 409 with a sentence.
+export const POST = guardDeptRace(postHandler);

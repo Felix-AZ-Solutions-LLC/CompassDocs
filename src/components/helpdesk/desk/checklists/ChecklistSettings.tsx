@@ -19,6 +19,11 @@
 // the editor in place of the live copy, with Discard changes / Publish
 // changes; until then tickets and request types use the live copy.
 // ?id=<checklist> opens that checklist (the links Claude hands out).
+//
+// 1.20.23: each checklist is in a desk department (or All departments, a desk
+// Admin's choice): the editor's Desk department field, the list's filter and
+// chip (settings/DeskDepartmentField). Agents add only their departments'
+// (and All departments') by hand. One the person can't change opens read-only.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Bot, GripVertical, ListChecks, Plus, SlidersHorizontal, Trash2, X } from "lucide-react";
@@ -47,6 +52,17 @@ import {
   type HdChecklistTemplateRow,
 } from "@/lib/helpdesk/checklists-shared";
 import { getJson, sendJson } from "../api";
+import {
+  DeskDepartmentChip,
+  DeskDepartmentFilter,
+  DeskDepartmentSelect,
+  byDeskDepartment,
+  deptPayload,
+  deptValue,
+  deskDepartmentsChanged,
+  useDeskDepartmentChoices,
+} from "../settings/DeskDepartmentField";
+import { deskDepartmentLabel, type HdDeskDepartmentChoices } from "@/lib/helpdesk/desk-departments-shared";
 
 interface View {
   templates: HdChecklistTemplateRow[];
@@ -66,6 +82,8 @@ export function ChecklistSettings() {
   const [view, setView] = useState<View | null>(null);
   const [error, setError] = useState("");
   const [chosen, setChosen] = useState<number | "new" | null>(null);
+  const depts = useDeskDepartmentChoices("checklists");
+  const [deptFilter, setDeptFilter] = useState("");
 
   const load = () =>
     getJson<View>("/api/helpdesk/admin/checklists", "Couldn't load the checklists.")
@@ -120,7 +138,17 @@ export function ChecklistSettings() {
           action={{ onClick: () => open("new"), label: "New checklist", icon: <Plus /> }}
         />
       )}
-      {view && view.templates.length > 0 && (
+      {view && view.templates.length > 0 && depts?.filter && (
+        <div className="mb-3 flex justify-end">
+          <DeskDepartmentFilter choices={depts} value={deptFilter} onChange={setDeptFilter} />
+        </div>
+      )}
+      {view && view.templates.length > 0 && byDeskDepartment(view.templates, deptFilter).length === 0 && (
+        <SectionEmpty className="mb-3" action={{ label: "Show every desk department", onClick: () => setDeptFilter("") }}>
+          No checklist in this desk department.
+        </SectionEmpty>
+      )}
+      {view && byDeskDepartment(view.templates, deptFilter).length > 0 && (
         <Card padding="none" className="overflow-hidden">
           <Table aria-label="Checklists" className="table-fixed">
             <thead className={TABLE_HEAD_ROW}>
@@ -140,7 +168,7 @@ export function ChecklistSettings() {
               </tr>
             </thead>
             <tbody>
-              {view.templates.map((t) => {
+              {byDeskDepartment(view.templates, deptFilter).map((t) => {
                 const on = t.id === chosen;
                 return (
                   <tr key={t.id} className={`relative border-b border-slate-100 transition-colors last:border-b-0 ${on ? "bg-compass-50" : "hover:bg-slate-50/70"}`}>
@@ -152,6 +180,11 @@ export function ChecklistSettings() {
                         className="block w-full min-w-0 text-left after:absolute after:inset-0 focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-compass-500"
                       >
                         <span className="block truncate font-semibold text-slate-900">{t.name}</span>
+                        {depts?.filter && (
+                          <span className="mt-1 block">
+                            <DeskDepartmentChip id={t.desk_department_id} choices={depts} />
+                          </span>
+                        )}
                         {hasClaudeDraft(t) && (
                           <span className="mt-1 block">
                             <span className={chipClass("accent", "sm")}>{t.published ? "Changes from Claude" : "Draft from Claude"}</span>
@@ -179,8 +212,10 @@ export function ChecklistSettings() {
           teams={view.teams}
           types={view.request_types}
           workflowUses={current ? current.added_to.filter((a) => !a.startsWith("Request type ")) : []}
+          depts={depts}
           onSaved={(t) => {
             setChosen(t.id);
+            deskDepartmentsChanged();
             void load();
           }}
           onDeleted={() => {
@@ -203,14 +238,16 @@ function Editor({
   teams,
   types,
   workflowUses,
+  depts,
   onSaved,
   onDeleted,
   onCancelNew,
 }: {
-  template: HdChecklistTemplate | null;
+  template: (HdChecklistTemplate & { can_edit?: boolean }) | null;
   teams: View["teams"];
   types: View["request_types"];
   workflowUses: string[];
+  depts: HdDeskDepartmentChoices | null;
   onSaved: (t: HdChecklistTemplate) => void;
   onDeleted: () => void;
   onCancelNew: () => void;
@@ -223,6 +260,13 @@ function Editor({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // 1.20.23: its desk department; a new one starts in the person's starting department.
+  const [dept, setDept] = useState(deptValue(template ? template.desk_department_id : (depts?.default_id ?? null)));
+  const startDept = depts?.default_id ?? null;
+  useEffect(() => {
+    if (!template) setDept(deptValue(startDept));
+  }, [template, startDept]);
+  const readOnly = template?.can_edit === false;
   const [drag, setDrag] = useState<string | null>(null);
   const titles = useRef(new Map<string, HTMLInputElement>());
   const grips = useRef(new Map<string, HTMLButtonElement>());
@@ -258,7 +302,7 @@ function Editor({
     setError("");
     // 1.20.14 (review fix): publishing names the draft this editor showed (draft_at); a newer one is refused (409) so it is never published unseen.
     const publishing = publish && claude ? (claude.published ? { publish_draft: true, draft_at: claude.draft_at } : { publish: true, draft_at: claude.draft_at }) : {};
-    const body = { ...draft, name: draft.name.trim(), items: draft.items.filter((i) => i.title.trim()), ...publishing };
+    const body = { ...draft, name: draft.name.trim(), items: draft.items.filter((i) => i.title.trim()), ...publishing, desk_department_id: deptPayload(dept) };
     if (!body.name) return setError("Give the checklist a name.");
     if (!body.items.length) return setError("Add at least one item.");
     setBusy(true);
@@ -357,10 +401,24 @@ function Editor({
           </p>
         </section>
       )}
-      <div className="mt-3 max-w-md">
+      {readOnly && (
+        <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700" role="note">
+          This checklist belongs to {deskDepartmentLabel(template?.desk_department_id, depts?.departments ?? [])}, which you don&apos;t manage. You can read it, not change it.
+        </p>
+      )}
+      <div className="mt-3 grid max-w-2xl gap-3 sm:grid-cols-2">
         <Field label="Name">
           <TextInput value={draft.name} maxLength={CHECKLIST_LIMITS.name} onChange={(e) => change({ ...draft, name: e.target.value })} placeholder="Leaver: IT" />
         </Field>
+        <DeskDepartmentSelect
+          choices={depts}
+          value={dept}
+          onChange={(v) => {
+            markDirty();
+            setDept(v);
+          }}
+          disabled={readOnly}
+        />
       </div>
       <ol aria-label="Items" className="mt-3">
         {draft.items.map((it, i) => (
@@ -474,7 +532,7 @@ function Editor({
       </fieldset>
 
       {error && <p className="notice-error mt-4 rounded-lg border px-3 py-2 text-sm" role="alert">{error}</p>}
-      <div className="mt-5 flex flex-wrap items-center justify-end gap-2 print:hidden">
+      <div className={`mt-5 flex flex-wrap items-center justify-end gap-2 print:hidden ${readOnly ? "hidden" : ""}`}>
         <Button variant="ghost" icon={<Trash2 />} className="mr-auto hover-danger" onClick={remove}>
           {claude && !claude.published ? "Discard draft" : template ? "Delete" : "Cancel"}
         </Button>

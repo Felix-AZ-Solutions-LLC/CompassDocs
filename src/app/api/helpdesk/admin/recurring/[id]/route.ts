@@ -22,6 +22,7 @@ import {
   deleteRecurring,
   discardRecurringDraft,
   getRecurring,
+  RECURRING_GATE_CAPS,
   saveRecurring,
 } from "@/lib/helpdesk/recurring";
 import { scheduleTitle } from "@/lib/helpdesk/recurring-shared";
@@ -32,7 +33,8 @@ export const dynamic = "force-dynamic";
 type Ctx = { params: Promise<{ id: string }> };
 
 async function load(ctx: Ctx) {
-  const gate = await hdAnyCapGate(["settings.manage", "agents.manage_team"]);
+  // 1.20.23: and "Manage a desk department" (the teams in their own teams' desk departments; review M3; canManageRecurringTeam).
+  const gate = await hdAnyCapGate([...RECURRING_GATE_CAPS]);
   if (gate instanceof NextResponse) return gate;
   const id = Number((await ctx.params).id);
   const s = Number.isInteger(id) && id > 0 && id < 2 ** 31 ? await getRecurring(id) : undefined;

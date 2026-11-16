@@ -96,6 +96,8 @@ export interface HdTeam {
   email_alias: string;
   position: number;
   created_at: string;
+  /** 1.20.23: the desk department the team is in (exactly one; lib/helpdesk/desk-departments). */
+  desk_department_id?: number;
 }
 
 export interface HdTeamMember {
@@ -150,6 +152,8 @@ export interface HdRequestType {
   description: string;
   icon: string;
   team_id: number | null;
+  /** 1.20.23: its desk department (null = All departments). Decides which agents are offered it; never limits requesters. */
+  desk_department_id?: number | null;
   category: string;
   /** 1.20.6 (lib/helpdesk/categories): the sub-category its tickets start with; '' = none. */
   subcategory?: string;
@@ -372,6 +376,8 @@ export interface HdMacro {
   team_id: number | null;
   /** Set: a personal macro, only its owner sees it. */
   owner_id?: number | null;
+  /** 1.20.23: its desk department (null = All departments; a personal macro has none). */
+  desk_department_id?: number | null;
   created_by: number | null;
   created_at: string;
   updated_at: string;
@@ -410,6 +416,8 @@ export interface HdAutomationActions {
 export interface HdAutomation {
   id: number;
   name: string;
+  /** 1.20.23: its desk department (null = All departments): it runs on tickets of that department's teams. */
+  desk_department_id?: number | null;
   event: HdAutomationEvent;
   conditions: HdAutomationConditions;
   actions: HdAutomationActions;
@@ -547,6 +555,8 @@ export interface HdWorkflow {
   slug: string;
   title: string;
   description: string;
+  /** 1.20.23: its desk department (null = All departments). */
+  desk_department_id?: number | null;
   /** The published definition (what new runs pin). */
   definition: HdWorkflowDefinition;
   /** Unpublished edits; null = none. */

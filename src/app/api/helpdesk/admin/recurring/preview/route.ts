@@ -6,13 +6,14 @@
 import { NextResponse } from "next/server";
 import { hdAnyCapGate } from "@/lib/helpdesk/roles";
 import { hoursForTeam } from "@/lib/helpdesk/calendars";
-import { canManageRecurringTeam, previewRuns } from "@/lib/helpdesk/recurring";
+import { canManageRecurringTeam, previewRuns, RECURRING_GATE_CAPS } from "@/lib/helpdesk/recurring";
 import { isHolidayRule, validTimezone, validatePattern } from "@/lib/helpdesk/recurring-shared";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  const gate = await hdAnyCapGate(["settings.manage", "agents.manage_team"]);
+  // 1.20.23: and "Manage a desk department" (the teams in their own teams' desk departments; review M3).
+  const gate = await hdAnyCapGate([...RECURRING_GATE_CAPS]);
   if (gate instanceof NextResponse) return gate;
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
   const teamId = body?.team_id;

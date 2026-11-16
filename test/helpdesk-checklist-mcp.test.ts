@@ -324,7 +324,7 @@ describe("hd_draft_checklist: a draft a person publishes", () => {
     assert.deepEqual(row.items[1], { key: "i2", title: "Transfer OneDrive files", team_id: T.B, due_days: 1 });
 
     // Offered nowhere: not in the picker, not by its request type, not to a workflow task, not by hand.
-    assert.ok(!(await checklists.templateOptions()).some((o) => o.id === draftId));
+    assert.ok(!(await checklists.templateOptions("all")).some((o) => o.id === draftId));
     const lib = await call(libraryRoute.GET, "agent", "/checklists");
     assert.ok(!lib.body.templates.some((x: { id: number }) => x.id === draftId), "the agents' library leaves drafts out");
     const t = await ticket("Leaver Sam", "A", { request_type_id: rt });
@@ -387,7 +387,7 @@ describe("hd_draft_checklist: a draft a person publishes", () => {
     assert.equal(save.status, 200, JSON.stringify(save.body));
     assert.equal(save.body.template.published, false);
     assert.equal(save.body.template.items.length, 3, "items kept");
-    assert.equal((await checklists.templateOptions()).some((o) => o.id === draftId), false);
+    assert.equal((await checklists.templateOptions("all")).some((o) => o.id === draftId), false);
     // An agent can't publish.
     assert.equal((await call(adminOneRoute.PUT, "agent", `/admin/checklists/${draftId}`, "PUT", { publish: true }, { id: String(draftId) })).status, 403);
     // Publishing names the draft that was reviewed (draft_at); without it, or with an older one, 409.
@@ -403,7 +403,7 @@ describe("hd_draft_checklist: a draft a person publishes", () => {
     assert.equal(audit[0].details.drafted_by, P.manager.name);
 
     // Now it is real: offered, added by its request type, addable by hand, valid in a workflow.
-    assert.ok((await checklists.templateOptions()).some((o) => o.id === draftId));
+    assert.ok((await checklists.templateOptions("all")).some((o) => o.id === draftId));
     const t = await ticket("Leaver Kim", "A", { request_type_id: typeIds[0] });
     assert.equal(await checklists.addRequestTypeChecklists(t.id), 1);
     assert.equal(await checklists.missingChecklistRef([draftId], "Laptop"), null);
@@ -776,7 +776,7 @@ describe("Claude in the desk", () => {
     const row = (await auditRows("helpdesk.checklist_template.created", P.manager.id, saved.body.template.id)).at(-1)!;
     assert.equal(row.details.via, "claude_desk");
     assert.equal(row.details.draft, true);
-    assert.ok(!(await checklists.templateOptions()).some((o) => o.id === saved.body.template.id));
+    assert.ok(!(await checklists.templateOptions("all")).some((o) => o.id === saved.body.template.id));
   });
 
   test("a full turn: Claude proposes ticks and drafts a checklist; the cards are created; the tools are offered only when switched on", async () => {

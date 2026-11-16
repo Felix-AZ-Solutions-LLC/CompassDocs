@@ -52,6 +52,8 @@ export interface HdRecurring {
   id: number;
   team_id: number;
   team_name: string;
+  /** 1.20.23: its team's desk department (a schedule is its team's; read, never stored). */
+  desk_department_id?: number;
   subject: string;
   body: string;
   priority: string;

@@ -1008,9 +1008,10 @@ export async function advanceRun(runId: number, opts: AdvanceOptions = {}): Prom
 export async function workflowForRequestType(
   typeId: number,
   client?: HdQueryable
-): Promise<{ id: number; title: string; version: number; definition: HdWorkflowDefinitionB } | undefined> {
-  const w = await hqOne<{ id: number; title: string; version: number; definition: HdWorkflowDefinitionB }>(
-    `SELECT w.id, w.title, w.version, w.definition FROM hd_workflows w
+): Promise<{ id: number; title: string; version: number; definition: HdWorkflowDefinitionB; desk_department_id: number | null } | undefined> {
+  // 1.20.23: with its desk department (workflow-start offers a type to an agent only when both are theirs).
+  const w = await hqOne<{ id: number; title: string; version: number; definition: HdWorkflowDefinitionB; desk_department_id: number | null }>(
+    `SELECT w.id, w.title, w.version, w.definition, w.desk_department_id FROM hd_workflows w
       WHERE w.published = 1
         AND (w.id = (SELECT rt.workflow_id FROM hd_request_types rt WHERE rt.id = $1)
              OR ((SELECT rt.workflow_id FROM hd_request_types rt WHERE rt.id = $1) IS NULL

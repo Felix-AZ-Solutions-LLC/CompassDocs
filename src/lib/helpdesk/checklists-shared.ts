@@ -40,6 +40,8 @@ export interface HdChecklistTemplateItem {
 export interface HdChecklistTemplate {
   id: number;
   name: string;
+  /** 1.20.23: its desk department (null = All departments). */
+  desk_department_id?: number | null;
   items: HdChecklistTemplateItem[];
   request_type_ids: number[];
   created_at: string;
@@ -72,6 +74,8 @@ export interface HdChecklistTemplateRow extends HdChecklistTemplate {
   used: number;
   /** "Request type Move desks", "New starter workflow · task Laptop and accounts". */
   added_to: string[];
+  /** 1.20.23: the settings list's answer: may the caller change it (its desk department is one they manage)? */
+  can_edit?: boolean;
 }
 
 export interface HdChecklistTemplateInput {

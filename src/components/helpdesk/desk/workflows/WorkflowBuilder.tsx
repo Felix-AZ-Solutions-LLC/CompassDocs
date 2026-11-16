@@ -11,6 +11,10 @@
 //
 // Moving steps is a menu on each card's grip (Move up, Move down, Remove),
 // so it works from the keyboard as well as the pointer.
+//
+// 1.20.23: the Desk department field under the header moves the workflow
+// (saved at once, like Rename); a workflow of a department the person
+// doesn't manage opens read-only (Test run only).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -48,6 +52,8 @@ import { TeamIcon } from "../TeamIcon";
 import { useWorkflows, workflowHref } from "./WorkflowsLayout";
 import { StepSettings, TriggerSettings } from "./StepSettings";
 import { TestRunModal } from "./TestRunModal";
+import { DeskDepartmentSelect, deptPayload, deptValue, deskDepartmentsChanged, useDeskDepartmentChoices } from "../settings/DeskDepartmentField";
+import { deskDepartmentLabel } from "@/lib/helpdesk/desk-departments-shared";
 import { StepBadges } from "../workflow-multi/StepBadges";
 import {
   ADD_OPTIONS,
@@ -96,6 +102,8 @@ export function WorkflowBuilder({ slug }: { slug: string }) {
   const snapshot = JSON.stringify(def);
   const { dirty, markDirty, markClean, hasUnsavedChanges } = useUnsavedChanges(snapshot);
   useLeaveGuard(dirty, hasUnsavedChanges);
+  // 1.20.23: the workflow's desk department (settings/DeskDepartmentField), changed on its own like the name.
+  const depts = useDeskDepartmentChoices("workflows");
 
   const load = useCallback(
     (id: number) =>
@@ -219,6 +227,21 @@ export function WorkflowBuilder({ slug }: { slug: string }) {
     }
   }
 
+  /** 1.20.23: move the workflow to another desk department (or All departments, a desk Admin's choice). */
+  async function moveDept(v: string) {
+    if (!wf) return;
+    try {
+      const d = await sendJson(`/api/helpdesk/admin/workflows/${wf.id}`, "PATCH", { desk_department_id: deptPayload(v) }, "Couldn't move the workflow.");
+      const w = itemOf<HdWorkflowListRow>(d, "workflow");
+      setWf((prev) => (prev ? { ...prev, desk_department_id: w?.desk_department_id ?? deptPayload(v) } : prev));
+      deskDepartmentsChanged();
+      reload();
+      toast("ok", "Desk department changed.");
+    } catch (e) {
+      toast("error", (e as Error).message);
+    }
+  }
+
   async function discard() {
     if (!wf) return;
     const ok = await confirmDialog({
@@ -264,6 +287,7 @@ export function WorkflowBuilder({ slug }: { slug: string }) {
 
   const n = countSteps(def);
   const state = !wf.published ? "not published yet" : dirty || wf.has_changes ? "unpublished changes" : "published";
+  const readOnly = (wf as HdWorkflowListRow & { can_edit?: boolean }).can_edit === false;
   const sel = selected === TRIGGER ? null : findStep(def, selected);
 
   return (
@@ -277,6 +301,11 @@ export function WorkflowBuilder({ slug }: { slug: string }) {
           subtitle={`${trigger ? `Started from Get help by the ${trigger.title} form` : "No request form starts it yet"} · ${n} ${n === 1 ? "step" : "steps"} · ${state}`}
           className="mb-5"
           actions={
+            readOnly ? (
+              <Button variant="secondary" onClick={() => setTestOpen(true)}>
+                Test run
+              </Button>
+            ) : (
             <>
               <Button variant="secondary" onClick={() => setTestOpen(true)}>
                 Test run
@@ -291,9 +320,25 @@ export function WorkflowBuilder({ slug }: { slug: string }) {
               </Button>
               <MoreMenu onRename={rename} onDiscard={wf.has_changes ? discard : undefined} onDelete={remove} />
             </>
+            )
           }
         />
         {dirty && <p className="-mt-3 mb-4 text-xs ink-warn">Unsaved changes</p>}
+        {readOnly ? (
+          <p className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700" role="note">
+            This workflow belongs to {deskDepartmentLabel(wf.desk_department_id, depts?.departments ?? [])}, which you don&apos;t manage. You can read it and test it, not change it.
+          </p>
+        ) : (
+          <div className="-mt-2 mb-5 max-w-sm">
+            <DeskDepartmentSelect
+              choices={depts}
+              value={deptValue(wf.desk_department_id)}
+              onChange={(v) => void moveDept(v)}
+              disabled={!!busy}
+              help="Agents of this desk department's teams can start its request types from the desk. Requests already on their way are not affected."
+            />
+          </div>
+        )}
 
         <ol className="mx-auto max-w-[40rem]" aria-label={`Steps of ${wf.title}`}>
           <li>

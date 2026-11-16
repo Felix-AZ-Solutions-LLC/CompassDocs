@@ -8,6 +8,9 @@
 // show as chips (CannedBodyEditor). Who may edit what is the server's
 // answer (can_edit, share_options): an agent their own, a team's leads the
 // team's, a manager everyone's.
+// 1.20.23: a workspace response is everyone's in its desk department (or All
+// departments, a desk Admin's choice): the Desk department field beside
+// Shared with, the list's filter and chip (DeskDepartmentField).
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Eye, Folder, MessageSquareText, Pencil, Plus, Search, Trash2, X } from "lucide-react";
@@ -26,6 +29,17 @@ import { toast } from "@/components/Toasts";
 import { CANNED_LIMITS, cannedMatches, shareOf, sharedWithLabel, type HdCanned } from "@/lib/helpdesk/canned-shared";
 import { getJson, listOf, sendJson } from "../api";
 import { CannedBodyEditor, PlaceholderButtons } from "./CannedBodyEditor";
+import {
+  DeskDepartmentChip,
+  DeskDepartmentFilter,
+  DeskDepartmentSelect,
+  byDeskDepartment,
+  deptPayload,
+  deptValue,
+  deskDepartmentsChanged,
+  useDeskDepartmentChoices,
+} from "./DeskDepartmentField";
+import type { HdDeskDepartmentChoices } from "@/lib/helpdesk/desk-departments-shared";
 
 type Row = HdCanned & { can_edit?: boolean };
 type ShareOption = { value: string; label: string };
@@ -42,6 +56,8 @@ export function CannedSettings() {
   const [tab, setTab] = useState("all");
   const [q, setQ] = useState("");
   const [editing, setEditing] = useState<Row | "new" | null>(null);
+  const depts = useDeskDepartmentChoices("canned");
+  const [deptFilter, setDeptFilter] = useState("");
 
   const load = () =>
     getJson<{ canned: Row[]; share_options?: ShareOption[]; inactive_owners?: InactiveOwner[] }>("/api/helpdesk/admin/canned", "Couldn't load the canned responses.")
@@ -69,14 +85,14 @@ export function CannedSettings() {
   }, [tabs, tab]);
 
   const shown = useMemo(() => {
-    const list = (rows ?? []).filter((r) => {
+    const list = byDeskDepartment(rows ?? [], deptFilter).filter((r) => {
       if (tab === "all") return true;
       if (tab === "mine") return r.scope === "personal";
       if (tab === "workspace") return r.scope === "workspace";
       return shareOf(r) === tab;
     });
     return list.filter((r) => cannedMatches(r, q)).sort((a, b) => b.uses_30d - a.uses_30d || a.title.localeCompare(b.title));
-  }, [rows, tab, q]);
+  }, [rows, tab, q, deptFilter]);
 
   const canCreate = shares.length > 0;
 
@@ -125,6 +141,7 @@ export function CannedSettings() {
                 ))}
               </Select>
             )}
+            <DeskDepartmentFilter choices={depts} value={deptFilter} onChange={setDeptFilter} />
             <div className="relative ml-auto min-w-48 flex-1 sm:max-w-xs">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden />
               <TextInput
@@ -178,7 +195,10 @@ export function CannedSettings() {
                         </span>
                       </Td>
                       <Td fit>
-                        <Chip tone="neutral">{sharedWithLabel(r)}</Chip>
+                        <span className="inline-flex flex-wrap items-center gap-1">
+                          <Chip tone="neutral">{sharedWithLabel(r)}</Chip>
+                          {r.scope !== "personal" && <DeskDepartmentChip id={r.desk_department_id} choices={depts} />}
+                        </span>
                       </Td>
                       <Td fit className="hidden text-slate-600 sm:table-cell">
                         {r.folder && (
@@ -218,10 +238,12 @@ export function CannedSettings() {
           shares={shares}
           folders={[...new Set((rows ?? []).map((r) => r.folder).filter(Boolean))].sort()}
           defaultShare={tab !== "all" && shares.some((s) => s.value === (tab === "mine" ? "me" : tab)) ? (tab === "mine" ? "me" : tab) : shares[0]?.value ?? "me"}
+          depts={depts}
           onClose={() => setEditing(null)}
           onDelete={remove}
           onSaved={() => {
             setEditing(null);
+            deskDepartmentsChanged();
             void load();
           }}
         />
@@ -235,6 +257,7 @@ function CannedEditor({
   shares,
   folders,
   defaultShare,
+  depts,
   onClose,
   onDelete,
   onSaved,
@@ -243,6 +266,7 @@ function CannedEditor({
   shares: ShareOption[];
   folders: string[];
   defaultShare: string;
+  depts: HdDeskDepartmentChoices | null;
   onClose: () => void;
   onDelete: (r: Row) => void;
   onSaved: () => void;
@@ -258,6 +282,12 @@ function CannedEditor({
   const [body, setBody] = useState(start.body);
   const [folder, setFolder] = useState(start.folder);
   const [share, setShare] = useState<string>(start.share);
+  // 1.20.23: a workspace response's desk department (a team's is its team's; a personal one has none).
+  const startDept = row ? deptValue(row.desk_department_id) : deptValue(depts?.default_id ?? null);
+  const [dept, setDept] = useState(startDept);
+  useEffect(() => {
+    if (!row) setDept(deptValue(depts?.default_id ?? null));
+  }, [row, depts?.default_id]);
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -268,7 +298,7 @@ function CannedEditor({
     if (!row) card.current?.querySelector<HTMLInputElement>("input")?.focus();
   }, [row]);
 
-  const dirty = title !== start.title || body !== start.body || folder !== start.folder || share !== start.share;
+  const dirty = title !== start.title || body !== start.body || folder !== start.folder || share !== start.share || (share === "workspace" && dept !== startDept);
   const errs = { title: !title.trim() ? "Give it a name." : undefined, body: !body.trim() ? "Write the text to insert." : undefined };
   // The current sharing stays choosable even when it is not one you could pick for a new one.
   const options = row && !shares.some((s) => s.value === start.share) ? [{ value: start.share, label: sharedWithLabel(row) }, ...shares] : shares;
@@ -280,7 +310,7 @@ function CannedEditor({
     setBusy(true);
     setError("");
     try {
-      const payload = { title: title.trim(), body, folder: folder.trim(), share };
+      const payload = { title: title.trim(), body, folder: folder.trim(), share, ...(share === "workspace" ? { desk_department_id: deptPayload(dept) } : {}) };
       if (row) await sendJson(`/api/helpdesk/admin/canned/${row.id}`, "PATCH", payload, "Couldn't save the canned response.");
       else await sendJson("/api/helpdesk/admin/canned", "POST", payload, "Couldn't create the canned response.");
       toast("ok", row ? "Canned response saved." : "Canned response created.");
@@ -325,6 +355,11 @@ function CannedEditor({
             </datalist>
           </Field>
         </div>
+        {share === "workspace" && (
+          <div className="mt-3 sm:max-w-sm">
+            <DeskDepartmentSelect choices={depts} value={dept} onChange={setDept} disabled={!editable} />
+          </div>
+        )}
         <p id={bodyLabelId} className="mb-1 mt-3 block text-xs font-medium text-slate-500">
           Text
         </p>

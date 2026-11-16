@@ -50,6 +50,7 @@ import {
 } from "../helpdesk/access";
 import type { TicketRelation } from "../helpdesk/access";
 import { hdCan, HD_FORBIDDEN } from "../helpdesk/roles";
+import { deskDepartmentScope } from "../helpdesk/desk-departments";
 import {
   createTicket,
   getTicketByNumber,
@@ -540,16 +541,18 @@ async function onSide(user: User, side: Side): Promise<boolean> {
     case "reports":
       for (const c of REPORT_CAPS) if (await hdCan(user, c)) return true;
       return false;
+    // 1.20.23: "Manage a desk department" opens each department-held side too (its own departments only;
+    // lib/helpdesk/desk-departments, checked again by each tool).
     case "workflows":
-      return hdCan(user, "workflows.manage");
+      return (await hdCan(user, "workflows.manage")) || hdCan(user, "departments.manage");
     case "request_types":
-      return hdCan(user, "request_types.manage");
+      return (await hdCan(user, "request_types.manage")) || hdCan(user, "departments.manage");
     case "macros":
       return hdCan(user, "macros.manage_personal");
     case "checklists": {
       // Desk settings → Checklists' own rule (lib/helpdesk/checklists-caps).
       const { CHECKLIST_MANAGE_CAPS } = await import("../helpdesk/checklists-caps");
-      for (const c of CHECKLIST_MANAGE_CAPS) if (await hdCan(user, c)) return true;
+      for (const c of [...CHECKLIST_MANAGE_CAPS, "departments.manage" as const]) if (await hdCan(user, c)) return true;
       return false;
     }
     case "macro_use":
@@ -559,9 +562,9 @@ async function onSide(user: User, side: Side): Promise<boolean> {
     case "categories":
       return hdCan(user, "settings.manage");
     case "automations":
-      return hdCan(user, "automations.manage");
+      return (await hdCan(user, "automations.manage")) || hdCan(user, "departments.manage");
     case "recurring":
-      return (await hdCan(user, "settings.manage")) || (await hdCan(user, "agents.manage_team"));
+      return (await hdCan(user, "settings.manage")) || (await hdCan(user, "agents.manage_team")) || hdCan(user, "departments.manage");
   }
 }
 
@@ -710,7 +713,7 @@ export async function callHelpdeskTool(user: User, name: string, args: Args, ctx
       case "hd_report":
         return await report(user, a);
       case "hd_list_workflows":
-        return await listWorkflowsTool(a, ctx);
+        return await listWorkflowsTool(user, a, ctx);
       case "hd_draft_workflow":
         return await draftWorkflow(user, a, ctx);
       case "hd_draft_request_type":
@@ -720,7 +723,7 @@ export async function callHelpdeskTool(user: User, name: string, args: Args, ctx
       case "hd_update_checklist":
         return await updateChecklistTool(user, a, ctx);
       case "hd_list_checklists":
-        return await listChecklistsTool(a, ctx);
+        return await listChecklistsTool(user, a, ctx);
       case "hd_draft_checklist":
         return await draftChecklist(user, a, ctx);
       case "hd_list_macros":
@@ -732,7 +735,7 @@ export async function callHelpdeskTool(user: User, name: string, args: Args, ctx
       case "hd_draft_categories":
         return await draftCategoriesTool(user, a, ctx);
       case "hd_list_automations":
-        return await listAutomationsTool(a, ctx);
+        return await listAutomationsTool(user, a, ctx);
       case "hd_draft_automation":
         return await draftAutomationTool(user, a, ctx);
       case "hd_list_recurring":
@@ -742,6 +745,9 @@ export async function callHelpdeskTool(user: User, name: string, args: Args, ctx
     }
   } catch (e) {
     if (e instanceof HdTicketError) return refuse(e.message);
+    // 1.20.23 review L3: a draft racing a desk department's deletion.
+    const dd = await import("../helpdesk/desk-departments");
+    if (dd.isDeskDepartmentGone(e)) return refuse(`${dd.DESK_DEPARTMENT_GONE} Nothing was saved.`);
     throw e;
   }
   return refuse(`Unknown tool: ${name}`);
@@ -1061,7 +1067,7 @@ async function readTicket(user: User, a: Args, ctx: Ctx) {
     // 1.19.2: checklists (agents only; required items must be ticked before it can be solved; agent W3).
     checklists: await (await import("../helpdesk/checklists")).checklistsForMcp(t.id),
     // 1.20.14 (additive): the library checklists an agent could add by hand now (hd_update_checklist add_template_id).
-    checklist_templates: await checklistTemplatesFor(t),
+    checklist_templates: await checklistTemplatesFor(user, t),
     // 1.20.5: the "Before you solve" answers kept on the ticket, and what a solve would still need (lib/helpdesk/solve-requirements).
     ...(await (await import("../helpdesk/solve-requirements")).solveRequirementsForMcp(t)),
     // 1.20.6: the ticket's event on the desk's Calendar, or null (lib/helpdesk/desk-calendar). While its setup is not complete the ticket can't be solved.
@@ -1118,7 +1124,8 @@ async function draftReply(user: User, a: Args, ctx: Ctx) {
     const id = Number(a.canned_id);
     const cn = await import("../helpdesk/canned");
     const c = Number.isSafeInteger(id) && id > 0 ? await cn.getCanned(id) : undefined;
-    if (!c || !cn.cannedVisibleTo(c, user.id, await agentTeamIds(user), t.team_id)) {
+    // 1.20.23: and in one of their desk departments (or All departments), as the desk's picker.
+    if (!c || !cn.cannedVisibleTo(c, user.id, await agentTeamIds(user), t.team_id, await deskDepartmentScope(user))) {
       return refuse(`No canned response with id ${String(a.canned_id)} that you can use on #${t.number}. hd_canned_responses lists them. Nothing was saved.`);
     }
     const filled = (await cn.renderCannedFor(c, t, user)).trim();
@@ -1320,16 +1327,20 @@ async function report(user: User, a: Args) {
 
 // --- Admin side: drafts only ------------------------------------------------------------
 
-async function listWorkflowsTool(a: Args, ctx: Ctx) {
+async function listWorkflowsTool(user: User, a: Args, ctx: Ctx) {
   const { getWorkflow, listWorkflows, workingDefinition } = await import("../helpdesk/workflows");
   if (a.id !== undefined && a.id !== null) {
-    const w = Number.isSafeInteger(Number(a.id)) ? await getWorkflow(Number(a.id)) : undefined;
+    const found = Number.isSafeInteger(Number(a.id)) ? await getWorkflow(Number(a.id)) : undefined;
+    // 1.20.23: only one of the person's desk departments' workflows, or All departments'.
+    const w = found ? (await deptRowsFor(user, "workflows", [found]))[0] : undefined;
     if (!w) return refuse(`No workflow with id ${a.id}.`);
     return toolJson({
       id: w.id,
       slug: w.slug,
       title: w.title,
       description: w.description,
+      desk_department: w.desk_department,
+      can_change: w.can_change,
       published: w.published === 1,
       version: w.version,
       unpublished_changes: w.has_changes || (!w.published && !!w.draft),
@@ -1339,12 +1350,14 @@ async function listWorkflowsTool(a: Args, ctx: Ctx) {
       edit_url: `${ctx.origin}/desk/workflows/${w.slug}`,
     });
   }
-  const rows = await listWorkflows();
+  const rows = await deptRowsFor(user, "workflows", await listWorkflows());
   return toolJson({
     workflows: rows.map((w) => ({
       id: w.id,
       slug: w.slug,
       title: w.title,
+      desk_department: w.desk_department,
+      can_change: w.can_change,
       published: w.published === 1,
       version: w.version,
       unpublished_changes: w.has_changes || (!w.published && !!w.draft),
@@ -1356,13 +1369,55 @@ async function listWorkflowsTool(a: Args, ctx: Ctx) {
   });
 }
 
+// --- 1.20.23: desk departments on the admin side (lib/helpdesk/desk-departments) ---------------
+//
+// The connector's lists show the person's desk departments' items and All departments' (as Desk
+// settings does), each with its desk_department name and whether they may change it; a draft of
+// changes to an item needs a department they manage (All departments: desk Admin only); a new
+// draft goes into their starting department (the default one when they manage it).
+
+type DeptFeature = import("../helpdesk/desk-departments").HdDeskDepartmentFeature;
+
+/** Why the person may not draft changes to an item of department `deptId` (they see it, they don't manage it); null = fine. */
+async function deptDraftRefusal(user: User, feature: DeptFeature, deptId: number | null | undefined): Promise<string | null> {
+  const dd = await import("../helpdesk/desk-departments");
+  const access = await dd.deskDepartmentAccess(user, feature);
+  if (dd.mayManageDept(access, deptId ?? null)) return null;
+  return deptId === null || deptId === undefined
+    ? `It is shared with all desk departments: only a desk Admin can change it (403). Nothing was saved.`
+    : `It belongs to the ${await dd.deskDepartmentName(deptId)} desk department, which you don't manage (403). Nothing was saved.`;
+}
+
+/** The department a new draft goes into, or the refusal. */
+async function newDraftDept(user: User, feature: DeptFeature): Promise<{ value: number | null } | { error: string }> {
+  const dd = await import("../helpdesk/desk-departments");
+  const start = await dd.startingDeptFor(await dd.deskDepartmentAccess(user, feature));
+  return start === null ? { error: "You don't manage any desk department to save a draft in (403). Nothing was saved." } : { value: start };
+}
+
+/** Rows filtered to what the person sees, with their department's name and can_change. */
+async function deptRowsFor<T extends { desk_department_id?: number | null }>(user: User, feature: DeptFeature, rows: T[]): Promise<(T & { desk_department: string; can_change: boolean })[]> {
+  const dd = await import("../helpdesk/desk-departments");
+  const access = await dd.deskDepartmentAccess(user, feature);
+  const names = new Map((await dd.listDeskDepartments()).map((d) => [d.id, d.name]));
+  return rows
+    .filter((r) => dd.maySeeDept(access, r.desk_department_id))
+    .map((r) => ({
+      ...r,
+      desk_department: r.desk_department_id == null ? dd.ALL_DESK_DEPARTMENTS_LABEL : (names.get(r.desk_department_id) ?? "Desk department"),
+      can_change: dd.mayManageDept(access, r.desk_department_id),
+    }));
+}
+
 async function draftWorkflow(user: User, a: Args, ctx: Ctx) {
   const { createWorkflow, getWorkflow, saveWorkflowDraft, validateWorkflowDefinition, validateWorkflowMeta } = await import("../helpdesk/workflows");
   const PUBLISH = "Nothing is published: a person reviews and publishes it in the desk's workflow builder (edit_url).";
   if (a.id !== undefined && a.id !== null) {
     const id = Number(a.id);
     const existing = Number.isSafeInteger(id) ? await getWorkflow(id) : undefined;
-    if (!existing) return refuse(`No workflow with id ${a.id}.`);
+    if (!existing || !(await deptRowsFor(user, "workflows", [existing])).length) return refuse(`No workflow with id ${a.id}.`);
+    const notMine = await deptDraftRefusal(user, "workflows", existing.desk_department_id);
+    if (notMine) return refuse(notMine);
     // Only the steps change, and only in the draft: name and address stay as the builder left them.
     const meta = await validateWorkflowMeta({}, existing);
     if (!meta.ok) return refuse(meta.error);
@@ -1375,9 +1430,12 @@ async function draftWorkflow(user: User, a: Args, ctx: Ctx) {
   }
   const meta = await validateWorkflowMeta({ title: a.title, description: a.description ?? "" });
   if (!meta.ok) return refuse(meta.error);
-  const checked = await validateWorkflowDefinition(a.definition);
+  const dept = await newDraftDept(user, "workflows");
+  if ("error" in dept) return refuse(dept.error);
+  // Review M1/M2: its trigger's request type and its checklists fit the department it goes into.
+  const checked = await validateWorkflowDefinition(a.definition, null, dept.value);
   if (!checked.ok) return refuse(checked.error);
-  const w = await createWorkflow(meta.value, checked.value);
+  const w = await createWorkflow(meta.value, checked.value, dept.value);
   await auditMcp(user, ctx, "helpdesk.workflow.created", { type: "helpdesk_workflow", id: w.id, label: w.title }, { slug: w.slug, steps: checked.value.steps.length });
   return toolJson({ id: w.id, title: w.title, saved: "draft", published: false, note: PUBLISH, edit_url: `${ctx.origin}/desk/workflows/${w.slug}` });
 }
@@ -1392,9 +1450,14 @@ async function draftRequestType(user: User, a: Args, ctx: Ctx) {
   input.active = 0;
   const checked = await validateRequestTypeInput(input);
   if (!checked.ok) return refuse(checked.error);
+  // 1.20.23: in the person's starting desk department; its workflow must be of that department or All departments.
+  const dept = await newDraftDept(user, "request_types");
+  if ("error" in dept) return refuse(dept.error);
+  const mismatch = await (await import("../helpdesk/desk-departments")).requestTypeWorkflowRefusal(dept.value, checked.value.workflow_id);
+  if (mismatch) return refuse(`${mismatch} Nothing was saved.`);
   let rt;
   try {
-    rt = await createRequestType({ ...checked.value, active: 0 });
+    rt = await createRequestType({ ...checked.value, active: 0 }, dept.value);
   } catch (e) {
     if ((e as { code?: string }).code === "23505") return refuse("Another request type already uses that address name.");
     throw e;
@@ -1446,10 +1509,11 @@ async function draftMacro(user: User, a: Args, ctx: Ctx) {
 // --- Checklists (1.20.14) ----------------------------------------------------------------
 
 /** The library checklists that can be added to this ticket now (none on a closed or merged one, none it already has). */
-async function checklistTemplatesFor(t: HdTicket): Promise<{ id: number; name: string; items: number; required: number }[]> {
+/** 1.20.23: only the person's desk departments' checklists and All departments' (lib/helpdesk/desk-departments). */
+async function checklistTemplatesFor(user: User, t: HdTicket): Promise<{ id: number; name: string; items: number; required: number }[]> {
   const cl = await import("../helpdesk/checklists");
   if (!cl.checklistsEditable(t)) return [];
-  const [options, on] = await Promise.all([cl.templateOptions(), cl.ticketChecklists(t.id)]);
+  const [options, on] = await Promise.all([deskDepartmentScope(user).then(cl.templateOptions), cl.ticketChecklists(t.id)]);
   const have = new Set(on.map((c) => c.template_id));
   return options.filter((o) => !have.has(o.id));
 }
@@ -1487,7 +1551,7 @@ async function updateChecklistTool(user: User, a: Args, ctx: Ctx) {
   let ticked: Awaited<ReturnType<typeof cl.tickItemsAs>> = [];
   try {
     if (addId) {
-      if (!(await cl.templateOptions()).some((o) => o.id === addId)) return refuse(`No library checklist with id ${addId} that can be added. hd_read_ticket lists them under checklist_templates. Nothing was changed.`);
+      if (!(await cl.templateOptions(await deskDepartmentScope(user))).some((o) => o.id === addId)) return refuse(`No library checklist with id ${addId} that can be added. hd_read_ticket lists them under checklist_templates. Nothing was changed.`);
       added = await cl.addChecklistAs(user, t, addId, { ip: ctx.ip, via: "mcp" });
     }
     if (changes.length) ticked = await cl.tickItemsAs(user, t, changes, { ip: ctx.ip, via: "mcp" });
@@ -1515,15 +1579,19 @@ function checklistStatus(t: { published: boolean; draft: unknown }): string {
   return !t.published ? "draft (not published)" : t.draft ? "published, with changes waiting for review" : "published";
 }
 
-async function listChecklistsTool(a: Args, ctx: Ctx) {
+async function listChecklistsTool(user: User, a: Args, ctx: Ctx) {
   const cl = await import("../helpdesk/checklists");
   if (a.id !== undefined && a.id !== null) {
     const id = Number(a.id);
-    const t = Number.isSafeInteger(id) && id > 0 ? await cl.getTemplate(id) : undefined;
+    const found = Number.isSafeInteger(id) && id > 0 ? await cl.getTemplate(id) : undefined;
+    // 1.20.23: only one of the person's desk departments' checklists, or All departments'.
+    const t = found ? (await deptRowsFor(user, "checklists", [found]))[0] : undefined;
     if (!t) return refuse(`No checklist with id ${a.id}.`);
     return toolJson({
       id: t.id,
       name: t.name,
+      desk_department: t.desk_department,
+      can_change: t.can_change,
       status: checklistStatus(t),
       items: t.items,
       request_type_ids: t.request_type_ids,
@@ -1531,15 +1599,19 @@ async function listChecklistsTool(a: Args, ctx: Ctx) {
       edit_url: checklistsUrl(ctx, t.id),
     });
   }
-  const [rows, teams, types] = await Promise.all([
+  const [all, teams, types] = await Promise.all([
     cl.listTemplateRows(),
     (await import("../helpdesk/db-core")).hq<{ id: number; name: string }>("SELECT id, name FROM hd_teams ORDER BY position, lower(name), id"),
-    (await import("../helpdesk/db-core")).hq<{ id: number; title: string; active: number }>("SELECT id, title, active FROM hd_request_types ORDER BY position, lower(title), id"),
+    // 1.20.23 review L1: only the request types of the caller's desk departments and All departments'.
+    import("../helpdesk/desk-departments").then(async (dd) => dd.requestTypeOptions((await dd.deskDepartmentAccess(user, "checklists")).scope)),
   ]);
+  const rows = await deptRowsFor(user, "checklists", all);
   return toolJson({
     checklists: rows.map((t) => ({
       id: t.id,
       name: t.name,
+      desk_department: t.desk_department,
+      can_change: t.can_change,
       status: checklistStatus(t),
       items: t.items.length,
       required: t.items.filter((i) => i.required).length,
@@ -1561,9 +1633,21 @@ async function draftChecklist(user: User, a: Args, ctx: Ctx) {
     id = Number(a.id);
     if (!Number.isSafeInteger(id) || id <= 0) return refuse(`No checklist with id ${a.id}.`);
   }
+  // 1.20.23: changes only to a checklist of a desk department they manage; a new one in their starting department.
+  let dept: number | null | undefined;
+  if (id !== undefined) {
+    const cur = await cl.getTemplate(id);
+    if (!cur || !(await deptRowsFor(user, "checklists", [cur])).length) return refuse(`No checklist with id ${a.id}. Nothing was saved.`);
+    const notMine = await deptDraftRefusal(user, "checklists", cur.desk_department_id);
+    if (notMine) return refuse(notMine);
+  } else {
+    const d = await newDraftDept(user, "checklists");
+    if ("error" in d) return refuse(d.error);
+    dept = d.value;
+  }
   let r: Awaited<ReturnType<typeof cl.saveTemplateDraft>>;
   try {
-    r = await cl.saveTemplateDraft(input, { id: user.id, name: user.name || user.username, via: "mcp" }, id);
+    r = await cl.saveTemplateDraft(input, { id: user.id, name: user.name || user.username, via: "mcp" }, id, dept);
   } catch (e) {
     if (e instanceof cl.ChecklistError) return refuse(`${e.message} Nothing was saved.`);
     throw e;
@@ -1604,7 +1688,8 @@ async function listMacrosTool(user: User, a: Args, ctx: Ctx) {
   const query = typeof a.query === "string" ? a.query.trim().toLowerCase().slice(0, 200) : "";
   const limit = Math.min(50, Math.max(1, Number.isFinite(Number(a.limit)) ? Math.floor(Number(a.limit)) : 20));
   // Exactly the macros the desk lets them apply: their own personal ones, their teams' and everyone's (macroVisibleTo).
-  const all = await mac.listMacros(await agentTeamIds(user), user.id);
+  // 1.20.23: everyone's in their desk departments and All departments only.
+  const all = await mac.listMacros(await agentTeamIds(user), user.id, await deskDepartmentScope(user));
   const hits = all.filter((m) => !query || m.title.toLowerCase().includes(query) || m.body.toLowerCase().includes(query)).slice(0, limit);
   const mctx = t ? await mac.macroContext(t.id, { id: user.id, name: user.name || user.username, email: user.email }, ctx.origin) : null;
   const out = [];
@@ -1738,16 +1823,20 @@ async function draftCategoriesTool(user: User, a: Args, ctx: Ctx) {
 
 const AUTOMATION_LIST_MAX = 200;
 
-async function listAutomationsTool(a: Args, ctx: Ctx) {
+async function listAutomationsTool(user: User, a: Args, ctx: Ctx) {
   const au = await import("../helpdesk/automations");
   if (a.id !== undefined && a.id !== null) {
     const id = Number(a.id);
-    const r = Number.isSafeInteger(id) && id > 0 ? await au.getAutomation(id) : undefined;
+    const found = Number.isSafeInteger(id) && id > 0 ? await au.getAutomation(id) : undefined;
+    // 1.20.23: only one of the person's desk departments' rules, or All departments'.
+    const r = found ? (await deptRowsFor(user, "automations", [found]))[0] : undefined;
     if (!r) return refuse(`No automation with id ${a.id}.`);
     const words = await au.automationInWords(r);
     return toolJson({
       id: r.id,
       name: r.name,
+      desk_department: r.desk_department,
+      can_change: r.can_change,
       status: draftStatus(r, r.active ? "on" : "off"),
       event: r.event,
       conditions: r.conditions,
@@ -1757,11 +1846,25 @@ async function listAutomationsTool(a: Args, ctx: Ctx) {
       edit_url: settingsUrl(ctx, "automations", r.id),
     });
   }
-  const rules = (await au.listAutomations()).slice(0, AUTOMATION_LIST_MAX);
+  const rules = (await deptRowsFor(user, "automations", await au.listAutomations())).slice(0, AUTOMATION_LIST_MAX);
   // Review fix: one batch of name lookups for every rule (not a handful of queries per rule).
   const words = await au.automationsInWords(rules);
-  const out = rules.map((r, i) => ({ id: r.id, order: i + 1, name: r.name, status: draftStatus(r, r.active ? "on" : "off"), when: words[i].when, if: words[i].if, then: words[i].then }));
-  return toolJson({ automations: out, note: "Rules run in this order, first to last, on each event.", edit_url: settingsUrl(ctx, "automations") });
+  const out = rules.map((r, i) => ({
+    id: r.id,
+    order: i + 1,
+    name: r.name,
+    desk_department: r.desk_department,
+    can_change: r.can_change,
+    status: draftStatus(r, r.active ? "on" : "off"),
+    when: words[i].when,
+    if: words[i].if,
+    then: words[i].then,
+  }));
+  return toolJson({
+    automations: out,
+    note: "Rules run in this order, first to last, on each event. A rule runs on tickets of its desk department's teams (All departments: every ticket); a ticket with no team counts as the default desk department's.",
+    edit_url: settingsUrl(ctx, "automations"),
+  });
 }
 
 async function draftAutomationTool(user: User, a: Args, ctx: Ctx) {
@@ -1773,9 +1876,21 @@ async function draftAutomationTool(user: User, a: Args, ctx: Ctx) {
     id = Number(a.id);
     if (!Number.isSafeInteger(id) || id <= 0) return refuse(`No automation with id ${a.id}.`);
   }
+  // 1.20.23: changes only to a rule of a desk department they manage; a new one in their starting department.
+  let dept: number | null | undefined;
+  if (id !== undefined) {
+    const cur = await au.getAutomation(id);
+    if (!cur || !(await deptRowsFor(user, "automations", [cur])).length) return refuse(`No automation with id ${a.id}. Nothing was saved.`);
+    const notMine = await deptDraftRefusal(user, "automations", cur.desk_department_id);
+    if (notMine) return refuse(notMine);
+  } else {
+    const d = await newDraftDept(user, "automations");
+    if ("error" in d) return refuse(d.error);
+    dept = d.value;
+  }
   let r: Awaited<ReturnType<typeof au.saveAutomationDraft>>;
   try {
-    r = await au.saveAutomationDraft(input, { id: user.id, name: user.name || user.username, via: "mcp" }, id);
+    r = await au.saveAutomationDraft(input, { id: user.id, name: user.name || user.username, via: "mcp" }, id, dept);
   } catch (e) {
     if (e instanceof au.AutomationDraftError) return refuse(`${e.message} Nothing was saved.`);
     throw e;
@@ -1823,7 +1938,9 @@ async function listRecurringTool(user: User, a: Args, ctx: Ctx) {
   }
   const [all, teams] = await Promise.all([rc.canManageAllRecurring(su), rc.recurringTeams(su)]);
   const schedules = (await rc.listRecurring(all ? "all" : teams.map((t) => t.id))).slice(0, RECURRING_LIST_MAX);
-  const types = await (await import("../helpdesk/db-core")).hq<{ id: number; title: string; team_id: number | null }>("SELECT id, title, team_id FROM hd_request_types ORDER BY position, title");
+  // 1.20.23 review L1: only the request types of the caller's desk departments and All departments'.
+  const dd = await import("../helpdesk/desk-departments");
+  const types = (await dd.requestTypeOptions(await dd.deskDepartmentScope(su))).map(({ id, title, team_id }) => ({ id, title, team_id }));
   return toolJson({
     recurring: schedules.map((s) => ({
       id: s.id,

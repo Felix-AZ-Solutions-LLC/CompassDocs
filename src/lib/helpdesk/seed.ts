@@ -259,8 +259,10 @@ export async function seedStarterSet(createdBy: number | null = null): Promise<S
     ];
     for (const m of macros) {
       const ins = await client.query(
-        `INSERT INTO hd_macros (title, body, actions, team_id, created_by)
-         SELECT $1, $2, $3::jsonb, $4, $5 WHERE NOT EXISTS (SELECT 1 FROM hd_macros WHERE title = $1)
+        // 1.20.23: a team macro is in its team's desk department (the rest of the starter set lands in the default one).
+        `INSERT INTO hd_macros (title, body, actions, team_id, created_by, desk_department_id)
+         SELECT $1, $2, $3::jsonb, $4::int, $5, COALESCE((SELECT desk_department_id FROM hd_teams WHERE id = $4::int), hd_default_desk_department())
+          WHERE NOT EXISTS (SELECT 1 FROM hd_macros WHERE title = $1)
          RETURNING id`,
         [m.title, m.body, JSON.stringify(m.actions), m.team_id, createdBy]
       );
