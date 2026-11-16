@@ -61,6 +61,25 @@ export function CalendarPage({ today, initial }: { /** Today's date in the viewe
   const [loading, setLoading] = useState(true);
   const [feeds, setFeeds] = useState(false);
 
+  // 1.20.24: a link to the Calendar while it is open (the top bar's upcoming events open their day) renders this
+  // page again with new `initial` props: go where the link says. A re-render that isn't a navigation keeps the object.
+  // Following a link is not a choice: the view and team it brings are not saved as the person's preference
+  // (skipPrefs, read by the prefs effect below, which runs because the view or team changed).
+  const shownInitial = useRef(initial);
+  const chosen = useRef({ view, teamId });
+  const skipPrefs = useRef(false);
+  useEffect(() => {
+    chosen.current = { view, teamId };
+  }, [view, teamId]);
+  useEffect(() => {
+    if (shownInitial.current === initial) return;
+    shownInitial.current = initial;
+    if (initial.view !== chosen.current.view || initial.team_id !== chosen.current.teamId) skipPrefs.current = true;
+    setView(initial.view);
+    setDay(initial.day);
+    setTeamId(initial.team_id);
+  }, [initial]);
+
   const range = useMemo(() => viewRange(view, day), [view, day]);
   const layerKey = layers.join(",");
 
@@ -98,6 +117,10 @@ export function CalendarPage({ today, initial }: { /** Today's date in the viewe
   useEffect(() => {
     if (firstPrefs.current) {
       firstPrefs.current = false;
+      return;
+    }
+    if (skipPrefs.current) {
+      skipPrefs.current = false;
       return;
     }
     const t = setTimeout(() => void sendJson("/api/helpdesk/calendar/prefs", "PUT", { view, team_id: teamId, colour, layers: layerKey ? layerKey.split(",") : [] }).catch(() => {}), 400);

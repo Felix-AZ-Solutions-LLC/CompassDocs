@@ -35,6 +35,10 @@ import { ClaudeButton, ClaudeDeskProvider, type ClaudeDeskProps } from "./claude
 // 1.20.18: the reply pop-out (/desk/tickets/[number]/reply) is a desk page with no top bar or rail.
 import { adoptLegacyDrafts, isReplyPopoutPath, pruneDeskStorage } from "./popout/reply-popout";
 import { useReplyPopoutToasts } from "./popout/useReplyPopout";
+// 1.20.24: upcoming events in the top bar and today's count on the Calendar rail icon.
+import { useUpcomingEvents } from "./calendar/upcoming";
+import { UpcomingPill } from "./calendar/UpcomingPill";
+import { badgeText, badgeWords } from "@/lib/helpdesk/desk-calendar-upcoming-shared";
 
 export interface DeskCaps {
   agent: boolean;
@@ -54,9 +58,11 @@ interface Dest {
   match: (p: string) => boolean;
   badge?: number;
   badgeLabel?: string;
+  /** 1.20.24: the count may be higher ("12+"): the calendar's answer was cut short. */
+  badgeMore?: boolean;
 }
 
-function destinations(caps: DeskCaps, counts: HdCounts | null): Dest[] {
+function destinations(caps: DeskCaps, counts: HdCounts | null, eventsLeft = 0, eventsMore = false): Dest[] {
   const out: Dest[] = [];
   if (caps.agent)
     out.push({
@@ -72,6 +78,10 @@ function destinations(caps: DeskCaps, counts: HdCounts | null): Dest[] {
       label: "Calendar",
       icon: <CalendarDays className="h-5 w-5" aria-hidden />,
       match: (p) => p.startsWith("/desk/calendar"),
+      // 1.20.24: today's timed events that haven't ended (all-day and past ones never count).
+      badge: eventsLeft,
+      badgeLabel: badgeWords(eventsLeft, eventsMore),
+      badgeMore: eventsMore,
     });
   out.push({
     href: "/desk/approvals",
@@ -142,6 +152,8 @@ export function DeskShell({
   const bare = isReplyPopoutPath(pathname);
   // 1.20.19: `live` bumps on each live signal (./live), for the queue to reload its list.
   const { counts, refresh, live } = useCountsPoll(caps.agent && !bare);
+  // 1.20.24: one copy for the pill and the rail badge; reloads on the same live signal, no poll of its own.
+  const upcoming = useUpcomingEvents(caps.agent && !bare, live);
   // A reply sent from a pop-out is announced here, in the desk window (the pop-out closes as it sends).
   useReplyPopoutToasts(user.id, caps.agent && !bare);
   // 1.20.18 (security review): a shared computer keeps no one else's desk drafts or hand-offs. 1.20.16's drafts named
@@ -150,7 +162,7 @@ export function DeskShell({
     adoptLegacyDrafts(user.id);
     pruneDeskStorage(user.id);
   }, [user.id]);
-  const dests = destinations(caps, counts);
+  const dests = destinations(caps, counts, upcoming.left, upcoming.leftMore);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuBtn = useRef<HTMLButtonElement>(null);
   const userMenu = useRef<HTMLDivElement>(null);
@@ -219,7 +231,7 @@ export function DeskShell({
                   <span className="min-w-0 flex-1 truncate">{d.label}</span>
                   {d.badge ? (
                     <span className="rounded-full bg-compass-600 px-1.5 text-2xs font-semibold text-white">
-                      {d.badge}
+                      {badgeText(d.badge, d.badgeMore)}
                       <span className="sr-only"> {d.badgeLabel}</span>
                     </span>
                   ) : null}
@@ -242,6 +254,7 @@ export function DeskShell({
           </div>
           <div className="flex shrink-0 items-center gap-1 sm:gap-2">
             {claude && <ClaudeButton />}
+            {caps.agent && <UpcomingPill upcoming={upcoming} />}
             {caps.agent && <StatusPill />}
             <a
               href="/"
@@ -292,7 +305,7 @@ export function DeskShell({
                       className="absolute right-0.5 top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-compass-600 px-1 text-3xs font-semibold leading-none text-white"
                       aria-hidden
                     >
-                      {d.badge > 99 ? "99+" : d.badge}
+                      {badgeText(d.badge, d.badgeMore)}
                     </span>
                   ) : null}
                 </Link>

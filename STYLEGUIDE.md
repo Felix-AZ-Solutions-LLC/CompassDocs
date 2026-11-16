@@ -1298,6 +1298,12 @@ and `py-1.5` (`dense`) in the settings and account rails. Group labels
   "Dismiss what's new in 1.19.3", `data-tt` "Dismiss"); dismissed, it stays
   gone for that person. A release replaces the list and the version;
   nothing else changes.
+- The desk rail's badges (1.19.0, `DeskShell`): a `bg-compass-600` circle
+  at the icon's top right, `text-3xs` white, "99+" past 99, `aria-hidden`
+  while the link's `aria-label` says it in words ("Approvals, 2 approvals
+  waiting for you"). The **Calendar** icon's (1.20.24) counts today's timed
+  events that haven't ended ("Calendar, 3 events left today"); see
+  §Helpdesk: the event calendar.
 - A destination behind the sidebar's More fold that carries a badge is
   rendered with the fold open and the toggle hidden, exactly as the current
   page is: the accent pill means work waiting for you, and it is never
@@ -6011,3 +6017,54 @@ hours, `CalendarClock`).
   Place (optional) questions and the Setup ready lead time. Only questions
   of a fitting kind are offered ("Date and time" or "Date"; a short answer
   or pick-one for the place).
+- **Upcoming events in the top bar** (1.20.24, `calendar/UpcomingPill`,
+  rules in `lib/helpdesk/desk-calendar-upcoming-shared`). A pill between
+  the Claude button and the status pill, in the status pill's family:
+  `h-8 rounded-full border border-slate-200 bg-surface px-2.5 text-sm
+  font-medium` with a 14px `CalendarDays`, the subject (`max-w-48
+  truncate`, from `xl`), a `·`, the time and `ChevronDown`; from `sm` to
+  `xl` the time alone; under `sm` a 32px circle with the icon only. Its
+  `data-tt` is the whole summary, "Next event: Change freeze, Fri 20 Nov
+  2026, 2:00 PM to 3:00 PM at Boardroom A"; its `aria-label` adds what the
+  menu's header and notes say outside its items, which a screen reader
+  walking the menu never reaches ("Today: 2 all-day events. Times in London
+  time.", the truncation note), then "Show upcoming events". The menu
+  closes when the pill goes, so it never comes back already open. It shows the **next timed event that has not ended**:
+  "2:00 PM" later today, "Tomorrow 9:00 AM", "Thu 9:00 AM" this coming
+  week, "Thu 26 Nov, 9:00 AM" after that, and **Now** in
+  `font-semibold text-compass-ink` (the icon too) while one is running.
+  **All-day events never make the pill.** It looks 14 calendar days ahead
+  (today included) in the agent's zone; with no timed event in that time
+  there is no pill. Cancelled events are left out everywhere.
+  - **The dropdown** is a `Popover role="menu"` ("Upcoming events",
+    end-aligned, `w-[min(23rem,calc(100vw-1rem))]`, `rounded-xl`): a
+    header ("Upcoming events", "The next 14 days · times in London time"
+    and, when today has any, "Today: 2 all-day events" with `Sun`), then
+    one `role="group"` per day with a `RAIL_GROUP_TEXT` heading
+    (**Today**, **Tomorrow**, "Thu 19 Nov"). Each day lists its **All day**
+    events first (a multi-day one on each of its days, "Day 2 of 5"), then
+    its timed events by start (a running one under Today, "Now" in the time
+    column). Every row is a `menuitem` link to that day in the Calendar's
+    day view for all the agent's teams (`&team=0`, so a remembered team
+    filter can't hide it); following it never changes what the Calendar
+    remembers, even when it is already open. A hairline foot holds **Open
+    calendar**. Arrows, Home/End,
+    Escape and Tab as every desk menu.
+- **The Calendar rail icon's count** (1.20.24) is the rail's usual badge
+  (`bg-compass-600` circle, white `text-3xs`, "99+" past 99): today's
+  timed events in the agent's zone that have not ended (a running one
+  counts; all-day, cancelled and finished ones never do). No badge at 0.
+  The link's `aria-label` is "Calendar, 3 events left today". Should the
+  answer have been cut at 200 events before the end of today, it reads
+  "12+" ("Calendar, 12 or more events left today"). Under `md` the folded
+  menu's row ends in the fold's own pill (`rounded-full bg-compass-600
+  px-1.5 text-2xs`, white) with the same text ("3", "12+", "99+") and the
+  words `sr-only`.
+- **One copy, no extra poll.** The shell loads
+  `GET /api/helpdesk/calendar/upcoming` once (`calendar/upcoming`), and
+  again on the desk's live signal, when the tab or window comes back and
+  every 5 minutes while visible, never more than once per 15 s. One
+  client timer wakes at the next event end, start or midnight, so the
+  pill moves on and the count drops with no reload (and at a cut-short
+  answer's last kept start, which reloads). Both live in the top
+  bar and the rail, so print never shows them.
