@@ -31,6 +31,17 @@
 //                "later" (a timeout, 429, 5xx, the desk's own limits), is put
 //                off with a growing wait and not counted.
 //                A mailbox no help address lives on is not read at all.
+//                1.20.25: every drop, wait and failure keeps its reason (a
+//                code, a header's name, the ticket, the account it
+//                concerns, Microsoft's error code) for "Last messages".
+//                A 403 on one message while the Inbox still reads is an
+//                answer about that message: counted, and given up on after
+//                M365_ACCESS_DENIED_TRIES. "Take in anyway"
+//                (takeInM365Anyway) reads a dropped message again by its
+//                immutable id and skips only the rule that dropped it;
+//                "Try now" (tryM365Now) clears a wait and tries at once.
+//                The per-sender limit and trusted senders are the
+//                workspace's (lib/helpdesk/inbound).
 //   new mail     Graph change notifications (a subscription per Inbox, POSTed
 //                to /api/helpdesk/m365/notify/<key>) fetch the named message
 //                at once; a delta query on a timer is the safety net and the
@@ -52,6 +63,7 @@ import { logEvent } from "../../log";
 import { openSecret, sealSecret } from "../../secretbox";
 import { hq, hqOne } from "../db-core";
 import type { InboundEmail, InboundFile } from "../inbound-parse";
+import type { InboundOverride } from "../inbound";
 import {
   M365_DEFAULTS,
   M365_GRAPH_ID_HINT,
@@ -61,6 +73,7 @@ import {
   M365_RENEW_BEFORE_MINUTES,
   M365_SAFETY_NET_MINUTES,
   M365_SUBSCRIPTION_MINUTES,
+  M365_TAKE_IN_RULES,
   cleanFolderName,
   cleanM365Address,
   cleanM365GraphId,
@@ -416,23 +429,70 @@ export async function m365MailView(): Promise<M365MailView> {
 /**
  * The last messages seen in one mailbox, newest first, for the settings
  * page's diagnostic: when, the sender's domain, how the sender check went
- * and what Exchange's headers said. Never a subject, an address or a body.
+ * and what Exchange's headers said. Never a subject, an outside sender's
+ * address or a body. 1.20.25: and why each was dropped, is waiting or
+ * failed (a reason code, a header's name, the ticket, the CompassDocs
+ * account it concerns, Microsoft's error code, the next try), with the Graph
+ * id "Take in anyway" and "Try now" name it by.
  */
-export async function m365MailboxMessages(id: number, limit = 12): Promise<M365MessageDiag[] | undefined> {
+export async function m365MailboxMessages(id: number, limit = 12, messageId: string | null = null): Promise<M365MessageDiag[] | undefined> {
   if (!(await getRow(id))) return undefined;
-  const rows = await hq<{ at: string; sender_domain: string; sender_check: string; sender_reason: string; state: string; outcome: string; attempts: number }>(
-    `SELECT COALESCE(received_at, created_at) AS at, sender_domain, sender_check, sender_reason, state, outcome, attempts
-       FROM hd_m365_messages WHERE mailbox_id = $1 ORDER BY COALESCE(received_at, created_at) DESC, created_at DESC LIMIT $2`,
-    [id, Math.min(50, Math.max(1, limit))]
+  const rows = await hq<{
+    at: string;
+    message_id: string;
+    sender_domain: string;
+    sender_check: string;
+    sender_reason: string;
+    state: string;
+    outcome: string;
+    attempts: number;
+    reason: string;
+    reason_detail: string;
+    ticket_number: number | null;
+    ticket_address: string | null;
+    user_id: number | null;
+    user_name: string | null;
+    retry_at: string | null;
+    error: string;
+    error_code: string;
+    overrides: string;
+  }>(
+    `SELECT COALESCE(m.received_at, m.created_at) AS at, m.message_id, m.sender_domain, m.sender_check, m.sender_reason, m.state, m.outcome, m.attempts,
+            m.reason, m.reason_detail, m.ticket_number, b.address AS ticket_address, m.user_id, COALESCE(NULLIF(u.name, ''), u.username) AS user_name,
+            m.retry_at, m.error, m.error_code, m.overrides
+       FROM hd_m365_messages m
+       LEFT JOIN users u ON u.id = m.user_id
+       LEFT JOIN hd_tickets t ON t.number = m.ticket_number
+       LEFT JOIN hd_mailboxes b ON b.id = t.mailbox_id
+      WHERE m.mailbox_id = $1 AND ($3::text IS NULL OR m.message_id = $3) ORDER BY COALESCE(m.received_at, m.created_at) DESC, m.created_at DESC LIMIT $2`,
+    [id, Math.min(50, Math.max(1, limit)), messageId]
   );
-  return rows.map((r) => ({
-    at: r.at,
-    sender_domain: r.sender_domain,
-    check: (["passed", "failed", "internal", "none"].includes(r.sender_check) ? r.sender_check : "") as M365MessageDiag["check"],
-    reason: r.sender_reason,
-    outcome: r.state === "done" ? r.outcome : r.state === "failed" ? (r.attempts >= M365_MAIL_LIMITS.attempts ? "failed" : "waiting") : "working",
-  }));
+  return rows.map((r) => {
+    const outcome = r.state === "done" ? r.outcome : r.state === "failed" ? (r.attempts >= M365_MAIL_LIMITS.attempts ? "failed" : "waiting") : "working";
+    return {
+      at: r.at,
+      sender_domain: r.sender_domain,
+      check: (["passed", "failed", "internal", "none"].includes(r.sender_check) ? r.sender_check : "") as M365MessageDiag["check"],
+      reason: r.sender_reason,
+      outcome,
+      message_id: r.message_id,
+      reason_code: r.reason,
+      reason_detail: r.reason_detail,
+      ticket: r.ticket_number,
+      // Only where the line says it ("it was also sent to ..."): one of the desk's own help addresses, never a sender's.
+      ticket_address: r.reason === "duplicate" ? (r.ticket_address ?? "") : "",
+      user: r.user_id && r.user_name ? { id: r.user_id, name: r.user_name } : null,
+      next_try_at: outcome === "waiting" ? r.retry_at : null,
+      error: outcome === "waiting" || outcome === "failed" ? r.error : "",
+      error_code: outcome === "waiting" || outcome === "failed" ? r.error_code : "",
+      overrides: r.overrides ? r.overrides.split(",") : [],
+      can_take_in: r.state === "done" && r.reason in M365_TAKE_IN_RULES && TAKE_IN_OUTCOMES.has(r.outcome),
+    };
+  });
 }
+
+/** The pipeline outcomes "Take in anyway" may follow (each with its own reason, M365_TAKE_IN_RULES). */
+const TAKE_IN_OUTCOMES = new Set(["ignored_auto", "rejected_not_permitted", "rejected_outside_sender"]);
 
 // --- Saving the connection -----------------------------------------------------------
 
@@ -1028,23 +1088,64 @@ const DEFER_GIVE_UP = "7 days";
  * growing wait (1, 2, 4 ... 30 minutes, or as long as Microsoft asked), for
  * up to a week. Answers whether that week is over (then it is at the cap).
  */
-async function defer(mb: MbRow, id: string, why: string, retryAfterMs = 0): Promise<IntakeResult> {
+async function defer(mb: MbRow, id: string, why: string, retryAfterMs = 0, reason: WaitReason = { code: "microsoft" }): Promise<IntakeResult> {
   const after = Math.min(3600, Math.max(0, Math.ceil(retryAfterMs / 1000)));
   const r = await hqOne<{ capped: boolean; deferrals: number }>(
     `UPDATE hd_m365_messages SET state = 'failed',
         attempts = CASE WHEN created_at < now() - interval '${DEFER_GIVE_UP}' THEN $4 ELSE GREATEST(attempts - 1, 0) END,
         retry_at = now() + make_interval(secs => GREATEST($5::int, LEAST(1800, 60 * power(2, LEAST(deferrals, 5))::int))),
-        deferrals = deferrals + 1, error = $3, updated_at = now()
+        deferrals = deferrals + 1, error = $3, reason = $6, reason_detail = $7, error_code = $8, updated_at = now()
       WHERE mailbox_id = $1 AND message_id = $2 RETURNING attempts >= $4 AS capped, deferrals`,
-    [mb.id, id, why.replace(/\s+/g, " ").slice(0, 300), M365_MAIL_LIMITS.attempts, after]
+    [mb.id, id, why.replace(/\s+/g, " ").slice(0, 300), M365_MAIL_LIMITS.attempts, after, reason.code, (reason.detail ?? "").slice(0, 120), (reason.errorCode ?? "").slice(0, 120)]
   );
-  logEvent("info", "helpdesk.m365_intake_deferred", { mailbox: mb.address, deferrals: r?.deferrals ?? 0, error: why.slice(0, 200) });
+  logEvent("info", "helpdesk.m365_intake_deferred", { mailbox: mb.address, deferrals: r?.deferrals ?? 0, reason: reason.code, error: why.slice(0, 200) });
   if (r?.capped) {
     await gaveUp(mb, r.deferrals, why);
     return "failed";
   }
   return "deferred";
 }
+
+/** 1.20.25: why a message waits (the "Last messages" line words it): the sender's limit, the desk's own, or Microsoft's "later". */
+interface WaitReason {
+  code: "sender_limit" | "desk_busy" | "microsoft";
+  detail?: string;
+  /** Microsoft's status and error code ("503 ErrorServerBusy"). */
+  errorCode?: string;
+}
+
+/** Microsoft's status and Graph error code for the "Last messages" line ("403 ErrorAccessDenied"); '' when it is not Microsoft's answer. */
+const errorCodeOf = (e: unknown): string => (e instanceof M365Error ? (e.status > 0 ? `${e.status}${e.code ? ` ${e.code}` : ""}` : e.kind) : "");
+
+/**
+ * 1.20.25: a refused message (403) counts as a failure of that message only
+ * when the mailbox's messages still read: Microsoft hands over the Inbox's
+ * newest message with the same fields the refused read asked for (so a
+ * permission that only lists folders, such as Mail.ReadBasic, is not taken
+ * for "the mailbox reads"), and fewer than M365_ACCESS_DENIED_SPREAD
+ * different messages were refused in the last ten minutes. Else the whole
+ * connection is refused, which the mailbox's own status says, and the
+ * message waits as before.
+ */
+async function onlyThisMessageRefused(c: M365Config, mb: MbRow, id: string): Promise<boolean> {
+  const others = await hqOne<{ n: number }>(
+    `SELECT count(*)::int AS n FROM hd_m365_messages
+      WHERE mailbox_id = $1 AND message_id <> $2 AND error_code LIKE '403%' AND updated_at > now() - interval '10 minutes'`,
+    [mb.id, id]
+  );
+  if ((others?.n ?? 0) >= M365_ACCESS_DENIED_SPREAD - 1) return false;
+  try {
+    await graph(creds(c), { path: `${who(mb)}/mailFolders/inbox/messages?$top=1&$select=${M365_HEAD_SELECT}`, prefer: [IMMUTABLE], what: "read this mailbox" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A message Microsoft refuses while the mailbox reads is given up on after this many tries (not put off for a week). */
+export const M365_ACCESS_DENIED_TRIES = 2;
+/** This many different messages refused within ten minutes is the connection, not the messages: they wait. */
+export const M365_ACCESS_DENIED_SPREAD = 3;
 
 async function gaveUp(mb: MbRow, tries: number, message: string): Promise<void> {
   logEvent("error", "helpdesk.m365_intake_failed", { mailbox: mb.address, tries, final: true, error: message });
@@ -1156,13 +1257,19 @@ async function inviteFile(c: M365Config, mb: MbRow, id: string): Promise<Inbound
   return data ? { name: "invite.ics", type: "text/calendar", data } : null;
 }
 
-async function finish(mb: MbRow, id: string, outcome: string, opts: { filed?: boolean; count?: "taken_in" | "dropped" } = {}): Promise<void> {
-  await hq("UPDATE hd_m365_messages SET state = 'done', outcome = $3, error = '', retry_at = NULL, filed = $4, updated_at = now() WHERE mailbox_id = $1 AND message_id = $2", [
-    mb.id,
-    id,
-    outcome.slice(0, 60),
-    opts.filed === true,
-  ]);
+async function finish(
+  mb: MbRow,
+  id: string,
+  outcome: string,
+  opts: { filed?: boolean; count?: "taken_in" | "dropped"; why?: { code: string; detail?: string; userId?: number; ticket?: number }; ticket?: number } = {}
+): Promise<void> {
+  // 1.20.25: why (a code, a header's name, the account it concerns) and the ticket, for the "Last messages" line.
+  await hq(
+    `UPDATE hd_m365_messages SET state = 'done', outcome = $3, error = '', error_code = '', retry_at = NULL, filed = $4,
+            reason = $5, reason_detail = $6, user_id = (SELECT id FROM users WHERE id = $7::int), ticket_number = $8, updated_at = now()
+      WHERE mailbox_id = $1 AND message_id = $2`,
+    [mb.id, id, outcome.slice(0, 60), opts.filed === true, opts.why?.code ?? "", (opts.why?.detail ?? "").slice(0, 120), opts.why?.userId ?? null, opts.why?.ticket ?? opts.ticket ?? null]
+  );
   if (opts.count) await hq(`UPDATE hd_m365_mailboxes SET ${opts.count} = ${opts.count} + 1, updated_at = now() WHERE id = $1`, [mb.id]);
 }
 
@@ -1191,16 +1298,20 @@ async function intakeClaimed(c: M365Config, mb: MbRow, id: string, source: Intak
   const listed = source === "delta";
   // A delta read of the Inbox listed it: remembered even when someone else holds the claim.
   if (listed) await hq("UPDATE hd_m365_messages SET listed = true WHERE mailbox_id = $1 AND message_id = $2 AND NOT listed", [mb.id, id]);
-  const claim = await hqOne<{ attempts: number; deferrals: number; listed: boolean }>(
+  const claim = await hqOne<{ attempts: number; deferrals: number; listed: boolean; overrides: string }>(
     `INSERT INTO hd_m365_messages (mailbox_id, message_id, state, attempts, listed, claimed_at) VALUES ($1, $2, 'working', 1, $4, now())
      ON CONFLICT (mailbox_id, message_id) DO UPDATE SET state = 'working', attempts = hd_m365_messages.attempts + 1, claimed_at = now(), updated_at = now()
        WHERE hd_m365_messages.attempts < $3
          AND ((hd_m365_messages.state = 'failed' AND (hd_m365_messages.retry_at IS NULL OR hd_m365_messages.retry_at <= now()))
            OR (hd_m365_messages.state = 'working' AND hd_m365_messages.claimed_at < now() - interval '10 minutes'))
-     RETURNING attempts, deferrals, listed`,
+     RETURNING attempts, deferrals, listed, overrides`,
     [mb.id, id, M365_MAIL_LIMITS.attempts, listed]
   );
   if (!claim) return "busy";
+  // 1.20.25: "Take in anyway" (takeInM365Anyway): an admin chose this message, which the desk already read once and
+  // filed. Where it lies now and how old it is no longer matter; the rules named are skipped, and nothing else is.
+  const overrides = (claim.overrides ? claim.overrides.split(",") : []).filter((o): o is InboundOverride => o === "auto" || o === "not_permitted" || o === "outside_sender");
+  const chosen = overrides.length > 0;
   const at = `${who(mb)}/messages/${encodeURIComponent(id)}`;
   try {
     const head = await graph(creds(c), { path: `${at}?$select=${M365_HEAD_SELECT}`, prefer: [IMMUTABLE], what: "read a message" });
@@ -1208,7 +1319,7 @@ async function intakeClaimed(c: M365Config, mb: MbRow, id: string, source: Intak
     if (!meta) throw new Error("Microsoft 365 sent no message.");
     // Only the Inbox is read. A notification (or a retry of one) names an id; where that message lies is asked of
     // Microsoft, not taken from the caller. Not there: the claim is given back and the next Inbox read decides.
-    if (!claim.listed && meta.parentFolderId !== (await inboxFolderId(c, mb))) {
+    if (!chosen && !claim.listed && meta.parentFolderId !== (await inboxFolderId(c, mb))) {
       await hq("DELETE FROM hd_m365_messages WHERE mailbox_id = $1 AND message_id = $2 AND state = 'working' AND NOT listed", [mb.id, id]);
       await hq("UPDATE hd_m365_mailboxes SET poll_due = true, updated_at = now() WHERE id = $1", [mb.id]);
       logEvent("info", "helpdesk.m365_not_in_inbox", { mailbox: mb.address });
@@ -1220,7 +1331,7 @@ async function intakeClaimed(c: M365Config, mb: MbRow, id: string, source: Intak
       return "skipped";
     }
     const received = Date.parse(meta.receivedAt);
-    if (Number.isFinite(received) && received < floorOf(mb, Date.now())) {
+    if (!chosen && Number.isFinite(received) && received < floorOf(mb, Date.now())) {
       await finish(mb, id, "skipped_old", { filed: true });
       return "skipped";
     }
@@ -1243,7 +1354,7 @@ async function intakeClaimed(c: M365Config, mb: MbRow, id: string, source: Intak
     if (!first) {
       // No SMTP sender address: nothing the pipeline could match or answer. Dropped, and filed like any other drop.
       await diag(null, null);
-      await finish(mb, id, "skipped_no_sender", { count: "dropped" });
+      await finish(mb, id, "skipped_no_sender", { count: "dropped", why: { code: "no_sender" } });
       await fileMessage(c, mb, id).catch(() => {});
       return "dropped";
     }
@@ -1252,14 +1363,22 @@ async function intakeClaimed(c: M365Config, mb: MbRow, id: string, source: Intak
     // The desk's own mail coming back: the pipeline drops it by this header alone. Nothing more is read.
     const loop = !!first.email.headers["x-compassdocs-helpdesk"];
     const { isAutoGenerated } = await import("../inbound-parse");
-    let light = loop || isAutoGenerated(first.email);
+    // 1.20.25: the workspace's trusted senders and per-sender limit (Desk settings → Email → Who can write in). A
+    // trusted sender (listed AND verified) is not automatic mail and is held to the ceiling instead of the limit.
+    const inboundLib = await import("../inbound");
+    const senders = await inboundLib.getInboundAuthSettings();
+    const trusted = inboundLib.isTrustedSender(first.email, senders.trusted_senders);
+    let light = loop || (isAutoGenerated(first.email) && !trusted && !overrides.includes("auto"));
     if (!loop) {
-      if (limited("intake:all", M365_INTAKE_LIMITS.perMinute, 60_000)) return await defer(mb, id, "The desk is taking in a lot of mail right now. This message is tried again shortly.", 60_000);
+      if (limited("intake:all", M365_INTAKE_LIMITS.perMinute, 60_000)) {
+        return await defer(mb, id, "The desk is taking in a lot of mail right now. This message is tried again shortly.", 60_000, { code: "desk_busy" });
+      }
       if (!light && first.email.messageId) {
         light = !!(await hqOne("SELECT 1 FROM hd_messages WHERE email_message_id = $1 LIMIT 1", [first.email.messageId.slice(0, 500)]));
       }
-      if (!light && limited(`intake:from:${first.email.from.email}`, M365_INTAKE_LIMITS.perSender, M365_INTAKE_LIMITS.perSenderWindowMs)) {
-        return await defer(mb, id, "Too many messages from this sender. It is tried again later.", 120_000);
+      // An admin's "Take in anyway" is one message they chose: not held to the sender's limit.
+      if (!light && !chosen && limited(`intake:from:${first.email.from.email}`, inboundLib.perSenderLimitFor(trusted, senders), M365_INTAKE_LIMITS.perSenderWindowMs)) {
+        return await defer(mb, id, "Too many messages from this sender. It is tried again later.", 120_000, { code: "sender_limit", detail: trusted ? "trusted" : "" });
       }
     }
 
@@ -1281,15 +1400,23 @@ async function intakeClaimed(c: M365Config, mb: MbRow, id: string, source: Intak
     }
     const conv = graphMessageToInbound(msg, files, own);
     if (!conv) throw new Error("The message could not be read a second time.");
-    const { processInboundEmail } = await import("../inbound");
     const origin = notifyBase(c.notify_origin) ?? undefined;
-    const result = await processInboundEmail(conv.email, { origin, ip: null });
+    const result = await inboundLib.processInboundEmail(conv.email, { origin, ip: null, ...(chosen ? { overrides } : {}) });
     // The pipeline's own "later" (its rate limit, a busy moment): not a failure of this message.
-    if (result.status === 429 || result.status >= 500) return await defer(mb, id, result.status === 429 ? "Too many messages at once. It is tried again shortly." : result.body.error || "The desk was busy. It is tried again shortly.", 60_000);
+    if (result.status === 429 || result.status >= 500) {
+      const sender = result.why?.code === "sender_limit";
+      return await defer(
+        mb,
+        id,
+        sender ? "Too many messages from this sender. It is tried again later." : result.status === 429 ? "Too many messages at once. It is tried again shortly." : result.body.error || "The desk was busy. It is tried again shortly.",
+        60_000,
+        sender ? { code: "sender_limit", detail: result.why?.detail } : { code: "desk_busy" }
+      );
+    }
     if (result.status !== 200) throw new Error(result.body.error || `The inbound pipeline answered ${result.status}.`);
     const outcome = result.body.outcome ?? "";
     const taken = TAKEN.has(outcome);
-    await finish(mb, id, outcome, { count: taken ? "taken_in" : "dropped" });
+    await finish(mb, id, outcome, { count: taken ? "taken_in" : "dropped", why: result.why, ticket: result.body.ticket });
     logEvent("info", "helpdesk.m365_intake", { mailbox: mb.address, outcome, sender_check: conv.verdict.kind, ticket: result.body.ticket ?? null });
     // (The pipeline answers with the ticket's number; the note goes on the ticket by its id.)
     const ticket = missing.length && result.body.ticket ? await hqOne<{ id: number }>("SELECT id FROM hd_tickets WHERE number = $1", [result.body.ticket]).catch(() => undefined) : undefined;
@@ -1311,10 +1438,33 @@ async function intakeClaimed(c: M365Config, mb: MbRow, id: string, source: Intak
       return "skipped";
     }
     const message = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, " ").slice(0, 300);
+    const code = errorCodeOf(e);
+    // 1.20.25: Microsoft refused THIS message (403) while the mailbox reads: an answer about the message, counted,
+    // and given up on after M365_ACCESS_DENIED_TRIES with Microsoft's code on the line. A 403 for the whole
+    // connection (the Inbox refused too) is the mailbox's status, and the message waits as before.
+    if (e instanceof M365Error && e.status === 403 && e.kind !== "auth" && (await onlyThisMessageRefused(c, mb, id))) {
+      const final = claim.attempts >= M365_ACCESS_DENIED_TRIES;
+      await hq(
+        `UPDATE hd_m365_messages SET state = 'failed', error = $3, error_code = $4, reason = 'access_denied', reason_detail = '', retry_at = NULL,
+                attempts = CASE WHEN $5 THEN GREATEST(attempts, $6) ELSE attempts END, updated_at = now()
+          WHERE mailbox_id = $1 AND message_id = $2`,
+        [mb.id, id, message, code, final, M365_MAIL_LIMITS.attempts]
+      );
+      if (final) await gaveUp(mb, claim.attempts, message);
+      else logEvent("warn", "helpdesk.m365_intake_failed", { mailbox: mb.address, attempt: claim.attempts, final, error: message, code });
+      return "failed";
+    }
     const later = transient(e);
-    if (later) return await defer(mb, id, message, later.retryAfterMs).catch(() => "deferred" as const);
+    // (Microsoft's own "wait": a 429 or a Retry-After. "Try now" leaves such a wait alone.)
+    const asked = !!later && e instanceof M365Error && (e.status === 429 || later.retryAfterMs > 0);
+    if (later) return await defer(mb, id, message, later.retryAfterMs, { code: "microsoft", errorCode: code, ...(asked ? { detail: "retry_after" } : {}) }).catch(() => "deferred" as const);
     const final = claim.attempts >= M365_MAIL_LIMITS.attempts;
-    await hq("UPDATE hd_m365_messages SET state = 'failed', error = $3, retry_at = NULL, updated_at = now() WHERE mailbox_id = $1 AND message_id = $2", [mb.id, id, message]);
+    await hq("UPDATE hd_m365_messages SET state = 'failed', error = $3, error_code = $4, reason = 'error', reason_detail = '', retry_at = NULL, updated_at = now() WHERE mailbox_id = $1 AND message_id = $2", [
+      mb.id,
+      id,
+      message,
+      code,
+    ]);
     if (final) await gaveUp(mb, claim.attempts, message);
     else logEvent("warn", "helpdesk.m365_intake_failed", { mailbox: mb.address, attempt: claim.attempts, final, error: message });
     return "failed";
@@ -1523,6 +1673,144 @@ export async function retryM365Messages(id: number, by: M365Actor): Promise<{ re
   }
   const r = await pollM365Mailbox(c, id);
   return { retried: rows.length, ok: r.ok, ...(r.busy ? { busy: true } : {}), ...(r.error ? { error: r.error } : {}) };
+}
+
+/** One "Last messages" line as the page shows it (after an action on it). */
+async function messageLine(id: number, messageId: string): Promise<M365MessageDiag | null> {
+  return (await m365MailboxMessages(id, 1, messageId))?.[0] ?? null;
+}
+
+/**
+ * 1.20.25: "Try now" on a waiting line (`messageId`), or "Try all waiting
+ * now" on the mailbox row (none). The wait is cleared and the message is
+ * taken in at once, in an intake slot like any other; all of them: the
+ * mailbox is read, which tries every waiting one. Answers the line as it
+ * now stands (a single message) or how many were tried. Audited as "Try
+ * again" is (helpdesk.m365.retry_requested, `now: true`).
+ */
+export async function tryM365Now(
+  id: number,
+  messageId: string | null,
+  by: M365Actor
+): Promise<{ tried: number; line?: M365MessageDiag | null; ok: boolean; busy?: boolean; held?: boolean; error?: string } | undefined> {
+  const c = await getM365Config();
+  if (!connected(c)) throw new M365MailError("Connect Microsoft 365 first.", 409);
+  const mb = await getRow(id);
+  if (!mb) return undefined;
+  if (messageId !== null && !listedId(messageId)) return undefined;
+  if (!(await isLinked(id))) throw new M365MailError(M365_IDLE, 409, "idle");
+  // A wait Microsoft itself asked for (a 429 or a Retry-After) is kept: trying sooner only earns a longer one.
+  const rows = await hq<{ message_id: string }>(
+    `UPDATE hd_m365_messages SET retry_at = NULL, updated_at = now() - interval '1 second'
+      WHERE mailbox_id = $1 AND state = 'failed' AND attempts < $2 AND ($3::text IS NULL OR message_id = $3)
+        AND NOT (reason = 'microsoft' AND reason_detail = 'retry_after' AND retry_at > now())
+      RETURNING message_id`,
+    [id, M365_MAIL_LIMITS.attempts, messageId]
+  );
+  if (messageId !== null && !rows.length) {
+    const line = await messageLine(id, messageId);
+    if (!line) return undefined;
+    // Not waiting (any more), or waiting on Microsoft's own word: the line as it is.
+    return { tried: 0, line, ok: true, ...(line.outcome === "waiting" ? { held: true } : {}) };
+  }
+  if (rows.length) {
+    await audit({
+      actor: by.actor,
+      action: "helpdesk.m365.retry_requested",
+      targetType: "helpdesk_m365_mailbox",
+      targetId: id,
+      targetLabel: mb.address,
+      details: { address: mb.address, messages: rows.length, now: true },
+      ip: by.ip ?? null,
+    });
+  }
+  if (messageId !== null) {
+    const r = await intakeOne(c, mb, messageId, "retry");
+    return { tried: 1, line: await messageLine(id, messageId), ok: r !== "busy", ...(r === "busy" ? { busy: true } : {}) };
+  }
+  const r = await pollM365Mailbox(c, id);
+  return { tried: rows.length, ok: r.ok, ...(r.busy ? { busy: true } : {}), ...(r.error ? { error: r.error } : {}) };
+}
+
+export interface M365TakeInResult {
+  /** The line as it now stands. */
+  line: M365MessageDiag | null;
+  /** It was taken in before (a second click): nothing was done. */
+  already?: boolean;
+  /** It is no longer in the mailbox (moved to another mailbox or deleted). */
+  gone?: boolean;
+}
+
+/**
+ * 1.20.25: "Take in anyway" on a dropped line. The message is read again
+ * from Microsoft by its immutable id (wherever it lies now: the Processed
+ * folder, still in the Inbox) and run through the pipeline with ONE rule
+ * skipped: the one that dropped it (M365_TAKE_IN_RULES: automatic mail; an
+ * account that can't use Get help, taken in unlinked as an outside sender;
+ * mail from outside the workspace). Loop protection, a blocked portal
+ * contact, duplicates and the sender check are never skipped; a duplicate
+ * offers "Open #N" instead, and the sender limit does not drop mail.
+ *
+ * Exactly once: the row is claimed from its dropped state in one statement,
+ * so a second click (or two admins at once) finds it taken in, or being
+ * taken in, and makes no second ticket (the pipeline's own duplicate check
+ * is the backstop). A message no longer in the mailbox is said to be gone.
+ * Audited (helpdesk.m365.taken_in_anyway: who, the original reason, what
+ * became of it).
+ */
+export async function takeInM365Anyway(id: number, messageId: string, by: M365Actor): Promise<M365TakeInResult | undefined> {
+  const c = await getM365Config();
+  if (!connected(c)) throw new M365MailError("Connect Microsoft 365 first.", 409);
+  const mb = await getRow(id);
+  if (!mb || !listedId(messageId)) return undefined;
+  if (!(await isLinked(id))) throw new M365MailError(M365_IDLE, 409, "idle");
+  const cur = await hqOne<{ state: string; outcome: string; reason: string; overrides: string; ticket_number: number | null }>(
+    "SELECT state, outcome, reason, overrides, ticket_number FROM hd_m365_messages WHERE mailbox_id = $1 AND message_id = $2",
+    [id, messageId]
+  );
+  if (!cur) return undefined;
+  if (cur.overrides && cur.state === "done" && TAKEN.has(cur.outcome)) return { line: await messageLine(id, messageId), already: true };
+  if (cur.reason === "duplicate") {
+    throw new M365MailError(cur.ticket_number ? `This email is already on #${cur.ticket_number}. Open that ticket instead.` : "This email is already on a ticket.", 409, "duplicate");
+  }
+  const rule = M365_TAKE_IN_RULES[cur.reason];
+  if (cur.state === "working") throw new M365MailError("This message is being taken in right now.", 409, "busy");
+  if (cur.overrides && cur.state === "failed") throw new M365MailError("This message is already waiting to be taken in anyway. Press Try now on its line.", 409, "waiting");
+  if (!rule || cur.state !== "done" || !TAKE_IN_OUTCOMES.has(cur.outcome)) throw new M365MailError("This message can't be taken in anyway: the rule that dropped it can't be skipped.", 409, "not_allowed");
+  const overrides = [...new Set([...(cur.overrides ? cur.overrides.split(",") : []), rule])].join(",");
+  // The claim: from exactly the dropped state read above. It is no longer counted as dropped; what it becomes is.
+  const claimed = await hqOne(
+    `UPDATE hd_m365_messages SET state = 'failed', attempts = 0, deferrals = 0, retry_at = NULL, error = '', error_code = '',
+            reason = 'take_in', reason_detail = '', overrides = $3, override_by = (SELECT id FROM users WHERE id = $4::int), override_at = now(), updated_at = now() - interval '1 second'
+      WHERE mailbox_id = $1 AND message_id = $2 AND state = 'done' AND outcome = $5 AND reason = $6 AND overrides = $7 RETURNING 1`,
+    [id, messageId, overrides, typeof by.actor.id === "number" ? by.actor.id : null, cur.outcome, cur.reason, cur.overrides]
+  );
+  if (!claimed) {
+    const line = await messageLine(id, messageId);
+    if (line && line.overrides.length && TAKEN.has(line.outcome)) return { line, already: true };
+    throw new M365MailError("This message is being taken in right now.", 409, "busy");
+  }
+  await hq("UPDATE hd_m365_mailboxes SET dropped = GREATEST(dropped - 1, 0), updated_at = now() WHERE id = $1", [id]);
+  const result = await intakeOne(c, mb, messageId, "retry");
+  const line = await messageLine(id, messageId);
+  const gone = line?.outcome === "gone";
+  await audit({
+    actor: by.actor,
+    action: "helpdesk.m365.taken_in_anyway",
+    targetType: "helpdesk_m365_mailbox",
+    targetId: id,
+    targetLabel: mb.address,
+    details: {
+      address: mb.address,
+      reason: cur.reason,
+      outcome_before: cur.outcome,
+      skipped: rule,
+      result: gone ? "gone" : (line?.outcome ?? result),
+      ...(line?.ticket ? { ticket: line.ticket } : {}),
+    },
+    ip: by.ip ?? null,
+  });
+  return { line, ...(gone ? { gone: true } : {}) };
 }
 
 // --- Subscriptions -------------------------------------------------------------------

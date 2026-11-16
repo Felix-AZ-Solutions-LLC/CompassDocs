@@ -169,6 +169,8 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.setup.starter": "Added the helpdesk starter set",
   "helpdesk.inbound.secret_rotated": "Changed the helpdesk email address secret",
   "helpdesk.inbound.rejected": "Rejected helpdesk email",
+  // 1.20.25: an account whose role can't use Get help, taken in as an outside sender (lib/helpdesk/inbound).
+  "helpdesk.inbound.taken_in_unlinked": "Took in email from an account that can't use Get help, unlinked",
   // Several help addresses (1.20.2, lib/helpdesk/mailboxes).
   "helpdesk.assets.intune_credentials": "Changed the Intune app registration",
   "helpdesk.mailbox.created": "Added a helpdesk email address",
@@ -198,6 +200,8 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.m365.subscription_failed": "Microsoft 365 refused mail notifications",
   "helpdesk.m365.intake_failed": "Could not take in a Microsoft 365 message",
   "helpdesk.m365.send_refused": "Microsoft 365 refused to send as a mailbox",
+  // 1.20.25: "Take in anyway" on a dropped message (lib/helpdesk/m365/mail takeInM365Anyway).
+  "helpdesk.m365.taken_in_anyway": "Took in a dropped Microsoft 365 message anyway",
   // Customer portal (1.19.1, agent V6, lib/helpdesk/portal).
   "helpdesk.portal.updated": "Changed the customer portal",
   "helpdesk.portal.contact_blocked": "Blocked a customer portal contact",

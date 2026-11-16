@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { Client } from "pg";
-import { startFakeM365, type FakeM365 } from "../test/helpers/fake-m365";
+import { exchangeHeaders, passResults, startFakeM365, type FakeM365 } from "../test/helpers/fake-m365";
 import { ADMIN, api, login } from "./helpers";
 
 // The Microsoft 365 mailbox connection (Helpdesk 1.20.7), end to end on Desk
@@ -12,7 +12,8 @@ import { ADMIN, api, login } from "./helpers";
 // lives on it, the question asked before a mailbox is connected while the
 // app can read every mailbox, a help address placed on the mailbox that
 // sends through Microsoft 365, mail read with Check now and by a
-// notification, "Last messages", a message given up on and "Try again",
+// notification, "Last messages" (1.20.25: a dropped line's reason in words
+// and "Take in anyway"), a message given up on and "Try again",
 // Send test, an error state, and removing it all.
 //
 // It runs only where the app was started with the test seam
@@ -264,6 +265,30 @@ test.describe("Microsoft 365 mailboxes (licensed, fake Microsoft)", () => {
     await expect(row).toContainText("3 taken in, 0 dropped");
     expect((await db.query("SELECT count(*)::int AS n FROM hd_tickets WHERE requester_email = $1 AND subject = $2", [customer, `Stuck ${stamp}`])).rows[0].n).toBe(1);
 
+    // --- 1.20.25: a dropped line says why in words, with the setting; Take in anyway takes it in ----------
+    const newsSubject = `Newsletter ${stamp}`;
+    const newsId = `news.${stamp}@clientco.example`;
+    await ctl("message", {
+      address: HELP,
+      subject: newsSubject,
+      from: { name: "Cara Customer", address: customer },
+      internetMessageId: `<${newsId}>`,
+      body: { contentType: "text", content: "Our monthly news." },
+      headers: exchangeHeaders({ from: `Cara Customer <${customer}>`, to: HELP, messageId: newsId, subject: newsSubject, results: passResults("clientco.example"), authAs: ["Anonymous"], sender: [["List-Unsubscribe", "<mailto:unsubscribe@clientco.example>"]] }),
+    });
+    await row.getByRole("button", { name: "Check now" }).click();
+    await expect(row).toContainText("3 taken in, 1 dropped", { timeout: 60_000 });
+    await row.getByTestId("hd-m365-last-messages").locator("summary").click();
+    const newsLine = row.getByTestId("hd-m365-last-message").filter({ hasText: "List-Unsubscribe" });
+    await expect(newsLine.getByTestId("hd-m365-line-why")).toContainText("Automatic mail (List-Unsubscribe header)", { timeout: 30_000 });
+    await expect(newsLine.getByRole("link", { name: "Trust this sender" })).toHaveAttribute("href", "/desk/settings/email#who-can-write-in");
+    expect(await row.getByTestId("hd-m365-last-messages").innerText()).not.toContain(customer);
+    await newsLine.getByTestId("hd-m365-take-in").click();
+    await expect(page.getByText(/^Taken in as #\d+\.$/)).toBeVisible({ timeout: 60_000 });
+    await expect(row).toContainText("4 taken in, 0 dropped");
+    expect((await db.query("SELECT count(*)::int AS n FROM hd_tickets WHERE subject = $1", [newsSubject])).rows[0].n).toBe(1);
+    await row.getByTestId("hd-m365-last-messages").locator("summary").click();
+
     // --- Send test goes through Microsoft 365 (when the admin has an email address to send to) ----
     const sent = await api(page, `/api/helpdesk/admin/mailboxes/${(await db.query("SELECT id FROM hd_mailboxes WHERE address = $1", [HELP])).rows[0].id}/test`, { method: "POST", body: {} });
     if (sent.status === 200) {
@@ -291,7 +316,7 @@ test.describe("Microsoft 365 mailboxes (licensed, fake Microsoft)", () => {
     await expect(page.getByText("Microsoft 365 options saved.")).toBeVisible({ timeout: 30_000 });
     const third = await ctl("message", { address: HELP, subject: `Third ${stamp}`, from: { name: "Cara Customer", address: customer }, body: { contentType: "text", content: "Filed away." } });
     await row.getByRole("button", { name: "Check now" }).click();
-    await expect(row).toContainText("4 taken in", { timeout: 60_000 });
+    await expect(row).toContainText("5 taken in", { timeout: 60_000 });
     inboxState = (await ctl("state")).mailboxes.find((m: { address: string }) => m.address === HELP);
     expect(inboxState.folders).toEqual(["Processed"]);
     expect(inboxState.messages.find((m: { id: string }) => m.id === third.id).folder).toBe("Processed");

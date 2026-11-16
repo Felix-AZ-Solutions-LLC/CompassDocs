@@ -5714,6 +5714,25 @@ addresses 1.20.5 (`lib/helpdesk/send-addresses`).
     **Internal** `info`, **No result** `neutral`, **Not checked**
     `neutral`. One `text-xs` sentence above it says what is and is not
     kept. Empty is `SectionEmpty`.
+  - **A diagnostic line says why, and offers the fix** (1.20.25, Last
+    messages). Under the line's facts, one `text-xs text-slate-700`
+    sentence in plain words (`ink-warn` when it could not be done):
+    which rule dropped it and by what ("Automatic mail (List-Unsubscribe
+    header)"), what it is waiting for and when ("Tries again at 10:42"),
+    Microsoft's code in brackets ("(403 ErrorAccessDenied)"). Where a
+    setting would change it, the sentence ends in a `link` to that
+    setting's anchor ("Trust this sender" → Who can write in). The words
+    come from one pure function beside the data
+    (`lib/helpdesk/m365-mail-shared` `m365LineWords`), so tests read the
+    same sentence the page shows. Actions on the line sit under it in a
+    `flex flex-wrap gap-1` row of `secondary` `sm` buttons, only when
+    they apply: **Take in anyway** (lucide `Inbox`), **Try now** (lucide
+    `RefreshCw`), **Open #N** (a `Link` with `buttonClass("secondary",
+    "sm")`, offered instead of a second ticket). The answer is a toast,
+    and the line is replaced with what it became. A row-level twin
+    ("Try all waiting now", lucide `RotateCcw`) follows the "row action
+    that only sometimes exists" rule below. A colleague's account may be
+    named on such a line for admins; an outside sender's address never.
   - **A row action that only sometimes exists** (Try again, lucide
     `RotateCcw`, `secondary` `sm`) appears beside Check now only while
     there is something for it to do; its answer is a toast.

@@ -51,6 +51,23 @@
 //                                for the settings page's "Last messages":
 //                                when, the From domain, how the sender check
 //                                went and why. Never any content.
+//     reason, reason_detail      1.20.25: why it was dropped, put off or
+//                                failed, as a short code ("auto", "duplicate",
+//                                "not_permitted", "sender_limit",
+//                                "access_denied", ...) and a safe detail (the
+//                                header's NAME that marked it automatic,
+//                                never its text). The page words them.
+//     ticket_number              the ticket it became, was added to, or (a
+//                                duplicate) already is on.
+//     user_id                    the CompassDocs account it concerns (one
+//                                whose role can't use Get help, or whose
+//                                address failed the sender check): named to
+//                                the admins who read the list, never an
+//                                outside sender's address.
+//     error_code                 Microsoft's status and error code for the
+//                                last failure ("403 ErrorAccessDenied").
+//     overrides, override_by,    "Take in anyway": the rules an admin chose
+//     override_at                to skip for it (comma-separated), who, when.
 //   hd_m365_links                which Microsoft 365 mailbox a help address
 //                                (hd_mailboxes) lives on. Several help
 //                                addresses may point at one mailbox (aliases).
@@ -106,6 +123,14 @@ CREATE TABLE IF NOT EXISTS hd_m365_messages (
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (mailbox_id, message_id)
 );
+ALTER TABLE hd_m365_messages ADD COLUMN IF NOT EXISTS reason text NOT NULL DEFAULT '';
+ALTER TABLE hd_m365_messages ADD COLUMN IF NOT EXISTS reason_detail text NOT NULL DEFAULT '';
+ALTER TABLE hd_m365_messages ADD COLUMN IF NOT EXISTS ticket_number integer;
+ALTER TABLE hd_m365_messages ADD COLUMN IF NOT EXISTS user_id integer REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE hd_m365_messages ADD COLUMN IF NOT EXISTS error_code text NOT NULL DEFAULT '';
+ALTER TABLE hd_m365_messages ADD COLUMN IF NOT EXISTS overrides text NOT NULL DEFAULT '';
+ALTER TABLE hd_m365_messages ADD COLUMN IF NOT EXISTS override_by integer REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE hd_m365_messages ADD COLUMN IF NOT EXISTS override_at timestamptz;
 CREATE INDEX IF NOT EXISTS idx_hd_m365_messages_open ON hd_m365_messages (mailbox_id, state) WHERE state <> 'done' OR NOT filed;
 CREATE INDEX IF NOT EXISTS idx_hd_m365_messages_updated ON hd_m365_messages (updated_at);
 CREATE TABLE IF NOT EXISTS hd_m365_links (
