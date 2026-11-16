@@ -4,6 +4,37 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.25] - 2026-11-16
+
+Microsoft 365 mail: see why, and take it in anyway.
+
+### Added
+- **Every Last messages line says why.** A dropped or waiting message names
+  its reason in words: which header made it automatic mail, the ticket an
+  "already taken in" copy went to, a colleague whose account can't use Get
+  help, a sender over the limit with the next try, or Microsoft's own error
+  code. Where a setting would change it, the line links there.
+- **Take in anyway** on a dropped message, for whoever manages email
+  settings: it reads the message again and skips only the rule that dropped
+  it. Loops and blocked contacts are never taken in; a duplicate offers its
+  ticket instead. Each one is in the audit log.
+- **Try now** on a waiting message, and **Try all waiting now** on the
+  mailbox.
+- **Trusted senders** (Desk settings, Email, Who can write in): addresses or
+  domains, such as a docketing system or a scanner, whose mail is never
+  dropped as automatic mail and isn't held to the per-sender limit. They
+  must still pass the sender check.
+- **The per-sender limit can be set**, from 5 to 200 messages in 10 minutes
+  (20 by default).
+
+### Changed
+- **A colleague whose account can't use Get help** is no longer dropped
+  while mail from outside the workspace is accepted: their mail becomes a
+  ticket from an outside sender, with a note saying why.
+- **A message Microsoft refuses to read** while the mailbox otherwise reads
+  is given up after two tries and shown with Microsoft's error, instead of
+  waiting for up to a week.
+
 ## [1.20.24] - 2026-11-16
 
 Upcoming events in the desk's top bar.
