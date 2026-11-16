@@ -596,6 +596,7 @@ describe("restore and purge", () => {
     await bin.binTickets((await getUserById(P.admin.id))!, [t.number]);
     // Two hours in the bin (the database's clock).
     await pool().query("UPDATE hd_tickets SET deleted_at = deleted_at - interval '2 hours' WHERE id = $1", [t.id]);
+    const binnedAt = new Date((await row(t.id)).deleted_at).getTime();
     const list = await call(binRoute.GET, req(`/recycle-bin?q=${encodeURIComponent(t.subject)}`, P.admin.session));
     assert.equal(list.status, 200);
     // Without ?limit the whole page comes back (an absent limit once read as 0, so 1 row).
@@ -615,6 +616,7 @@ describe("restore and purge", () => {
     const otherBin = await bin.listBin((await getUserById(P.other.id))!, { q: t.subject });
     assert.equal(otherBin.total, 0, "another team's agent: no bin (and no tickets.delete)");
 
+    const restoredAt = Date.now();
     const r = await binPost(P.manager, "restore", [t.number]);
     assert.equal(r.body.ok, 1, JSON.stringify(r.body));
     const back = await row(t.id);
@@ -625,7 +627,23 @@ describe("restore and purge", () => {
     assert.equal(String(back.updated_at), String(before.updated_at), "sorts where it did");
     const shift = (Date.parse(back.resolve_due) - Date.parse(before.resolve_due)) / 60_000;
     // By the time in the bin, counted in the team's SLA hours (a business-hours target can move further in wall time).
-    assert.ok(shift >= 119, `the resolve due moved by at least the 2 hours in the bin (${shift} min)`);
+    // 1.20.22: the clock-independent rule is that the SLA time left is the same after the restore as when it was
+    // binned; the 2-hour shift only holds when those 2 hours were SLA time (a business-hours policy outside its hours,
+    // e.g. CI on a Sunday, banks none, so the due rightly doesn't move).
+    const cal = require("../src/lib/helpdesk/calendars") as typeof import("../src/lib/helpdesk/calendars");
+    const sla = require("../src/lib/helpdesk/sla") as typeof import("../src/lib/helpdesk/sla");
+    const policy = await cal.slaPolicyForTeam(back.priority, back.team_id);
+    if (policy) {
+      const hours = await cal.hoursForTeam(back.team_id);
+      const leftBefore = sla.policyMinutesBetween(binnedAt, Date.parse(before.resolve_due), policy, hours);
+      const leftAfter = sla.policyMinutesBetween(restoredAt, Date.parse(back.resolve_due), policy, hours);
+      assert.ok(Math.abs(leftAfter - leftBefore) <= 2, `the SLA time left is kept (${leftBefore} min before, ${leftAfter} min after)`);
+      if (sla.policyMinutesBetween(binnedAt, restoredAt, policy, hours) >= 119) {
+        assert.ok(shift >= 119, `the resolve due moved by at least the 2 hours in the bin (${shift} min)`);
+      }
+    } else {
+      assert.ok(shift >= 119, `the resolve due moved by at least the 2 hours in the bin (${shift} min)`);
+    }
     assert.ok(Number(back.sla_paused_ms) >= 119 * 60_000, "counted as paused");
     assert.ok((await tickets.listTickets({ id: P.agent.id, role: "viewer" }, { view: "mine" })).rows.some((x) => x.number === t.number), "in the queue again");
     const audit = (await pool().query("SELECT action FROM audit_log WHERE target_type = 'helpdesk_ticket' AND target_id = $1 ORDER BY id DESC LIMIT 1", [String(t.id)])).rows[0];
