@@ -486,13 +486,16 @@ export async function m365MailboxMessages(id: number, limit = 12, messageId: str
       error: outcome === "waiting" || outcome === "failed" ? r.error : "",
       error_code: outcome === "waiting" || outcome === "failed" ? r.error_code : "",
       overrides: r.overrides ? r.overrides.split(",") : [],
-      can_take_in: r.state === "done" && r.reason in M365_TAKE_IN_RULES && TAKE_IN_OUTCOMES.has(r.outcome),
+      can_take_in: r.state === "done" && dropReason(r.reason, r.outcome) in M365_TAKE_IN_RULES && TAKE_IN_OUTCOMES.has(r.outcome),
     };
   });
 }
 
 /** The pipeline outcomes "Take in anyway" may follow (each with its own reason, M365_TAKE_IN_RULES). */
 const TAKE_IN_OUTCOMES = new Set(["ignored_auto", "rejected_not_permitted", "rejected_outside_sender"]);
+/** 1.20.26: a message dropped before 1.20.25 has no reason stored; its outcome says which rule dropped it. */
+const LEGACY_REASON: Readonly<Record<string, string>> = { ignored_auto: "auto", rejected_not_permitted: "not_permitted", rejected_outside_sender: "outside_sender" };
+const dropReason = (reason: string, outcome: string): string => reason || LEGACY_REASON[outcome] || "";
 
 // --- Saving the connection -----------------------------------------------------------
 
@@ -1181,8 +1184,21 @@ async function inboxFolderId(c: M365Config, mb: MbRow): Promise<string> {
 async function fetchFiles(c: M365Config, mb: MbRow, id: string, tolerant: boolean, missing: string[]): Promise<InboundFile[]> {
   const { INBOUND_LIMITS } = await import("../inbound");
   const base = `${who(mb)}/messages/${encodeURIComponent(id)}/attachments`;
-  // 1.20.8: contentId too, so an inline picture is drawn where the HTML names it ("View original", lib/helpdesk/email-html).
-  const list = await graph<{ value?: unknown[] }>(creds(c), { path: `${base}?$select=id,name,contentType,size,isInline,contentId&$top=30`, prefer: [IMMUTABLE], what: "read a message's attachments" });
+  // 1.20.26: only the base attachment's own properties. contentId belongs to fileAttachment, and naming it in $select on
+  // the attachments collection makes Graph refuse the whole list (400 BadRequest), which held back every message with an
+  // attachment or a signature picture. An inline file's contentId comes with the file itself (below).
+  let list: { value?: unknown[] };
+  try {
+    list = await graph<{ value?: unknown[] }>(creds(c), { path: `${base}?$select=id,name,contentType,size,isInline&$top=30`, prefer: [IMMUTABLE], what: "read a message's attachments" });
+  } catch (e) {
+    // 1.20.26: after two tries an attachment problem never holds the email back: it is taken in without its files and
+    // the ticket says so. A sign-in or access problem of the whole mailbox (401/403) is still passed up.
+    if (tolerant && e instanceof M365Error && e.status !== 401 && e.status !== 403) {
+      missing.push("the email's attachments (Microsoft 365 wouldn't list them)");
+      return [];
+    }
+    throw e;
+  }
   const files: InboundFile[] = [];
   let total = 0;
   for (const raw of (Array.isArray(list.value) ? list.value : []).slice(0, 30)) {
@@ -1203,8 +1219,21 @@ async function fetchFiles(c: M365Config, mb: MbRow, id: string, tolerant: boolea
       continue;
     }
     let data: Buffer;
+    let inlineCid = "";
     try {
-      data = await graph<Buffer>(creds(c), {
+      if (a.isInline === true) {
+        // 1.20.26: an inline file (a signature picture, a pasted image) is read whole, so its contentId comes with it
+        // and "View original" can draw it where the HTML names it (lib/helpdesk/email-html).
+        const f = await graph<{ contentBytes?: unknown; contentId?: unknown }>(creds(c), {
+          path: `${base}/${encodeURIComponent(aid)}`,
+          timeoutMs: 30_000 + Math.ceil(Math.max(0, size) / 50),
+          prefer: [IMMUTABLE],
+          what: "read an attachment",
+        });
+        data = Buffer.from(str(f.contentBytes), "base64");
+        if (data.length > INBOUND_LIMITS.fileBytes) data = oversizeStub(INBOUND_LIMITS.fileBytes);
+        inlineCid = str(f.contentId);
+      } else data = await graph<Buffer>(creds(c), {
         path: `${base}/${encodeURIComponent(aid)}/$value`,
         as: "bytes",
         maxBytes: INBOUND_LIMITS.fileBytes + 1,
@@ -1215,13 +1244,13 @@ async function fetchFiles(c: M365Config, mb: MbRow, id: string, tolerant: boolea
       });
     } catch (e) {
       if (e instanceof M365Error && e.kind === "too_large") data = oversizeStub(INBOUND_LIMITS.fileBytes);
-      else if (tolerant && e instanceof M365Error && (e.kind === "timeout" || e.kind === "network" || e.status === 429 || e.status >= 500)) {
+      else if (tolerant && e instanceof M365Error && e.status !== 401 && e.status !== 403) {
         missing.push(name);
         continue;
       } else throw e;
     }
     total += data.length;
-    const contentId = str(a.contentId).trim().replace(/^<|>$/g, "").slice(0, 500);
+    const contentId = (inlineCid || str(a.contentId)).trim().replace(/^<|>$/g, "").slice(0, 500);
     files.push({ name, type, data, ...(contentId ? { contentId } : {}) });
   }
   return files;
@@ -1396,7 +1425,7 @@ async function intakeClaimed(c: M365Config, mb: MbRow, id: string, source: Intak
         const invite = await inviteFile(c, mb, id);
         if (invite) files.push(invite);
       }
-      if (meta.hasAttachments || /\bcid:/i.test(bodyText.slice(0, 2_000_000))) files.push(...(await fetchFiles(c, mb, id, claim.deferrals >= 2, missing)));
+      if (meta.hasAttachments || /\bcid:/i.test(bodyText.slice(0, 2_000_000))) files.push(...(await fetchFiles(c, mb, id, claim.deferrals >= 2 || claim.attempts >= 2, missing)));
     }
     const conv = graphMessageToInbound(msg, files, own);
     if (!conv) throw new Error("The message could not be read a second time.");
@@ -1773,7 +1802,7 @@ export async function takeInM365Anyway(id: number, messageId: string, by: M365Ac
   if (cur.reason === "duplicate") {
     throw new M365MailError(cur.ticket_number ? `This email is already on #${cur.ticket_number}. Open that ticket instead.` : "This email is already on a ticket.", 409, "duplicate");
   }
-  const rule = M365_TAKE_IN_RULES[cur.reason];
+  const rule = M365_TAKE_IN_RULES[dropReason(cur.reason, cur.outcome)];
   if (cur.state === "working") throw new M365MailError("This message is being taken in right now.", 409, "busy");
   if (cur.overrides && cur.state === "failed") throw new M365MailError("This message is already waiting to be taken in anyway. Press Try now on its line.", 409, "waiting");
   if (!rule || cur.state !== "done" || !TAKE_IN_OUTCOMES.has(cur.outcome)) throw new M365MailError("This message can't be taken in anyway: the rule that dropped it can't be skipped.", 409, "not_allowed");
