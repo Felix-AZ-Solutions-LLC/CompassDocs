@@ -20,6 +20,13 @@
 //        no longer offered → 409 (code "request_type_unavailable"). Every check is repeated
 //        under the ticket's row lock. Audited helpdesk.workflow_run.started; the ticket(s) get
 //        the internal note "Workflow started by <agent>: <workflow> (version n)".
+//        1.20.22: optional `claude_card: { id, claim }` from Review and start on a Claude in the
+//        desk suggestion card (POST /api/helpdesk/claude/cards/[id]/workflow). Malformed → 400. Under
+//        the same lock, after every other check, the card must be the caller's, for this ticket and
+//        request type, held by that claim and not yet used; else 409 { code: "claude_card_taken" }
+//        and nothing is written. The card records the outcome in the same transaction (a repeat of
+//        the key settles it too); the note and the audit add "· suggested by Claude" (audit
+//        details suggested_by "claude_desk", claude_card_id).
 // Helpdesk 1.20.21. Desk capability workflows.start in the ticket's team (403), for an agent who
 // works the ticket (anyone else gets the same 404 as a missing ticket). POST: 30 a minute per person.
 

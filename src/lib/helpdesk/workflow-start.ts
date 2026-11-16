@@ -62,6 +62,15 @@
 // answers are checked again inside that transaction against the type as it
 // is then.
 //
+// 1.20.22: a start from a Claude in the desk suggestion card (Review and
+// start) carries `claude_card: { id, claim }`. Inside the same transaction,
+// after every other check and before anything is written, the card is locked
+// and must be this agent's, for this ticket and type, held by that review and
+// unused (claude/workflow-cards takeCardForStart; else 409
+// claude_card_taken); it records the outcome there too, so one card starts
+// once. The note and the audit say "· suggested by Claude" (audit details
+// suggested_by "claude_desk", claude_card_id). Without it nothing changes.
+//
 // After the commit: the request type's calendar event and checklists (as
 // afterTicketCreated gives a new request), then the run
 // (startWorkflowForRequest, or afterTicketCreated for a new request). The
@@ -92,6 +101,7 @@ import { addSystemMessage } from "./messages";
 import type { HdHookContext } from "./events";
 import type { HdFormAnswers, HdFormField, HdRequestType, HdTicketRow } from "./types";
 import { startedLine, cleanStartId, WORKFLOW_START_CODES } from "./workflow-start-shared";
+import { WORKFLOW_CARD_CODES } from "./claude/shared";
 import type { HdStartMode, HdStartableType, HdStartWorkflowOptions, HdStartWorkflowResult } from "./workflow-start-shared";
 
 /** How long a finished start's key is remembered. */
@@ -345,11 +355,16 @@ const ticketLink = (n: number, subject: string) => `[#${n} ${mdInline(subject)}]
  * internal notes inside the run's insert transaction and remembers the run
  * for the audit. `notes` says which tickets get which words.
  */
-export function deskStartTracker(agent: StartAgent, notes: (line: string, run: StartedRun) => { ticketId: number; body: string }[]) {
+export function deskStartTracker(
+  agent: StartAgent,
+  notes: (line: string, run: StartedRun) => { ticketId: number; body: string }[],
+  /** 1.20.22: started from a Claude in the desk suggestion card ("… · suggested by Claude"). */
+  opts: { suggested?: boolean } = {}
+) {
   const state: { run: StartedRun | null } = { run: null };
   const hook = async (client: PoolClient, run: StartedRun) => {
     state.run = run;
-    const line = startedLine(mdInline(agentName(agent)), mdInline(run.workflow_title), run.workflow_version);
+    const line = startedLine(mdInline(agentName(agent)), mdInline(run.workflow_title), run.workflow_version, { suggested: opts.suggested });
     const touched: number[] = [];
     for (const n of notes(line, run)) {
       await addSystemMessage(n.ticketId, n.body, { internal: true, author: { id: agent.id, name: agentName(agent) }, client });
@@ -365,8 +380,17 @@ export function deskStartTracker(agent: StartAgent, notes: (line: string, run: S
 export async function auditDeskStart(
   agent: StartAgent,
   run: StartedRun,
-  info: { requestNumber: number; requestType: { id: number; title: string }; mode: HdStartMode | "new_ticket"; fromNumber?: number | null; ip?: string | null }
+  info: {
+    requestNumber: number;
+    requestType: { id: number; title: string };
+    mode: HdStartMode | "new_ticket";
+    fromNumber?: number | null;
+    ip?: string | null;
+    /** 1.20.22: the Claude in the desk card the agent started it from. */
+    claudeCardId?: number | null;
+  }
 ): Promise<void> {
+  const suggested = !!info.claudeCardId;
   await audit({
     actor: actorFrom(agent),
     action: "helpdesk.workflow_run.started",
@@ -374,7 +398,7 @@ export async function auditDeskStart(
     targetId: info.requestNumber,
     targetLabel: `#${info.requestNumber} · ${run.workflow_title} (version ${run.workflow_version})`,
     details: {
-      summary: startedLine(agentName(agent), run.workflow_title, run.workflow_version),
+      summary: startedLine(agentName(agent), run.workflow_title, run.workflow_version, { suggested }),
       run_id: run.run_id,
       workflow_id: run.workflow_id,
       workflow_title: run.workflow_title,
@@ -384,6 +408,7 @@ export async function auditDeskStart(
       mode: info.mode,
       ...(info.fromNumber ? { from_ticket: info.fromNumber } : {}),
       via: "desk",
+      ...(suggested ? { suggested_by: "claude_desk", claude_card_id: info.claudeCardId } : {}),
     },
     ip: info.ip ?? null,
   });
@@ -414,6 +439,12 @@ export interface StartInput {
   expect?: unknown;
   /** A new request's subject (the dialog derives it as Get help does); the type's title when empty. */
   subject?: unknown;
+  /**
+   * 1.20.22: { id, claim } when the agent starts it from a Claude in the desk suggestion card
+   * (claude/workflow-cards): the card must be theirs, for this ticket and type, and held by this
+   * review; it records the outcome in the start's own transaction. Else 409 and nothing is done.
+   */
+  claude_card?: unknown;
 }
 
 export type StartOutcome =
@@ -439,6 +470,9 @@ export async function startWorkflowFromTicket(
   if (expect !== null && expect !== "this" && expect !== "new") return { ok: false, status: 400, error: 'expect is "this" or "new".' };
   const typeId = Number(raw.request_type_id);
   if (!Number.isInteger(typeId) || typeId <= 0) return { ok: false, status: 400, error: "Choose a request type." };
+  const cards = await import("./claude/workflow-cards");
+  const cardRef = cards.cleanCardRef(raw.claude_card);
+  if (cardRef === "bad") return { ok: false, status: 400, error: "claude_card is the { id, claim } that Review and start gave." };
   const rt0 = await getRequestType(typeId);
   if (!rt0) return { ok: false, status: 400, error: "That request type no longer exists.", code: WORKFLOW_START_CODES.typeUnavailable };
   // Required fields and every value's type, as Get help's own POST checks them (again under the lock below).
@@ -508,6 +542,11 @@ export async function startWorkflowFromTicket(
     const checked = await validateAnswers(rt.form ?? [], raw.answers ?? {}, client);
     if (!checked.ok) return refuse(400, checked.error);
     const answers: HdFormAnswers = checked.value;
+    // 1.20.22: from a Claude suggestion card: taken here, under the ticket's lock, so one card starts once.
+    if (cardRef) {
+      const cardWhy = await cards.takeCardForStart(client, agent.id, t.id, cardRef, typeId);
+      if (cardWhy) return refuse(409, cardWhy, WORKFLOW_CARD_CODES.taken);
+    }
     const mark = { request_type_id: typeId, by: agent.id, at: new Date().toISOString() };
     let row: HdTicketRow | null = null;
     if (mode === "this") {
@@ -540,18 +579,31 @@ export async function startWorkflowFromTicket(
       "INSERT INTO hd_workflow_start_ids (user_id, ticket_id, client_start_id, request_ticket_id, mode) VALUES ($1, $2, $3, $4, $5)",
       [agent.id, t.id, key, row ? row.id : t.id, mode]
     );
+    if (cardRef) await cards.recordCardStart(client, cardRef.id, { kind: "started", mode, number: row ? row.number : t.number, started: null });
     return row ? { kind: "new", source: t, rt, row } : { kind: "this", source: t, rt };
   });
 
   if (done.kind === "refused") return done.out;
-  if (done.kind === "duplicate") return { ok: true, result: await outcomeOf(done.mode, done.requestTicketId ?? ticketId, true) };
+  if (done.kind === "duplicate") {
+    const again = await outcomeOf(done.mode, done.requestTicketId ?? ticketId, true);
+    // 1.20.22 (security review 4): a repeat settles the card too, should the first try have stopped before it could.
+    if (cardRef) await cards.finishCardStart(cardRef.id, agent.id, again);
+    return { ok: true, result: again };
+  }
 
   // A portal contact's notices link to the portal (never the request's Host), as the portal's own hooks do.
   const origin = requester.kind === "portal" ? await (await import("./portal")).portalHookOrigin() : ctx.origin;
   const hookCtx: HdHookContext = { actorId: agent.id, actorName: who, origin };
   const source = done.source;
+  // 1.20.22: a start from a Claude suggestion card says so in its note and audit, and the card records the outcome.
+  const suggested = { suggested: !!cardRef };
+  const claudeCardId = cardRef ? cardRef.id : null;
+  const finish = async (r: HdStartWorkflowResult): Promise<StartOutcome> => {
+    if (cardRef) await cards.finishCardStart(cardRef.id, agent.id, r);
+    return { ok: true, result: r };
+  };
   if (done.kind === "this") {
-    const tracker = deskStartTracker(agent, (line) => [{ ticketId: source.id, body: `${line}. This ticket is now a ${mdInline(done.rt.title)} request.` }]);
+    const tracker = deskStartTracker(agent, (line) => [{ ticketId: source.id, body: `${line}. This ticket is now a ${mdInline(done.rt.title)} request.` }], suggested);
     // What a new request of the type gets (lib/helpdesk/events afterTicketCreated): its event and checklists, then the run.
     await safely("calendar.requestType", async () => (await import("./desk-calendar")).eventFromRequestType(source.id, { origin }));
     await safely("checklists.requestType", async () => (await import("./checklists")).addRequestTypeChecklists(source.id));
@@ -564,7 +616,7 @@ export async function startWorkflowFromTicket(
     }
     // Webhooks and the ticket_updated rules hear the change.
     await safely("events.updated", async () => (await import("./events")).afterTicketUpdated(source.id, { assigneeChangedTo: undefined, solved: false, changed: ["request_type_id"] }, hookCtx));
-    if (tracker.state.run) await auditDeskStart(agent, tracker.state.run, { requestNumber: source.number, requestType: done.rt, mode: "this", ip: ctx.ip });
+    if (tracker.state.run) await auditDeskStart(agent, tracker.state.run, { requestNumber: source.number, requestType: done.rt, mode: "this", ip: ctx.ip, claudeCardId });
     else {
       const reason = await whyNotStarted(source.id, done.rt.id, error);
       if (reason) {
@@ -575,19 +627,23 @@ export async function startWorkflowFromTicket(
         }).catch(() => undefined);
       }
     }
-    return { ok: true, result: await outcomeOf("this", source.id, false) };
+    return finish(await outcomeOf("this", source.id, false));
   }
 
   const row = done.row;
-  const tracker = deskStartTracker(agent, (line) => [
-    { ticketId: row.id, body: `${line}. Opened from ${ticketLink(source.number, source.subject)}.` },
-    { ticketId: source.id, body: `${line}, on a new request: ${ticketLink(row.number, row.subject)}.` },
-  ]);
+  const tracker = deskStartTracker(
+    agent,
+    (line) => [
+      { ticketId: row.id, body: `${line}. Opened from ${ticketLink(source.number, source.subject)}.` },
+      { ticketId: source.id, body: `${line}, on a new request: ${ticketLink(row.number, row.subject)}.` },
+    ],
+    suggested
+  );
   const { afterTicketCreated } = await import("./events");
   // afterTicketCreated never throws (each step is caught and logged); whyNotStarted tells an error from the rest.
   await afterTicketCreated(row, { ...hookCtx, onWorkflowStarted: tracker.hook });
   if (tracker.state.run) {
-    await auditDeskStart(agent, tracker.state.run, { requestNumber: row.number, requestType: done.rt, mode: "new", fromNumber: source.number, ip: ctx.ip });
+    await auditDeskStart(agent, tracker.state.run, { requestNumber: row.number, requestType: done.rt, mode: "new", fromNumber: source.number, ip: ctx.ip, claudeCardId });
   } else {
     const reason = await whyNotStarted(row.id, done.rt.id, null);
     if (reason) {
@@ -596,7 +652,7 @@ export async function startWorkflowFromTicket(
       for (const id of [row.id, source.id]) await addSystemMessage(id, n, { internal: true, author: { id: agent.id, name: who } }).catch(() => undefined);
     }
   }
-  return { ok: true, result: await outcomeOf("new", row.id, false) };
+  return finish(await outcomeOf("new", row.id, false));
 }
 
 async function safely(step: string, fn: () => Promise<unknown>): Promise<void> {

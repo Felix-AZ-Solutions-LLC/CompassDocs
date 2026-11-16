@@ -3277,7 +3277,9 @@ components in `components/helpdesk/desk/workflow-start`, rules in
   opened and New starter started." with **Open #1052**), the pane and the
   queue reload; the timeline carries the agent's internal note "Workflow
   started by Sam Lee: New starter (version 3)", on both tickets with a link
-  to the other when a new request was opened. A refusal is the dialog's
+  to the other when a new request was opened (1.20.22: "… (version 3) ·
+  suggested by Claude" when it was started from Claude's suggestion card,
+  §Helpdesk: Claude in the desk). A refusal is the dialog's
   `FormError`; when the ticket changed meanwhile the strip is reloaded with
   the new outcome before anything is done.
 - **New ticket** gains "Request type (optional)" under the requester (only
@@ -4325,6 +4327,35 @@ settings page, the server and the tests read the same words.
     Solving or closing another ticket from a card is refused with the toast
     "Open #N to solve it there.": the solve flow (time, maintenance,
     required checklist items) runs in the open ticket.
+  - **Workflow suggestion card** (1.20.22, `suggest_workflow`; the card
+    shell above): `Workflow` and 'Start "New starter"', a `text-xs
+    text-slate-600` line "Starts Onboarding (version 3)", where it would
+    run as a `text-xs` line with a 12px `Workflow` "On this ticket" or
+    `TicketPlus` "On a new request" (the words of §Helpdesk: start a
+    workflow from the desk, never a radio), Claude's reason as the hint,
+    always labelled as Claude's words ("Claude's reason:" in
+    `font-medium`), then its answers as a `dl` labelled "Claude's proposed
+    answers" ("Start date: 2026-12-07", the label `text-slate-500`; a person
+    answer carries a `warn sm` chip "Check this person", and the dialog's
+    note adds "Check the person Claude chose for Manager."), then, while it
+    is open, "Still to answer: …" in `ink-warn` and "Left out Manager: …"
+    lines in `text-slate-500` for what failed the form's checks. Primary
+    `sm` **Review and start** with secondary `sm` **Dismiss**. Review never
+    starts anything: it claims the card and opens the 1.20.21 dialog with
+    the type chosen and Claude's answers in its fields, under a compass-tint
+    note (`role="note"`, `Sparkle`) "Claude suggested this and filled in
+    answers from the conversation. Check them before you start."; the
+    agent's own primary starts it. Afterwards the card says what became of
+    it: an `ok` chip "Started" with a link "Open #1052" (a `warn` chip
+    "Its workflow didn't start" when the run didn't; a `neutral` chip
+    "Starting…" while its run hasn't reported, settled when the card is
+    next loaded), a `neutral` chip "Dismissed", or a `neutral` chip "Out of
+    date" with the reason in `text-xs text-slate-500` (only for good: the
+    requester changed, the ticket became a request, or it already runs).
+    A reason that may pass (the ticket solved for now, the type not offered
+    here now) is a toast with the server's sentence and the card keeps its
+    buttons. While another tab reviews it: a `neutral` chip "In review"
+    and no buttons.
   - "Claude is still answering in this chat" (a second tab) and the
     limits come back as the panel's error line before anything streams.
   - A refusal, a cut-off answer or an error is one `text-xs` line with

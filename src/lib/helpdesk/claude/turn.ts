@@ -149,7 +149,13 @@ export async function prepareTurn(input: TurnInput): Promise<{ ok: true; turn: P
   } catch {
     assets = false;
   }
-  const clientTools = toolsFor(cfg, { assets });
+  // 1.20.22: the workflow tools only for an agent who may start one on the open ticket (workflows.start in its team).
+  let workflows = false;
+  if (ticket) {
+    const { hdCan } = await import("../roles");
+    workflows = await hdCan(input.user, "workflows.start", { teamId: ticket.team_id });
+  }
+  const clientTools = toolsFor(cfg, { assets, workflows });
   const web = webSearchAvailable(model) ? webSearchTool(cfg) : null;
   const tools: Anthropic.Beta.BetaToolUnion[] = [...clientTools, ...(web ? [web] : [])];
   const hash = prefixHash(model, tools);
@@ -420,7 +426,8 @@ async function turnBody(turn: PreparedTurn, emit: Emit, usage: ReturnType<typeof
           if (out.card.ticketId !== null) touched.add(out.card.ticketId);
           const id = await createCard({ chatId: chat.id, userId: user.id, ticketId: out.card.ticketId, kind: out.card.kind, payload: out.card.payload });
           cardIds.push(id);
-          emit({ type: "card", card: { ...(out.card.payload as object), id, kind: out.card.kind, state: "offered" } as ClaudeCard });
+          const shown = out.card.payload.action === "workflow" ? (await import("./workflow-cards")).workflowCardOut(out.card.payload, "offered") : out.card.payload;
+          emit({ type: "card", card: { ...(shown as object), id, kind: out.card.kind, state: "offered" } as ClaudeCard });
         }
         results.push({ type: "tool_result", tool_use_id: tu.id, content: out.content, ...(out.isError ? { is_error: true } : {}) });
       }

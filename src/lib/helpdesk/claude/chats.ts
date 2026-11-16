@@ -21,6 +21,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { hq, hqOne, withTx, type HdQueryable } from "../db-core";
 import { quote } from "./prompt";
 import type { ClaudeCard, ClaudeChatHistory, ClaudeChatTurn, ClaudeSource } from "./shared";
+import { settleStartingCards, workflowCardOut } from "./workflow-cards";
 
 type BetaMessageParam = Anthropic.Beta.BetaMessageParam;
 
@@ -197,11 +198,13 @@ export async function createCard(row: { chatId: number; userId: number; ticketId
 /**
  * Record the agent's decision on one of their cards. Only an offered card changes; returns the card or undefined.
  * Never a card on a ticket in the recycle bin (1.19.4 C7): nothing can be applied to one.
+ * 1.20.22: never a workflow suggestion card, which only its own route claims, releases and dismisses
+ * (claude/workflow-cards), so it is never marked used without a start.
  */
 export async function decideCard(userId: number, cardId: number, state: "applied" | "skipped"): Promise<{ id: number; kind: string; ticket_id: number | null; payload: Record<string, unknown> } | undefined> {
   return hqOne(
     `UPDATE hd_claude_cards c SET state = $3, decided_at = now()
-      WHERE c.id = $1 AND c.user_id = $2 AND c.state = 'offered'
+      WHERE c.id = $1 AND c.user_id = $2 AND c.state = 'offered' AND coalesce(c.payload->>'action', '') <> 'workflow'
         AND (c.ticket_id IS NULL OR EXISTS (SELECT 1 FROM hd_tickets t WHERE t.id = c.ticket_id AND t.deleted_at IS NULL))
       RETURNING c.id, c.kind, c.ticket_id, c.payload`,
     [cardId, userId, state]
@@ -254,7 +257,9 @@ function stable(v: unknown): string {
 }
 
 function cardOut(c: { id: number; kind: string; payload: Record<string, unknown>; state: string }): ClaudeCard {
-  return { ...(c.payload as object), id: c.id, kind: c.kind, state: c.state } as ClaudeCard;
+  // 1.20.22: a workflow card never shows its claim's token (only the tab that claimed it holds it).
+  const payload = c.payload?.action === "workflow" ? workflowCardOut(c.payload, c.state) : c.payload;
+  return { ...(payload as object), id: c.id, kind: c.kind, state: c.state } as ClaudeCard;
 }
 
 /** Point a turn's cards at the assistant row that shows them. */
@@ -278,10 +283,10 @@ export async function chatHistory(userId: number, ticketId: number | null, chatI
       "SELECT id, role, display, created_at FROM hd_claude_messages WHERE chat_id = $1 ORDER BY id",
       [current.id]
     ),
-    hq<{ id: number; kind: string; payload: Record<string, unknown>; state: string; created_at: string; turn_id: number | null }>(
-      "SELECT id, kind, payload, state, created_at, (payload->>'turn_id')::bigint AS turn_id FROM hd_claude_cards WHERE chat_id = $1 ORDER BY id",
+    hq<{ id: number; kind: string; payload: Record<string, any>; state: string; created_at: string; decided_at: string | null; turn_id: number | null }>(
+      "SELECT id, kind, payload, state, created_at, decided_at, (payload->>'turn_id')::bigint AS turn_id FROM hd_claude_cards WHERE chat_id = $1 ORDER BY id",
       [current.id]
-    ),
+    ).then(settleStartingCards),
   ]);
   // Only rows with words or activity are turns the panel shows (tool-result rows are not).
   const turns: ClaudeChatTurn[] = [];
@@ -316,6 +321,18 @@ async function hasTables(client: HdQueryable): Promise<boolean> {
  */
 export async function purgeClaudeForTicketTx(client: HdQueryable, ticketId: number): Promise<number> {
   if (!(await hasTables(client))) return 0;
+  // 1.20.22 (security review 8): the tickets whose cards go are locked first, in id order, before any
+  // card row is touched: the order a start from a Claude card takes them (the ticket, then its card;
+  // workflow-start, claude/workflow-cards takeCardForStart), so the two can't deadlock.
+  await client.query(
+    `SELECT t.id FROM hd_tickets t
+      WHERE t.id = $1 OR t.id IN (
+        SELECT c.ticket_id FROM hd_claude_cards c
+         WHERE c.ticket_id IS NOT NULL
+           AND (c.ticket_id = $1 OR c.chat_id IN (SELECT id FROM hd_claude_chats WHERE ticket_id = $1 OR id IN (SELECT chat_id FROM hd_claude_chat_tickets WHERE ticket_id = $1))))
+      ORDER BY t.id FOR UPDATE OF t`,
+    [ticketId]
+  );
   const r = await client.query(
     `DELETE FROM hd_claude_chats
       WHERE ticket_id = $1 OR id IN (SELECT chat_id FROM hd_claude_chat_tickets WHERE ticket_id = $1)`,

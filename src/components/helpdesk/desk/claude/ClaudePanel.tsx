@@ -18,6 +18,12 @@
 // ticket): Save as draft sends only the card's id to the desk's own settings
 // route, which claims the card and saves its content unpublished, switched
 // off or paused for someone with access to publish in Desk settings.
+// 1.20.22: workflow suggestion cards (suggest_workflow): Review and start
+// claims the card on the server and opens 1.20.21's Start a workflow dialog
+// prefilled with Claude's answers; the agent's own submit starts it (and
+// records the outcome on the card), closing the dialog gives the card back,
+// Dismiss sets it aside. The card then says Started (with a link), Dismissed
+// or Out of date (with why).
 // History per ticket (the history menu: earlier chats, New chat). Screen
 // readers hear the answer once it is complete (role="log", aria-busy while
 // streaming); focus starts in the question box and returns to the opener.
@@ -44,7 +50,9 @@ import {
   SlidersHorizontal,
   Sparkle,
   Ticket,
+  TicketPlus,
   TriangleAlert,
+  Workflow,
   X,
   Zap,
 } from "lucide-react";
@@ -59,7 +67,9 @@ import {
   CLAUDE_INPUT_PLACEHOLDER,
   CLAUDE_INPUT_PLACEHOLDER_NO_TICKET,
   SETTINGS_DRAFT_HREF,
+  WORKFLOW_CARD_CODES,
   type ClaudeCard,
+  type ClaudeWorkflowCard,
   type ClaudeChatHistory,
   type ClaudeChatTurn,
   type ClaudeIntent,
@@ -67,6 +77,7 @@ import {
 } from "@/lib/helpdesk/claude/shared";
 import { COLLISION_ERROR } from "@/lib/helpdesk/presence-shared";
 import { getJson, sendJson } from "../api";
+import { StartWorkflowDialog, type StartWorkflowSuggestion } from "../workflow-start/StartWorkflow";
 import { useClaudeDesk } from "./ClaudeDesk";
 import { askClaude } from "./stream";
 
@@ -296,9 +307,70 @@ export function ClaudePanel() {
     }
   }
 
+  // 1.20.22: a workflow suggestion card's Review and start (claims it, then opens the Start a workflow
+  // dialog prefilled) and Dismiss. The start itself is the dialog's own submit, which records the outcome.
+  const [review, setReview] = useState<{ card: ClaudeWorkflowCard; suggestion: StartWorkflowSuggestion } | null>(null);
+  const reviewStarted = useRef(false);
+  const setCard = (card: ClaudeCard) => setTurns((all) => all.map((t) => ({ ...t, cards: t.cards.map((c) => (c.id === card.id ? card : c)) })));
+  const patchCard = (id: number, fn: (c: ClaudeWorkflowCard) => ClaudeWorkflowCard) =>
+    setTurns((all) => all.map((t) => ({ ...t, cards: t.cards.map((c) => (c.id === id && c.kind === "change" && c.action === "workflow" ? fn(c) : c)) })));
+
+  async function workflowCard(card: ClaudeWorkflowCard, how: "applied" | "skipped") {
+    if (how === "skipped") {
+      const r = await workflowCardOp(card.id, { op: "dismiss" });
+      if (r.ok && r.data.card) setCard(r.data.card);
+      else toast("error", r.data?.error || "Couldn't dismiss the suggestion.");
+      return;
+    }
+    if (ticket?.number !== card.number) {
+      toast("error", `Open #${card.number} to start this workflow there.`);
+      return;
+    }
+    const r = await workflowCardOp(card.id, { op: "review" });
+    if (!r.ok) {
+      if (r.data?.card) setCard(r.data.card);
+      else if (r.data?.code === WORKFLOW_CARD_CODES.taken) patchCard(card.id, (c) => ({ ...c, claimed: true }));
+      toast("error", r.data?.error || "Couldn't open the suggestion.");
+      return;
+    }
+    reviewStarted.current = false;
+    setCard({ ...r.data.card, claimed: true });
+    setReview({ card: r.data.card, suggestion: { cardId: card.id, claim: r.data.claim, requestTypeId: r.data.request_type_id, answers: r.data.answers ?? {} } });
+  }
+
+  function closeReview() {
+    const r = review;
+    setReview(null);
+    if (!r || reviewStarted.current) return;
+    // Closed without starting: the card is offered again.
+    void workflowCardOp(r.card.id, { op: "release", claim: r.suggestion.claim }).then((x) => x.ok && x.data.card && setCard(x.data.card));
+    requestAnimationFrame(() => input.current?.focus());
+  }
+
+  // A tab closed with the dialog open gives the card back too (else its claim lapses after a while).
+  useEffect(() => {
+    if (!review) return;
+    const { card, suggestion } = review;
+    const onHide = () => {
+      if (reviewStarted.current) return;
+      void fetch(`/api/helpdesk/claude/cards/${card.id}/workflow`, {
+        method: "POST",
+        keepalive: true,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ op: "release", claim: suggestion.claim }),
+      }).catch(() => {});
+    };
+    window.addEventListener("pagehide", onHide);
+    return () => window.removeEventListener("pagehide", onHide);
+  }, [review]);
+
   async function decideCard(card: ClaudeCard, how: "applied" | "skipped") {
     let done = "";
     try {
+      if (card.kind === "change" && card.action === "workflow") {
+        await workflowCard(card, how);
+        return;
+      }
       if (how === "applied") {
         if (card.kind === "change" && card.action === "settings_draft") {
           // 1.20.16: the desk's own settings route claims the card and saves its content as a draft.
@@ -547,7 +619,128 @@ export function ClaudePanel() {
         )}
         <p className="mt-1.5 text-xs text-slate-500">{CLAUDE_FOOTER_NOTE}</p>
       </div>
+      {review && (
+        <StartWorkflowDialog
+          open
+          number={review.card.number}
+          suggestion={review.suggestion}
+          onClose={closeReview}
+          onStarted={(r) => {
+            reviewStarted.current = true;
+            const id = review.card.id;
+            patchCard(id, (c) => ({ ...c, state: "applied", claimed: false, outcome: { kind: "started", mode: r.mode, number: r.request.number, started: r.started, workflow: r.workflow } }));
+            if (ticket?.number === review.card.number) ticket.reload();
+          }}
+        />
+      )}
     </aside>
+  );
+}
+
+/** 1.20.22: one call to a workflow card's route, with its body whatever the status (a refusal may carry the card). */
+async function workflowCardOp(id: number, body: Record<string, unknown>): Promise<{ ok: boolean; data: any }> {
+  try {
+    const res = await fetch(`/api/helpdesk/claude/cards/${id}/workflow`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+    return { ok: res.ok, data: await res.json().catch(() => ({})) };
+  } catch {
+    return { ok: false, data: { error: "Couldn't reach the desk. Check the connection and try again." } };
+  }
+}
+
+/**
+ * 1.20.22: a workflow suggestion (STYLEGUIDE §Helpdesk: Claude in the desk, workflow suggestion
+ * card): the request type, the workflow and version, where it would run, Claude's answers with its
+ * reason, and Review and start / Dismiss; once decided, what became of it.
+ */
+function WorkflowCardView({ card, onDecide, busy, shell }: { card: ClaudeWorkflowCard; onDecide: (c: ClaudeCard, how: "applied" | "skipped") => void; busy: boolean; shell: string }) {
+  const o = card.outcome ?? null;
+  const open = card.state === "offered" || (card.state === "applied" && !o);
+  return (
+    <section aria-label={card.title} className={shell} data-testid="claude-workflow-card">
+      <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
+        <Workflow className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        <span className="min-w-0 flex-1">{card.title}</span>
+      </div>
+      <p className="mt-0.5 text-xs text-slate-600">
+        Starts {card.workflow.title} (version {card.workflow.version})
+      </p>
+      <p className="mt-1 flex items-center gap-1 text-xs text-slate-700">
+        {card.mode === "this" ? <Workflow className="h-3 w-3 shrink-0 text-compass-600" aria-hidden /> : <TicketPlus className="h-3 w-3 shrink-0 text-compass-600" aria-hidden />}
+        <span className="font-semibold">{card.mode === "this" ? "On this ticket" : "On a new request"}</span>
+      </p>
+      {/* Claude's own words, said to be so (security review 5). */}
+      {card.hint && (
+        <p className="mt-0.5 text-xs text-slate-500">
+          <span className="font-medium text-slate-600">Claude&apos;s reason:</span> {card.hint}
+        </p>
+      )}
+      {card.lines.length > 0 && (
+        <dl aria-label="Claude's proposed answers" className="mt-1.5 max-h-48 space-y-0.5 overflow-y-auto pr-1 text-xs text-slate-700">
+          {card.lines.map((l) => (
+            <div key={l.key} className="flex items-start gap-1.5">
+              <dt className="shrink-0 text-slate-500">{l.label}:</dt>
+              <dd className="min-w-0 flex-1 break-words">
+                {l.text}
+                {l.person && <span className={`ml-1.5 ${chipClass("warn", "sm")}`}>Check this person</span>}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {(card.missing.length > 0 || card.dropped.length > 0) && open && (
+        <ul aria-label="Still to check" className="mt-1.5 space-y-0.5 text-xs">
+          {card.missing.length > 0 && <li className="ink-warn">Still to answer: {card.missing.join(", ")}</li>}
+          {card.dropped.map((d, i) => (
+            <li key={i} className="text-slate-500">
+              Left out {d.label}: {d.why}
+            </li>
+          ))}
+        </ul>
+      )}
+      {o ? (
+        <p className="mt-2 flex flex-wrap items-center gap-2">
+          {o.kind === "started" && o.started == null ? (
+            // Recorded, its run not reported yet: settled when the card is next loaded.
+            <span className={chipClass("neutral", "sm")}>Starting…</span>
+          ) : o.kind === "started" ? (
+            <>
+              <span className={chipClass(o.started === false ? "warn" : "ok", "sm")}>
+                {o.started !== false && <CircleCheck className="h-3 w-3" aria-hidden />}
+                {o.started === false ? "Its workflow didn't start" : "Started"}
+              </span>
+              <Link href={`/desk/tickets/${o.number}`} className="text-xs font-medium text-compass-700 hover:underline">
+                Open #{o.number}
+              </Link>
+            </>
+          ) : o.kind === "dismissed" ? (
+            <span className={chipClass("neutral", "sm")}>Dismissed</span>
+          ) : (
+            <>
+              <span className={chipClass("neutral", "sm")}>Out of date</span>
+              <span className="text-xs text-slate-500">{o.reason}</span>
+            </>
+          )}
+        </p>
+      ) : card.claimed ? (
+        <p className="mt-2 flex flex-wrap items-center gap-2">
+          <span className={chipClass("neutral", "sm")}>In review</span>
+          <span className="text-xs text-slate-500">Open in a Start a workflow dialog, perhaps in another tab.</span>
+        </p>
+      ) : (
+        <div className="mt-2 flex gap-2">
+          <button type="button" disabled={busy} aria-busy={busy || undefined} onClick={() => onDecide(card, "applied")} className={buttonClass("primary", "sm")}>
+            Review and start
+          </button>
+          <button type="button" disabled={busy} onClick={() => onDecide(card, "skipped")} className={buttonClass("secondary", "sm")}>
+            Dismiss
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -627,6 +820,7 @@ function CardView({ card, onDecide, inBox, busy }: { card: ClaudeCard; onDecide:
       </section>
     );
   }
+  if (card.kind === "change" && card.action === "workflow") return <WorkflowCardView card={card} onDecide={onDecide} busy={busy} shell={shell} />;
   const decided = card.state !== "offered";
   // A macro card has no hint: Claude's own words never appear on it.
   const hint = card.kind === "change" ? (card.action === "macro" ? "" : card.hint) : card.kind === "checklist" ? card.hint : "";

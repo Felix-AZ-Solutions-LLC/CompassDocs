@@ -23,9 +23,10 @@ export const SYSTEM_PROMPT = `You are Claude, working inside CompassDocs Desk, a
 
 How you work:
 - You act as the agent, with exactly their desk role and teams. Your tools only return what the agent can see. If a tool refuses, say so plainly; never try to get around it.
-- You never send, approve, publish, delete or merge anything, and no tool you have can. Drafts and proposed changes go back to the agent as cards: a draft lands in their reply box for them to edit and send, and a proposed change waits for them to click Apply. Say what you prepared; never claim you sent or changed something.
+- You never send, approve, publish, delete, merge or start anything, and no tool you have can. Drafts and proposed changes go back to the agent as cards: a draft lands in their reply box for them to edit and send, and a proposed change waits for them to click Apply. Say what you prepared; never claim you sent or changed something.
 - A macro is a saved reply and set of ticket changes the workspace already uses. propose_macro offers one, for the ticket the agent has open, on a card that says what it will do, including any reply it would send as the agent; only the agent's Apply runs it, with their own permissions. Find macros with list_macros; never describe a macro's reply as your own words.
 - Use draft_reply for a reply to the requester, draft_internal_note for a note to other agents, propose_ticket_change for status, priority, tags, team or owner, suggest_checklist to add a checklist, propose_checklist_ticks to tick or untick checklist items, propose_macro to apply a macro, draft_checklist for a new checklist template, and draft_categories, draft_automation or draft_recurring for changes to the category list, an automation rule or a recurring ticket (each is saved as a draft only when the agent clicks Save as draft, and someone publishes it in Desk settings; a drafted rule stays off and a drafted schedule stays paused until then). Prepare these only when the agent asks for them or clearly wants them. Propose ticking an item only when the agent says the step is done.
+- A request type is a kind of request the workspace handles with a workflow (approvals, tasks for other teams, notices), such as a new starter, a new laptop or access to a system. When you have suggest_workflow and the requester is clearly asking for something one of these covers, call list_startable_workflows, then suggest_workflow once with the type that fits and the answers the conversation already gives (leave out what you don't know; never guess a person, a date or a cost). It only puts a card in front of the agent: they review the answers and start it themselves. Never suggest a type whose workflow the ticket already runs or that was already started from it (list_startable_workflows says already_started), never more than one suggestion in a turn, and don't suggest one when the ticket is about something no listed type covers; then just answer.
 - A reply to the requester must not quote or reveal internal notes, internal names or other agents' remarks unless the agent explicitly asks you to include them. Internal notes are for agents only.
 - Ground what you say in the ticket, your tool results and the agent's words. When you rely on another ticket or an article, name it (for example #1012, or the article's title). If you don't know, say so. Never invent ticket numbers, steps, policies, names or contact details.
 - Be brief and practical: short paragraphs or a few bullet points, plain language, no headings for short answers. Match the language the agent writes in; write a reply draft in the requester's language unless the agent asks otherwise.
@@ -53,6 +54,8 @@ interface ToolSpec {
   /** Which settings switch offers it. */
   cap: "read" | "search" | "changes" | "drafts";
   assets?: true;
+  /** 1.20.22: only when the agent may start a workflow on the open ticket (workflows.start in its team). */
+  workflows?: true;
 }
 
 export const TOOL_SPECS: ToolSpec[] = [
@@ -259,6 +262,35 @@ export const TOOL_SPECS: ToolSpec[] = [
       timezone: { type: "string", description: "An IANA zone, or empty for the team calendar's." },
     }),
   },
+  // 1.20.22: suggest starting a request type's workflow for the open ticket (a card; the agent reviews and starts it).
+  {
+    name: "list_startable_workflows",
+    cap: "changes",
+    workflows: true,
+    description:
+      "List the request types whose workflow the agent could start for the ticket they have open, for its requester, with each type's questions (key, label, type, options, whether the requester's directory fills it) and whether it is already running. Also says whether the workflow would run on this ticket or on a new request. Call this before suggest_workflow.",
+    input_schema: obj({ number: NUMBER }),
+  },
+  {
+    name: "suggest_workflow",
+    cap: "changes",
+    workflows: true,
+    description:
+      "Suggest starting one request type's workflow (an id from list_startable_workflows) for the ticket the agent has open (only that one), with the answers the conversation already gives. Nothing starts: the agent sees a card with Review and start, which opens the start dialog prefilled with your answers for them to check, edit and submit, and Dismiss. Leave out what you don't know; never invent answers. A person is answered with their email or full name. At most one per turn.",
+    input_schema: obj({
+      number: NUMBER,
+      request_type_id: { type: "integer", description: "The request type's id from list_startable_workflows." },
+      answers: {
+        type: "array",
+        description: "Your proposed answers, one per question you can answer from the conversation (keys from list_startable_workflows).",
+        items: obj({
+          key: { type: "string", description: "The question's key." },
+          value: { anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }, { type: "null" }], description: "The answer: text, a number, true/false, YYYY-MM-DD for a date, an option's value, or a person's email or full name." },
+        }),
+      },
+      reason: { type: "string", description: "One short sentence on why this request type fits, for the agent." },
+    }),
+  },
   {
     name: "propose_ticket_change",
     cap: "changes",
@@ -289,9 +321,14 @@ export const TOOL_SPECS: ToolSpec[] = [
   },
 ];
 
-/** The client tools a workspace's settings offer, sorted by name (deterministic for the cache). */
-export function toolsFor(cfg: ClaudeDeskConfig, opts: { assets: boolean }): BetaTool[] {
-  return TOOL_SPECS.filter((t) => cfg.caps[t.cap] && (!t.assets || opts.assets))
+/**
+ * The client tools a workspace's settings offer, sorted by name (deterministic for the cache).
+ * 1.20.22: `workflows` (the agent holds workflows.start in the open ticket's team) adds the two
+ * workflow tools under "Suggest ticket changes"; it changes per agent and ticket, so the tools and
+ * the chat's epoch hash follow it (a chat whose answer changes starts a new epoch).
+ */
+export function toolsFor(cfg: ClaudeDeskConfig, opts: { assets: boolean; workflows?: boolean }): BetaTool[] {
+  return TOOL_SPECS.filter((t) => cfg.caps[t.cap] && (!t.assets || opts.assets) && (!t.workflows || opts.workflows === true))
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((t) => ({
       name: t.name,
