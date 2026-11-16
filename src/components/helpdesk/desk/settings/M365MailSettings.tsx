@@ -13,6 +13,11 @@
 //                arrives, when it was last read, its counts and its last
 //                error in words, and a closed "Last messages" (how the
 //                sender check went for the last few, never any content);
+//                1.20.25: each line also says why it was dropped, is waiting
+//                or failed, in words with a link to the setting that would
+//                change it (m365LineWords), and offers Take in anyway, Try
+//                now or Open #N where they apply; the row offers "Try all
+//                waiting now" while any message waits;
 //                then three <details>: "Limit the app to your help
 //                mailboxes" (the Exchange Online commands with Copy, and
 //                Check access with its answer), "Options" and "App
@@ -29,8 +34,9 @@
 // the address rows show M365AddressChip and M365AddressWarning.
 
 import { useEffect, useId, useState, useSyncExternalStore } from "react";
-import { Plus, RefreshCw, RotateCcw, ShieldCheck, Unplug } from "lucide-react";
-import { Button, iconButtonClass } from "@/components/Button";
+import Link from "next/link";
+import { Inbox, Plus, RefreshCw, RotateCcw, ShieldCheck, Unplug } from "lucide-react";
+import { Button, buttonClass, iconButtonClass } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { Chip } from "@/components/Chip";
 import { CopyButton } from "@/components/CopyButton";
@@ -49,6 +55,7 @@ import {
   cleanM365GraphId,
   m365AddressProblem,
   m365CredentialsProblem,
+  m365LineWords,
   modeSentence,
   restrictCommands,
   type M365AccessCheck,
@@ -394,6 +401,7 @@ function MailboxList({ v, manage }: { v: M365MailView; manage: boolean }) {
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState<number | null>(null);
   const [retrying, setRetrying] = useState<number | null>(null);
+  const [tryingAll, setTryingAll] = useState<number | null>(null);
   const full = v.mailboxes.length >= v.limit;
 
   /** With organisation-wide access the list alone decides what the desk reads: say so, and ask. */
@@ -486,6 +494,24 @@ function MailboxList({ v, manage }: { v: M365MailView; manage: boolean }) {
     }
   }
 
+  /** 1.20.25: every message waiting to be tried again, now (the wait is cleared and the mailbox read). */
+  async function tryAllNow(m: M365MailboxView) {
+    setTryingAll(m.id);
+    try {
+      const r = await sendJson<{ tried: number; ok: boolean; busy?: boolean; error?: string; view: M365MailView }>(`${URL_}/mailboxes/${m.id}/try-now`, "POST", {}, "Couldn't try the waiting messages.");
+      setM365Mail(r.view);
+      const left = r.view.mailboxes.find((x) => x.id === m.id)?.waiting ?? 0;
+      if (r.busy) toast("ok", "A check of this mailbox is already running. The waiting messages are tried in it.");
+      else if (!r.ok) toast("error", r.error ?? "The mailbox could not be read.");
+      else if (left > 0) toast("error", `${left === 1 ? "1 message is" : `${left} messages are`} still waiting. Last messages says why.`);
+      else toast("ok", r.tried === 1 ? "The waiting message was tried." : `${r.tried} waiting messages were tried.`);
+    } catch (err) {
+      toast("error", (err as Error).message);
+    } finally {
+      setTryingAll(null);
+    }
+  }
+
   async function disconnect(m: M365MailboxView) {
     const users = m.addresses.map((a) => a.address);
     const ok = await confirmDialog({
@@ -521,9 +547,11 @@ function MailboxList({ v, manage }: { v: M365MailView; manage: boolean }) {
               manage={manage}
               checking={checking === m.id}
               retrying={retrying === m.id}
-              disabled={checking !== null || retrying !== null || !v.connected}
+              tryingAll={tryingAll === m.id}
+              disabled={checking !== null || retrying !== null || tryingAll !== null || !v.connected}
               onCheck={() => void checkNow(m)}
               onRetry={() => void tryAgain(m)}
+              onTryAll={() => void tryAllNow(m)}
               onDisconnect={() => void disconnect(m)}
             />
           ))}
@@ -600,10 +628,12 @@ const outcomeWords = (o: string) => OUTCOME[o] ?? (o ? `Dropped (${o.replace(/_/
  * Exchange's headers said, and what became of the message. No subject, no
  * address, no content. Loaded when opened, and again on each opening.
  */
-function LastMessages({ m }: { m: M365MailboxView }) {
+function LastMessages({ m, refreshKey }: { m: M365MailboxView; refreshKey: string }) {
   const fmt = useFormatDate();
   const [rows, setRows] = useState<M365MessageDiag[] | null>(null);
   const [error, setError] = useState("");
+  const [open, setOpen] = useState(false);
+  const [acting, setActing] = useState<string | null>(null);
 
   async function load() {
     setError("");
@@ -614,10 +644,53 @@ function LastMessages({ m }: { m: M365MailboxView }) {
     }
   }
 
+  // 1.20.25: an action on the mailbox row (Try all waiting now, Check now) changes the lines: read them again while open.
+  useEffect(() => {
+    if (open) void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
+
+  /** 1.20.25: Take in anyway (a dropped line) or Try now (a waiting line); the line is replaced with what it became. */
+  async function act(r: M365MessageDiag, kind: "take-in" | "try-now") {
+    setActing(r.message_id);
+    try {
+      const res = await sendJson<{ line: M365MessageDiag | null; already?: boolean; gone?: boolean; busy?: boolean; view: M365MailView }>(
+        `${URL_}/mailboxes/${m.id}/${kind}`,
+        "POST",
+        { message: r.message_id },
+        kind === "take-in" ? "Couldn't take the message in." : "Couldn't try the message."
+      );
+      setM365Mail(res.view);
+      if (res.line) setRows((cur) => cur?.map((x) => (x.message_id === r.message_id ? res.line! : x)) ?? cur);
+      const line = res.line;
+      if (res.gone) toast("error", "The message is no longer in the mailbox: it was moved to another mailbox or deleted.");
+      else if (res.already) toast("ok", line?.ticket ? `Already taken in as #${line.ticket}.` : "Already taken in.");
+      else if (res.busy) toast("ok", "The message is being read right now.");
+      else if (line && ["created", "appended", "follow_up"].includes(line.outcome)) toast("ok", line.ticket ? `Taken in as #${line.ticket}.` : "Taken in.");
+      else if (line?.outcome === "waiting") toast("error", m365LineWords(line, fmt.dateTime).text || "It's still waiting.");
+      else toast("error", (line && m365LineWords(line, fmt.dateTime).text) || "It still wasn't taken in.");
+    } catch (err) {
+      toast("error", (err as Error).message);
+    } finally {
+      setActing(null);
+    }
+  }
+
   return (
-    <details className="mt-2 text-sm text-slate-600" onToggle={(e) => (e.currentTarget as HTMLDetailsElement).open && void load()} data-testid="hd-m365-last-messages">
+    <details
+      className="mt-2 text-sm text-slate-600"
+      onToggle={(e) => {
+        const isOpen = (e.currentTarget as HTMLDetailsElement).open;
+        setOpen(isOpen);
+        if (isOpen) void load();
+      }}
+      data-testid="hd-m365-last-messages"
+    >
       <summary className="cursor-pointer text-xs font-medium text-slate-500">Last messages</summary>
-      <p className="mt-2 text-xs text-slate-500">How the sender check went for the last messages in this mailbox, and what Microsoft's headers said. No subject, address or text is kept here.</p>
+      <p className="mt-2 text-xs text-slate-500">
+        How the sender check went for the last messages in this mailbox, what Microsoft&apos;s headers said and why any was dropped or is waiting. No subject or text is kept here, and no
+        outside sender&apos;s address; a colleague&apos;s account is named when it&apos;s the reason.
+      </p>
       {error ? (
         <p className="ink-warn mt-2 text-xs">{error}</p>
       ) : !rows ? (
@@ -626,19 +699,56 @@ function LastMessages({ m }: { m: M365MailboxView }) {
         <SectionEmpty className="py-2">No message has been read from this mailbox yet.</SectionEmpty>
       ) : (
         <ul role="list" className="mt-2 divide-y divide-slate-100 rounded-lg border border-slate-200">
-          {rows.map((r, i) => (
-            <li key={i} className="px-3 py-2" data-testid="hd-m365-last-message">
-              <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-700">
-                <span className="text-xs text-slate-500">{fmt.dateTime(r.at)}</span>
-                <span className="min-w-0 break-all font-medium text-slate-900">{r.sender_domain || "no sender"}</span>
-                <Chip tone={CHECK_CHIP[r.check].tone} size="sm">
-                  {CHECK_CHIP[r.check].label}
-                </Chip>
-                <span className="text-xs text-slate-500">{outcomeWords(r.outcome)}</span>
-              </p>
-              {r.reason && <p className="mt-0.5 text-xs text-slate-500 [overflow-wrap:anywhere]">{r.reason}</p>}
-            </li>
-          ))}
+          {rows.map((r, i) => {
+            const words = m365LineWords(r, fmt.dateTime);
+            const waiting = r.outcome === "waiting";
+            const duplicate = r.reason_code === "duplicate" && r.ticket;
+            return (
+              <li key={r.message_id || i} className="px-3 py-2" data-testid="hd-m365-last-message" data-outcome={r.outcome}>
+                <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-700">
+                  <span className="text-xs text-slate-500">{fmt.dateTime(r.at)}</span>
+                  <span className="min-w-0 break-all font-medium text-slate-900">{r.sender_domain || "no sender"}</span>
+                  <Chip tone={CHECK_CHIP[r.check].tone} size="sm">
+                    {CHECK_CHIP[r.check].label}
+                  </Chip>
+                  <span className="text-xs text-slate-500">{outcomeWords(r.outcome)}</span>
+                </p>
+                {words.text && (
+                  <p className={`mt-0.5 text-xs [overflow-wrap:anywhere] ${r.outcome === "failed" ? "ink-warn" : "text-slate-700"}`} data-testid="hd-m365-line-why">
+                    {words.text}
+                    {words.link && (
+                      <>
+                        {" "}
+                        <Link href={words.link.href} className="link">
+                          {words.link.label}
+                        </Link>
+                      </>
+                    )}
+                  </p>
+                )}
+                {(r.can_take_in || waiting || duplicate) && (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                    {r.can_take_in && (
+                      <Button variant="secondary" size="sm" icon={<Inbox />} busy={acting === r.message_id} disabled={acting !== null} onClick={() => void act(r, "take-in")} data-testid="hd-m365-take-in">
+                        Take in anyway
+                      </Button>
+                    )}
+                    {waiting && (
+                      <Button variant="secondary" size="sm" icon={<RefreshCw />} busy={acting === r.message_id} disabled={acting !== null} onClick={() => void act(r, "try-now")} data-testid="hd-m365-try-now">
+                        Try now
+                      </Button>
+                    )}
+                    {duplicate && (
+                      <Link href={`/desk/tickets/${r.ticket}`} className={buttonClass("secondary", "sm")} data-testid="hd-m365-open-ticket">
+                        Open #{r.ticket}
+                      </Link>
+                    )}
+                  </div>
+                )}
+                {r.reason && <p className="mt-0.5 text-xs text-slate-500 [overflow-wrap:anywhere]">{r.reason}</p>}
+              </li>
+            );
+          })}
         </ul>
       )}
     </details>
@@ -697,9 +807,11 @@ function MailboxRow({
   manage,
   checking,
   retrying,
+  tryingAll,
   disabled,
   onCheck,
   onRetry,
+  onTryAll,
   onDisconnect,
 }: {
   v: M365MailView;
@@ -707,9 +819,11 @@ function MailboxRow({
   manage: boolean;
   checking: boolean;
   retrying: boolean;
+  tryingAll: boolean;
   disabled: boolean;
   onCheck: () => void;
   onRetry: () => void;
+  onTryAll: () => void;
   onDisconnect: () => void;
 }) {
   const fmt = useFormatDate();
@@ -779,6 +893,11 @@ function MailboxRow({
               Try again
             </Button>
           )}
+          {v.connected && !idle && m.waiting > 0 && (
+            <Button variant="secondary" size="sm" icon={<RotateCcw />} busy={tryingAll} disabled={disabled} onClick={onTryAll} data-testid="hd-m365-try-all">
+              Try all waiting now
+            </Button>
+          )}
           {v.connected && !idle && (
             <Button variant="secondary" size="sm" icon={<RefreshCw />} busy={checking} disabled={disabled} onClick={onCheck}>
               Check now
@@ -791,7 +910,7 @@ function MailboxRow({
           )}
         </div>
       </div>
-      {v.connected && !idle && <LastMessages m={m} />}
+      {v.connected && !idle && <LastMessages m={m} refreshKey={`${m.last_poll_at}|${m.taken_in}|${m.dropped}|${m.waiting}|${m.failed}`} />}
       {v.connected && manage && <LookupField m={m} />}
     </li>
   );

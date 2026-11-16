@@ -11,6 +11,10 @@
 // (lib/helpdesk/inbound). Both lists act at once (add, edit, remove, send
 // test); the two "Who can write in" switches save through the page's Save
 // row. Adding the first address ticks the setup checklist's Email step.
+// 1.20.25: "Who can write in" also lists trusted senders (addresses and
+// @domains whose verified mail is never dropped as automatic mail and is held
+// to a ceiling instead of the per-sender limit) and the per-sender limit
+// itself (lib/helpdesk/inbound-senders-shared), saved with the switches.
 
 import { useCallback, useEffect, useId, useState } from "react";
 import { KeyRound, Mail, Pencil, Plus, Send, Trash2, X } from "lucide-react";
@@ -18,7 +22,7 @@ import { Button, iconButtonClass } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { Chip } from "@/components/Chip";
 import { CopyButton } from "@/components/CopyButton";
-import { Field, FormError, SectionEmpty, Select, TextInput, Toggle } from "@/components/form";
+import { Field, FormError, SectionEmpty, Select, TextInput, Textarea, Toggle, rangeError } from "@/components/form";
 import { Tooltip } from "@/components/Tooltip";
 import { Modal } from "@/components/Modal";
 import { PageHeader } from "@/components/PageHeader";
@@ -31,13 +35,14 @@ import { toast } from "@/components/Toasts";
 import { useLeaveGuard, useUnsavedChanges } from "@/lib/use-unsaved";
 import { MAILBOX_LIMITS, cleanMailboxAddress, mailboxAddressProblem, sendAddressProblem } from "@/lib/helpdesk/mailboxes-shared";
 import type { HdMailboxView, HdSendAddressView } from "@/lib/helpdesk/mailboxes-shared";
+import { INBOUND_SENDER_LIMITS, cleanTrustedSenders } from "@/lib/helpdesk/inbound-senders-shared";
 import type { HdSettings } from "@/lib/helpdesk/types";
 import { getJson, sendJson } from "../api";
 import { forgetDeskMailboxes } from "../mailboxes";
 import { useCan } from "../me";
 import { M365AddressChip, M365AddressWarning, M365MailCard, M365MailboxField, m365MailboxAddress, saveM365AddressLink, useM365Mail } from "./M365MailSettings";
 
-type PublicSettings = Omit<HdSettings, "inbound_secret"> & { inbound_enabled: boolean; trust_unverified_senders: boolean };
+type PublicSettings = Omit<HdSettings, "inbound_secret"> & { inbound_enabled: boolean; trust_unverified_senders: boolean; trusted_senders: string[]; per_sender_limit: number };
 interface MailboxData {
   mailboxes: HdMailboxView[];
   teams: { id: number; name: string }[];
@@ -66,7 +71,10 @@ export function EmailSettings() {
   const [testing, setTesting] = useState<number | null>(null);
   const [editingSender, setEditingSender] = useState<HdSendAddressView | "new" | null>(null);
   const [testingSender, setTestingSender] = useState<number | null>(null);
-  const snap = JSON.stringify(s && { o: s.outside_senders, t: s.trust_unverified_senders });
+  // 1.20.25: the trusted senders as typed (one per line) and the per-sender limit as typed.
+  const [trustedText, setTrustedText] = useState("");
+  const [limitText, setLimitText] = useState(String(INBOUND_SENDER_LIMITS.perSender));
+  const snap = JSON.stringify(s && { o: s.outside_senders, t: s.trust_unverified_senders, ts: trustedText, l: limitText });
   const { dirty, markDirty, markClean, hasUnsavedChanges } = useUnsavedChanges(snap);
   useLeaveGuard(dirty, hasUnsavedChanges);
 
@@ -82,6 +90,8 @@ export function EmailSettings() {
     getJson<{ settings: PublicSettings; inbound_path: string }>("/api/helpdesk/admin/settings", "Couldn't load the email settings.")
       .then((d) => {
         setS(d.settings);
+        setTrustedText((d.settings.trusted_senders ?? []).join("\n"));
+        setLimitText(String(d.settings.per_sender_limit ?? INBOUND_SENDER_LIMITS.perSender));
         setPath(d.inbound_path || "");
       })
       .catch((e: Error) => setError(e.message));
@@ -101,8 +111,15 @@ export function EmailSettings() {
     setS({ ...s, ...p });
   };
 
+  const trusted = cleanTrustedSenders(trustedText);
+  const limitError = rangeError(limitText, INBOUND_SENDER_LIMITS.perSenderMin, INBOUND_SENDER_LIMITS.perSenderMax);
+
   async function save(extra: Record<string, unknown> = {}) {
     if (!s) return;
+    if (trusted.problem || limitError) {
+      toast("error", trusted.problem || `Limit per sender: ${limitError}`);
+      return false;
+    }
     setBusy(true);
     try {
       // Ticking the setup checklist needs settings.manage: send it only when
@@ -112,11 +129,22 @@ export function EmailSettings() {
       const d = await sendJson<{ settings: PublicSettings; inbound_path: string }>(
         "/api/helpdesk/admin/settings",
         "PATCH",
-        { outside_senders: s.outside_senders, trust_unverified_senders: s.trust_unverified_senders === true, ...tick, ...extra },
+        {
+          outside_senders: s.outside_senders,
+          trust_unverified_senders: s.trust_unverified_senders === true,
+          trusted_senders: trusted.list,
+          per_sender_limit: Number(limitText),
+          ...tick,
+          ...extra,
+        },
         "Couldn't save the email settings."
       );
-      markClean(snap);
+      const nextTrusted = (d.settings.trusted_senders ?? []).join("\n");
+      const nextLimit = String(d.settings.per_sender_limit ?? INBOUND_SENDER_LIMITS.perSender);
+      markClean(JSON.stringify({ o: d.settings.outside_senders, t: d.settings.trust_unverified_senders, ts: nextTrusted, l: nextLimit }));
       setS(d.settings);
+      setTrustedText(nextTrusted);
+      setLimitText(nextLimit);
       setPath(d.inbound_path || "");
       return true;
     } catch (e) {
@@ -390,6 +418,46 @@ export function EmailSettings() {
               onChange={(v) => set({ trust_unverified_senders: v })}
             />
           </div>
+          <Field
+            label="Trusted senders"
+            size="lg"
+            className="mt-4"
+            error={trusted.problem || undefined}
+            help={`One per line: a whole address (scanner@yourcompany.com) or a domain (@yourcompany.com). Their mail is never dropped as automatic mail (a scanner's, a docketing system's) and isn't held to the limit below, up to ${INBOUND_SENDER_LIMITS.trustedCeiling} messages each in ${INBOUND_SENDER_LIMITS.windowMinutes} minutes to protect the desk. It must still pass the sender check (an internal message, or SPF, DKIM or DMARC), and the desk's own mail and duplicates are still dropped.`}
+          >
+            <Textarea
+              rows={3}
+              value={trustedText}
+              onChange={(e) => {
+                markDirty();
+                setTrustedText(e.target.value);
+              }}
+              placeholder={"docketing@yourcompany.com\n@yourcompany.com"}
+              spellCheck={false}
+              data-testid="hd-trusted-senders"
+            />
+          </Field>
+          <Field
+            label="Limit per sender"
+            size="lg"
+            className="mt-4"
+            error={limitError}
+            help={`Messages one sender can send in ${INBOUND_SENDER_LIMITS.windowMinutes} minutes before the rest wait and are tried again later (${INBOUND_SENDER_LIMITS.perSenderMin} to ${INBOUND_SENDER_LIMITS.perSenderMax}, normally ${INBOUND_SENDER_LIMITS.perSender}). Nothing is lost: waiting mail is taken in once the ${INBOUND_SENDER_LIMITS.windowMinutes} minutes are over.`}
+          >
+            <TextInput
+              type="number"
+              inputMode="numeric"
+              min={INBOUND_SENDER_LIMITS.perSenderMin}
+              max={INBOUND_SENDER_LIMITS.perSenderMax}
+              className="w-28"
+              value={limitText}
+              onChange={(e) => {
+                markDirty();
+                setLimitText(e.target.value);
+              }}
+              data-testid="hd-per-sender-limit"
+            />
+          </Field>
         </Card>
       </div>
       <SaveRow dirty={dirty} busy={busy} onSave={() => void save().then((ok) => ok && toast("ok", "Email settings saved."))} label="Save email settings" />

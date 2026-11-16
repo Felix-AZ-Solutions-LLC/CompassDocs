@@ -174,7 +174,7 @@ export const DESK_SETTINGS_GROUPS: DeskSettingsGroup[] = [
               { anchor: "microsoft-365", label: "Microsoft 365 mailboxes", keywords: "microsoft 365 m365 office 365 o365 outlook exchange graph shared mailbox connect" },
               { anchor: "send-from", label: "Send-from addresses", keywords: "send from sender reply from outgoing smtp spf dkim domain" },
               { anchor: "email-webhook", label: "Mail webhook", keywords: "webhook inbound forward mailgun postmark sendgrid" },
-              { anchor: "who-can-write-in", label: "Who can write in", keywords: "outside senders external allow block spam domains" },
+              { anchor: "who-can-write-in", label: "Who can write in", keywords: "outside senders external allow block spam domains trusted senders scanner automatic limit per sender" },
             ] },
         ] },
       { key: "email-templates", label: "Email templates", icon: MailPlus, tabs: false, description: "The header, body, signature and footer of each helpdesk email.", keywords: "email templates notifications messages header body signature footer wording branding", pages: [

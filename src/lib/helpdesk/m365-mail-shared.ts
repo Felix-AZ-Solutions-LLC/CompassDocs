@@ -131,6 +131,92 @@ export interface M365MessageDiag {
   reason: string;
   /** What became of it ("created", "appended", "ignored_auto", "waiting", "failed", …). */
   outcome: string;
+  /** 1.20.25: the message's Graph id, so a line's "Take in anyway" or "Try now" names it. An id, never content. */
+  message_id: string;
+  /** 1.20.25: why it was dropped, put off or failed (a short code; '' = nothing to say). M365_REASON_CODES. */
+  reason_code: string;
+  /** A safe detail for the reason: the NAME of the header that marked it automatic, "trusted", … */
+  reason_detail: string;
+  /** The ticket it became, was added to, or (a duplicate) already is on. */
+  ticket: number | null;
+  /** The help address that ticket was written to (a duplicate: "it was also sent to …"). */
+  ticket_address: string;
+  /** The CompassDocs account the reason concerns (named to admins only; never an outside sender). */
+  user: { id: number; name: string } | null;
+  /** Waiting: when it is tried next (null = at the next read). */
+  next_try_at: string | null;
+  /** The last failure, in Microsoft's or the desk's words, and Microsoft's status and code ("403 ErrorAccessDenied"). */
+  error: string;
+  error_code: string;
+  /** "Take in anyway" was used on it: the rules skipped. */
+  overrides: string[];
+  /** It may be taken in anyway (dropped by a rule an admin may skip for one message). */
+  can_take_in: boolean;
+}
+
+/** 1.20.25: the outcomes "Take in anyway" is offered for, and the rule each skips. Never a loop, a blocked portal contact or a duplicate (that offers "Open #N"). */
+export const M365_TAKE_IN_RULES: Readonly<Record<string, "auto" | "not_permitted" | "outside_sender">> = {
+  auto: "auto",
+  not_permitted: "not_permitted",
+  outside_sender: "outside_sender",
+  unverified_sender: "outside_sender",
+};
+
+/** Where a line's reason can be changed: Desk settings → Email → Who can write in. */
+export const WHO_CAN_WRITE_IN = "/desk/settings/email#who-can-write-in";
+
+/**
+ * 1.20.25: a "Last messages" line in plain words: what became of the
+ * message and why, and where the setting that would change it is.
+ * `clock` writes a time ("10:42") in the reader's own format.
+ */
+export function m365LineWords(d: M365MessageDiag, clock: (iso: string) => string = (iso) => iso): { text: string; link?: { href: string; label: string } } {
+  const who = d.user?.name || "This person";
+  const at = d.ticket_address ? d.ticket_address.replace(/@.*$/, "@") : "";
+  const err = d.error_code ? ` (${d.error_code})` : "";
+  const later = d.next_try_at ? `Tries again at ${clock(d.next_try_at)}.` : "Tries again at the next check.";
+  const settings = (label: string) => ({ href: WHO_CAN_WRITE_IN, label });
+  if (d.outcome === "waiting") {
+    if (d.reason_code === "sender_limit") {
+      return {
+        text: `Too many messages from this sender${d.reason_detail === "trusted" ? ", even for a trusted sender" : ""}. ${later}`,
+        ...(d.reason_detail === "trusted" ? {} : { link: settings("Change the limit or trust this sender") }),
+      };
+    }
+    if (d.reason_code === "desk_busy") return { text: `The desk was taking in a lot of mail at once. ${later}` };
+    if (d.reason_code === "take_in") return { text: `Being taken in anyway. ${later}` };
+    if (d.reason_code === "microsoft" && d.reason_detail === "retry_after") return { text: `Microsoft asked the desk to wait${err}. ${later}` };
+    return { text: `Microsoft didn't answer in time or asked the desk to wait${d.error ? `: ${d.error.replace(/\.$/, "")}` : ""}${err}. ${later}` };
+  }
+  if (d.outcome === "failed") {
+    if (d.reason_code === "access_denied") return { text: `Could not be taken in: Microsoft refused access to this message${err}. It's still in the Inbox. Check the mailbox's permissions, then press Try again.` };
+    return { text: `Could not be taken in${d.error ? `: ${d.error.replace(/\.$/, "")}` : ""}${err}. It's still in the Inbox. Press Try again.` };
+  }
+  const taken = d.overrides.length ? " (taken in anyway)" : "";
+  switch (d.reason_code) {
+    case "auto":
+      return { text: `Automatic mail${d.reason_detail ? ` (${d.reason_detail} header)` : ""}. Automatic mail is dropped so two systems never mail each other forever.`, link: settings("Trust this sender") };
+    case "duplicate":
+      return { text: d.ticket ? `Already taken in as #${d.ticket}${at ? ` (it was also sent to ${at})` : ""}.` : "Already taken in: the same email is already on a ticket." };
+    case "loop":
+      return { text: "The desk's own mail coming back. It's never taken in." };
+    case "not_permitted":
+      return { text: `${who}'s account can't use Get help, and mail from outside the workspace isn't accepted.`, link: settings("Accept mail from outside the workspace") };
+    case "unlinked_not_permitted":
+      return { text: `${d.ticket ? `New ticket #${d.ticket}${taken}` : `Taken in${taken}`}, not linked to ${who}: their account can't use Get help.` };
+    case "outside_sender":
+      return { text: "Mail from outside the workspace isn't accepted.", link: settings("Accept mail from outside the workspace") };
+    case "unverified_sender":
+      return { text: `The From address is ${who}'s, but it didn't pass the sender check, so it counts as mail from outside the workspace, which isn't accepted.`, link: settings("Who can write in") };
+    case "portal_blocked":
+      return { text: "The sender is a blocked customer portal contact." };
+    case "no_sender":
+      return { text: "The message had no sender address to answer." };
+    case "integration":
+      return { text: "Mail from an email integration's sender that the integration didn't turn into an alert." };
+  }
+  if (d.ticket && ["created", "appended", "follow_up"].includes(d.outcome)) return { text: `${d.outcome === "appended" ? "Added to" : "New ticket"} #${d.ticket}${taken}.` };
+  return { text: "" };
 }
 
 export interface M365AccessCheck {

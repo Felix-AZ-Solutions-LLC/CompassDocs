@@ -30,6 +30,12 @@
 //     accounting and "Try again", Inbox-only notifications and strict ids,
 //     cheap rejections and the intake's limits, meeting invites, the "Last
 //     messages" diagnostic, the object ID lookup, key rotation.
+//   - 1.20.25: every drop and wait recorded with its reason and worded; Take
+//     in anyway (one rule skipped, once, audited, never a loop or a
+//     duplicate, a message gone since); Try now and Try all waiting now; a
+//     403 on one message counted while the mailbox reads; trusted senders
+//     and the adjustable per-sender limit, on both intake paths; a colleague
+//     whose role can't use Get help, with outside senders on and off.
 //
 // hd_mailboxes and the email settings are workspace-wide: the whole file
 // holds the workspace mail lock exclusively (test/support/mail-lock), so no
@@ -2098,9 +2104,11 @@ describe("a message that cannot be taken in", () => {
   test("no answer, 'try later' and trouble with the connection itself are put off with a growing wait, and never use up a try", async () => {
     const m = inboxMessage({ subject: `${STAMP} a slow day at Microsoft` });
     // A 500, a cut connection, "too many requests", "unavailable", a sign-in and a permission problem, another 500.
+    // (1.20.25: the 403 is one for the whole mailbox, the Inbox refused too: one for this message alone counts.)
     const waits: number[] = [];
     for (const [i, status] of [500, -1, 429, 503, 401, 403, 500].entries()) {
       fake.fail.message = status;
+      fake.fail.inbox = status === 403 ? 403 : 0;
       if (i > 0) await due(m.id);
       await poll();
       const s = await state(m.id);
@@ -2361,7 +2369,9 @@ describe("last messages (how the sender check went)", () => {
     assert.equal(r.status, 200);
     const list = r.body.messages as { at: string; sender_domain: string; check: string; reason: string; outcome: string }[];
     assert.ok(list.length >= 7 && list.length <= 12, "the last few, not the whole history");
-    for (const m of list) assert.deepEqual(Object.keys(m).sort(), ["at", "check", "outcome", "reason", "sender_domain"]);
+    // 1.20.25: and why (codes, a ticket number, an account of the workspace's own, Microsoft's error code), by the message's Graph id.
+    const KEYS = ["at", "can_take_in", "check", "error", "error_code", "message_id", "next_try_at", "outcome", "overrides", "reason", "reason_code", "reason_detail", "sender_domain", "ticket", "ticket_address", "user"];
+    for (const m of list) assert.deepEqual(Object.keys(m).sort(), KEYS);
     assert.ok(list.every((m, i) => i === 0 || Date.parse(list[i - 1].at) >= Date.parse(m.at)), "newest first");
     const of = (name: string) => list.find((m) => m.sender_domain === `${name}-${tag}.example`)!;
     assert.deepEqual([of("pass").check, of("pass").outcome], ["passed", "created"]);
@@ -2386,6 +2396,377 @@ describe("last messages (how the sender check went)", () => {
     assert.equal((await call(messagesRoute.GET, req(`${API}/mailboxes/999999999/messages`, U.manager, undefined, "GET"), { id: "999999999" })).status, 404);
     assert.equal((await call(messagesRoute.GET, req(`${API}/mailboxes/x/messages`, U.manager, undefined, "GET"), { id: "x" })).status, 404);
     for (const name of ["pass", "fail", "internal", "none", "allnone", "twostamps"]) await ticketFor(`${STAMP} ${secret} ${name}`);
+  });
+});
+
+// --- 1.20.25: plain reasons, Take in anyway, Try now, trusted senders, the per-sender limit ------------------------
+
+describe("1.20.25: why a message was dropped or waits, and what an admin can do about it", () => {
+  type Line = import("../src/lib/helpdesk/m365-mail-shared").M365MessageDiag;
+  const settingsRoute = require("../src/app/api/helpdesk/admin/settings/route") as typeof import("../src/app/api/helpdesk/admin/settings/route");
+  const takeInRoute = require("../src/app/api/helpdesk/admin/m365-mail/mailboxes/[id]/take-in/route") as typeof import("../src/app/api/helpdesk/admin/m365-mail/mailboxes/[id]/take-in/route");
+  const tryNowRoute = require("../src/app/api/helpdesk/admin/m365-mail/mailboxes/[id]/try-now/route") as typeof import("../src/app/api/helpdesk/admin/m365-mail/mailboxes/[id]/try-now/route");
+  const parse = require("../src/lib/helpdesk/inbound-parse") as typeof import("../src/lib/helpdesk/inbound-parse");
+  const senders = require("../src/lib/helpdesk/inbound-senders-shared") as typeof import("../src/lib/helpdesk/inbound-senders-shared");
+  const fresh = () => {
+    m365.resetM365NotifyLimitsForTests();
+    inbound.resetInboundRateLimitsForTests();
+  };
+  const sam = { id: 0, name: "", email: "" };
+  const TRUST = `trusted-${STAMP}.example`;
+  const lines = async (): Promise<Line[]> => (await call(messagesRoute.GET, req(`${API}/mailboxes/${helpId}/messages`, U.manager, undefined, "GET"), { id: String(helpId) })).body.messages;
+  const lineOf = async (id: string) => (await lines()).find((l) => l.message_id === id)!;
+  const takeIn = (id: string, who: Person = U.manager) => call(takeInRoute.POST, req(`${API}/mailboxes/${helpId}/take-in`, who, { message: id }), { id: String(helpId) });
+  const tryNow = (id?: string, who: Person = U.manager) => call(tryNowRoute.POST, req(`${API}/mailboxes/${helpId}/try-now`, who, id ? { message: id } : {}), { id: String(helpId) });
+  const patchSettings = (body: Record<string, unknown>) => call(settingsRoute.PATCH, req("http://localhost/api/helpdesk/admin/settings", U.manager, body, "PATCH"));
+  const staff = (subject: string, over: Parameters<typeof inboxMessage>[0] = {}) =>
+    inboxMessage({ subject, from: { name: "Sam Lee", address: sam.email }, fromDomainResults: "", authAs: ["Internal"], ...over });
+  const outside = (on: boolean) => settingsLib.saveHelpdeskSettings({ outside_senders: on }, { syncMailboxes: false });
+  const email = (over: Partial<import("../src/lib/helpdesk/inbound-parse").InboundEmail> & { fromEmail: string }) => {
+    const { fromEmail, ...rest } = over;
+    return {
+      provider: "generic" as const,
+      from: { name: "Webhook Sender", email: fromEmail },
+      to: [{ name: "", email: HELP }],
+      cc: [],
+      recipients: [],
+      subject: `${STAMP} webhook ${newToken().slice(0, 6)}`,
+      text: "hello",
+      html: "",
+      stripped: "",
+      messageId: `${newToken()}@hook.example`,
+      inReplyTo: "",
+      references: [],
+      headers: {},
+      auth: { spf: "pass", dkim: "pass", dmarc: "pass" },
+      files: [],
+      ...rest,
+    };
+  };
+
+  before(async () => {
+    fresh();
+    // Sam Lee: a colleague with an account whose role can't use Get help (no role at all: the ladder role taken away).
+    sam.email = `${STAMP}-sam@example.test`;
+    sam.name = `Sam Lee ${STAMP.slice(-4)}`;
+    sam.id = (await fixtureQuery("INSERT INTO users (username, name, email, role, status, timezone) VALUES ($1, $2, $3, 'viewer', 'active', 'UTC') RETURNING id", [`${STAMP}-sam`, sam.name, sam.email])).rows[0].id;
+    await pool().query("DELETE FROM role_assignments WHERE user_id = $1", [sam.id]);
+  });
+  after(async () => {
+    fresh();
+    await outside(true);
+    await inbound.saveInboundAuthSettings({ trusted_senders: [], per_sender_limit: 20 });
+    const t = (await pool().query("SELECT id FROM hd_tickets WHERE requester_email = $1", [sam.email])).rows.map((r) => r.id);
+    await pool().query("DELETE FROM hd_tickets WHERE id = ANY($1)", [t]);
+    await pool().query("DELETE FROM audit_log WHERE actor_id = $1 OR (action = 'helpdesk.inbound.rejected' AND target_label = $2)", [sam.id, sam.email]);
+    await pool().query("UPDATE hd_m365_messages SET user_id = NULL WHERE user_id = $1", [sam.id]);
+    await fixtureQuery("DELETE FROM users WHERE id = $1", [sam.id]);
+  });
+
+  test("pure: the header that made mail automatic, the trusted list, the limit, and every line in words", () => {
+    const base = email({ fromEmail: "a@b.example" });
+    assert.equal(parse.autoGeneratedSignal({ ...base, headers: { "list-unsubscribe": "<mailto:u@x>" } }), "List-Unsubscribe");
+    assert.equal(parse.autoGeneratedSignal({ ...base, headers: { precedence: "bulk" } }), "Precedence: bulk");
+    assert.equal(parse.autoGeneratedSignal({ ...base, headers: { "auto-submitted": "auto-replied" } }), "Auto-Submitted: auto-replied");
+    assert.equal(parse.autoGeneratedSignal({ ...base, headers: { "x-auto-response-suppress": "OOF" } }), "X-Auto-Response-Suppress: OOF");
+    assert.equal(parse.autoGeneratedSignal({ ...base, from: { name: "", email: "no-reply@b.example" } }), "a no-reply@ sender address");
+    assert.equal(parse.autoGeneratedSignal(base), null);
+    assert.deepEqual(senders.cleanTrustedSenders(" Docketing@Firm.com\n@firm.com\n\n@firm.com"), { list: ["docketing@firm.com", "@firm.com"], problem: "" });
+    assert.match(senders.cleanTrustedSenders(["firm.com"]).problem, /isn't an email address or a domain/);
+    assert.equal(senders.trustedSenderListed("Scanner@Firm.com", ["@firm.com"]), true);
+    assert.equal(senders.trustedSenderListed("x@sub.firm.com", ["@firm.com"]), false, "the domain exactly, not its subdomains");
+    // A domain never covers its bounce and no-reply senders; only the exact address does.
+    for (const robot of ["no-reply@firm.com", "noreply@firm.com", "mailer-daemon@firm.com", "postmaster@firm.com", "do-not-reply@firm.com"]) {
+      assert.equal(senders.trustedSenderListed(robot, ["@firm.com"]), false, robot);
+      assert.equal(senders.trustedSenderListed(robot, ["@firm.com", robot]), true, robot);
+    }
+    for (const bad of [4, 201, 2.5, "", "x", null]) assert.ok(senders.perSenderLimitProblem(bad), String(bad));
+    assert.equal(senders.perSenderLimitProblem(5) + senders.perSenderLimitProblem(200), "");
+    const L = (over: Partial<Line>): Line => ({ at: "", sender_domain: "", check: "", reason: "", outcome: "", message_id: "x", reason_code: "", reason_detail: "", ticket: null, ticket_address: "", user: null, next_try_at: null, error: "", error_code: "", overrides: [], can_take_in: false, ...over });
+    const w = (over: Partial<Line>) => shared.m365LineWords(L(over), () => "10:42");
+    assert.equal(w({ outcome: "waiting", reason_code: "take_in" }).text, "Being taken in anyway. Tries again at the next check.");
+    assert.match(w({ outcome: "ignored_auto", reason_code: "auto", reason_detail: "List-Unsubscribe" }).text, /^Automatic mail \(List-Unsubscribe header\)/);
+    assert.equal(w({ outcome: "ignored_auto", reason_code: "auto" }).link?.href, shared.WHO_CAN_WRITE_IN);
+    assert.equal(w({ outcome: "duplicate", reason_code: "duplicate", ticket: 1047, ticket_address: "itsupport@firm.com" }).text, "Already taken in as #1047 (it was also sent to itsupport@).");
+    assert.equal(w({ outcome: "rejected_not_permitted", reason_code: "not_permitted", user: { id: 1, name: "Sam Lee" } }).text, "Sam Lee's account can't use Get help, and mail from outside the workspace isn't accepted.");
+    assert.equal(w({ outcome: "waiting", reason_code: "sender_limit", next_try_at: "x" }).text, "Too many messages from this sender. Tries again at 10:42.");
+    assert.match(w({ outcome: "failed", reason_code: "access_denied", error_code: "403 ErrorAccessDenied" }).text, /^Could not be taken in: Microsoft refused access to this message \(403 ErrorAccessDenied\)\./);
+    assert.match(w({ outcome: "waiting", reason_code: "microsoft", error: "Microsoft 365 had a problem (error 503).", error_code: "503 ErrorServerBusy", next_try_at: "x" }).text, /error 503\) \(503 ErrorServerBusy\)\. Tries again at 10:42\./);
+  });
+
+  test("each drop is recorded with its reason and worded; Take in anyway skips only that rule, once, audited", async () => {
+    fresh();
+    await outside(false);
+    try {
+      const auto = inboxMessage({ subject: `${STAMP} newsletter`, senderHeaders: [["List-Unsubscribe", "<mailto:unsub@news.example>"]] });
+      const firstId = `<${newToken()}@mail.sender.example>`;
+      const first = staff(`${STAMP} twice (staff)`, { internetMessageId: firstId });
+      const notPermitted = staff(`${STAMP} printer jam`);
+      const loop = inboxMessage({ subject: `${STAMP} our own`, from: { name: "Acme Help", address: HELP }, senderHeaders: [["X-CompassDocs-Helpdesk", "1"]] });
+      assert.deepEqual(await poll(), { ok: true });
+      // Outside senders off: the colleague's mail is dropped, and the line names them (an account of the workspace's own).
+      const np = await lineOf(notPermitted.id);
+      assert.deepEqual([np.outcome, np.reason_code, np.user, np.can_take_in], ["rejected_not_permitted", "not_permitted", { id: sam.id, name: sam.name }, true]);
+      assert.match(shared.m365LineWords(np).text, new RegExp(`^${sam.name}'s account can't use Get help`));
+      assert.equal(shared.m365LineWords(np).link?.href, shared.WHO_CAN_WRITE_IN);
+      assert.equal((await lineOf(first.id)).outcome, "rejected_not_permitted");
+      const a = await lineOf(auto.id);
+      assert.deepEqual([a.outcome, a.reason_code, a.reason_detail, a.can_take_in, a.user], ["ignored_auto", "auto", "List-Unsubscribe", true, null]);
+      const l = await lineOf(loop.id);
+      assert.deepEqual([l.outcome, l.reason_code, l.can_take_in], ["ignored_loop", "loop", false]);
+
+      // Take in anyway: the newsletter, with ONLY the automatic-mail rule skipped. Outside senders are off, so the next
+      // rule drops it, in words, and that one can be skipped as well: then it is taken in.
+      const dropped = (await row()).dropped;
+      const t0 = await takeIn(auto.id);
+      assert.equal(t0.status, 200);
+      assert.deepEqual([t0.body.line.outcome, t0.body.line.reason_code, t0.body.line.overrides, t0.body.line.can_take_in], ["rejected_outside_sender", "outside_sender", ["auto"], true]);
+      assert.equal(shared.m365LineWords(t0.body.line).text, "Mail from outside the workspace isn't accepted.");
+      assert.equal((await ticketFor(`${STAMP} newsletter`)).length, 0);
+      const t1 = await takeIn(auto.id);
+      assert.equal(t1.status, 200);
+      assert.deepEqual([t1.body.line.outcome, t1.body.line.overrides, t1.body.line.can_take_in], ["created", ["auto", "outside_sender"], false]);
+      const [ticket] = await ticketFor(`${STAMP} newsletter`);
+      assert.equal(t1.body.line.ticket, ticket.number);
+      assert.equal((await row()).dropped, dropped - 1, "no longer counted as dropped");
+      const audit0 = (await audits("helpdesk.m365.taken_in_anyway")).at(-2)!;
+      assert.deepEqual([audit0.details.reason, audit0.details.skipped, audit0.details.result], ["auto", "auto", "rejected_outside_sender"]);
+      const audit1 = (await audits("helpdesk.m365.taken_in_anyway")).at(-1)!;
+      assert.equal(audit1.actor_name, U.manager.name);
+      assert.deepEqual([audit1.details.reason, audit1.details.skipped, audit1.details.result, audit1.details.ticket], ["outside_sender", "outside_sender", "created", ticket.number]);
+      // A second click: nothing more.
+      const t2 = await takeIn(auto.id);
+      assert.deepEqual([t2.status, t2.body.already], [200, true]);
+      assert.equal((await ticketFor(`${STAMP} newsletter`)).length, 1);
+
+      // The colleague, with outside senders still off: taken in as an outside sender, unlinked, with the note.
+      const t3 = await takeIn(notPermitted.id);
+      assert.deepEqual([t3.status, t3.body.line.outcome, t3.body.line.reason_code], [200, "created", "unlinked_not_permitted"]);
+      const [np2] = await ticketFor(`${STAMP} printer jam`);
+      assert.deepEqual([np2.requester_id, np2.requester_email], [null, sam.email]);
+      const note = (await pool().query("SELECT body FROM hd_messages WHERE ticket_id = $1 AND kind = 'internal'", [np2.id])).rows.map((r) => r.body).join("\n");
+      assert.match(note, new RegExp(`${sam.name}'s account can't use Get help, so this ticket isn't linked to them`));
+      assert.match(note, /\(\/admin\/users\)/);
+      assert.equal((await audits("helpdesk.m365.taken_in_anyway")).at(-1)!.details.reason, "not_permitted");
+
+      // A duplicate offers its ticket instead; the desk's own mail is never taken in.
+      await takeIn(first.id);
+      const dup = staff(`${STAMP} twice (staff)`, { internetMessageId: firstId });
+      await poll();
+      const d = await lineOf(dup.id);
+      const [firstTicket] = await ticketFor(`${STAMP} twice (staff)`);
+      assert.deepEqual([d.outcome, d.reason_code, d.ticket, d.ticket_address, d.can_take_in], ["duplicate", "duplicate", firstTicket.number, HELP, false]);
+      assert.equal(shared.m365LineWords(d).text, `Already taken in as #${firstTicket.number} (it was also sent to help@).`);
+      const t4 = await takeIn(dup.id);
+      assert.deepEqual([t4.status, t4.body.code], [409, "duplicate"]);
+      const t5 = await takeIn(loop.id);
+      assert.deepEqual([t5.status, t5.body.code], [409, "not_allowed"]);
+      assert.equal((await ticketFor(`${STAMP} twice (staff)`)).length, 1);
+
+      // Gone from the mailbox since: said so, nothing made.
+      const gone = inboxMessage({ subject: `${STAMP} deleted later`, senderHeaders: [["Precedence", "bulk"]] });
+      await poll();
+      fake.removeMessage(HELP, gone.id);
+      const t6 = await takeIn(gone.id);
+      assert.deepEqual([t6.status, t6.body.gone, t6.body.line.outcome], [200, true, "gone"]);
+      assert.equal((await ticketFor(`${STAMP} deleted later`)).length, 0);
+      assert.equal((await audits("helpdesk.m365.taken_in_anyway")).at(-1)!.details.result, "gone");
+
+      // Who may: the Email channel's holders. A requester or an agent: 403. An unknown message: 404.
+      for (const who of [U.req, U.agent]) assert.equal((await takeIn(auto.id, who)).status, 403);
+      assert.equal((await takeIn("AAMknotthere=")).status, 404);
+      assert.ok(auditLabels.hasActionLabel("helpdesk.m365.taken_in_anyway"));
+    } finally {
+      await outside(true);
+    }
+  });
+
+  test("outside senders on: a colleague whose role can't use Get help is taken in unlinked, with a note, and audited; off: dropped (webhook too)", async () => {
+    fresh();
+    const m = staff(`${STAMP} monitor flicker`);
+    await poll();
+    const [t] = await ticketFor(`${STAMP} monitor flicker`);
+    assert.deepEqual([t.requester_id, t.requester_email], [null, sam.email], "an outside sender: never their Get help, never their account");
+    const l = await lineOf(m.id);
+    assert.deepEqual([l.outcome, l.reason_code, l.user?.id], ["created", "unlinked_not_permitted", sam.id]);
+    assert.match((await pool().query("SELECT body FROM hd_messages WHERE ticket_id = $1 AND kind = 'internal'", [t.id])).rows[0].body, /can't use Get help, so this ticket isn't linked to them/);
+    const a = (await audits("helpdesk.inbound.taken_in_unlinked")).at(-1)!;
+    assert.deepEqual([a.actor_name, a.details.reason, a.details.ticket], [sam.name, "not_permitted", t.number]);
+    assert.ok(auditLabels.hasActionLabel("helpdesk.inbound.taken_in_unlinked"));
+    // The webhook: the same pipeline, the same answers.
+    const on = await inbound.processInboundEmail(email({ fromEmail: sam.email }), { outsideSenders: true });
+    assert.deepEqual([on.body.outcome, on.why?.code], ["created", "unlinked_not_permitted"]);
+    const off = await inbound.processInboundEmail(email({ fromEmail: sam.email }), { outsideSenders: false });
+    assert.deepEqual([off.body.outcome, off.why], ["rejected_not_permitted", { code: "not_permitted", userId: sam.id }]);
+    assert.equal(JSON.stringify(off.body).includes(String(sam.id)), false, "the reason is never in what the webhook answers");
+  });
+
+  test("an account whose role can't use Get help still replies into its tickets as before: an agent's reply and a requester's are added", async () => {
+    fresh();
+    const { createTicket } = require("../src/lib/helpdesk/tickets") as typeof import("../src/lib/helpdesk/tickets"); // eslint-disable-line @typescript-eslint/no-require-imports
+    // An agent of team A whose workspace role holds no helpdesk.request (the ladder role taken away).
+    const agentEmail = `${STAMP}-agent2@example.test`;
+    const agentId = (await fixtureQuery("INSERT INTO users (username, name, email, role, status, timezone) VALUES ($1, $2, $3, 'viewer', 'active', 'UTC') RETURNING id", [`${STAMP}-agent2`, `Desk Agent ${STAMP.slice(-4)}`, agentEmail])).rows[0].id;
+    try {
+      await pool().query("DELETE FROM role_assignments WHERE user_id = $1", [agentId]);
+      await fixtureQuery("INSERT INTO hd_agent_roles (user_id, role) VALUES ($1, 'agent')", [agentId]);
+      await pool().query("INSERT INTO hd_team_members (team_id, user_id, role) VALUES ($1, $2, 'agent')", [teamA, agentId]);
+      // Sam's own ticket (an account requester), made before his role lost Get help.
+      const t = await createTicket(
+        { subject: `${STAMP} sam's own request`, body: "x", requester: { id: sam.id, name: sam.name, email: sam.email }, via: "portal", source: "portal", team_id: teamA, mailbox_id: boxHelp.id },
+        { actorId: sam.id, actorName: sam.name }
+      );
+      const tok = (await pool().query("SELECT reply_token FROM hd_tickets WHERE id = $1", [t.id])).rows[0].reply_token as string;
+      const replyTo = (fromEmail: string) => email({ fromEmail, subject: `Re: ${STAMP} sam's own request [#${t.number} ref:${tok}]`, text: `a reply from ${fromEmail}` });
+      for (const from of [agentEmail, sam.email]) {
+        const r = await inbound.processInboundEmail(replyTo(from), { outsideSenders: true });
+        assert.deepEqual([r.body.outcome, r.body.ticket, r.why], ["appended", t.number, undefined], from);
+      }
+      const authors = (await pool().query("SELECT author_id FROM hd_messages WHERE ticket_id = $1 AND via = 'email' ORDER BY id", [t.id])).rows.map((r) => r.author_id);
+      assert.deepEqual(authors, [agentId, sam.id], "added to the ticket, each as their own account");
+      assert.equal((await ticketFor(`${STAMP} sam's own request`)).length, 1, "no new, unlinked ticket");
+    } finally {
+      await pool().query("DELETE FROM hd_tickets WHERE subject = $1", [`${STAMP} sam's own request`]);
+      await pool().query("DELETE FROM hd_team_members WHERE user_id = $1", [agentId]);
+      await pool().query("DELETE FROM hd_agent_roles WHERE user_id = $1", [agentId]);
+      await pool().query("DELETE FROM audit_log WHERE actor_id = $1", [agentId]);
+      await pool().query("DELETE FROM notifications WHERE user_id = $1", [agentId]);
+      await fixtureQuery("DELETE FROM users WHERE id = $1", [agentId]);
+    }
+  });
+
+  test("Microsoft refuses one message while the mailbox reads: counted, given up on after two tries, worded with its code", async () => {
+    fresh();
+    const bad = inboxMessage({ subject: `${STAMP} locked item` });
+    const good = inboxMessage({ subject: `${STAMP} readable item` });
+    fake.failMessages.set(bad.id, [403, "ErrorAccessDenied"]);
+    try {
+      await poll();
+      assert.equal((await ticketFor(`${STAMP} readable item`)).length, 1, "the rest of the mailbox reads");
+      const s1 = await seen(bad.id);
+      assert.deepEqual([s1.state, s1.attempts], ["failed", 1], "counted, not put off for a week");
+      assert.equal((await lineOf(bad.id)).outcome, "waiting");
+      await poll();
+      const l = await lineOf(bad.id);
+      assert.deepEqual([l.outcome, l.reason_code, l.error_code], ["failed", "access_denied", "403 ErrorAccessDenied"]);
+      assert.match(shared.m365LineWords(l).text, /^Could not be taken in: Microsoft refused access to this message \(403 ErrorAccessDenied\)/);
+      assert.equal((await audits("helpdesk.m365.intake_failed")).at(-1)!.details.attempts, m365.M365_ACCESS_DENIED_TRIES);
+      assert.equal((await row()).last_error.startsWith("1 message could not be taken in"), true);
+    } finally {
+      fake.failMessages.clear();
+    }
+    // Readable again: Try again on the mailbox takes it in.
+    await call(retryRoute.POST, req(`${API}/mailboxes/${helpId}/retry`, U.manager, {}), { id: String(helpId) });
+    assert.equal((await ticketFor(`${STAMP} locked item`)).length, 1);
+    assert.equal((await row()).last_error, "");
+
+    // Several different messages refused in one round: the connection, not the messages. They wait; none is given up on.
+    const many = [1, 2, 3].map((i) => inboxMessage({ subject: `${STAMP} refused ${i}` }).id);
+    for (const id of many) fake.failMessages.set(id, [403, "ErrorAccessDenied"]);
+    const due = () => pool().query("UPDATE hd_m365_messages SET retry_at = now() - interval '1 second', updated_at = now() - interval '1 minute' WHERE mailbox_id = $1 AND message_id = ANY($2)", [helpId, many]);
+    try {
+      await poll();
+      assert.equal((await seen(many[2])).attempts, 0, `the third of ${m365.M365_ACCESS_DENIED_SPREAD} is put off, not counted`);
+      await due();
+      await poll();
+      for (const id of many) assert.notEqual((await lineOf(id)).outcome, "failed", "never given up on while several are refused");
+    } finally {
+      fake.failMessages.clear();
+    }
+    await due();
+    await poll();
+    for (const id of many) assert.equal((await seen(id)).outcome, "created");
+
+    // Microsoft asked the desk to wait (429): Try now keeps that wait, and says so.
+    const slow = inboxMessage({ subject: `${STAMP} told to wait` });
+    fake.failMessages.set(slow.id, [429, "TooManyRequests"]);
+    try {
+      await poll();
+      const held = await tryNow(slow.id);
+      assert.deepEqual([held.status, held.body.tried, held.body.held, held.body.line.reason_detail], [200, 0, true, "retry_after"]);
+      assert.match(shared.m365LineWords(held.body.line, () => "10:42").text, /^Microsoft asked the desk to wait \(429 TooManyRequests\)\. Tries again at 10:42\.$/);
+    } finally {
+      fake.failMessages.clear();
+    }
+    await pool().query("UPDATE hd_m365_messages SET retry_at = now() - interval '1 second', updated_at = now() - interval '1 minute' WHERE mailbox_id = $1 AND message_id = $2", [helpId, slow.id]);
+    await poll();
+    assert.equal((await seen(slow.id)).outcome, "created");
+  });
+
+  test("the per-sender limit is adjustable and audited; a waiting line says why and when, and Try now / Try all waiting now take it in", async () => {
+    fresh();
+    const bad = await patchSettings({ per_sender_limit: 4 });
+    assert.equal(bad.status, 400);
+    const ok = await patchSettings({ per_sender_limit: 5 });
+    assert.deepEqual([ok.status, ok.body.settings.per_sender_limit], [200, 5]);
+    const a = (await pool().query("SELECT details FROM audit_log WHERE action = 'helpdesk.settings.updated' AND actor_id = $1 ORDER BY id DESC LIMIT 1", [U.manager.id])).rows[0];
+    assert.deepEqual([a.details.changed, a.details.per_sender_limit], [["per_sender_limit"], 5]);
+    const from = { name: "Chatty", address: `chatty-${STAMP}@customer.example` };
+    const ids = Array.from({ length: 7 }, (_, i) => inboxMessage({ subject: `${STAMP} chatty ${i}`, from }).id);
+    await poll();
+    const waiting = (await lines()).filter((l) => ids.includes(l.message_id) && l.outcome === "waiting");
+    assert.equal(waiting.length, 2, "five taken in, two wait");
+    for (const w of waiting) {
+      assert.deepEqual([w.reason_code, typeof w.next_try_at], ["sender_limit", "string"]);
+      assert.match(shared.m365LineWords(w, () => "10:42").text, /^Too many messages from this sender\. Tries again at 10:42\./);
+    }
+    // The window is over (the counters start again): Try now on one, then Try all waiting now for the rest.
+    fresh();
+    const one = await tryNow(waiting[0].message_id);
+    assert.deepEqual([one.status, one.body.tried, one.body.line.outcome], [200, 1, "created"]);
+    assert.equal((await row()).last_error, "");
+    const all = await tryNow();
+    assert.deepEqual([all.status, all.body.tried, all.body.ok], [200, 1, true]);
+    assert.equal((await lineOf(waiting[1].message_id)).outcome, "created");
+    assert.equal((await audits("helpdesk.m365.retry_requested")).at(-1)!.details.now, true);
+    // Not waiting (any more): the line as it is, nothing tried.
+    const again = await tryNow(waiting[0].message_id);
+    assert.deepEqual([again.body.tried, again.body.line.outcome], [0, "created"]);
+    assert.equal((await tryNow(undefined, U.req)).status, 403);
+    // The webhook path holds the same limit.
+    fresh();
+    const hook = (n: number) => inbound.processInboundEmail(email({ fromEmail: `hook-${STAMP}@customer.example`, subject: `${STAMP} hook ${n}` }), { outsideSenders: true });
+    const answers = [];
+    for (let i = 0; i < 6; i++) answers.push((await hook(i)).status);
+    assert.deepEqual(answers, [200, 200, 200, 200, 200, 429]);
+    await patchSettings({ per_sender_limit: 20 });
+  });
+
+  test("trusted senders: never dropped as automatic mail, not held to the limit; still verified, still loop-protected, still deduplicated", async () => {
+    fresh();
+    const r = await patchSettings({ trusted_senders: [`@${TRUST}`, `scanner@${TRUST}`], per_sender_limit: 5 });
+    assert.deepEqual([r.status, r.body.settings.trusted_senders], [200, [`@${TRUST}`, `scanner@${TRUST}`]]);
+    assert.equal((await patchSettings({ trusted_senders: ["not a sender"] })).status, 400);
+    const a = (await pool().query("SELECT details FROM audit_log WHERE action = 'helpdesk.settings.updated' AND actor_id = $1 ORDER BY id DESC LIMIT 1", [U.manager.id])).rows[0];
+    assert.deepEqual(a.details.trusted_added, [`@${TRUST}`, `scanner@${TRUST}`]);
+    const scanner = { name: "Scanner", address: `scanner@${TRUST}` };
+    const autoHeaders: [string, string][] = [["Precedence", "bulk"], ["List-Unsubscribe", "<mailto:x@y.example>"]];
+    // Verified and listed: taken in, automatic or not, past the limit of five.
+    const ok = Array.from({ length: 7 }, (_, i) => inboxMessage({ subject: `${STAMP} scan ${i}`, from: scanner, senderHeaders: autoHeaders }).id);
+    // Listed, but the From failed the sender check: no exemption.
+    const forged = inboxMessage({ subject: `${STAMP} forged scan`, from: scanner, fromDomainResults: failResults(TRUST), senderHeaders: autoHeaders });
+    await poll();
+    for (const id of ok) assert.equal((await seen(id)).outcome, "created", id);
+    assert.equal((await seen(forged.id)).outcome, "ignored_auto");
+    // Loop protection and duplicates still apply (the webhook here: the same pipeline).
+    await patchSettings({ trusted_senders: [`@${TRUST}`, `@${DOMAIN}`] });
+    const loop = await inbound.processInboundEmail(email({ fromEmail: HELP, headers: { "x-compassdocs-helpdesk": "1" } }), { outsideSenders: true });
+    assert.equal(loop.body.outcome, "ignored_loop");
+    const once = email({ fromEmail: `hook@${TRUST}`, headers: { precedence: "bulk" } });
+    assert.equal((await inbound.processInboundEmail(once, { outsideSenders: true })).body.outcome, "created");
+    const dupe = await inbound.processInboundEmail(once, { outsideSenders: true });
+    assert.deepEqual(dupe.body, { ok: true, outcome: "duplicate" }, "the ticket it matched is never in what the webhook answers");
+    assert.equal(typeof dupe.why?.ticket, "number");
+    // Unverified on the webhook (no result at all, even with "trust addresses without results" on): no exemption.
+    await inbound.saveInboundAuthSettings({ trust_unverified_senders: true });
+    const bare = await inbound.processInboundEmail(email({ fromEmail: `hook@${TRUST}`, headers: { precedence: "bulk" }, auth: undefined }), { outsideSenders: true });
+    assert.equal(bare.body.outcome, "ignored_auto");
+    await inbound.saveInboundAuthSettings({ trust_unverified_senders: false });
+    // The ceiling holds even for a trusted sender.
+    assert.equal(inbound.perSenderLimitFor(true, { per_sender_limit: 5 }), senders.INBOUND_SENDER_LIMITS.trustedCeiling);
+    await patchSettings({ trusted_senders: [], per_sender_limit: 20 });
+    for (let i = 0; i < 7; i++) await ticketFor(`${STAMP} scan ${i}`);
+    await pool().query("DELETE FROM hd_tickets WHERE subject LIKE $1", [`${STAMP} webhook %`]);
   });
 });
 
@@ -2828,7 +3209,7 @@ describe("permissions on every new route", () => {
       }
     };
     walk(root);
-    assert.equal(files.length, 8);
+    assert.equal(files.length, 10);
     const gates: Record<string, string> = {};
     for (const f of files) {
       const src = fs.readFileSync(f, "utf8");
@@ -2855,6 +3236,8 @@ describe("permissions on every new route", () => {
       "POST mailboxes/[id]/check/route.ts": "channels",
       "POST mailboxes/[id]/retry/route.ts": "channels",
       "GET mailboxes/[id]/messages/route.ts": "channels",
+      "POST mailboxes/[id]/take-in/route.ts": "channels",
+      "POST mailboxes/[id]/try-now/route.ts": "channels",
       "PUT addresses/[id]/route.ts": "channels",
     });
     const stored = await getSetting(KEY);

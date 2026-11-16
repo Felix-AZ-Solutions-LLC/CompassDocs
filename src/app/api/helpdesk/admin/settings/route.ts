@@ -1,7 +1,7 @@
 // GET   /api/helpdesk/admin/settings   → { settings, inbound_path }
 // PATCH /api/helpdesk/admin/settings   any of { timezone, days, start, end, holidays, outside_senders,
 //         inbound_address, csat_enabled, email_from_name, setup_steps_done, rotate_inbound_secret: true,
-//         trust_unverified_senders }
+//         trust_unverified_senders, trusted_senders, per_sender_limit }
 //         → { settings, inbound_path }. Audited (helpdesk.settings.updated,
 //         changed keys only; helpdesk.inbound.secret_rotated for a new secret).
 //         1.20.2: inbound_address is the default mailbox's address: "" clears it, anything
@@ -9,6 +9,12 @@
 // settings.trust_unverified_senders is the email channel's sender check
 // (lib/helpdesk/inbound, its own settings key): match mail to accounts
 // even when the provider reports no SPF/DKIM/DMARC result. Off by default.
+// 1.20.25: settings.trusted_senders (addresses and @domains whose verified mail
+// is never dropped as automatic mail and is held to a 300-per-10-minutes
+// ceiling instead of the per-sender limit) and settings.per_sender_limit
+// (5-200, default 20), both channels.manage, kept beside it
+// (lib/helpdesk/inbound-senders-shared). Audited with what was added and
+// removed and the new limit.
 // Helpdesk 1.19.0 (desk capabilities: settings.manage for everything;
 // business hours sla.manage, email channel channels.manage, survey
 // csat.manage). The inbound secret is part of the
@@ -19,7 +25,7 @@
 
 import { NextResponse } from "next/server";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
-import { getInboundAuthSettings, saveInboundAuthSettings } from "@/lib/helpdesk/inbound";
+import { InboundSettingsError, getInboundAuthSettings, saveInboundAuthSettings } from "@/lib/helpdesk/inbound";
 import { readJson } from "@/lib/helpdesk/access";
 import { hdAnyCapGate, hdCan, HD_FORBIDDEN } from "@/lib/helpdesk/roles";
 import type { HdCap } from "@/lib/helpdesk/roles";
@@ -27,6 +33,7 @@ import { getHelpdeskSettings, markSetupSteps, newInboundSecret, publicSettings, 
 import type { HdSettings } from "@/lib/helpdesk/types";
 import { badRequest } from "@/lib/helpdesk/routes";
 import { mailboxAddressProblem } from "@/lib/helpdesk/mailboxes-shared";
+import { cleanTrustedSenders, perSenderLimitProblem } from "@/lib/helpdesk/inbound-senders-shared";
 
 export const dynamic = "force-dynamic";
 
@@ -41,11 +48,14 @@ async function inboundPath(gate: Gate, s: HdSettings): Promise<string | null> {
 
 async function view(gate: Gate, s: HdSettings) {
   const auth = await getInboundAuthSettings();
-  return { settings: { ...publicSettings(s), trust_unverified_senders: auth.trust_unverified_senders }, inbound_path: await inboundPath(gate, s) };
+  return {
+    settings: { ...publicSettings(s), trust_unverified_senders: auth.trust_unverified_senders, trusted_senders: auth.trusted_senders, per_sender_limit: auth.per_sender_limit },
+    inbound_path: await inboundPath(gate, s),
+  };
 }
 
 /** Which desk capability each key needs (settings.manage covers them all). */
-const KEY_CAP: Partial<Record<keyof HdSettings | "rotate_inbound_secret" | "trust_unverified_senders", HdCap>> = {
+const KEY_CAP: Partial<Record<keyof HdSettings | "rotate_inbound_secret" | "trust_unverified_senders" | "trusted_senders" | "per_sender_limit", HdCap>> = {
   timezone: "sla.manage",
   days: "sla.manage",
   start: "sla.manage",
@@ -56,6 +66,8 @@ const KEY_CAP: Partial<Record<keyof HdSettings | "rotate_inbound_secret" | "trus
   email_from_name: "channels.manage",
   rotate_inbound_secret: "channels.manage",
   trust_unverified_senders: "channels.manage",
+  trusted_senders: "channels.manage",
+  per_sender_limit: "channels.manage",
   csat_enabled: "csat.manage",
   setup_steps_done: "settings.manage",
 };
@@ -101,6 +113,11 @@ export async function PATCH(req: Request) {
     return badRequest("Working days are 1 (Monday) to 7 (Sunday).");
   }
   if (b.trust_unverified_senders !== undefined && typeof b.trust_unverified_senders !== "boolean") return badRequest("trust_unverified_senders is true or false.");
+  if (b.trusted_senders !== undefined && !Array.isArray(b.trusted_senders)) return badRequest("trusted_senders is a list of addresses and @domains.");
+  {
+    const problem = (b.trusted_senders !== undefined ? cleanTrustedSenders(b.trusted_senders).problem : "") || (b.per_sender_limit !== undefined ? perSenderLimitProblem(b.per_sender_limit) : "");
+    if (problem) return badRequest(problem);
+  }
   if (b.holidays !== undefined && (!Array.isArray(b.holidays) || b.holidays.length > 366 || b.holidays.some((d) => typeof d !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d)))) {
     return badRequest("Holidays are YYYY-MM-DD dates.");
   }
@@ -121,9 +138,23 @@ export async function PATCH(req: Request) {
   if (rotate) patch.inbound_secret = newInboundSecret();
   const { settings, changed } = await saveHelpdeskSettings(patch);
   const visible: string[] = changed.filter((k) => k !== "inbound_secret");
-  if (b.trust_unverified_senders !== undefined) {
-    const r = await saveInboundAuthSettings({ trust_unverified_senders: b.trust_unverified_senders === true });
-    if (r.changed) visible.push("trust_unverified_senders");
+  const senders: Record<string, unknown> = {};
+  if (b.trust_unverified_senders !== undefined || b.trusted_senders !== undefined || b.per_sender_limit !== undefined) {
+    let r: Awaited<ReturnType<typeof saveInboundAuthSettings>>;
+    try {
+      r = await saveInboundAuthSettings({
+        ...(b.trust_unverified_senders !== undefined ? { trust_unverified_senders: b.trust_unverified_senders === true } : {}),
+        ...(b.trusted_senders !== undefined ? { trusted_senders: b.trusted_senders } : {}),
+        ...(b.per_sender_limit !== undefined ? { per_sender_limit: b.per_sender_limit } : {}),
+      });
+    } catch (e) {
+      if (e instanceof InboundSettingsError) return badRequest(e.message);
+      throw e;
+    }
+    visible.push(...r.changed);
+    // 1.20.25: who was added to or taken off the trusted senders, and the new limit (addresses of the workspace's own choosing).
+    if (r.changed.includes("trusted_senders")) Object.assign(senders, { trusted_added: r.added, trusted_removed: r.removed });
+    if (r.changed.includes("per_sender_limit")) senders.per_sender_limit = r.settings.per_sender_limit;
   }
   if (visible.length) {
     await audit({
@@ -131,7 +162,7 @@ export async function PATCH(req: Request) {
       action: "helpdesk.settings.updated",
       targetType: "helpdesk_settings",
       targetLabel: "Helpdesk settings",
-      details: { changed: visible },
+      details: { changed: visible, ...senders },
       ip: ipFrom(req),
     });
   }

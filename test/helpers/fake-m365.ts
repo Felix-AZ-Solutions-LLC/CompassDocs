@@ -37,6 +37,9 @@
 //               notificationUrl (and refuses when it fails); deliver() and
 //               lifecycle() POST what Graph would.
 //   activation  a new app's sign-in is refused for `signInDelayMs`.
+//   one message 1.20.25: `failMessages` refuses the reads of one message by
+//               its id (a 403 ErrorAccessDenied on an item whose permissions
+//               were changed) while the mailbox and its other mail read.
 
 import { randomBytes, randomUUID } from "node:crypto";
 import http from "node:http";
@@ -148,9 +151,14 @@ export interface FakeM365 {
   failAttachmentId: string;
   /**
    * Fail a kind of call: { sendMail: 403, subscriptions: 403, patch: 500, move: 404, attachments: 500, message: 500,
-   * body: 500, attachmentValue: 503, mime: 500, token: 503 }. -1 = no answer at all (the connection is cut).
+   * body: 500, attachmentValue: 503, mime: 500, token: 503, inbox: 403 }. -1 = no answer at all (the connection is cut).
    */
   fail: Record<string, number>;
+  /**
+   * 1.20.25: fail the reads of ONE message (by its id) while the mailbox and every other message read:
+   * [status, Graph error code], e.g. [403, "ErrorAccessDenied"]. Cleared by reset.
+   */
+  failMessages: Map<string, [number, string]>;
   /** Seconds in a Retry-After header on every 429 and 503 the fake answers (0 = none). */
   retryAfter: number;
   /** A new app cannot sign in for this long. */
@@ -239,6 +247,7 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
     maxInflight: 0,
     failAttachmentId: "",
     fail: {},
+    failMessages: new Map(),
     retryAfter: 0,
     signInDelayMs: 0,
     failStep: "",
@@ -548,7 +557,17 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
       mb.sent.push(Buffer.from(text, "base64"));
       return send(res, 202);
     }
-    if (rest === "/mailFolders/inbox" && method === "GET") return send(res, 200, { id: INBOX_ID, displayName: "Inbox" });
+    if (rest === "/mailFolders/inbox/messages" && method === "GET") {
+      // 1.20.25: the Inbox's messages (the desk's "do this mailbox's messages still read?" probe); refused with the Inbox.
+      if (fake.fail.inbox) return send(res, fake.fail.inbox, gerr("ErrorAccessDenied", "Access is denied. Check credentials and try again."));
+      const top = Number(url.searchParams.get("$top") ?? 10);
+      return send(res, 200, { value: [...mb.messages.values()].filter((m) => m.folder === "inbox").slice(0, top).map((m) => messageJson(m, select)) });
+    }
+    if (rest === "/mailFolders/inbox" && method === "GET") {
+      // 1.20.25: fail.inbox stands for a refusal of the whole mailbox (the Inbox itself refused), not of one message.
+      if (fake.fail.inbox) return send(res, fake.fail.inbox, gerr("ErrorAccessDenied", "Access is denied. Check credentials and try again."));
+      return send(res, 200, { id: INBOX_ID, displayName: "Inbox" });
+    }
     if (rest === "/mailFolders" && method === "GET") {
       const want = (url.searchParams.get("$filter") ?? "").match(/^displayName eq '(.*)'$/)?.[1]?.replace(/''/g, "'");
       const value = [...mb.folders].filter(([, name]) => want === undefined || name === want).map(([id, displayName]) => ({ id, displayName }));
@@ -600,6 +619,8 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
       const tail = msgPath[2] ?? "";
       const m = mb.messages.get(id);
       if (!m) return send(res, 404, gerr("ErrorItemNotFound", "The specified object was not found in the store."));
+      const failOne = fake.failMessages.get(id);
+      if (failOne && method === "GET") return send(res, failOne[0], gerr(failOne[1], "Access is denied. Check credentials and try again."));
       if (tail === "" && method === "GET") {
         inflight++;
         fake.maxInflight = Math.max(fake.maxInflight, inflight);
@@ -691,6 +712,7 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
       delegated.clear();
       log.length = 0;
       fake.requests.length = 0;
+      fake.failMessages.clear();
       Object.assign(fake, { fail: {}, retryAfter: 0, delayMs: 0, maxInflight: 0, failAttachmentId: "", signInDelayMs: 0, failStep: "", deleteFails: false, deviceTenant: tenantId, devicePending: 1, evilNextLink: false });
       return send(res, 200, { ok: true });
     }
