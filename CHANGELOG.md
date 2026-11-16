@@ -4,6 +4,29 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.24] - 2026-11-16
+
+Upcoming events in the desk's top bar.
+
+### Added
+- **The next event in the top bar.** A pill next to Claude shows the next
+  timed event that hasn't ended in the next 14 days: Now while it runs, then
+  its time, Tomorrow, a weekday or a date. All-day events are never in the
+  pill; it's hidden when nothing timed is coming up and shrinks on narrow
+  windows.
+- **Every upcoming event, one click away.** The pill opens a list grouped by
+  day: all-day events first (with Day 2 of 5 on longer ones), then timed
+  events in order, and "Today: N all-day events" at the top when there are
+  any. An event opens that day in the Calendar for all teams, without
+  changing your saved Calendar view.
+- **Today's count on the Calendar icon.** The rail shows how many of today's
+  timed events haven't ended, in your time zone; it drops as each one ends,
+  with no reload, and is hidden at 0. All-day and past events never count.
+
+### Changed
+- **The Calendar page follows a link** to a day or team while it is already
+  open.
+
 ## [1.20.23] - 2026-11-16
 
 Desk departments.

@@ -57,6 +57,7 @@ import {
   CALENDAR_PREFS_DEFAULTS,
   checkCalendarSettings,
   checkEventInput,
+  dayOf,
   dayStart,
   daysBetween,
   EVENT_LIMITS,
@@ -84,6 +85,8 @@ import {
   type HdTicketEvent,
   type HdTicketEventView,
 } from "./desk-calendar-shared";
+// 1.20.24: the top bar's upcoming events and the rail's count.
+import { UPCOMING_HORIZON_DAYS, UPCOMING_LIMIT, type HdUpcomingEvents } from "./desk-calendar-upcoming-shared";
 
 export * from "./desk-calendar-shared";
 
@@ -735,6 +738,67 @@ async function recurringInRange(teams: number[] | "all", teamId: number, after: 
     }
   }
   return out.sort((a, b) => a.at.localeCompare(b.at));
+}
+
+/**
+ * 1.20.24: the desk top bar's upcoming events and the Calendar rail icon's
+ * count (lib/helpdesk/desk-calendar-upcoming-shared has the rules). The
+ * events of tickets the viewer may see on the Calendar page (scopeSql: their
+ * teams' and their own, never binned or merged), not cancelled, that are
+ * still to come in the `days` calendar days from today in `tz`: a timed
+ * event that has not ended by `now` and starts before the horizon's end,
+ * and an all-day event with a day in [today, today + days − 1] (its days
+ * are calendar days, as on the Calendar page). Recurrence: a repeating
+ * meeting invite puts only its first date on the calendar (setTicketEvent),
+ * so there is nothing to expand. One query, no per-row reads.
+ *
+ * Indexed: every candidate ends after now − 2 days and starts before the
+ * horizon's end + 2 days (the 2 days of slack cover an all-day event's own
+ * zone being up to 26 hours from the viewer's), so the scan is the events
+ * still running or to come (idx_hd_ticket_events_end), cut at the horizon
+ * (idx_hd_ticket_events_start), whatever an event's length.
+ */
+export async function upcomingEvents(user: U, opts: { tz: string; now?: Date; days?: number }): Promise<HdUpcomingEvents> {
+  const tz = validZone(opts.tz) ? opts.tz : "UTC";
+  const now = opts.now ?? new Date();
+  const days = Math.max(1, Math.min(opts.days ?? UPCOMING_HORIZON_DAYS, EVENT_LIMITS.rangeDays));
+  const today = dayOf(now.getTime(), tz);
+  const last = addDays(today, days - 1);
+  const endAt = new Date(dayStart(addDays(today, days), tz));
+  const SLACK = 2 * 86_400_000;
+  const teams = await agentTeamIds(user);
+  const params: unknown[] = [];
+  const scope = scopeSql(teams, user.id, params);
+  params.push(new Date(now.getTime() - SLACK), new Date(endAt.getTime() + SLACK), now, endAt, today, last);
+  const n = params.length;
+  const [lo, hi, pNow, pEnd, pToday, pLast] = [n - 5, n - 4, n - 3, n - 2, n - 1, n];
+  const rows = await hq<{ number: number; subject: string; place: string; starts_at: string; ends_at: string; all_day: number; start_date: string | null; end_date: string | null }>(
+    `SELECT t.number, t.subject, e.place, e.starts_at, e.ends_at, e.all_day,
+            to_char(e.start_date, 'YYYY-MM-DD') AS start_date, to_char(e.end_date, 'YYYY-MM-DD') AS end_date
+       FROM hd_ticket_events e JOIN hd_tickets t ON t.id = e.ticket_id
+      WHERE ${scope} AND e.cancelled_at IS NULL
+        AND e.ends_at > $${lo} AND e.starts_at < $${hi}
+        AND ((e.all_day = 1 AND e.start_date <= $${pLast}::date AND e.end_date >= $${pToday}::date)
+          OR (e.all_day = 0 AND e.ends_at > $${pNow} AND e.starts_at < $${pEnd}))
+      ORDER BY e.starts_at, t.number LIMIT ${UPCOMING_LIMIT + 1}`,
+    params
+  );
+  return {
+    timezone: tz,
+    today,
+    horizon_days: days,
+    events: rows.slice(0, UPCOMING_LIMIT).map((r) => ({
+      number: r.number,
+      subject: r.subject,
+      place: r.place,
+      starts_at: new Date(r.starts_at).toISOString(),
+      ends_at: new Date(r.ends_at).toISOString(),
+      all_day: r.all_day === 1,
+      start_date: r.all_day === 1 ? r.start_date : null,
+      end_date: r.all_day === 1 ? r.end_date : null,
+    })),
+    truncated: rows.length > UPCOMING_LIMIT,
+  };
 }
 
 /**
