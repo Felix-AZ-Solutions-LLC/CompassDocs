@@ -412,6 +412,9 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.webhook.tested": "Sent a test to a helpdesk webhook",
   "helpdesk.webhook.auto_disabled": "Turned off a failing helpdesk webhook",
   "helpdesk.workflow_run.cancelled": "Cancelled a workflow run",
+  // 1.20.21 (lib/helpdesk/workflow-start): an agent started a request type's workflow from the desk; the target label
+  // names the workflow and the version the run pinned, details.summary reads "Workflow started by <agent>: …".
+  "helpdesk.workflow_run.started": "Started a workflow",
   "helpdesk.workflow_run.step_retried": "Retried a workflow step",
   "helpdesk.workflow_run.step_skipped": "Skipped a workflow step",
   // Claude connector helpdesk tools (1.19.1, agent V1): rows carry details.via "mcp".

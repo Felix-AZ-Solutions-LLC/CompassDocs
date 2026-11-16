@@ -42,6 +42,7 @@ import { HD_CUSTOM_FIELDS_SCHEMA } from "./helpdesk/custom-fields-schema";
 import { HD_EMAIL_HTML_SCHEMA } from "./helpdesk/email-html-schema";
 import { HD_LIVE_SCHEMA } from "./helpdesk/live-schema";
 import { HD_REPLY_LOCK_SCHEMA } from "./helpdesk/reply-lock-schema";
+import { HD_WORKFLOW_START_SCHEMA } from "./helpdesk/workflow-start-schema";
 import { createHash, randomBytes } from "node:crypto";
 import { SEED_SPACES, SEED_DOCS } from "./seed-data";
 import { hashPassword } from "./password";
@@ -2427,6 +2428,8 @@ const SCHEMA_SQL = `
   ${HD_LIVE_SCHEMA}
   -- The reply lock: who holds a ticket's public reply (1.20.20, lib/helpdesk/reply-lock-schema; after hd_messages, hd_ticket_presence, settings).
   ${HD_REPLY_LOCK_SCHEMA}
+  -- Start a workflow from the desk: a start's idempotency keys (1.20.21, lib/helpdesk/workflow-start-schema; after hd_tickets, users).
+  ${HD_WORKFLOW_START_SCHEMA}
   --- end Helpdesk 1.19.0 ---------------------------------------------------
   ${EMAIL_PARTS_SCHEMA}
   ${NOTIFY_POLICY_SCHEMA}

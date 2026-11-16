@@ -379,9 +379,22 @@ export function hdRateLimited(key: string, max: number, windowMs: number): boole
   return w.count > max;
 }
 
+/**
+ * Testing only (1.20.21): COMPASSDOCS_TEST_REQUEST_LIMIT_SCALE multiplies the
+ * new-request limits below. The e2e rig makes every spec's tickets as one
+ * admin, so a full run passes 60 in the hour and later specs got 429s that
+ * pass on their own. A whole number from 1 to 100; anything else is 1.
+ * Never set this in production.
+ */
+function requestLimitScale(): number {
+  const n = Number(process.env.COMPASSDOCS_TEST_REQUEST_LIMIT_SCALE);
+  return Number.isInteger(n) && n >= 1 && n <= 100 ? n : 1;
+}
+
 /** A requester's new requests: 10 a minute, 60 an hour. */
 export function requestCreateLimited(userId: number): boolean {
-  return hdRateLimited(`hd-new-m:${userId}`, 10, 60_000) || hdRateLimited(`hd-new-h:${userId}`, 60, 3_600_000);
+  const k = requestLimitScale();
+  return hdRateLimited(`hd-new-m:${userId}`, 10 * k, 60_000) || hdRateLimited(`hd-new-h:${userId}`, 60 * k, 3_600_000);
 }
 
 /** Messages on requests and tickets: 30 a minute per person. */

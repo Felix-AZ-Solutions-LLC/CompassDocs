@@ -31,6 +31,12 @@ export interface HdHookContext {
   noAutoFollow?: boolean;
   /** 1.19.2 (agent W5): an email's own To/Cc (lower-case): those people already have it, so the notice mails them no copy. */
   directRecipients?: string[];
+  /**
+   * 1.20.21 (lib/helpdesk/workflow-start): a request an agent raised from the desk with a workflow:
+   * called inside the run's insert transaction (engine startWorkflowForRequest `onStarted`), so the
+   * "Workflow started by …" note lands before the run's first step and names the pinned version.
+   */
+  onWorkflowStarted?: (client: import("pg").PoolClient, run: import("./engine").StartedRun) => Promise<void>;
 }
 
 async function safely(step: string, fn: () => Promise<unknown>): Promise<void> {
@@ -77,7 +83,7 @@ export async function afterTicketCreated(
   if (ticket.request_type_id && ticket.parent_ticket_id === null) {
     await safely("engine.startWorkflowForRequest", async () => {
       const { startWorkflowForRequest } = await import("./engine");
-      await startWorkflowForRequest(ticket.id);
+      await startWorkflowForRequest(ticket.id, { onStarted: ctx.onWorkflowStarted });
     });
   }
   if (!ctx.silent && ticket.source !== "workflow") {

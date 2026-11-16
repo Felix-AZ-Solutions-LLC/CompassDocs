@@ -3239,6 +3239,54 @@ One agent at a time writes a ticket's public reply (1.20.20; components in
   "Nobody is writing a reply right now." when there are none. Both releases
   ask first.
 
+## Helpdesk: start a workflow from the desk
+
+An agent starts a request type's workflow without leaving the desk (1.20.21;
+components in `components/helpdesk/desk/workflow-start`, rules in
+`lib/helpdesk/workflow-start`, capability **Start a workflow**,
+`workflows.start`).
+
+- **Where.** "Start a workflow…" (`Workflow`) is an item of the ticket's …
+  menu, after the major incident items and before Merge, in its own group.
+  It is left out (not disabled) without the capability and on a ticket that
+  is solved, closed, merged, a workflow task or another child ticket.
+- **The dialog** is a `Modal` (`max-w-2xl`, scrolling inside past the
+  viewport): the title with `Workflow`, a lede naming the requester ("For Sam
+  Lee, on their behalf: …"), then, **before anything is chosen, what will
+  happen**: a neutral strip (`role="note"`, `rounded-lg border
+  border-slate-200 bg-slate-50 px-3 py-2.5`) with `Workflow` "On this ticket"
+  or `TicketPlus` "On a new request" in `font-semibold` and one sentence
+  (`startModeSentence`). The outcome is the server's, never the agent's
+  choice, so it is a statement, not a radio group.
+- **Then the request type** (a `Select` in a `Field`, help "Starts New
+  starter (version 3, 4 steps) · IT.") and the type's own questions through
+  Get help's **`FormFields`** (`help/RequestForm`): one layout and one set of
+  checks (`answerErrors`, the API's `validateAnswers`) for Get help, this
+  dialog and New ticket. Never re-implement a request form. A field filled
+  from the directory says whose ("From Sam Lee's directory entry",
+  `prefilledHelp`). The first missing answer takes focus on submit.
+- **The primary follows the outcome**: "Start on this ticket" (`Workflow`)
+  or "Open a request and start" (`TicketPlus`); Cancel beside it. No
+  primary while there is nothing to start. No types: `SectionEmpty` saying
+  when one shows, linked to Request types for those who manage them. A
+  ticket that can't start one (closed, a task, or a requester with no
+  account or portal sign-in, or who can't use Get help): its reason as a
+  `notice-warn` line. A customer-portal requester's lede says "the customer
+  portal" where an account's says "Get help".
+- **After**: a toast ("New starter started on #1047.", or "Request #1052
+  opened and New starter started." with **Open #1052**), the pane and the
+  queue reload; the timeline carries the agent's internal note "Workflow
+  started by Sam Lee: New starter (version 3)", on both tickets with a link
+  to the other when a new request was opened. A refusal is the dialog's
+  `FormError`; when the ticket changed meanwhile the strip is reloaded with
+  the new outcome before anything is done.
+- **New ticket** gains "Request type (optional)" under the requester (only
+  with the capability, listing the types that requester could use). Choosing
+  one shows its questions in a bordered group (`rounded-lg border
+  border-slate-200 p-3`), makes the subject optional (its help shows the
+  derived one), turns Team's and Priority's first option into "The request
+  type's", and the primary into "Create and start" when it has a workflow.
+
 ## Helpdesk: saved views
 
 Personal and team queue views (1.19.1, mock-up #1). Components live in
