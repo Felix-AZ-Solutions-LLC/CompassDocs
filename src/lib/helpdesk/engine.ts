@@ -59,6 +59,7 @@ import { audit } from "../audit";
 import type { AuditActor } from "../audit";
 import { logEvent } from "../log";
 import { hq, hqOne, withTx } from "./db-core";
+import type { HdQueryable } from "./db-core";
 import { mdInline } from "./md-inline";
 import { resolveManager, spaceOwner, teamLeadIds } from "./approvals";
 import { answerText } from "./request-types";
@@ -998,13 +999,54 @@ export async function advanceRun(runId: number, opts: AdvanceOptions = {}): Prom
 // --- Entry points ----------------------------------------------------------------------
 
 /**
+ * The workflow a request of this type starts: the type's own link
+ * (hd_request_types.workflow_id) when it is published, else, for a type
+ * with no link, a published workflow whose trigger names the type. Only one
+ * with steps counts. 1.20.21: shared with the desk's Start a workflow
+ * (lib/helpdesk/workflow-start), so what it offers is what starts.
+ */
+export async function workflowForRequestType(
+  typeId: number,
+  client?: HdQueryable
+): Promise<{ id: number; title: string; version: number; definition: HdWorkflowDefinitionB } | undefined> {
+  const w = await hqOne<{ id: number; title: string; version: number; definition: HdWorkflowDefinitionB }>(
+    `SELECT w.id, w.title, w.version, w.definition FROM hd_workflows w
+      WHERE w.published = 1
+        AND (w.id = (SELECT rt.workflow_id FROM hd_request_types rt WHERE rt.id = $1)
+             OR ((SELECT rt.workflow_id FROM hd_request_types rt WHERE rt.id = $1) IS NULL
+                 AND (w.definition->'trigger'->>'request_type_id')::int = $1))
+      ORDER BY w.id LIMIT 1`,
+    [typeId],
+    client
+  );
+  if (!w || !Array.isArray(w.definition?.steps) || w.definition.steps.length === 0) return undefined;
+  return w;
+}
+
+/** 1.20.21: what startWorkflowForRequest's `onStarted` is told about the run it just created. */
+export interface StartedRun {
+  run_id: number;
+  ticket_id: number;
+  workflow_id: number;
+  workflow_title: string;
+  workflow_version: number;
+}
+
+/**
  * Start the workflow of a new request, when its type links a published
  * workflow (hd_request_types.workflow_id; else a published workflow whose
  * trigger names the type). No-op for a request that has a run already, a
  * workflow task ticket, or a type without one. Call after the request's
  * insert has committed (lib/helpdesk/events afterTicketCreated does).
+ * 1.20.21: `onStarted` runs inside the run's insert transaction, before its
+ * first step, so a line it writes (the desk's "Workflow started by …") comes
+ * before the steps' own and names the version the run pinned. A throw there
+ * rolls the start back.
  */
-export async function startWorkflowForRequest(ticketId: number, opts: { now?: Date } = {}): Promise<{ run_id: number } | null> {
+export async function startWorkflowForRequest(
+  ticketId: number,
+  opts: { now?: Date; onStarted?: (client: PoolClient, run: StartedRun) => Promise<void> } = {}
+): Promise<{ run_id: number } | null> {
   const runId = await withTx(async (client) => {
     const t = await hqOne<{ id: number; request_type_id: number | null; parent_ticket_id: number | null; workflow_run_id: number | null; source: string; status: string }>(
       "SELECT id, request_type_id, parent_ticket_id, workflow_run_id, source, status FROM hd_tickets WHERE id = $1 FOR UPDATE",
@@ -1013,17 +1055,8 @@ export async function startWorkflowForRequest(ticketId: number, opts: { now?: Da
     );
     if (!t || !t.request_type_id || t.parent_ticket_id || t.workflow_run_id || t.source === "workflow" || DONE_TICKET.has(t.status)) return null;
     if (await hqOne("SELECT 1 FROM hd_workflow_runs WHERE ticket_id = $1", [ticketId], client)) return null;
-    const w = await hqOne<{ id: number; title: string; version: number; definition: HdWorkflowDefinitionB }>(
-      `SELECT w.id, w.title, w.version, w.definition FROM hd_workflows w
-        WHERE w.published = 1
-          AND (w.id = (SELECT rt.workflow_id FROM hd_request_types rt WHERE rt.id = $1)
-               OR ((SELECT rt.workflow_id FROM hd_request_types rt WHERE rt.id = $1) IS NULL
-                   AND (w.definition->'trigger'->>'request_type_id')::int = $1))
-        ORDER BY w.id LIMIT 1`,
-      [t.request_type_id],
-      client
-    );
-    if (!w || !Array.isArray(w.definition?.steps) || w.definition.steps.length === 0) return null;
+    const w = await workflowForRequestType(t.request_type_id, client);
+    if (!w) return null;
     const cursor: Cursor = { definition: w.definition, index: 0, workflow_title: w.title };
     const run = await hqOne<{ id: number }>(
       `INSERT INTO hd_workflow_runs (workflow_id, workflow_version, ticket_id, state, current, started_at)
@@ -1032,6 +1065,7 @@ export async function startWorkflowForRequest(ticketId: number, opts: { now?: Da
       client
     );
     await client.query("UPDATE hd_tickets SET workflow_run_id = $2 WHERE id = $1", [ticketId, run!.id]);
+    if (opts.onStarted) await opts.onStarted(client, { run_id: run!.id, ticket_id: ticketId, workflow_id: w.id, workflow_title: w.title, workflow_version: w.version });
     return run!.id;
   });
   if (!runId) return null;

@@ -87,6 +87,13 @@ export const HD_CAPABILITIES = {
   // checked on each linked ticket's team; running one on the incident's.
   "incidents.link": { section: "tickets", label: "Link tickets to a major incident", hint: "Link and unlink their teams' tickets to an open major incident" },
   "incidents.manage": { section: "tickets", label: "Run major incidents", hint: "Declare one, post updates to everyone affected, set its Get help banner and solve it with its linked tickets" },
+  // 1.20.21 (lib/helpdesk/workflow-start): start a request type's workflow from the desk, on an open
+  // ticket (Start a workflow…) or a new one (New ticket's Request type). Checked on the ticket's team.
+  "workflows.start": {
+    section: "tickets",
+    label: "Start a workflow",
+    hint: "Start a request type's workflow for a ticket's requester, on the ticket or on a new request linked to it",
+  },
   "tickets.sla_override": { section: "tickets", label: "Override a ticket's SLA", hint: "Change the due times of one ticket" },
   "tickets.export": { section: "tickets", label: "Export tickets", hint: "Download tickets and reports as CSV" },
   // 1.19.4 (C7, lib/helpdesk/recycle-bin): deleting moves a ticket to the
@@ -150,6 +157,7 @@ export const HD_CAP_SCOPE: Partial<Record<HdCap, HdCap>> = {
   "tickets.bulk": "tickets.view_all",
   "incidents.link": "tickets.view_all",
   "incidents.manage": "tickets.view_all",
+  "workflows.start": "tickets.view_all",
   "tickets.sla_override": "tickets.view_all",
   // 1.19.4 (C7): deleting, restoring and deleting for good are per team, like every other ticket change.
   "tickets.delete": "tickets.view_all",
@@ -191,6 +199,8 @@ const AGENT: HdCap[] = [
   "tickets.bulk",
   "incidents.link",
   "macros.manage_personal",
+  // 1.20.21: Agent and up. Not Newbie: their replies wait for review, and a workflow sends notices and asks approvers.
+  "workflows.start",
 ];
 const TEAM_LEAD: HdCap[] = [
   ...AGENT,
@@ -254,8 +264,15 @@ export type HdRoleOverrides = Partial<Record<Exclude<HdRole, "admin">, HdCap[]>>
  * The lift is worked out on every read from the stored lists, so it never
  * comes back once an admin has saved the matrix (v 2).
  */
-export const HD_MATRIX_VERSION = 4;
-export const HD_CAPS_SINCE: Partial<Record<HdCap, number>> = { "tickets.merge": 2, "tickets.bulk": 2, "incidents.link": 3, "incidents.manage": 3, "replies.take_over": 4 };
+export const HD_MATRIX_VERSION = 5;
+export const HD_CAPS_SINCE: Partial<Record<HdCap, number>> = {
+  "tickets.merge": 2,
+  "tickets.bulk": 2,
+  "incidents.link": 3,
+  "incidents.manage": 3,
+  "replies.take_over": 4,
+  "workflows.start": 5,
+};
 
 /** What a role customised before a capability existed must hold for it to be lifted on: every one of `all`, at least one of `any`. */
 export const HD_CAPS_SINCE_NEEDS: Partial<Record<HdCap, { all?: readonly HdCap[]; any?: readonly HdCap[] }>> = {
@@ -269,6 +286,11 @@ export const HD_CAPS_SINCE_NEEDS: Partial<Record<HdCap, { all?: readonly HdCap[]
   "incidents.manage": { all: ["tickets.change_status", "tickets.reply_public"] },
   // 1.20.20: taking over a reply is for those who reply.
   "replies.take_over": { all: ["tickets.reply_public"] },
+  // 1.20.21 (v5): a customised Agent, Team lead or Manager column that still works a queue (the basic
+  // agent capability: their teams' tickets, or every team's) and replies directly gets "Start a
+  // workflow"; a column whose replies wait for review (Newbie-like) is not lifted, as Newbie's default
+  // lacks it. Admin always holds it.
+  "workflows.start": { all: ["tickets.reply_public"], any: ["tickets.view_team", "tickets.view_all"] },
 };
 
 function liftable(cap: HdCap, held: readonly HdCap[]): boolean {

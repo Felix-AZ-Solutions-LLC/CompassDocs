@@ -59,7 +59,7 @@ const STEP_ICON: Record<HdNextStep["kind"], React.ReactNode> = {
 };
 
 /** The subject a form-only request is filed under: "New laptop or device: Developer laptop". */
-export function deriveSubject(t: HdRequestType, answers: HdFormAnswers): string {
+export function deriveSubject(t: Pick<HdRequestType, "title" | "form">, answers: HdFormAnswers): string {
   const choice = t.form.find((f) => (f.type === "choice" || f.type === "select") && answers[f.key]);
   const label = choice?.options?.find((o) => o.value === String(answers[choice.key]))?.label;
   const textField = t.form.find((f) => f.type === "text" && typeof answers[f.key] === "string" && answers[f.key]);
@@ -79,6 +79,79 @@ export function asksSubject(t: HdRequestType | null): boolean {
 
 export function isBlank(v: HdFormAnswers[string] | undefined): boolean {
   return v === undefined || v === null || v === "" || v === false;
+}
+
+/**
+ * The form's own checks, the ones the API makes (lib/helpdesk/request-types
+ * validateAnswers): a required question left empty, a number that isn't one.
+ * Keyed by field, in form order. 1.20.21: shared with the desk's Start a
+ * workflow and New ticket.
+ */
+export function answerErrors(fields: HdFormField[], answers: HdFormAnswers): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const f of fields) {
+    if (f.required && isBlank(answers[f.key])) out[f.key] = f.type === "choice" ? "Pick one." : "This is needed.";
+    if (f.type === "number" && !isBlank(answers[f.key]) && Number.isNaN(Number(answers[f.key]))) out[f.key] = "Enter a number.";
+  }
+  return out;
+}
+
+/**
+ * A request type's questions, laid out as Get help lays them out:
+ * consecutive one-line fields pair up, choices, long text and checkboxes
+ * take the row. 1.20.21: the desk's Start a workflow and New ticket render
+ * the same component, so a form reads and validates the same everywhere.
+ * `prefilledHelp` is the line under a field filled from the directory
+ * ("From your directory entry" here; the desk names the requester).
+ */
+export function FormFields({
+  fields,
+  answers,
+  onChange,
+  errors,
+  refs,
+  defaults = {},
+  prefilledHelp,
+}: {
+  fields: HdFormField[];
+  answers: HdFormAnswers;
+  onChange: (key: string, value: HdFormAnswers[string]) => void;
+  errors: Record<string, string>;
+  refs: React.RefObject<Map<string, HTMLElement | null>>;
+  defaults?: HdFormAnswers;
+  prefilledHelp?: string;
+}) {
+  const rows: HdFormField[][] = [];
+  for (const f of fields) {
+    const last = rows[rows.length - 1];
+    if (SHORT.has(f.type) && last && last.length === 1 && SHORT.has(last[0].type)) last.push(f);
+    else rows.push([f]);
+  }
+  const control = (f: HdFormField) => (
+    <FormFieldControl
+      key={f.key}
+      field={f}
+      value={answers[f.key]}
+      onChange={(v) => onChange(f.key, v)}
+      error={errors[f.key]}
+      refs={refs}
+      prefilled={f.key in defaults}
+      prefilledHelp={prefilledHelp}
+    />
+  );
+  return (
+    <>
+      {rows.map((row) =>
+        row.length === 2 ? (
+          <div key={row[0].key} className="grid gap-5 sm:grid-cols-2">
+            {row.map(control)}
+          </div>
+        ) : (
+          control(row[0])
+        )
+      )}
+    </>
+  );
 }
 
 export function RequestForm({
@@ -122,11 +195,7 @@ export function RequestForm({
       if (!subject.trim()) out.__subject = "Say in a few words what you need.";
       if (!body.trim()) out.__body = "Tell us a little more.";
     }
-    for (const f of fields) {
-      if (f.required && isBlank(answers[f.key])) out[f.key] = f.type === "choice" ? "Pick one." : "This is needed.";
-      if (f.type === "number" && !isBlank(answers[f.key]) && Number.isNaN(Number(answers[f.key]))) out[f.key] = "Enter a number.";
-    }
-    return out;
+    return { ...out, ...answerErrors(fields, answers) };
   }, [tried, freeForm, subject, body, fields, answers]);
 
   function set(key: string, value: HdFormAnswers[string]) {
@@ -187,14 +256,6 @@ export function RequestForm({
           { kind: "finish", title: "Sorted, and solved", detail: "Reply any time to reopen it" },
         ];
 
-  // Consecutive one-line fields pair up; choices, long text and checkboxes take the row.
-  const rows: HdFormField[][] = [];
-  for (const f of fields) {
-    const last = rows[rows.length - 1];
-    if (SHORT.has(f.type) && last && last.length === 1 && SHORT.has(last[0].type)) last.push(f);
-    else rows.push([f]);
-  }
-
   const Icon = requestTypeIcon(type?.icon ?? "lifebuoy");
   const title = type?.title ?? "Send a request";
   return (
@@ -243,17 +304,7 @@ export function RequestForm({
           </>
         )}
 
-        {rows.map((row) =>
-          row.length === 2 ? (
-            <div key={row[0].key} className="grid gap-5 sm:grid-cols-2">
-              {row.map((f) => (
-                <FormFieldControl key={f.key} field={f} value={answers[f.key]} onChange={(v) => set(f.key, v)} error={errors[f.key]} refs={refs} prefilled={f.key in defaults} />
-              ))}
-            </div>
-          ) : (
-            <FormFieldControl key={row[0].key} field={row[0]} value={answers[row[0].key]} onChange={(v) => set(row[0].key, v)} error={errors[row[0].key]} refs={refs} prefilled={row[0].key in defaults} />
-          )
-        )}
+        <FormFields fields={fields} answers={answers} onChange={set} errors={errors} refs={refs} defaults={defaults} />
 
         <RequestDevice value={assetId} onChange={setAssetId} />
 
@@ -310,6 +361,7 @@ export function FormFieldControl({
   error,
   refs,
   prefilled,
+  prefilledHelp = "From your directory entry",
 }: {
   field: HdFormField;
   value: HdFormAnswers[string] | undefined;
@@ -318,9 +370,11 @@ export function FormFieldControl({
   refs: React.RefObject<Map<string, HTMLElement | null>>;
   /** Prefilled from the person's directory entry: say so under the control. */
   prefilled: boolean;
+  /** 1.20.21: the words for that ("From Sam Lee's directory entry" in the desk). */
+  prefilledHelp?: string;
 }) {
   const label = f.required ? f.label : `${f.label} (optional)`;
-  const help = f.help || (prefilled && f.default_from ? "From your directory entry" : undefined);
+  const help = f.help || (prefilled && f.default_from ? prefilledHelp : undefined);
   const ref = (el: HTMLElement | null) => {
     refs.current.set(f.key, el);
   };

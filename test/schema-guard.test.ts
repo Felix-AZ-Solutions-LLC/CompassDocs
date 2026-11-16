@@ -54,6 +54,7 @@ import { HD_CUSTOM_FIELDS_SCHEMA } from "../src/lib/helpdesk/custom-fields-schem
 import { HD_EMAIL_HTML_SCHEMA } from "../src/lib/helpdesk/email-html-schema";
 import { HD_LIVE_SCHEMA } from "../src/lib/helpdesk/live-schema";
 import { HD_REPLY_LOCK_SCHEMA } from "../src/lib/helpdesk/reply-lock-schema";
+import { HD_WORKFLOW_START_SCHEMA } from "../src/lib/helpdesk/workflow-start-schema";
 
 /** The schema blocks db.ts interpolates into SCHEMA_SQL (1.19.0). */
 const INTERPOLATED: Record<string, string> = {
@@ -100,6 +101,7 @@ const INTERPOLATED: Record<string, string> = {
   HD_EMAIL_HTML_SCHEMA,
   HD_LIVE_SCHEMA,
   HD_REPLY_LOCK_SCHEMA,
+  HD_WORKFLOW_START_SCHEMA,
 };
 
 const COLUMN_PREDICATE = (table: string, column: string) =>

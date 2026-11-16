@@ -143,6 +143,8 @@ export const HELPDESK_SWEEPS: HelpdeskSweep[] = [
   { name: "hd_presence", run: async (now) => (await import("./helpdesk/presence")).sweepPresence(now) },
   // 1.20.20 reply lock: locks whose holder went quiet or left the ticket.
   { name: "hd_reply_locks", run: async () => (await import("./helpdesk/reply-lock")).sweepReplyLocks() },
+  // 1.20.21 Start a workflow from the desk: start keys older than a day.
+  { name: "hd_workflow_start_ids", run: async (now) => (await import("./helpdesk/workflow-start")).sweepStartIds(now) },
   // V8 (1.19.1 recurring tickets): open the schedules' due occurrences.
   { name: "hd_recurring", run: async (now) => (await import("./helpdesk/recurring")).recurringSweep(now) },
   // V6 (1.19.1 customer portal): spent links, expired sessions, contacts who never signed in.

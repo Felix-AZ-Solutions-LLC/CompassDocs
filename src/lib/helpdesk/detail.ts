@@ -289,10 +289,35 @@ const DIRECTORY_BUILTIN = new Set(["title", "department", "office", "phone", "mo
  * default_from "directory:<key>" takes the entry's built-in (title,
  * department, office, phone…) or custom value; "directory:manager" on a
  * user field takes the manager's account id. Missing values are left out.
+ *
+ * 1.20.21 (security review): `viewer` is who will see the answers when that
+ * is someone other than the requester (the desk's Start a workflow and New
+ * ticket prefill another person's form). A field the directory keeps from
+ * that viewer (an admins-only field, a restricted contact column, the far
+ * end of an admins-only people field: lib/directory-visibility
+ * hiddenKeysFor, as every directory page applies it) is never prefilled for
+ * them. The requester themselves (Get help) sees their own entry as before.
  */
-export async function directoryDefaults(userId: number, form: HdFormField[]): Promise<import("./types").HdFormAnswers> {
-  const wanted = form.filter((f) => typeof f.default_from === "string" && f.default_from.startsWith("directory:"));
+export async function directoryDefaults(
+  userId: number,
+  form: HdFormField[],
+  opts: { viewer?: { id: number; role: Role } } = {}
+): Promise<import("./types").HdFormAnswers> {
+  let wanted = form.filter((f) => typeof f.default_from === "string" && f.default_from.startsWith("directory:"));
   if (!wanted.length) return {};
+  const viewer = opts.viewer;
+  if (viewer && viewer.id !== userId) {
+    const [{ isDirectoryAdmin }, { hiddenKeysFor }, { listFields, getColumnVisibility }] = await Promise.all([
+      import("../directory-viewer"),
+      import("../directory-visibility"),
+      import("../directory"),
+    ]);
+    if (!isDirectoryAdmin(viewer)) {
+      const hidden = hiddenKeysFor(await listFields(), await getColumnVisibility(), false);
+      wanted = wanted.filter((f) => !hidden.has(f.default_from!.slice("directory:".length)));
+      if (!wanted.length) return {};
+    }
+  }
   const p = await hqOne<Record<string, unknown> & { id: number; custom: Record<string, unknown> }>(
     `SELECT p.* FROM directory_people p WHERE p.hidden = 0 AND p.id = (SELECT directory_person_id FROM users WHERE id = $1)`,
     [userId]

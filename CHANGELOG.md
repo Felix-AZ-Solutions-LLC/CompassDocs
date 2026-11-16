@@ -4,6 +4,48 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.21] - 2026-11-16
+
+Agents start a workflow from the desk.
+
+### Added
+- **Start a workflow on a ticket.** The ticket's … menu has **Start a
+  workflow…**. Pick a request type that runs a published workflow and fill
+  in its form, with the same questions and checks as Get help, prefilled
+  from the requester's directory entry. The dialog says up front where the
+  workflow will run.
+- **On this ticket or on a new request.** A ticket with no request type yet
+  becomes that request and its workflow runs on it, with progress in the
+  Workflow and Request details cards. A ticket that is already a request
+  opens a new request for the same requester, and an internal note on each
+  links to the other.
+- **New ticket, Request type.** The desk's New ticket form has an optional
+  request type; choosing one shows its form and the workflow starts when the
+  ticket is created.
+- **New capability, Start a workflow.** On by default for Agent, Team lead
+  and Manager; admins always have it, Newbies don't. Desks with a customised
+  role matrix get it on columns that can see a queue and send replies.
+- **Audit and notes.** Each start writes "Workflow started by Sam Lee" with
+  the workflow and its version, and an audit entry.
+
+### Changed
+- **Only types the requester could choose are offered:** types open to
+  everyone or to a group they belong to, for an active account that can use
+  Get help. A customer-portal contact is offered the portal's own types, and
+  the new request stays in their portal.
+- **A new request goes to its type's team** only when you can open tickets
+  there.
+- **POST /api/helpdesk/tickets** now refuses a request type that starts a
+  workflow unless the agent has Start a workflow (403) and the requester
+  could choose that type (400).
+- **Directory values hidden from you are never prefilled** into a form you
+  fill in for someone else.
+
+### Testing
+- **COMPASSDOCS_TEST_REQUEST_LIMIT_SCALE** (testing only) multiplies the
+  new-request limits for the e2e rig, so full runs stop hitting 429s. Never
+  set it in production.
+
 ## [1.20.20] - 2026-11-15
 
 One agent writes a ticket's reply at a time.

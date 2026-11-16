@@ -16,6 +16,12 @@
 //        (1.20.6: category and subcategory are names from the admin's list, lib/helpdesk/categories;
 //        anything else answers 400 { error, code: "category_not_listed" | "subcategory_not_listed", allowed })
 //        an agent's ticket on someone's behalf (source 'desk') → 201 { ticket }
+//        1.20.21: a request_type_id whose type starts a published workflow (lib/helpdesk/workflow-start
+//        newTicketWorkflowCheck) needs desk capability workflows.start in the ticket's team (else 403)
+//        and a type the requester could pick in Get help themselves (else 400); the workflow starts on
+//        create (afterTicketCreated), with the internal note "Workflow started by <agent>: <workflow>
+//        (version n)" and an audit entry (helpdesk.workflow_run.started). A type with no workflow is
+//        filed as before. GET /api/helpdesk/tickets/request-types lists the types for a requester.
 // Helpdesk 1.19.0 (helpdesk.agent).
 
 import { NextResponse } from "next/server";
@@ -27,7 +33,9 @@ import { attachToMessage, pendingAttachments } from "@/lib/helpdesk/attachments"
 import { badRequest, originOf, textField } from "@/lib/helpdesk/routes";
 import { hq, hqOne } from "@/lib/helpdesk/db-core";
 import { hdCan, HD_FORBIDDEN } from "@/lib/helpdesk/roles";
-import type { HdFormAnswers } from "@/lib/helpdesk/types";
+import { ipFrom } from "@/lib/audit";
+import { newTicketWorkflowCheck } from "@/lib/helpdesk/workflow-start";
+import type { HdFormAnswers, HdRequestType } from "@/lib/helpdesk/types";
 
 export const dynamic = "force-dynamic";
 
@@ -79,9 +87,10 @@ export async function POST(req: Request) {
 
   let requestTypeId: number | null = null;
   let answers: HdFormAnswers = {};
+  let rt: HdRequestType | undefined;
   if (b.request_type_id !== undefined && b.request_type_id !== null) {
     requestTypeId = Number(b.request_type_id);
-    const rt = Number.isInteger(requestTypeId) ? await getRequestType(requestTypeId) : undefined;
+    rt = Number.isInteger(requestTypeId) ? await getRequestType(requestTypeId) : undefined;
     if (!rt) return badRequest("Unknown request type.");
     const checked = await validateAnswers(rt.form, b.answers ?? {});
     if (!checked.ok) return badRequest(checked.error);
@@ -131,6 +140,14 @@ export async function POST(req: Request) {
   const attachments = await pendingAttachments(b.attachments, { userId: gate.id, ticketId: 0 });
   if (!attachments) return badRequest("One of the files is not available. Upload it again.");
 
+  // 1.20.21 (lib/helpdesk/workflow-start): a request type that starts a workflow needs workflows.start in the
+  // ticket's team and a type the requester could use themselves; the run's "Workflow started by …" note and audit.
+  let started: Awaited<ReturnType<typeof newTicketWorkflowCheck>> | null = null;
+  if (rt) {
+    started = await newTicketWorkflowCheck(gate, rt, requester, teamId ?? null, { ip: ipFrom(req) });
+    if (!started.ok) return NextResponse.json({ error: started.error }, { status: started.status });
+  }
+
   const ticket = await createTicket(
     {
       subject,
@@ -150,8 +167,9 @@ export async function POST(req: Request) {
       tags,
       attachments,
     },
-    { actorId: gate.id, actorName: gate.name, origin: originOf(req) }
+    { actorId: gate.id, actorName: gate.name, origin: originOf(req), ...(started?.ok && started.onWorkflowStarted ? { onWorkflowStarted: started.onWorkflowStarted } : {}) }
   );
+  if (started?.ok) await started.after(ticket);
   if (attachments.length) {
     const first = (await hq<{ id: number }>("SELECT id FROM hd_messages WHERE ticket_id = $1 ORDER BY id LIMIT 1", [ticket.id]))[0];
     if (first) await attachToMessage(attachments.map((x) => x.id), ticket.id, first.id, { userId: gate.id });

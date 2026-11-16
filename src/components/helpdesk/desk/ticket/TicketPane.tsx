@@ -73,6 +73,8 @@ import { popoutAllowed, useReplyElsewhere } from "../popout/useReplyPopout";
 import { ReplyElsewhere } from "../popout/ReplyElsewhere";
 import { clearHandoff, readDraft, writeDraft, type PopoutMode } from "../popout/reply-popout";
 import { DeleteTicketsDialog } from "../recycle-bin/DeleteTicketsDialog";
+// 1.20.21: Start a workflow from the desk (lib/helpdesk/workflow-start).
+import { useStartWorkflowMenu } from "../workflow-start/StartWorkflow";
 
 const PILL_TONE: Record<string, string> = {
   info: "bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-500/15 dark:text-sky-300",
@@ -405,6 +407,7 @@ export function TicketPane({ number }: { number: number }) {
                 onDeleted={() => { refreshQueue(); router.push(`/desk${qs}`); }}
                 onRestored={() => { refreshQueue(); router.push(`/desk/tickets/${t.number}${qs}`); }}
                 onShared={() => { void load(true); people.reload(); }}
+                onWorkflowStarted={() => { void load(true); refreshQueue(); }}
               />
             )}
           </div>
@@ -507,6 +510,7 @@ function TicketMoreMenu({
   onMerged,
   onShared,
   onRestored,
+  onWorkflowStarted,
 }: {
   ticket: HdTicketDetail["ticket"];
   number: number;
@@ -518,19 +522,23 @@ function TicketMoreMenu({
   onShared?: () => void;
   /** 1.19.4 (C7): the delete toast's Undo put it back. */
   onRestored?: () => void;
+  /** 1.20.21: a workflow was started from this ticket (on it, or on a new request linked to it). */
+  onWorkflowStarted?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [merging, setMerging] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
   const incident = useIncidentMenu(ticket);
   const share = useShareMenu(ticket, { onShared });
+  // 1.20.21: "Start a workflow…" (../workflow-start), workflows.start on an open ticket that is not a task.
+  const workflow = useStartWorkflowMenu(ticket, { onStarted: onWorkflowStarted });
   // 1.19.4 (C7): "Delete ticket…" moves it to the recycle bin (../recycle-bin DeleteTicketsDialog, mock-up v1).
   const [deleting, setDeleting] = useState(false);
   function remove() {
     setOpen(false);
     setDeleting(true);
   }
-  if (!share.any && !canDelete && !mergeFrom && !incident.any) return null;
+  if (!share.any && !canDelete && !mergeFrom && !incident.any && !workflow.any) return null;
   return (
     <div className="relative">
       <button
@@ -546,11 +554,13 @@ function TicketMoreMenu({
         <MoreHorizontal aria-hidden />
       </button>
       <Popover open={open} onClose={() => setOpen(false)} triggerRef={btn} role="menu" label={`Ticket #${number}`} align="end" width="w-64">
-        {/* 1.19.4 order (mock-up u1): share, copy link, print (C6) | incidents | merge | delete (C7). */}
+        {/* 1.19.4 order (mock-up u1): share, copy link, print (C6) | incidents | start a workflow (1.20.21) | merge | delete (C7). */}
         {share.items(() => setOpen(false))}
-        {(incident.any || mergeFrom || canDelete) && <MenuSeparator />}
+        {(incident.any || workflow.any || mergeFrom || canDelete) && <MenuSeparator />}
         {incident.items(() => setOpen(false))}
-        {incident.any && (mergeFrom || canDelete) && <MenuSeparator />}
+        {incident.any && (workflow.any || mergeFrom || canDelete) && <MenuSeparator />}
+        {workflow.items(() => setOpen(false))}
+        {workflow.any && (mergeFrom || canDelete) && <MenuSeparator />}
         {mergeFrom && (
           <MenuItem icon={<GitMerge />} onClick={() => { setOpen(false); setMerging(true); }}>
             Merge into another ticket…
@@ -573,6 +583,7 @@ function TicketMoreMenu({
         />
       )}
       {incident.dialogs}
+      {workflow.dialogs}
       {canDelete && (
         <DeleteTicketsDialog
           open={deleting}
