@@ -72,10 +72,11 @@ export function DeskNewChip() {
  */
 export function DeskNewStrip({ className = "mb-4" }: { className?: string }) {
   const ctx = useDeskNew();
-  if (!ctx || !ctx.state.strip) return null;
+  // 1.20.27: a release with no New pages shows no strip at all.
+  if (!ctx || !ctx.state.strip || DESK_NEW_PAGES.length === 0) return null;
   const names = andList(DESK_NEW_PAGES.map((p) => p.label));
   return (
-    <div role="note" className={`flex items-start gap-2 rounded-lg border border-compass-200 bg-compass-50 px-3 py-2.5 text-sm text-slate-800 print:hidden ${className}`}>
+    <div role="note" className={`notice-info flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm print:hidden ${className}`}>
       <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-compass-600" aria-hidden />
       <p className="min-w-0 flex-1">
         <b className="font-semibold text-slate-900">New in {ctx.state.release}:</b> {names}. The <DeskNewChip /> badge goes once you&apos;ve opened the page.

@@ -243,7 +243,7 @@ export function AppearanceSettings() {
             Panels let the artwork show through, blurred so text stays easy to read. People who turn on Reduce transparency in their device settings always get Solid.
           </p>
           <div className="mt-4 border-t border-slate-100 pt-4">
-            <Toggle
+            <Toggle size="full"
               label="Let agents choose their own"
               help="From their menu: your artwork, one of their own, or none."
               checked={f.agents_choose}

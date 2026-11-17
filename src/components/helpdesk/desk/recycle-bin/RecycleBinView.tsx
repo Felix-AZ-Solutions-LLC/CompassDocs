@@ -175,7 +175,7 @@ export function RecycleBinView() {
               <span className="hidden flex-1 sm:block" />
               {n > 0 && (
                 <div className="flex flex-wrap items-center gap-2" role="region" aria-label="Selected deleted tickets">
-                  <span className="text-sm font-semibold text-compass-800" aria-live="polite">
+                  <span className="text-sm font-semibold text-compass-ink-strong" aria-live="polite">
                     {n} selected
                   </span>
                   <Button variant="secondary" icon={<Undo2 />} busy={busy === "restore"} disabled={!!busy} onClick={() => void restore([...picked])}>

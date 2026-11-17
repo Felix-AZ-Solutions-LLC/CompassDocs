@@ -320,10 +320,13 @@ export async function setupChecklist(): Promise<{ steps: SetupStepState[]; done:
   const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
   const steps: SetupStepState[] = [
     { key: "teams", done: ticked.has("teams") || c.teams > 0, summary: c.teams ? `${plural(c.teams, "team")} · ${plural(c.agents, "agent")}` : "" },
-    { key: "hours", done: ticked.has("hours") || c.sla > 0, summary: c.sla ? "Using your reply targets" : "" },
-    { key: "email", done: ticked.has("email") || !!s.inbound_secret, summary: emailSummary },
+    { key: "hours", done: ticked.has("hours") || c.sla > 0, summary: c.sla ? `${plural(c.sla, "reply target")} set` : "" },
+    // 1.20.27: done only once there is an address to forward (a mailbox, or the pre-1.20.2 single address).
+    // A tick or an inbound secret alone said "done" beside an Email page reading "No addresses yet".
+    { key: "email", done: !!emailSummary, summary: emailSummary },
     { key: "forms", done: ticked.has("forms") || c.types > 0, summary: c.types ? plural(c.types, "request type") : "" },
-    { key: "csat", done: ticked.has("csat"), summary: s.csat_enabled ? "Asking after every solved request" : "" },
+    // 1.20.27: the survey switched on is the step done, whether or not the box was ever ticked.
+    { key: "csat", done: ticked.has("csat") || !!s.csat_enabled, summary: s.csat_enabled ? "Asking after every solved request" : "" },
   ];
   const done = steps.filter((x) => x.done).length;
   return { steps, done, total: steps.length, setup_complete: s.setup_complete || c.teams > 0 };

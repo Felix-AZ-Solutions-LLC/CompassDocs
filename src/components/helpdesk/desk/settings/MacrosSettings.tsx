@@ -93,7 +93,7 @@ export function MacrosSettings() {
       <PageHeader
         icon={<Zap />}
         title="Macros"
-        subtitle="Canned replies for the questions you answer every week. Agents type / in a reply to use one."
+        subtitle="One-click actions: a reply plus a status, tags or a team. Agents type / in a reply to use one."
         actions={
           <Button icon={<Plus />} onClick={() => setEditing("new")}>
             New macro

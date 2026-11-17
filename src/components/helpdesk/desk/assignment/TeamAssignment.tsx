@@ -294,7 +294,10 @@ function People({
     >
       {auto && <NextUp view={view} />}
       {view.members.length === 0 ? (
-        <SectionEmpty className="px-4 py-6">Nobody is in {view.team.name} yet. Add people in Settings → Teams.</SectionEmpty>
+        // 1.20.27: the place is a link (§Empty states), not prose.
+        <SectionEmpty className="px-4 py-6" action={{ href: `/desk/settings/teams/${view.team.id}`, label: `Add people to ${view.team.name}` }}>
+          Nobody is in {view.team.name} yet.
+        </SectionEmpty>
       ) : (
         <ul className="divide-y divide-slate-100">
           {view.members.map((m) => (

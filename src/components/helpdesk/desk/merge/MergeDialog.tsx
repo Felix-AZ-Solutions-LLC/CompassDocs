@@ -188,7 +188,7 @@ export function MergeDialog({
               <label
                 key={t.number}
                 className={`flex cursor-pointer gap-3 rounded-lg border p-3 transition ${
-                  checked ? "border-compass-300 bg-compass-50/60" : "border-slate-200 hover:bg-slate-50"
+                  checked ? "border-compass-300 dark:border-compass-500 bg-compass-50/60" : "border-slate-200 hover:bg-slate-50"
                 }`}
               >
                 <input

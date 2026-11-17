@@ -203,7 +203,7 @@ export function AgentsSettings() {
                 </option>
               ))}
             </Select>
-            <Select dense className="w-auto" aria-label="Filter by team" value={teamFilter} onChange={(e) => setTeamFilter(e.target.value)}>
+            <Select dense className="w-auto max-w-56" aria-label="Filter by team" value={teamFilter} onChange={(e) => setTeamFilter(e.target.value)}>
               <option value="">All teams</option>
               {data.teams.map((t) => (
                 <option key={t.id} value={t.id}>
@@ -378,7 +378,8 @@ function BuyAgentsLink({ href, className = "" }: { href: string; className?: str
 /** The licence's agent allowance under the page header: the meter, and a warning past it. */
 function AgentAllowance({ d }: { d: AgentsData }) {
   if (d.licensed === null) {
-    return <p className="mb-4 text-sm text-slate-500">{agentsNoun(d.used)} · unlimited on your licence</p>;
+    // 1.20.27: no count here; the list's filter says it right under ("82 agents" twice, 40px apart).
+    return <p className="mb-4 text-sm text-slate-500">Unlimited agents on your licence.</p>;
   }
   // In grace nothing is refused: no warning, the meter's text says so (and by how much it will be over).
   const grace = !d.enforced;
@@ -434,7 +435,7 @@ function TeamChecks({ teams, value, onChange, legend }: { teams: TeamLite[]; val
     <fieldset>
       <legend className="mb-1 text-xs font-medium text-slate-500">{legend}</legend>
       {teams.length === 0 ? (
-        <SectionEmpty>No teams yet. Create them on the Teams page first.</SectionEmpty>
+        <SectionEmpty action={{ href: "/desk/settings/teams", label: "Open Teams" }}>No teams yet. Create them on the Teams page first.</SectionEmpty>
       ) : (
         <div className="grid gap-1 sm:grid-cols-2">
           {teams.map((t) => (

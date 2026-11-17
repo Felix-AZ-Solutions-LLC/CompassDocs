@@ -90,7 +90,7 @@ export function WorkflowsLayout({ children }: { children: ReactNode }) {
       <div className="flex min-h-0 min-w-0 flex-1">
         <aside
           aria-label="Workflows"
-          className={`min-h-0 w-full shrink-0 flex-col border-r border-slate-200 bg-surface lg:flex lg:w-64 ${open ? "hidden" : "flex"}`}
+          className={`min-h-0 w-full shrink-0 flex-col border-slate-200 bg-surface lg:flex lg:w-64 lg:border-r ${open ? "hidden" : "flex"}`}
         >
           <div className="flex items-center justify-between gap-2 px-4 pb-2 pt-4">
             <h2 className="text-base font-semibold text-slate-900">Workflows</h2>

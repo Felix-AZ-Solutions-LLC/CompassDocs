@@ -14,7 +14,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageContainer } from "@/components/PageWidth";
 import { SaveRow } from "@/components/SaveRow";
 import { LoadingRow } from "@/components/Spinner";
-import { Table, Td, Th } from "@/components/Table";
+import { TABLE_HEAD_ROW } from "@/components/Table";
 import { toast } from "@/components/Toasts";
 import { useLeaveGuard, useUnsavedChanges } from "@/lib/use-unsaved";
 import { HD_PRIORITIES, HD_PRIORITY_LABEL, type HdBusinessHours, type HdPriority, type HdSlaPolicy } from "@/lib/helpdesk/types";
@@ -132,7 +132,7 @@ export function SlaSettings() {
             ))}
           </Select>
         </div>
-        <p className="rounded-lg border border-compass-200 bg-compass-50/70 px-3 py-2 text-sm text-slate-700">
+        <p className="notice-info rounded-lg border px-3 py-2 text-sm">
           Business hours come from each team&apos;s calendar: its office hours and holidays.{" "}
           <Link href="/desk/settings/calendars" className="link font-medium">
             Manage calendars
@@ -144,47 +144,55 @@ export function SlaSettings() {
           </Card>
         )}
         {scoped === null && <Card id="targets" className="scroll-mt-6" title="Targets by priority" description="The clock pauses while a ticket waits on the requester or is on hold." padding="none">
-          <Table scroll minWidth="40rem">
-            <thead>
-              <tr>
-                <Th>Priority</Th>
-                <Th>First reply</Th>
-                <Th>Resolve</Th>
-                <Th fit>Counts</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {targets.map((t, i) => (
-                <tr key={t.priority} className="border-b border-slate-100 last:border-b-0">
-                  <Td className="font-medium text-slate-800">{HD_PRIORITY_LABEL[t.priority]}</Td>
-                  <Td>
-                    <div className="flex gap-1.5">
-                      <TextInput dense type="number" min={1} className="w-20" aria-label={`First reply for ${HD_PRIORITY_LABEL[t.priority]}`} value={t.first_reply} onChange={(e) => setT(i, { first_reply: e.target.value })} />
-                      <Select dense className="w-auto" aria-label={`Unit for ${HD_PRIORITY_LABEL[t.priority]} first reply`} value={t.first_unit} onChange={(e) => setT(i, { first_unit: e.target.value as Target["first_unit"] })}>
-                        <option value="minutes">minutes</option>
-                        <option value="hours">hours</option>
-                      </Select>
-                    </div>
-                  </Td>
-                  <Td>
-                    <div className="flex gap-1.5">
-                      <TextInput dense type="number" min={1} className="w-20" aria-label={`Resolution for ${HD_PRIORITY_LABEL[t.priority]}`} value={t.resolve} onChange={(e) => setT(i, { resolve: e.target.value })} />
-                      <Select dense className="w-auto" aria-label={`Unit for ${HD_PRIORITY_LABEL[t.priority]} resolution`} value={t.resolve_unit} onChange={(e) => setT(i, { resolve_unit: e.target.value as Target["resolve_unit"] })}>
-                        <option value="hours">hours</option>
-                        <option value="days">business days</option>
-                      </Select>
-                    </div>
-                  </Td>
-                  <Td fit>
-                    <Select dense className="w-auto" aria-label={`How ${HD_PRIORITY_LABEL[t.priority]} counts time`} value={t.business_hours ? "1" : "0"} onChange={(e) => setT(i, { business_hours: e.target.value === "1" })}>
-                      <option value="1">Business hours</option>
-                      <option value="0">Around the clock</option>
+          {/* 1.20.27 (STYLEGUIDE, "A settings list that must stack on a phone"): a grid list,
+              not a 40rem table that hid Resolve past a phone's edge. The header row (TABLE_HEAD_ROW) shows
+              from sm; under it each priority stacks its three controls, each under a caption. */}
+          <div className={`hidden gap-4 px-4 py-2.5 sm:grid sm:grid-cols-[7rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,auto)] ${TABLE_HEAD_ROW}`} aria-hidden>
+            <span>Priority</span>
+            <span>First reply</span>
+            <span>Resolve</span>
+            <span>Counts</span>
+          </div>
+          <ul role="list" aria-label="Targets by priority" className="divide-y divide-slate-100">
+            {targets.map((t, i) => (
+              <li key={t.priority} className="grid grid-cols-1 gap-2.5 px-4 py-3 sm:grid-cols-[7rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,auto)] sm:items-center sm:gap-4">
+                <span className="text-sm font-medium text-slate-800">{HD_PRIORITY_LABEL[t.priority]}</span>
+                <div>
+                  <span className="mb-1 block text-xs font-medium text-slate-500 sm:hidden" aria-hidden>
+                    First reply
+                  </span>
+                  <div className="flex gap-1.5">
+                    <TextInput dense type="number" min={1} className="w-20" aria-label={`First reply for ${HD_PRIORITY_LABEL[t.priority]}`} value={t.first_reply} onChange={(e) => setT(i, { first_reply: e.target.value })} />
+                    <Select dense className="w-auto" aria-label={`Unit for ${HD_PRIORITY_LABEL[t.priority]} first reply`} value={t.first_unit} onChange={(e) => setT(i, { first_unit: e.target.value as Target["first_unit"] })}>
+                      <option value="minutes">minutes</option>
+                      <option value="hours">hours</option>
                     </Select>
-                  </Td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
+                  </div>
+                </div>
+                <div>
+                  <span className="mb-1 block text-xs font-medium text-slate-500 sm:hidden" aria-hidden>
+                    Resolve
+                  </span>
+                  <div className="flex gap-1.5">
+                    <TextInput dense type="number" min={1} className="w-20" aria-label={`Resolution for ${HD_PRIORITY_LABEL[t.priority]}`} value={t.resolve} onChange={(e) => setT(i, { resolve: e.target.value })} />
+                    <Select dense className="w-auto" aria-label={`Unit for ${HD_PRIORITY_LABEL[t.priority]} resolution`} value={t.resolve_unit} onChange={(e) => setT(i, { resolve_unit: e.target.value as Target["resolve_unit"] })}>
+                      <option value="hours">hours</option>
+                      <option value="days">business days</option>
+                    </Select>
+                  </div>
+                </div>
+                <div>
+                  <span className="mb-1 block text-xs font-medium text-slate-500 sm:hidden" aria-hidden>
+                    Counts
+                  </span>
+                  <Select dense className="w-auto" aria-label={`How ${HD_PRIORITY_LABEL[t.priority]} counts time`} value={t.business_hours ? "1" : "0"} onChange={(e) => setT(i, { business_hours: e.target.value === "1" })}>
+                    <option value="1">Business hours</option>
+                    <option value="0">Around the clock</option>
+                  </Select>
+                </div>
+              </li>
+            ))}
+          </ul>
           <FormError className="m-4">{tried ? errs.targets : undefined}</FormError>
         </Card>}
       </div>

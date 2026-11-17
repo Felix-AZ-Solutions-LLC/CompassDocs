@@ -317,12 +317,18 @@ export function TicketPane({ number }: { number: number }) {
         <PageHeader className="sr-only" title={`Ticket #${t.number}: ${t.subject}`} />
         {/* A major incident's own ticket, or one linked to it (1.19.2, agent W1). */}
         {can && <IncidentBanner number={t.number} refreshKey={t.updated_at} />}
+        {/* 1.20.27: the subject block grows from 22rem, so on a desk pane the actions keep their row
+            beside it and on a phone they wrap under it (Solve and More were pushed off a 390px screen). */}
         <div className="flex flex-wrap items-start gap-3">
-          <div className="min-w-[min(100%,18rem)] flex-1">
+          <div className="min-w-0 flex-1 basis-[min(100%,22rem)]">
             <p className="text-xs text-slate-500">
               #{t.number}
               {t.import_ref && typeof t.source_ref?.import_label === "string" && <span data-testid="import-ref"> · {t.source_ref.import_label}</span>}
-              {t.team_name && ` · ${t.team_name}`} · opened <RelativeTime value={t.created_at} /> by {t.requester_name || t.requester_email}
+              {t.team_name && ` · ${t.team_name}`} ·{" "}
+              <span className="whitespace-nowrap">
+                opened <RelativeTime value={t.created_at} />
+              </span>{" "}
+              by {t.requester_name || t.requester_email}
               {/* 1.20.2: the help address it came in on, while more than one is listed (lib/helpdesk/mailboxes). */}
               {d.mailboxes && t.mailbox_address && <span data-testid="ticket-address"> · to {t.mailbox_address}</span>}
               {d.parent && (
@@ -342,6 +348,12 @@ export function TicketPane({ number }: { number: number }) {
             <h2 id="ticket-subject" className="mt-1 text-xl font-bold text-slate-900">
               {t.subject}
             </h2>
+            {/* 1.20.27: the workflow state sits with the subject's other chips, not beside the status pill as a second status. */}
+            {t.in_workflow && !closed && (
+              <span className="mt-1.5 inline-flex">
+                <span className={chipClass("accent")}>{HD_IN_WORKFLOW_LABEL}</span>
+              </span>
+            )}
             {can && <TicketPresence number={t.number} className="mt-1.5" />}
             {vip?.vip &&<VipChip size="md" reason={vip.reason} className="mt-1.5" />}
             {(t.automated === 1 || t.source === "alert") && (
@@ -362,8 +374,7 @@ export function TicketPane({ number }: { number: number }) {
               canEdit={can && !closed && (can$("tickets.reply_public") || can$("tickets.reply_needs_review"))}
             />
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            {t.in_workflow && !closed && <span className={chipClass("accent")}>{HD_IN_WORKFLOW_LABEL}</span>}
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
             {can && can$("tickets.change_status") && !merged ? (
               <PickMenu
                 label="Status"

@@ -38,6 +38,9 @@ import type { ReportOptions } from "./data";
 
 type Choice = { value: string | number; label: string };
 
+/** 1.20.27: the range and comparison menus are pills like the filter chips beside them: one height, one radius. */
+const PILL_BUTTON = buttonClass("secondary", "sm", "gap-1.5").replace("rounded-lg", "rounded-full");
+
 /** What each filter offers, from the caller's options. */
 export function filterChoices(key: HdFilterKey, o: ReportOptions | null): Choice[] {
   switch (key) {
@@ -103,8 +106,9 @@ export function FilterChip({
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((x) => !x)}
-        className={`inline-flex h-8 max-w-64 items-center gap-1.5 rounded-full border px-3 text-xs ${
-          on ? "border-compass-200 bg-compass-50 text-compass-ink-strong" : "border-slate-200 bg-surface text-slate-700 hover:bg-slate-50"
+        // 1.20.27: the height of the range and comparison pills beside it (28px, 36px on touch).
+        className={`inline-flex h-7 max-w-64 items-center gap-1.5 rounded-full border px-3 text-xs pointer-coarse:h-9 ${
+          on ? "border-compass-200 bg-compass-50 text-compass-ink-strong dark:border-compass-500/40" : "border-slate-200 bg-surface text-slate-700 hover:bg-slate-50"
         }`}
       >
         <span className="font-medium">{HD_FILTER_LABEL[k]}</span>
@@ -169,7 +173,7 @@ function RangePicker({ range, onChange, timezone }: { range: HdRangeInput; onCha
   const bad = Boolean(from && to && from > to);
   return (
     <div className="relative">
-      <button ref={btn} type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((x) => !x)} className={buttonClass("secondary", "sm", "gap-1.5")}>
+      <button ref={btn} type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((x) => !x)} className={PILL_BUTTON}>
         <CalendarRange className="h-3.5 w-3.5" aria-hidden />
         {label}
         <ChevronDown className="h-3.5 w-3.5 text-slate-400" aria-hidden />
@@ -235,7 +239,7 @@ function ComparePicker({ compare, onChange }: { compare: HdCompare | null; onCha
   ];
   return (
     <div className="relative">
-      <button ref={btn} type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((x) => !x)} className={buttonClass("secondary", "sm", "gap-1.5")}>
+      <button ref={btn} type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((x) => !x)} className={PILL_BUTTON}>
         <GitCompareArrows className="h-3.5 w-3.5" aria-hidden />
         {compare ? `vs ${HD_COMPARE_LABEL[compare].toLowerCase()}` : "No comparison"}
         <ChevronDown className="h-3.5 w-3.5 text-slate-400" aria-hidden />

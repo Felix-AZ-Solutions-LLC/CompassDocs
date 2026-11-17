@@ -14,6 +14,7 @@
 // page belongs to. The New chip (1.19.2, agent W5) sits on a section with a
 // page this person hasn't opened yet.
 
+import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { LayoutGrid } from "lucide-react";
 import { RailLink } from "@/components/RailLink";
@@ -43,6 +44,20 @@ export function DeskSettingsNav({ viewer }: { viewer: DeskSettingsViewer }) {
     })),
   }));
   const current = groups.flatMap((g) => g.entries).find((e) => e.active);
+  // 1.20.27: at lg the rail scrolls in its own box, and the sections near its
+  // end (Integrations, API, Retention, Import) were lit below its fold. Bring
+  // the lit row into view when the section changes, without touching the page.
+  const nav = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const el = nav.current;
+    if (!el || el.scrollHeight <= el.clientHeight) return;
+    const row = [...el.querySelectorAll<HTMLElement>('[aria-current="page"]')].find((r) => r.offsetParent !== null);
+    if (!row) return;
+    const top = row.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+    if (top < el.scrollTop || top + row.offsetHeight > el.scrollTop + el.clientHeight) {
+      el.scrollTop = Math.max(0, top - el.clientHeight / 3);
+    }
+  }, [here]);
   const search = (q: string): SettingsRailHit[] =>
     searchDeskSettings(viewer, q).map((h) =>
       h.kind === "section"
@@ -53,7 +68,8 @@ export function DeskSettingsNav({ viewer }: { viewer: DeskSettingsViewer }) {
   return (
     <nav
       aria-label="Desk settings"
-      className="flex shrink-0 flex-col gap-1 border-b border-slate-200 bg-surface px-3 py-2 lg:block lg:w-rail lg:overflow-y-auto lg:border-b-0 lg:border-r lg:px-2 lg:py-4 print:hidden"
+      ref={nav}
+      className="flex shrink-0 flex-col gap-1 border-b border-slate-200 bg-surface px-4 py-2 lg:block lg:w-rail lg:overflow-y-auto lg:border-b-0 lg:border-r lg:px-2 lg:py-4 print:hidden"
     >
       <SettingsRail
         label="Desk settings"

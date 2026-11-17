@@ -324,7 +324,7 @@ export function PortalPolicies({ licensed, canManageLicense = false }: PortalPag
           <div className="flex flex-wrap items-center gap-2">
             <div className="min-w-72 flex-1 sm:max-w-md">
               {candidate != null ? (
-                <span className="inline-flex items-center gap-1.5 rounded-lg border border-compass-200 bg-compass-50 px-3 py-1.5 text-sm font-medium text-compass-800">
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-compass-200 bg-compass-50 px-3 py-1.5 text-sm font-medium text-compass-ink-strong">
                   {data.candidates.find((c) => c.id === candidate)?.title ?? `#${candidate}`}
                   <button
                     type="button"

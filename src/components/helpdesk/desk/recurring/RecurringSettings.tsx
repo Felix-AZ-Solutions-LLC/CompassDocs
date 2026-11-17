@@ -857,7 +857,7 @@ function Editor({
             {schedule.published === false ? "Discard draft" : "Delete"}
           </Button>
         )}
-        {dirty && <span className="text-xs text-amber-600">Unsaved changes</span>}
+        {dirty && <span className="text-xs ink-warn">Unsaved changes</span>}
         {claude ? (
           changesWaiting ? (
             <>
@@ -924,6 +924,6 @@ function Editor({
 
 function pickClass(on: boolean, small = false): string {
   return `inline-flex cursor-pointer items-center gap-1.5 rounded-lg border ${small ? "px-2 py-1 text-xs" : "px-2.5 py-1.5 text-sm"} transition ${
-    on ? "border-compass-300 bg-compass-50 text-compass-700" : "border-slate-200 text-slate-700 hover:bg-slate-50"
+    on ? "border-compass-300 dark:border-compass-500 bg-compass-50 text-compass-700" : "border-slate-200 text-slate-700 hover:bg-slate-50"
   }`;
 }

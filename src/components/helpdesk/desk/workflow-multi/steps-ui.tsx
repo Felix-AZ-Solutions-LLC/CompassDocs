@@ -82,7 +82,7 @@ export function WorkflowTimeline({ workflow, currentNumber, canOpen }: { workflo
               </p>
               <ul className="mt-2 grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(100%,15rem),1fr))]">
                 {s.children.map((c) => (
-                  <li key={c.key} className={`rounded-lg border p-3 ${c.task_ticket_number === currentNumber ? "border-compass-300 bg-compass-50/40" : "border-slate-200"}`}>
+                  <li key={c.key} className={`rounded-lg border p-3 ${c.task_ticket_number === currentNumber ? "border-compass-300 dark:border-compass-500 bg-compass-50/40" : "border-slate-200"}`}>
                     <StepBody s={c} currentNumber={currentNumber} canOpen={canOpen} />
                   </li>
                 ))}

@@ -58,7 +58,7 @@ export function CollisionDialog({
   return (
     <Modal open={open} onClose={onKeep} labelledBy={titleId} describedBy={ledeId} className="w-full max-w-lg rounded-xl border border-slate-200 bg-surface p-5 shadow-modal">
       <h2 id={titleId} className="flex items-start gap-2 text-base font-semibold text-slate-900">
-        <CircleAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" aria-hidden />
+        <CircleAlert className="mt-0.5 h-5 w-5 shrink-0 ink-warn" aria-hidden />
         {collisionTitle(newer)}
       </h2>
       <ul className="mt-3 space-y-2" aria-label="Messages you haven't read">

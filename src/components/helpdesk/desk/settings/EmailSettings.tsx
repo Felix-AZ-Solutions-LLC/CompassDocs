@@ -38,6 +38,8 @@ import type { HdMailboxView, HdSendAddressView } from "@/lib/helpdesk/mailboxes-
 import { INBOUND_SENDER_LIMITS, cleanTrustedSenders } from "@/lib/helpdesk/inbound-senders-shared";
 import type { HdSettings } from "@/lib/helpdesk/types";
 import { getJson, sendJson } from "../api";
+import { WorkspaceAddressNotice } from "../WorkspaceAddressNotice";
+import { SettingsLink } from "@/components/SettingsLink";
 import { forgetDeskMailboxes } from "../mailboxes";
 import { useCan } from "../me";
 import { M365AddressChip, M365AddressWarning, M365MailCard, M365MailboxField, m365MailboxAddress, saveM365AddressLink, useM365Mail } from "./M365MailSettings";
@@ -64,6 +66,8 @@ export function EmailSettings() {
   const fmt = useFormatDate();
   const [s, setS] = useState<PublicSettings | null>(null);
   const [path, setPath] = useState("");
+  // 1.20.27: the configured workspace address (undefined until read; null: none).
+  const [address, setAddress] = useState<string | null | undefined>(undefined);
   const [boxes, setBoxes] = useState<MailboxData | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -87,9 +91,10 @@ export function EmailSettings() {
   }, []);
 
   useEffect(() => {
-    getJson<{ settings: PublicSettings; inbound_path: string }>("/api/helpdesk/admin/settings", "Couldn't load the email settings.")
+    getJson<{ settings: PublicSettings; inbound_path: string; workspace_address?: string | null }>("/api/helpdesk/admin/settings", "Couldn't load the email settings.")
       .then((d) => {
         setS(d.settings);
+        setAddress(d.workspace_address);
         setTrustedText((d.settings.trusted_senders ?? []).join("\n"));
         setLimitText(String(d.settings.per_sender_limit ?? INBOUND_SENDER_LIMITS.perSender));
         setPath(d.inbound_path || "");
@@ -248,6 +253,8 @@ export function EmailSettings() {
     <PageContainer>
       <PageHeader icon={<Mail />} title="Email" subtitle="Forward your help addresses here, and replies thread back into the ticket." />
       <div className="flex flex-col gap-4">
+        {/* 1.20.27: mail links come only from the workspace's configured address. */}
+        <WorkspaceAddressNotice address={address} />
         <Card
           id="addresses"
           className="scroll-mt-6"
@@ -366,7 +373,7 @@ export function EmailSettings() {
             </ul>
           )}
           <p className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
-            Mail goes out through your workspace mail server (Settings, Notifications, Email). Your mail provider, such as SMTP2GO, must allow each address: verify the sender or its
+            Mail goes out through your workspace mail server (<SettingsLink href="/admin/notifications/email">Settings → Notifications → Email</SettingsLink>). Your mail provider, such as SMTP2GO, must allow each address: verify the sender or its
             domain there first. Send test goes to your own email and shows the provider&apos;s answer. Answers to a reply always come back to the help address, whatever address the
             reply was sent from.
           </p>

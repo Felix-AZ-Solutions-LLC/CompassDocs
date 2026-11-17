@@ -978,7 +978,7 @@ export function AckRoster({
           aria-label="Selected people"
           className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-compass-200 bg-compass-50/70 px-3 py-2 print:hidden"
         >
-          <span className="text-sm font-semibold text-compass-800">{selected.size} selected</span>
+          <span className="text-sm font-semibold text-compass-ink-strong">{selected.size} selected</span>
           <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())} disabled={busy}>
             Clear selection
           </Button>

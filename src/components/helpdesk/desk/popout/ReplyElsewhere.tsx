@@ -39,7 +39,7 @@ export function ReplyElsewhere({
     >
       {state === "unanswered" ? (
         <>
-          <CircleAlert className="h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+          <CircleAlert className="h-4 w-4 shrink-0 ink-warn" aria-hidden />
           <span role="status">The other window isn&apos;t answering. Take the reply back here?</span>
           <button type="button" className="link font-medium" onClick={onTakeBack}>
             Take it back

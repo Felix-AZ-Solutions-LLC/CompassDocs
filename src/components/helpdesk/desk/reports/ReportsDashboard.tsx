@@ -56,7 +56,7 @@ function DashboardSwitcher({ dashboards, current, onPick, onNew }: { dashboards:
   const [open, setOpen] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
   const groups: { label: string; list: HdDashboard[] }[] = [
-    { label: "Built in", list: dashboards.filter((d) => d.builtin) },
+    { label: "Built-in", list: dashboards.filter((d) => d.builtin) },
     { label: "Yours", list: dashboards.filter((d) => !d.builtin && d.visibility === "private") },
     { label: "Shared", list: dashboards.filter((d) => !d.builtin && d.visibility !== "private") },
   ].filter((g) => g.list.length);
@@ -435,7 +435,7 @@ export function ReportsDashboard() {
         {current && layout && (
           <>
             {editing ? (
-              <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-compass-200 bg-compass-50/70 px-3 py-2 print:hidden">
+              <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-compass-200 bg-compass-50/70 px-3 py-2 dark:border-compass-500/40 print:hidden">
                 <p className="mr-auto text-sm font-semibold text-compass-ink-strong">
                   Editing {current.name}
                   <span className="ml-2 font-normal text-slate-600">The filters you set now are saved as the dashboard's defaults.</span>
@@ -458,7 +458,7 @@ export function ReportsDashboard() {
                 <DashboardSwitcher dashboards={dashboards ?? []} current={current} onPick={(d) => go(d, defaultState(d.layout))} onNew={newDashboard} />
                 {current.builtin ? (
                   <Chip tone="neutral" size="sm">
-                    Built in
+                    Built-in
                   </Chip>
                 ) : current.visibility !== "private" ? (
                   <Chip tone="accent" size="sm">

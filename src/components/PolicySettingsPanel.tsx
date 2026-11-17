@@ -957,7 +957,7 @@ export function RemindersCard({ model, server }: { model: PolicySettingsModel; s
       <div className="mt-4 max-w-md">
         <PickerLabel>Policy owner</PickerLabel>
         {s.owner_user_id !== null ? (
-          <span className="inline-flex items-center gap-1.5 rounded-lg border border-compass-200 bg-compass-50 px-3 py-1.5 text-sm font-medium text-compass-800">
+          <span className="inline-flex items-center gap-1.5 rounded-lg border border-compass-200 bg-compass-50 px-3 py-1.5 text-sm font-medium text-compass-ink-strong">
             {ownerName}
             <button
               type="button"
@@ -1280,7 +1280,7 @@ export function LifecycleCard({
       <div className="max-w-md">
         <PickerLabel>Replaced by</PickerLabel>
         {s.superseded_by !== null ? (
-          <span className="inline-flex items-center gap-1.5 rounded-lg border border-compass-200 bg-compass-50 px-3 py-1.5 text-sm font-medium text-compass-800">
+          <span className="inline-flex items-center gap-1.5 rounded-lg border border-compass-200 bg-compass-50 px-3 py-1.5 text-sm font-medium text-compass-ink-strong">
             {chosenTitle}
             {/* An icon-only control takes the icon-button recipe (STYLEGUIDE
                 §Buttons): a 28px square, never the glyph alone as the target. */}

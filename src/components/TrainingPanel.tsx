@@ -232,7 +232,7 @@ export function TrainingPanel({
 function MyTraining({ mine, teamLead = false }: { mine: MyItem[] | null; teamLead?: boolean }) {
   const fmtDay = useFmtDay();
   const teamLink = teamLead ? (
-    <p className="mb-4 flex items-center gap-2 rounded-xl border border-compass-200 bg-compass-50/60 px-4 py-2.5 text-sm text-compass-800 dark:bg-compass-100/20">
+    <p className="mb-4 flex items-center gap-2 rounded-xl border border-compass-200 bg-compass-50/60 px-4 py-2.5 text-sm text-compass-ink-strong dark:bg-compass-100/20">
       <Users className="h-4 w-4 shrink-0" />
       You lead a team —{" "}
       <Link href="/training/team" className="font-semibold underline underline-offset-2">
@@ -944,7 +944,7 @@ function ManageDecks({
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <div className="min-w-72 flex-1 sm:max-w-md">
             {chosen ? (
-              <span className="inline-flex items-center gap-1.5 rounded-lg border border-compass-200 bg-compass-50 px-3 py-1.5 text-sm font-medium text-compass-800">
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-compass-200 bg-compass-50 px-3 py-1.5 text-sm font-medium text-compass-ink-strong">
                 {chosen.title}
                 <span className="text-xs font-normal text-compass-600">{chosen.space_name}</span>
                 <button onClick={() => setCandidate(null)} aria-label="Clear document choice" className="opacity-60 hover:opacity-100">
@@ -1867,7 +1867,7 @@ function PeopleTable({
 
       {openSelected.length > 0 && (
         <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-compass-200 bg-compass-50/60 px-3 py-2 text-sm dark:bg-compass-100/20">
-          <span className="font-medium text-compass-800">{openSelected.length} selected</span>
+          <span className="font-medium text-compass-ink-strong">{openSelected.length} selected</span>
           <button
             onClick={() => void bulk({ remind_assignment_ids: openSelected }, "Reminded {n} people.")}
             disabled={busy}

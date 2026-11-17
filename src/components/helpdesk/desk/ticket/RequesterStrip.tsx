@@ -133,7 +133,7 @@ function byKind(list: HdAsset[]): HdAsset[] {
     .map((x) => x.a);
 }
 
-const DOT_TONE = { ok: "bg-emerald-500", warn: "bg-amber-500", neutral: "bg-slate-300" } as const;
+const DOT_TONE = { ok: "bg-emerald-500", warn: "bg-amber-500", neutral: "bg-slate-400" } as const;
 // One segment of the joined contact group. The group is a one-row grid of equal columns on a
 // narrow pane and a flex row from @2xl; it draws the hairlines and rounds the end segments, so a
 // segment is the same whether it is the link itself or a menu button inside its `relative` holder.

@@ -234,7 +234,7 @@ export function CalendarPage({ today, initial }: { /** Today's date in the viewe
                   ["recurring", "Recurring tickets", "The tickets recurring schedules will open"],
                 ] as const
               ).map(([key, label, hint]) => (
-                <label key={key} className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium ${layers.includes(key) ? "border-compass-500 bg-compass-50 text-compass-700" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`} data-tt={hint} data-tt-wrap>
+                <label key={key} className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium pointer-coarse:min-h-9 pointer-coarse:px-2.5 ${layers.includes(key) ? "border-compass-300 bg-compass-50 text-compass-700 dark:border-compass-500" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`} data-tt={hint} data-tt-wrap>
                   <input type="checkbox" checked={layers.includes(key)} onChange={(e) => toggleLayer(key, e.target.checked)} data-testid={`calendar-layer-${key}`} />
                   {label}
                 </label>

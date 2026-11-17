@@ -17,7 +17,7 @@ import { confirmDialog, formDialog } from "@/components/Dialog";
 import { EmptyState, Select, SectionEmpty } from "@/components/form";
 import { railIconClass, railRowClass } from "@/components/RailLink";
 import { LoadingRow } from "@/components/Spinner";
-import { Table, Td, Th } from "@/components/Table";
+import { TABLE_HEAD_ROW, Table, Td, Th } from "@/components/Table";
 import { toast } from "@/components/Toasts";
 import { DAY_SHORT } from "@/lib/helpdesk/calendars-shared";
 import type { HdHoliday, HdHolidayInput, HdHolidaySet } from "@/lib/helpdesk/calendars-shared";
@@ -336,7 +336,7 @@ export function HolidaysPanel() {
             ) : (
               <Table scroll minWidth="34rem">
                 <thead>
-                  <tr>
+                  <tr className={TABLE_HEAD_ROW}>
                     <Th fit>Date</Th>
                     <Th>Holiday</Th>
                     <Th fit>Closed</Th>
@@ -376,7 +376,7 @@ export function HolidaysPanel() {
             )}
           </Card>
           <p className="text-xs text-slate-500">
-            .ics files are read from your computer only (all-day events, and yearly repeats). Holidays that move each year, like Easter, are added year by year: use Copy to {year + 1} and fix their dates.
+            .ics files are read from your computer only (all-day events, and yearly repeats). Holidays that move each year, like Easter, are added year by year{oneOffs > 0 ? <>: use Copy to {year + 1} and fix their dates</> : null}.
           </p>
         </div>
       )}

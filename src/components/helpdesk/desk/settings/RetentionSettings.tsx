@@ -19,6 +19,7 @@ import { SectionEmpty, TextInput, Toggle } from "@/components/form";
 import { Modal } from "@/components/Modal";
 import { PageHeader } from "@/components/PageHeader";
 import { PageContainer } from "@/components/PageWidth";
+import { SaveRow } from "@/components/SaveRow";
 import { Segmented } from "@/components/Segmented";
 import { useFormatDate } from "@/components/SettingsProvider";
 import { LoadingRow } from "@/components/Spinner";
@@ -276,26 +277,22 @@ export function RetentionSettings() {
           </div>
         </Card>
 
-        <Card>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <h2 className="text-sm font-semibold text-slate-900">Preview the next run</h2>
-              <p className="mt-0.5 text-sm text-slate-600" aria-live="polite" data-testid="retention-preview">
-                {planError ? planError : plan ? planSentence(plan) : "Working it out…"}
-              </p>
-            </div>
-            <div className="flex shrink-0 flex-wrap items-center gap-2 print:hidden">
-              {dirty && <span className="text-xs text-amber-600">Unsaved changes</span>}
-              <Button variant="secondary" onClick={() => setListOpen(true)} disabled={!plan}>
-                See the list
-              </Button>
-              <Button onClick={save} busy={busy} disabled={!dirty || daysError || keepError}>
-                Save
-              </Button>
-            </div>
-          </div>
+        {/* 1.20.27: the preview is a card of its own (a Card title, like the others) and the toggles
+            above save through the page's SaveRow below the cards, not a Save inside the preview. */}
+        <Card
+          title="Preview the next run"
+          actions={
+            <Button variant="secondary" size="sm" onClick={() => setListOpen(true)} disabled={!plan} className="print:hidden">
+              See the list
+            </Button>
+          }
+        >
+          <p className="text-sm text-slate-600" aria-live="polite" data-testid="retention-preview">
+            {planError ? planError : plan ? planSentence(plan) : "Working it out…"}
+          </p>
         </Card>
       </div>
+      <SaveRow dirty={dirty} busy={busy} onSave={save} label="Save" disabled={daysError || keepError} />
       {plan && <PlanList open={listOpen} onClose={() => setListOpen(false)} plan={plan} dateOf={fmt.date} />}
     </PageContainer>
   );

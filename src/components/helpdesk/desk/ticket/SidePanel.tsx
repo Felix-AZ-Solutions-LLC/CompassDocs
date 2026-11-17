@@ -137,27 +137,8 @@ export function SidePanel({
       {/* Linked assets from Snipe-IT and "+ Link", next to the requester (1.19.3, assets/TicketAssets). */}
       <TicketAssetsCard number={t.number} canWork={d.can_work} refreshKey={t.updated_at} />
 
-      {/* An integration's ticket: the alert behind it (agent P). */}
-      <AlertDetails ticket={t} canManage={can$("channels.manage") || can$("settings.manage")} />
-
-      {/* A workflow task: the request it belongs to (agent M). */}
-      <PartOfRequestCard detail={d} />
-
-      {/* The ticket's event: when, where, "Setup complete" (1.20.6, calendar/TicketEventCard). */}
-      <TicketEventCard number={t.number} subject={t.subject} canWork={d.can_work} locked={t.status === "closed" || !!t.merged_into} initial={d.event} refreshKey={t.updated_at} onChanged={onReload} />
-
-      {/* Time logged and the agent's timer (1.19.1, agent V8). */}
-      {/* Checklists on the ticket and Add a checklist (1.19.2, agent W3). */}
-      <ChecklistsSideCard number={t.number} canWork={d.can_work} />
-
-      {d.can_work && <TimeCard ticketNumber={t.number} refreshKey={t.status} />}
-
-      {/* Merged into / merged in (1.19.1, agent V2). */}
-      <RelatedCard d={d} />
-
-      {/* The "Before you solve" answers kept on the ticket (1.20.5, solve/SolveDetails). */}
-      <SolveDetailsCard details={d.solve_details} />
-
+      {/* 1.20.27: Properties and Due come first, right under the requester's people and assets (STYLEGUIDE
+          §Helpdesk: the desk, the side column): they were below a 900px fold behind the event, checklists and time. */}
       {/* Properties */}
       <section aria-label="Properties" className={`${CARD_CLASS} px-4 py-1`}>
         <div className={ROW}>
@@ -275,12 +256,6 @@ export function SidePanel({
         </div>
       </section>
 
-      {/* The custom fields assigned to the ticket's team, edited in place (1.20.6, custom-fields/TicketCustomFields). */}
-      <CustomFieldsCard d={d} onPatch={onPatch} />
-
-      {/* Who owned it, and how they got it (agent N). */}
-      {can && <AssignmentHistory ticketNumber={t.number} refreshKey={t.assignee_id} />}
-
       {/* Service level */}
       {(d.sla.policy || d.sla.first_reply.label || d.sla.resolve.label) && (
         <section aria-labelledby="sla-h" className={`${CARD_CLASS} p-4`}>
@@ -318,6 +293,33 @@ export function SidePanel({
           )}
         </section>
       )}
+
+      {/* The custom fields assigned to the ticket's team, edited in place (1.20.6, custom-fields/TicketCustomFields). */}
+      <CustomFieldsCard d={d} onPatch={onPatch} />
+
+      {/* An integration's ticket: the alert behind it (agent P). */}
+      <AlertDetails ticket={t} canManage={can$("channels.manage") || can$("settings.manage")} />
+
+      {/* A workflow task: the request it belongs to (agent M). */}
+      <PartOfRequestCard detail={d} />
+
+      {/* The ticket's event: when, where, "Setup complete" (1.20.6, calendar/TicketEventCard). */}
+      <TicketEventCard number={t.number} subject={t.subject} canWork={d.can_work} locked={t.status === "closed" || !!t.merged_into} initial={d.event} refreshKey={t.updated_at} onChanged={onReload} />
+
+      {/* Time logged and the agent's timer (1.19.1, agent V8). */}
+      {/* Checklists on the ticket and Add a checklist (1.19.2, agent W3). */}
+      <ChecklistsSideCard number={t.number} canWork={d.can_work} />
+
+      {d.can_work && <TimeCard ticketNumber={t.number} refreshKey={t.status} />}
+
+      {/* Merged into / merged in (1.19.1, agent V2). */}
+      <RelatedCard d={d} />
+
+      {/* The "Before you solve" answers kept on the ticket (1.20.5, solve/SolveDetails). */}
+      <SolveDetailsCard details={d.solve_details} />
+
+      {/* Who owned it, and how they got it (agent N). */}
+      {can && <AssignmentHistory ticketNumber={t.number} refreshKey={t.assignee_id} />}
 
       {/* Workflow progress (requests) */}
       {d.workflow && (

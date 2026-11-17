@@ -294,7 +294,8 @@ export function WorkflowBuilder({ slug }: { slug: string }) {
     // Under xl the steps and the settings panel are one scrolling column;
     // from xl each scrolls on its own beside the other.
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto xl:flex-row xl:overflow-hidden">
-      <section aria-label="Steps" className="min-w-0 px-4 py-5 sm:px-6 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
+      {/* 1.20.27: sm:py-8, so the title sits where every PageContainer page puts it. */}
+      <section aria-label="Steps" className="min-w-0 px-4 py-5 sm:px-6 sm:py-8 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
         <PageHeader
           icon={<Workflow />}
           title={wf.title}

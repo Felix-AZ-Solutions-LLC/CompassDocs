@@ -19,6 +19,7 @@ import type { HdAvailability, HdCounts } from "@/lib/helpdesk/types";
 import type { HdEmailView } from "@/lib/helpdesk/email-html-shared";
 import { DeskBell } from "./DeskBell";
 import { DeskSearch } from "./DeskSearch";
+import { WorkspaceAddressBanner } from "./WorkspaceAddressNotice";
 import { AvailabilityMenu } from "./AvailabilityMenu";
 import { DeskCountsContext, useCountsPoll } from "./counts";
 import { DeskMeContext } from "./me";
@@ -126,6 +127,7 @@ export function DeskShell({
   look = null,
   lookMenu = false,
   claude = null,
+  addressWarning = null,
   children,
 }: {
   user: { id: number; name: string };
@@ -144,6 +146,9 @@ export function DeskShell({
   lookMenu?: boolean;
   /** Claude in the desk, when it is on for this agent (1.20.0). */
   claude?: ClaudeDeskProps | null;
+  /** 1.20.27: a desk admin on a workspace with no configured address (lib/workspace-origin): the
+   *  dismissible strip under the top bar; `canSet` when they can open Domain & HTTPS. */
+  addressWarning?: { canSet: boolean } | null;
   children: ReactNode;
 }) {
   const pathname = usePathname() || "/desk";
@@ -194,14 +199,20 @@ export function DeskShell({
           escaped the panes and made the document itself thousands of pixels tall, so a wheel past the
           end of a pane scrolled the whole desk up into empty space. Positioned, the root contains them;
           `clip` (not a scroll container) means nothing, not even scrollIntoView, can scroll it. */}
-      <DeskLookRoot look={look} menu={lookMenu} className="relative flex h-dvh flex-col overflow-clip bg-canvas print:h-auto print:overflow-visible">
+      {/* 1.20.27: the installed desk is viewportFit cover (pwa/metadata), so the shell keeps clear of a
+          notch and the home indicator with the safe-area insets (zero in a browser tab). */}
+      <DeskLookRoot
+        look={look}
+        menu={lookMenu}
+        className="relative flex h-dvh flex-col overflow-clip bg-canvas pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] pt-[env(safe-area-inset-top)] print:h-auto print:overflow-visible print:p-0"
+      >
         <a
           href="#main"
           className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded-lg focus:bg-compass-600 focus:px-3 focus:py-2 focus:text-sm focus:font-semibold focus:text-white"
         >
           Skip to content
         </a>
-        <header className="flex h-13 shrink-0 items-center gap-2 border-b border-slate-200 bg-surface px-2 sm:gap-3 sm:px-4 print:hidden">
+        <header className="relative flex h-13 shrink-0 items-center gap-2 border-b border-slate-200 bg-surface px-2 sm:gap-3 sm:px-4 print:hidden">
           {/* Under md the rail folds into this menu. */}
           <div className="relative md:hidden">
             <button
@@ -249,7 +260,8 @@ export function DeskShell({
             </span>
             <span className="hidden sm:inline">Desk</span>
           </Link>
-          <div className="flex min-w-0 flex-1 sm:ml-3">
+          {/* 1.20.27: under sm the search is an icon at the end of this slot that opens a full-width bar. */}
+          <div className="flex min-w-0 flex-1 justify-end sm:ml-3 sm:justify-start">
             <DeskSearch />
           </div>
           <div className="flex shrink-0 items-center gap-1 sm:gap-2">
@@ -283,6 +295,7 @@ export function DeskShell({
             </div>
           </div>
         </header>
+        {addressWarning && <WorkspaceAddressBanner userId={user.id} canSet={addressWarning.canSet} />}
         <div className="flex min-h-0 flex-1">
           <nav aria-label="Desk" className="hidden w-sidebar-rail shrink-0 flex-col items-center gap-1.5 border-r border-slate-200 bg-surface py-3 md:flex print:hidden">
             {dests.map((d) => {

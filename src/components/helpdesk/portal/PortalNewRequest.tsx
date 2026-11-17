@@ -124,7 +124,7 @@ export function PortalNewRequest({
               <label
                 key={t.id}
                 className={`flex cursor-pointer items-start gap-2.5 rounded-xl border p-3 text-sm transition ${
-                  on ? "border-compass-300 bg-compass-50/60" : "border-slate-200 bg-surface hover:bg-slate-50"
+                  on ? "border-compass-300 dark:border-compass-500 bg-compass-50/60" : "border-slate-200 bg-surface hover:bg-slate-50"
                 }`}
               >
                 <input type="radio" name="request_type" className="mt-0.5" checked={on} onChange={() => pick(t.id)} />
@@ -202,7 +202,7 @@ function FormFieldInput({ field: f, value, error, onChange }: { field: HdFormFie
         <legend className="mb-1 text-xs font-medium text-slate-500">{label}</legend>
         <div className="grid gap-2 sm:grid-cols-2">
           {(f.options ?? []).map((o) => (
-            <label key={o.value} className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${value === o.value ? "border-compass-300 bg-compass-50/60" : "border-slate-200"}`}>
+            <label key={o.value} className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${value === o.value ? "border-compass-300 dark:border-compass-500 bg-compass-50/60" : "border-slate-200"}`}>
               <input type="radio" name={`f-${f.key}`} className="mt-0.5" checked={value === o.value} onChange={() => onChange(o.value)} />
               <span>
                 {o.label}

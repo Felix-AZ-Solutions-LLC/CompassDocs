@@ -6,7 +6,7 @@
 // stored per person (lib/helpdesk/whats-new, hd_desk_seen), so a page
 // someone opened once stays unflagged for them in later releases too.
 
-export const DESK_NEW_RELEASE = "1.20.0";
+export const DESK_NEW_RELEASE = "1.20.27";
 
 export interface DeskNewPage {
   href: string;
@@ -14,15 +14,15 @@ export interface DeskNewPage {
 }
 
 /**
- * The pages 1.20.0 adds to Desk settings (labels as the rail shows them), one
- * line each so every 1.20.0 area appends its own. 1.19.4's were Appearance,
- * Chat apps and API and webhooks; 1.19.3's was Assets; 1.19.2's were Skills
- * and languages, Canned responses and Checklists.
+ * The pages this release adds to Desk settings (labels as the rail shows
+ * them), one line each so every area appends its own. 1.20.27 adds none, so
+ * the list is empty and neither a New chip nor the strip shows (1.20.27
+ * retired 1.20.0's Claude in the desk, which read as stale 26 releases on).
+ * 1.19.4's were Appearance, Chat apps and API and webhooks; 1.19.3's was
+ * Assets; 1.19.2's were Skills and languages, Canned responses and
+ * Checklists. The strip shows on the settings overview only.
  */
-export const DESK_NEW_PAGES: readonly DeskNewPage[] = [
-  // Claude in the desk (1.20.0, lib/helpdesk/claude).
-  { href: "/desk/settings/claude-desk", label: "Claude in the desk" },
-];
+export const DESK_NEW_PAGES: readonly DeskNewPage[] = [];
 
 /** The release strip's seen-record key. */
 export const DESK_NEW_STRIP = `strip:${DESK_NEW_RELEASE}`;

@@ -573,7 +573,7 @@ function BulkBar({
 
   return (
     <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-compass-200 bg-compass-50/70 px-3 py-2">
-      <span className="text-sm font-semibold text-compass-800">
+      <span className="text-sm font-semibold text-compass-ink-strong">
         {count} selected
       </span>
       <button onClick={onClear} disabled={busy} className="text-xs font-medium text-slate-500 hover:underline">

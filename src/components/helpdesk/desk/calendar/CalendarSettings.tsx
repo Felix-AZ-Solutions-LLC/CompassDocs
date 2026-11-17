@@ -121,7 +121,7 @@ export function CalendarSettings() {
                   return (
                     <label
                       key={m}
-                      className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm ${on ? "border-compass-500 bg-compass-50 text-compass-700" : "border-slate-200 text-slate-700 hover:bg-slate-50"} ${!on && full ? "cursor-not-allowed opacity-50" : ""}`}
+                      className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm ${on ? "border-compass-300 bg-compass-50 text-compass-700 dark:border-compass-500" : "border-slate-200 text-slate-700 hover:bg-slate-50"} ${!on && full ? "cursor-not-allowed opacity-50" : ""}`}
                     >
                       <input
                         type="checkbox"
@@ -149,7 +149,7 @@ export function CalendarSettings() {
               </p>
               <Segmented<HdCalendarSettings["recipients"]>
                 label="Who gets them"
-                className="mt-1.5"
+                className="mt-1.5 max-sm:flex-col max-sm:items-stretch"
                 value={s.recipients}
                 onChange={(v) => change({ recipients: v })}
                 options={[

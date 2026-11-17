@@ -18,8 +18,9 @@ const BASE =
   "inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg transition disabled:cursor-not-allowed disabled:opacity-60";
 
 const SIZE: Record<ButtonSize, string> = {
-  /** Row actions in tables and dense lists. */
-  sm: "h-7 px-2.5 text-xs",
+  /** Row actions in tables and dense lists. 1.20.27: 36px on a touch
+   *  screen (pointer: coarse), where 28px is too small to hit. */
+  sm: "h-7 px-2.5 text-xs pointer-coarse:h-9 pointer-coarse:px-3",
   /** The default: forms, cards, headers. */
   md: "h-9 px-4 text-sm",
   /** Hero and sign-in actions. */
@@ -39,9 +40,12 @@ export function buttonClass(variant: ButtonVariant = "primary", size: ButtonSize
 
 /** Icon-only controls (STYLEGUIDE §Buttons): a square box no smaller than
  *  28px (WCAG 2.5.8), `quiet` for toolbars and rows, `bordered` where it
- *  stands alone. The caller supplies data-tt and aria-label. */
+ *  stands alone. The caller supplies data-tt and aria-label.
+ *  1.20.27: `sm` grows to 36px on a touch screen (pointer: coarse), so a
+ *  queue toolbar or a row's pencil and bin are hittable on a phone. */
 export function iconButtonClass(variant: "quiet" | "bordered" = "quiet", size: "sm" | "md" = "sm", extra = ""): string {
-  const box = size === "sm" ? "h-7 w-7 [&>svg]:h-4 [&>svg]:w-4" : "h-9 w-9 [&>svg]:h-4 [&>svg]:w-4";
+  const box =
+    size === "sm" ? "h-7 w-7 pointer-coarse:h-9 pointer-coarse:w-9 [&>svg]:h-4 [&>svg]:w-4" : "h-9 w-9 [&>svg]:h-4 [&>svg]:w-4";
   const look =
     variant === "bordered"
       ? "rounded-lg border border-slate-200 bg-surface text-slate-500 hover:bg-slate-50 hover:text-slate-700"

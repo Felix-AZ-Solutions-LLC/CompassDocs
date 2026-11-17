@@ -79,6 +79,8 @@ export interface SkillsAgentRow {
   email: string;
   team_ids: number[];
   teams: string[];
+  /** 1.20.27: the desk role, so an agent with no team reads as Settings → Agents says ("Every team" for a manager or admin). */
+  role: import("../roles-shared").HdRole;
   skill_ids: number[];
   languages: string[];
   availability: "available" | "away" | "offline";
@@ -118,6 +120,7 @@ export async function skillsOverview(user: SessionUser): Promise<SkillsOverview>
       email: a.email,
       team_ids: a.team_ids,
       teams: a.team_ids.map((id) => teamName.get(id)).filter((n): n is string => Boolean(n)),
+      role: a.role,
       skill_ids: t.skill_ids,
       languages: t.languages,
       availability: a.availability,

@@ -620,16 +620,23 @@ describe("reply-all threading", () => {
 describe("New badges in the desk settings rail", () => {
   const ALL = whatsNew.DESK_NEW_PAGES.map((p) => p.href);
   // The release's first New page (1.19.4: the list grows as areas land, so nothing below names one).
+  // 1.20.27 retired 1.20.0's list and adds no page: the list may be empty, and then nothing is New.
   const FIRST = ALL[0];
 
-  test("per person: every New page the rail shows is flagged until opened; the strip until dismissed", async () => {
+  test("1.20.27: the list is empty, so no page is flagged and no strip shows", async () => {
+    assert.equal(whatsNew.DESK_NEW_RELEASE, "1.20.27");
+    assert.deepEqual(ALL, []);
+    const s = await whatsNew.deskNewState(U.agent.id, ["/desk/settings/claude-desk", "/desk/settings/teams"]);
+    assert.deepEqual(s.unseen, []);
+    assert.equal(s.strip, false, "no strip when the release lists no page");
+    assert.equal(whatsNew.isDeskNewItem("/desk/settings/claude-desk"), false, "1.20.0's page is no longer New");
+  });
+
+  test("per person: every New page the rail shows is flagged until opened; the strip until dismissed", { skip: ALL.length === 0 }, async () => {
     const s0 = await whatsNew.deskNewState(U.agent.id, [...ALL, "/desk/settings/teams"]);
     assert.deepEqual(s0.unseen, ALL);
     assert.equal(s0.strip, true);
     assert.equal(s0.release, whatsNew.DESK_NEW_RELEASE);
-    // 1.20.0 lists one page, Claude in the desk.
-    assert.equal(whatsNew.DESK_NEW_RELEASE, "1.20.0");
-    assert.deepEqual(ALL, ["/desk/settings/claude-desk"]);
     const narrow = await whatsNew.deskNewState(U.agent.id, [FIRST]);
     assert.deepEqual(narrow.unseen, [FIRST], "only pages this person's rail shows");
     const none = await whatsNew.deskNewState(U.agent.id, ["/desk/settings/teams"]);
@@ -651,14 +658,16 @@ describe("New badges in the desk settings rail", () => {
   });
 
   test("only items on the list; only agents; never cross-origin", async () => {
+    // The strip's key is always on the list, so it stands in when the release lists no page.
+    const item = FIRST ?? whatsNew.DESK_NEW_STRIP;
     const odd = await call(whatsNewRoute.POST, "/api/helpdesk/whats-new", app(U.agent, { json: { item: "/desk/settings/teams" } }));
     assert.equal(odd.status, 400);
-    const notAgent = await call(whatsNewRoute.POST, "/api/helpdesk/whats-new", app(U.req, { json: { item: whatsNew.DESK_NEW_PAGES[0].href } }));
+    const notAgent = await call(whatsNewRoute.POST, "/api/helpdesk/whats-new", app(U.req, { json: { item } }));
     assert.equal(notAgent.status, 403);
     const req = new Request("http://localhost/api/helpdesk/whats-new", {
       method: "POST",
       headers: { cookie: `compass_session=${U.admin.session}`, origin: "https://evil.example", host: "localhost", "content-type": "application/json" },
-      body: JSON.stringify({ item: whatsNew.DESK_NEW_PAGES[0].href }),
+      body: JSON.stringify({ item }),
     });
     currentRequest = req;
     try {
@@ -670,11 +679,14 @@ describe("New badges in the desk settings rail", () => {
   });
 
   test("pure: the page a path is on; A, B and C", () => {
-    const first = whatsNew.DESK_NEW_PAGES[0].href;
-    assert.equal(whatsNew.deskNewPageFor(`${first}/12`)?.href, first);
-    assert.equal(whatsNew.deskNewPageFor(`${first}x`), undefined);
+    if (FIRST) {
+      assert.equal(whatsNew.deskNewPageFor(`${FIRST}/12`)?.href, FIRST);
+      assert.equal(whatsNew.deskNewPageFor(`${FIRST}x`), undefined);
+    }
+    assert.equal(whatsNew.deskNewPageFor("/desk/settings/claude-desk"), undefined, "1.20.0's page is no longer New");
     assert.equal(whatsNew.andList(["A", "B", "C"]), "A, B and C");
     assert.equal(whatsNew.isDeskNewItem(`strip:${whatsNew.DESK_NEW_RELEASE}`), true);
+    assert.equal(whatsNew.isDeskNewItem("strip:1.20.0"), false);
     assert.equal(whatsNew.isDeskNewItem("strip:1.19.4"), false);
     assert.equal(whatsNew.isDeskNewItem("strip:1.19.2"), false);
     for (const p of ["/desk/settings/appearance", "/desk/settings/chat", "/desk/settings/api"]) {

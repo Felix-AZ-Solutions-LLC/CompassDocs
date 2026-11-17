@@ -199,7 +199,7 @@ export function AutomationsSettings() {
       <PageHeader
         icon={<Bot />}
         title="Automations"
-        subtitle="Rules that sort and answer tickets for you. They run in this order, first to last."
+        subtitle="Each rule acts on a ticket event. They run in this order, first to last; turn one off to pause it."
         actions={
           <Button icon={<Plus />} onClick={() => setEditing("new")}>
             New rule
@@ -227,7 +227,9 @@ export function AutomationsSettings() {
             {shown.map((a) => (
               <li key={a.id} className="flex flex-wrap items-start gap-3 px-4 py-3 sm:flex-nowrap">
                 <span className="mt-0.5 w-5 shrink-0 text-right text-xs tabular-nums text-slate-500">{rows.indexOf(a) + 1}</span>
-                <div className="min-w-0 flex-1">
+                {/* 1.20.27: a 12rem floor, so on a phone the actions wrap under the rule (indented to its text)
+                    instead of squeezing it to a word a line. */}
+                <div className="min-w-[12rem] flex-1">
                   <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-900">
                     {a.name}
                     {!a.active && <Chip tone="neutral" size="sm">Off</Chip>}
@@ -240,7 +242,7 @@ export function AutomationsSettings() {
                     When {(events[a.event] ?? a.event).charAt(0).toLowerCase() + (events[a.event] ?? a.event).slice(1)}. {summary(a)}
                   </p>
                 </div>
-                <div className={`flex shrink-0 items-center gap-1 ${a.can_edit === false ? "hidden" : ""}`}>
+                <div className={`flex shrink-0 items-center gap-1 max-sm:ml-8 ${a.can_edit === false ? "hidden" : ""}`}>
                   {a.published === false ? (
                     // Only a person's publish switches a draft on (the dialog's Publish rule).
                     <Button variant="secondary" size="sm" onClick={() => setEditing(a)}>

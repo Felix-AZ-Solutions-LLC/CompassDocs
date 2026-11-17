@@ -31,7 +31,9 @@ import { useLeaveGuard, useUnsavedChanges } from "@/lib/use-unsaved";
 import { HD_PRIORITIES, HD_PRIORITY_LABEL, type HdRequestType } from "@/lib/helpdesk/types";
 import { getJson, itemOf, listOf, sendJson } from "../api";
 import { useRequestTypes, useTeams } from "../admin-data";
-import { TEAM_ICON_NAMES, TeamIcon } from "../TeamIcon";
+import { TeamIcon } from "../TeamIcon";
+import { TeamIconPicker } from "../TeamIconPicker";
+import { BackLink } from "@/components/BackLink";
 import { FormBuilder } from "./FormBuilder";
 import { CategoryFields } from "../categories/CategoryFields";
 import { RequestTypeCalendarCard } from "../calendar/RequestTypeCalendarCard";
@@ -59,6 +61,9 @@ export function RequestTypesSettings() {
   const [workflows, setWorkflows] = useState<{ id: number; title: string; desk_department_id?: number | null }[]>([]);
   const [groups, setGroups] = useState<{ id: number; name: string }[] | null>(null);
   const chosenId = Number(sp?.get("type")) || types?.[0]?.id || null;
+  // 1.20.27: under lg the list or the editor shows, never both stacked (the QueueLayout / WorkflowsLayout
+  // rule): a type picked from the list (?type=) is the editor, with a back link to the list.
+  const picked = !!sp?.get("type");
   const chosen = types?.find((t) => t.id === chosenId) ?? null;
 
   useEffect(() => {
@@ -123,7 +128,7 @@ export function RequestTypesSettings() {
       )}
       {types && types.length > 0 && (
         <div className="grid items-start gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
-          <nav aria-label="Request types" className={`${CARD_CLASS} overflow-hidden p-1.5`}>
+          <nav aria-label="Request types" className={`${CARD_CLASS} overflow-hidden p-1.5 ${picked ? "max-lg:hidden" : ""}`}>
             {types.map((t) => {
               const on = t.id === chosenId;
               return (
@@ -145,7 +150,8 @@ export function RequestTypesSettings() {
               );
             })}
           </nav>
-          <div className="@container min-w-0">
+          <div className={`@container min-w-0 ${picked ? "" : "max-lg:hidden"}`}>
+            <BackLink href="/desk/settings/request-types" label="Request types" className="mb-3 lg:hidden" />
             {chosen && (
               <TypeEditor
                 key={chosen.id}
@@ -303,16 +309,8 @@ function TypeEditor({
           <Field label="Name" error={tried ? titleError : undefined}>
             <TextInput value={v.title} maxLength={120} onChange={(e) => set({ title: e.target.value })} />
           </Field>
-          <Field label="Icon">
-            <Select value={v.icon || ""} onChange={(e) => set({ icon: e.target.value })}>
-              <option value="">Default</option>
-              {TEAM_ICON_NAMES.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </Select>
-          </Field>
+          {/* 1.20.27: the icons themselves, not their lucide names. */}
+          <TeamIconPicker value={v.icon || ""} onChange={(icon) => set({ icon })} disabled={readOnly} />
           <Field label="Description" className="@2xl:col-span-2">
             <Textarea value={v.description} maxLength={500} className="h-20" onChange={(e) => set({ description: e.target.value })} placeholder="Your manager approves, then IT orders and sets it up." />
           </Field>

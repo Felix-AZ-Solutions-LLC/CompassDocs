@@ -17,7 +17,7 @@
 // pop-out's hand-off record (`handoff`: the pane takes it back, the pop-out
 // keeps it current).
 
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState } from "react";
 import { replyLabel } from "@/lib/helpdesk/ccs-shared";
 import { BookOpen, ChevronDown, Lock, Paperclip, Reply, SquareArrowOutUpRight, X, Zap } from "lucide-react";
 import { buttonClass, iconButtonClass } from "@/components/Button";
@@ -163,6 +163,7 @@ export const Composer = forwardRef<
   const lock = useComposerReplyLock(number, mode === "public", !!text.trim());
   const lockRO = mode === "public" && lock.lockedByOther;
   const area = useRef<HTMLTextAreaElement>(null);
+  const keysHintId = useId();
   const fileInput = useRef<HTMLInputElement>(null);
   const macroBtn = useRef<HTMLButtonElement>(null);
   const articleBtn = useRef<HTMLButtonElement>(null);
@@ -519,11 +520,19 @@ export const Composer = forwardRef<
         readOnly={lockRO}
         onFocus={() => !internal && lock.touch(false)}
         aria-label={internal ? "Internal note" : "Reply"}
-        placeholder={internal ? "Write a note for the team… / for a macro, ; for a canned response, [[ for an article" : "Write a reply… / for a macro, ; for a canned response, [[ for an article"}
+        placeholder={internal ? "Write a note for the team…" : "Write a reply…"}
+        aria-describedby={text ? undefined : keysHintId}
         rows={4}
         maxLength={20000}
-        className={controlClass(false, "block min-h-24 w-full resize-y rounded-none border-0 bg-transparent px-3 py-3 text-sm shadow-none")}
+        className={controlClass(false, "block min-h-24 w-full resize-y rounded-none border-0 bg-transparent px-3 py-3 text-base shadow-none sm:text-sm")}
       />
+      {/* 1.20.27: the keys as keycaps under the empty box, not a cryptic run of punctuation in the placeholder. */}
+      {!text && !disabled && (
+        <p id={keysHintId} className="px-3 pb-2 text-xs text-slate-500">
+          Type <kbd className="cmd-kbd">/</kbd> for a macro, <kbd className="cmd-kbd">;</kbd> for a canned response,{" "}
+          <kbd className="cmd-kbd">[[</kbd> for an article.
+        </p>
+      )}
       {macro && (
         <p className="px-3 pb-1 text-xs text-slate-500">
           Macro: <span className="font-medium text-slate-700">{macro.title}</span>

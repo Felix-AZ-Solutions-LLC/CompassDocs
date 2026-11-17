@@ -79,8 +79,11 @@ export function DeskBell({ initialUnread }: { initialUnread: number }) {
       >
         <Bell aria-hidden />
         {unread > 0 && (
-          <span className="absolute right-0.5 top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-compass-600 px-1 text-3xs font-semibold leading-none text-white">
-            {unread > 99 ? "99+" : unread}
+          // 1.20.27: on the button's corner with a surface ring, not over the bell ("99+" hid the whole
+          // icon); "9+" under sm, where the top bar is tight.
+          <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-compass-600 px-1 text-3xs font-semibold leading-none text-white ring-2 ring-surface">
+            <span className="sm:hidden">{unread > 9 ? "9+" : unread}</span>
+            <span className="max-sm:hidden">{unread > 99 ? "99+" : unread}</span>
           </span>
         )}
       </button>

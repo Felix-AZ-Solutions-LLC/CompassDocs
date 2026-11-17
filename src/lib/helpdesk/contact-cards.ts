@@ -571,7 +571,7 @@ export async function contactCardFor(
       if (value) card.phones.push({ kind, label, value, tel_href: telHref(value) });
     };
     if (show.has("desk_phone")) phone("desk", "Desk phone", val(settings.fields.desk_phone));
-    if (show.has("cell_phone")) phone("cell", "Cell phone", val(settings.fields.cell_phone));
+    if (show.has("cell_phone")) phone("cell", "Mobile phone", val(settings.fields.cell_phone));
     if (show.has("extra")) {
       for (const key of settings.extra) {
         const f = vfields.find((x) => x.key === key);

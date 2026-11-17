@@ -268,10 +268,12 @@ export function Sparkline({ rows, label }: { rows: HdResultRow[]; label: string 
   const min = Math.min(0, ...nums);
   const x = (i: number) => (vals.length <= 1 ? 0 : (i / (vals.length - 1)) * Math.max(1, w - 6) + 3);
   const y = (v: number) => h - 3 - ((v - min) / (max - min || 1)) * (h - 6);
+  // 1.20.27: the line joins the buckets that have a value, across empty ones, so a sparse trend
+  // (two values a week apart) is a line rather than a lone dot.
   let d = "";
   vals.forEach((v, i) => {
     if (v === null) return;
-    d += `${d && vals[i - 1] !== null ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`;
+    d += `${d ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`;
   });
   const lastI = vals.length - 1 - [...vals].reverse().findIndex((v) => v !== null);
   return (
@@ -293,14 +295,19 @@ export function KpiTile({ result, target, spark, live }: { result: HdQueryResult
       <p className="text-3xl font-semibold tracking-tight text-slate-900">{formatValue(result.total.value, result.unit, { compact: true })}</p>
       <div className="mt-1 flex min-h-5 flex-wrap items-center gap-x-3 gap-y-1">
         {live ? <span className="text-xs text-slate-500">Right now · refreshes every minute</span> : <Delta result={result} />}
-        {result.low_sample && <span className="text-xs text-slate-500">Based on {result.total.n}</span>}
+        {result.low_sample && (
+          <span className="text-xs text-slate-500">
+            Based on {result.total.n} {result.total.n === 1 ? "ticket" : "tickets"}
+          </span>
+        )}
       </div>
       {target && (
         <div className="mt-1">
           <TargetNote value={result.total.value} target={target} result={result} />
         </div>
       )}
-      {spark && spark.length > 1 && <Sparkline rows={spark} label={`${def.label} trend: ${spark.map((r) => formatValue(r.value, result.unit)).join(", ")}`} />}
+      {/* 1.20.27: a trend needs two values; null buckets don't count. */}
+      {spark && spark.filter((r) => r.value !== null).length > 1 && <Sparkline rows={spark} label={`${def.label} trend: ${spark.map((r) => formatValue(r.value, result.unit)).join(", ")}`} />}
     </div>
   );
 }

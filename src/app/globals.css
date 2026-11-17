@@ -212,6 +212,12 @@ body {
   :is(.text-compass-700, .hover\:text-compass-700:hover, .group-hover\:text-compass-700:is(:where(.group):hover *)) {
   color: rgb(var(--compass-ink-strong));
 }
+/* 1.20.27: a darker hover (text-compass-700 hover:text-compass-800) must not
+ * drop to dark-blue-on-navy in dark mode; base text-compass-800 / -900 is
+ * banned outright (test/style-drift-desk) in favour of text-compass-ink-strong. */
+:root[data-theme="dark"] :is(.hover\:text-compass-800:hover, .hover\:text-compass-900:hover) {
+  color: rgb(var(--compass-ink-strong));
+}
 :root[data-theme="dark"] .text-compass-600\/80 {
   color: rgb(var(--compass-ink) / 0.85);
 }
@@ -991,6 +997,60 @@ table {
 .notice-ok {
   @apply border-green-200 bg-green-50 text-green-700;
   @apply dark:border-green-800/60 dark:bg-green-950/40 dark:text-green-300;
+}
+/* 1.20.27: the info tint as a class (a "New in" strip, "Business hours come
+ * from…", a merge or import explainer). compass-50/100 flip with the theme but
+ * compass-200 does not, so the hand-written border-compass-200 glared on a
+ * dark page at rgb(179 211 236); the dark edge is the accent at 40%. Not for
+ * invitation strips or bulk bars (those are not notes; they pair their own
+ * border with dark:border-compass-500/40). */
+.notice-info {
+  @apply border-compass-200 bg-compass-50/70 text-slate-700;
+  @apply dark:border-compass-500/40;
+}
+
+/* 1.20.27: one ink for a native <select>. `appearance: none` drops the
+ * browser's own chevron (which sat beside lucide ChevronDown pills) and this
+ * paints lucide's chevron-down in slate-400 (slate-500 in dark mode), so a
+ * select reads like every other menu in the app. components/form's Select
+ * adds it with the room it needs (pr-8). */
+.select-chevron {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.625rem center;
+  background-size: 1rem 1rem;
+}
+:root[data-theme="dark"] .select-chevron {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a1b5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+@media print {
+  .select-chevron {
+    background-image: none;
+  }
+}
+
+/* 1.20.27: a strip that scrolls sideways says so (components/edge-fade sets
+ * data-fade while there is more to see past an edge): a SubNav tab row, a
+ * settings table in TableWrap. The content fades out over 2rem at the edge
+ * that hides more, so a tab cut mid-word reads as "scroll" rather than a typo. */
+.edge-fade[data-fade="end"] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+}
+.edge-fade[data-fade="start"] {
+  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 2rem), transparent);
+  mask-image: linear-gradient(to left, #000 calc(100% - 2rem), transparent);
+}
+.edge-fade[data-fade="both"] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 2rem, #000 calc(100% - 2rem), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 2rem, #000 calc(100% - 2rem), transparent);
+}
+@media print {
+  .edge-fade[data-fade] {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
 }
 
 /* --- Sign-in shell (STYLEGUIDE §Sign-in surfaces, 1.16.0) ------------------

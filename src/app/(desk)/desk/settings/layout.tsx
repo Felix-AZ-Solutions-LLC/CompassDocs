@@ -16,6 +16,7 @@ import { DeskSettingsNav } from "@/components/helpdesk/desk/settings/DeskSetting
 import { DeskSettingsChrome } from "@/components/helpdesk/desk/settings/DeskSettingsChrome";
 import { DeskNewProvider } from "@/components/helpdesk/desk/settings/DeskNew";
 import { SettingsJumpHighlight } from "@/components/SettingsJumpHighlight";
+import { ReachableSettingsProvider } from "@/components/SettingsLink";
 import { deskSettingsViewer } from "@/components/helpdesk/desk/settings/settings-nav";
 import { DESK_SETTINGS_PAGES, canOpenDeskSettingsPage } from "@/lib/helpdesk/desk-settings-registry";
 import { deskNewState } from "@/lib/helpdesk/whats-new";
@@ -29,7 +30,10 @@ export default async function DeskSettingsLayout({ children }: { children: React
     user.id,
     DESK_SETTINGS_PAGES.filter((p) => !p.adminSection && canOpenDeskSettingsPage(viewer, p)).map((p) => p.href)
   );
+  // 1.20.27: the CompassDocs settings this person can open, so a desk page's SettingsLink to
+  // Settings → AI or Domain & HTTPS is a link for those who can open it and plain text otherwise.
   return (
+    <ReachableSettingsProvider sections={adminSections}>
     <DeskNewProvider initial={fresh}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
         <DeskSettingsNav viewer={viewer} />
@@ -39,5 +43,6 @@ export default async function DeskSettingsLayout({ children }: { children: React
       </div>
       <SettingsJumpHighlight />
     </DeskNewProvider>
+    </ReachableSettingsProvider>
   );
 }

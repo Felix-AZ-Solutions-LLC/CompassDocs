@@ -18,7 +18,6 @@ import { EmptyState, SectionEmpty } from "@/components/form";
 import { ListFilter } from "@/components/ListFilter";
 import { PageHeader } from "@/components/PageHeader";
 import { PageContainer } from "@/components/PageWidth";
-import { DeskNewStrip } from "./DeskNew";
 import { LoadingRow } from "@/components/Spinner";
 import { formDialog } from "@/components/Dialog";
 import { toast } from "@/components/Toasts";
@@ -99,15 +98,13 @@ export function TeamsSettings() {
       <PageHeader
         icon={<Users />}
         title="Teams"
-        subtitle="Who answers for what. Membership decides which queues an agent works."
+        subtitle="Each team's queue, people and hours. Open one to change it."
         actions={
           <Button icon={<Plus />} onClick={create}>
             Add team
           </Button>
         }
       />
-      {/* 1.19.2 (agent W5): the "New in <release>" strip until dismissed (DeskNew). */}
-      <DeskNewStrip />
       {error && <p className="notice-error mb-4 rounded-lg border px-3 py-2 text-sm">{error}</p>}
       {teams === null && <LoadingRow className="py-10" />}
       {teams && teams.length === 0 && (

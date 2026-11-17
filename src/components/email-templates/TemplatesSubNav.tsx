@@ -15,7 +15,8 @@ export function TemplatesSubNav({ base, className = "" }: { base: string; classN
       root={base}
       className={className}
       items={[
-        { href: base, label: "Templates", icon: LayoutTemplate },
+        // 1.20.27: a template's own page (/event/<key>) is under Templates, so the tab stays lit there.
+        { href: base, label: "Templates", icon: LayoutTemplate, also: [`${base}/event`] },
         { href: `${base}/headers`, label: "Headers", icon: PanelTop },
         { href: `${base}/bodies`, label: "Bodies", icon: FileText },
         { href: `${base}/signatures`, label: "Signatures", icon: Signature },

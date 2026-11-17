@@ -118,7 +118,7 @@ export function OriginalEmailDialog({ message, onClose }: { message: HdMessage |
             {info.insecure_images > 0 && <p className="text-xs text-slate-500">{HD_ORIGINAL_COPY.insecure(info.insecure_images)}</p>}
             {info.truncated && <p className="notice-warn rounded-lg border px-3 py-2 text-sm">{HD_ORIGINAL_COPY.truncated}</p>}
             {/* The paper: literal white in both themes (STYLEGUIDE §Helpdesk: the desk, "View original"). */}
-            <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white">
+            <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-white/15">
               <iframe
                 key={src}
                 src={src}

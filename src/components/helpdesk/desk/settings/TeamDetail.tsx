@@ -32,12 +32,12 @@ import { useTeams } from "../admin-data";
 import { useDeskCounts } from "../counts";
 import { personOption, usePeople } from "../people";
 import { TeamIcon } from "../TeamIcon";
+import { TeamIconPicker } from "../TeamIconPicker";
 import { TeamCalendarSelect } from "../calendars/TeamCalendarSelect";
 import { TeamSlaTargets } from "../calendars/TeamSlaTargets";
 import { TeamTimeToggle } from "../time/TeamTimeToggle";
 import { TeamStatusSection } from "../team-status/TeamStatusServices";
 import { cannedTeamDeleteNote } from "./canned-client";
-import { TEAM_ICON_HELP } from "./TeamsSettings";
 
 const TEAMS = "/desk/settings/teams";
 const BACK = { href: TEAMS, label: "Teams" };
@@ -186,9 +186,8 @@ function TeamPage({ team, onChanged }: { team: HdTeamWithMembers; onChanged: () 
             <Field label="Name" error={nameError}>
               <TextInput value={draft.name} onChange={(e) => set({ name: e.target.value })} maxLength={60} />
             </Field>
-            <Field label="Icon (optional)" help={TEAM_ICON_HELP}>
-              <TextInput value={draft.icon} onChange={(e) => set({ icon: e.target.value })} maxLength={40} placeholder="wallet" autoCapitalize="none" spellCheck={false} />
-            </Field>
+            {/* 1.20.27: the icons themselves, not a field for a lucide name. */}
+            <TeamIconPicker label="Icon" value={draft.icon} onChange={(icon) => set({ icon })} />
             <Field label="What it handles (optional)" className="sm:col-span-2">
               <TextInput value={draft.description} onChange={(e) => set({ description: e.target.value })} maxLength={300} placeholder="Expenses, invoices and payroll questions" />
             </Field>

@@ -40,6 +40,9 @@ const STATUS: Record<Exclude<HubStatus, "none">, { tone: ChipTone; label: string
   attention: { tone: "warn", label: "Needs attention" },
 };
 
+/** The tiles that are a connection to another service, whose own pages say "Not connected". */
+const CONNECTIONS = new Set<HubTileKey>(["snipe-it", "intune", "teams", "slack"]);
+
 export function IntegrationsHub() {
   const [tiles, setTiles] = useState<Partial<Record<HubTileKey, HubTileState>> | null>(null);
   const [error, setError] = useState("");
@@ -70,7 +73,14 @@ export function IntegrationsHub() {
               {g.tiles.map((t) => {
                 const state = tiles![t.key]!;
                 const Icon = ICON[t.key];
-                const chip = state.status === "none" ? null : STATUS[state.status];
+                // 1.20.27: a tile says what its own page says: a connection (Snipe-IT, Intune, Teams, Slack) is
+                // "Not connected" there and here; everything else (tokens, webhooks, sources) is "Not set up".
+                const chip =
+                  state.status === "none"
+                    ? null
+                    : state.status === "not_set_up" && CONNECTIONS.has(t.key)
+                      ? { ...STATUS.not_set_up, label: "Not connected" }
+                      : STATUS[state.status];
                 const setup = state.status === "not_set_up";
                 return (
                   <li key={t.key} className={`${CARD_CLASS} flex flex-col p-5`} data-testid={`hub-tile-${t.key}`} data-status={state.status}>

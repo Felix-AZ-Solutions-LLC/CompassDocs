@@ -8,7 +8,7 @@
 // /api/helpdesk/admin/setup; the starter set is POST …/setup/starter.
 
 import { useCallback, useEffect, useState } from "react";
-import { BookOpen, Check, Clock, LifeBuoy, ListChecks, Mail, Sparkles, Star, Users } from "lucide-react";
+import { BookOpen, Check, Clock, Globe, LifeBuoy, ListChecks, Mail, Sparkles, Star, Users } from "lucide-react";
 import { Button } from "@/components/Button";
 import { CARD_CLASS } from "@/components/Card";
 import { EnterpriseBadge } from "@/components/Chip";
@@ -19,6 +19,7 @@ import { confirmDialog } from "@/components/Dialog";
 import { toast } from "@/components/Toasts";
 import { getJson, sendJson } from "../api";
 import { useDeskCounts } from "../counts";
+import { AddressStep } from "../WorkspaceAddressNotice";
 
 interface StepState {
   key: "teams" | "hours" | "email" | "forms" | "csat";
@@ -35,12 +36,14 @@ interface Checklist {
   workspace_address?: string | null;
 }
 
+// 1.20.27: the bodies say what each step is, never the starter set's numbers (step 2 read "resolve in
+// 2 days" beside targets of 9 and 17 hours); what is actually set shows in the step's summary line.
 const STEPS: Record<StepState["key"], { icon: React.ReactNode; title: string; body: string; href: string }> = {
-  teams: { icon: <Users className="h-4 w-4" aria-hidden />, title: "Teams", body: "IT, HR and Facilities, with who answers for each.", href: "/desk/settings/teams" },
+  teams: { icon: <Users className="h-4 w-4" aria-hidden />, title: "Teams", body: "The groups that answer requests, and who answers for each.", href: "/desk/settings/teams" },
   hours: {
     icon: <Clock className="h-4 w-4" aria-hidden />,
     title: "Hours and reply targets",
-    body: "Mon to Fri, 9:00 to 17:30. Urgent: reply in 1 hour. Everything else: reply in 4 business hours, resolve in 2 days.",
+    body: "Office hours and holidays, and how soon each priority gets a first reply and a resolution.",
     href: "/desk/settings/sla",
   },
   email: { icon: <Mail className="h-4 w-4" aria-hidden />, title: "Email", body: "Forward your help address here, and replies thread back into the ticket.", href: "/desk/settings/email" },
@@ -80,7 +83,8 @@ export function SetupChecklist() {
     try {
       const d = await sendJson<{ checklist?: Checklist }>("/api/helpdesk/admin/setup/starter", "POST", {}, "Couldn't add the starter set.");
       toast("ok", "Starter set added. Add your agents to the teams next.");
-      if (d.checklist) setC(d.checklist);
+      // The starter route's checklist has no address; keep the one already read.
+      if (d.checklist) setC((prev) => ({ ...d.checklist!, workspace_address: prev?.workspace_address }));
       else load();
       refreshCounts();
     } catch (e) {
@@ -90,7 +94,14 @@ export function SetupChecklist() {
     }
   }
 
-  const pct = c ? Math.round((c.done / Math.max(1, c.total)) * 100) : 0;
+  // 1.20.27: the workspace address is a step of its own, first, because without it desk mail has no
+  // working links and the portal sends no sign-in links (lib/workspace-origin). It is a CompassDocs
+  // setting (Domain & HTTPS, or COMPASSDOCS_BASE_URL), so it counts here but not in the desk's five.
+  const address = c?.workspace_address ?? null;
+  const addressKnown = c ? c.workspace_address !== undefined : false;
+  const done = c ? c.done + (address ? 1 : 0) : 0;
+  const total = c ? c.total + (addressKnown ? 1 : 0) : 0;
+  const pct = c ? Math.round((done / Math.max(1, total)) * 100) : 0;
   const teamsDone = c?.steps.find((s) => s.key === "teams")?.done;
 
   return (
@@ -103,29 +114,16 @@ export function SetupChecklist() {
               Set up your helpdesk <EnterpriseBadge />
             </span>
           }
-          subtitle="Five short steps. Every one starts with sensible defaults, so you can open the doors after step one and come back later."
+          subtitle="A few short steps. Every one starts with sensible defaults, so you can open the doors after the teams and come back later."
         />
         {error && <p className="notice-error mb-4 rounded-lg border px-3 py-2 text-sm">{error}</p>}
         {!c && !error && <LoadingRow className="py-10" />}
         {c && (
           <>
-            {c.workspace_address === null && (
-              <div className="notice-warn mb-4 rounded-lg border px-3 py-2 text-sm">
-                <p className="font-medium">Set your workspace&apos;s address first.</p>
-                <p className="mt-1">
-                  Links in desk and portal mail are built only from it, never from the address someone happened to use. Until it is set,
-                  links in mail are incomplete and the customer portal sends no sign-in links. Set it under{" "}
-                  <a href="/admin/domain" className="link font-medium">
-                    Settings, Domain &amp; HTTPS
-                  </a>
-                  , or with <code className="font-mono text-xs">COMPASSDOCS_BASE_URL</code> on the server.
-                </p>
-              </div>
-            )}
             <section aria-label="Progress" className={`${CARD_CLASS} p-5`}>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <p className="text-base font-semibold text-slate-900">
-                  {c.done} of {c.total} done
+                  {done} of {total} done
                 </p>
                 <div className="flex flex-wrap gap-2">
                   {!teamsDone && (
@@ -142,20 +140,22 @@ export function SetupChecklist() {
                 role="progressbar"
                 aria-label="Setup progress"
                 aria-valuemin={0}
-                aria-valuemax={c.total}
-                aria-valuenow={c.done}
+                aria-valuemax={total}
+                aria-valuenow={done}
                 className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100"
               >
                 <span className="block h-full rounded-full bg-compass-500 transition-[width]" style={{ width: `${pct}%` }} />
               </div>
               {!teamsDone && (
-                <p className="mt-3 text-sm text-slate-600">New here? The starter set fills in all five steps with an IT, HR and Facilities desk you can adjust.</p>
+                <p className="mt-3 text-sm text-slate-600">New here? The starter set fills in the desk&apos;s steps with an IT, HR and Facilities desk you can adjust.</p>
               )}
             </section>
             <ol className={`${CARD_CLASS} mt-4 divide-y divide-slate-100`}>
+              {addressKnown && <AddressStep address={address} />}
               {c.steps.map((s, i) => {
                 const meta = STEPS[s.key];
                 if (!meta) return null;
+                const n = i + (addressKnown ? 2 : 1);
                 return (
                   <li key={s.key} className="flex flex-wrap items-start gap-4 p-5 sm:flex-nowrap">
                     <span
@@ -168,7 +168,7 @@ export function SetupChecklist() {
                     </span>
                     <div className="min-w-0 flex-1">
                       <h2 className="text-base font-semibold text-slate-900">
-                        {i + 1}. {meta.title}
+                        {n}. {meta.title}
                         <span className="sr-only">{s.done ? " (done)" : " (to do)"}</span>
                       </h2>
                       <p className="mt-0.5 text-sm text-slate-600">{meta.body}</p>
