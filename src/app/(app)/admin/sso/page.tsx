@@ -2,11 +2,11 @@ import { cookies, headers } from "next/headers";
 import { requireSettingsSection, SESSION_COOKIE } from "@/lib/auth";
 import { getSsoConfig, ssoAuthority } from "@/lib/sso-config";
 import { getSamlConfig, samlConfigured, samlSpUrls } from "@/lib/saml-config";
-import { countLocalPasswords, getSetting, listUsers, sessionSid } from "@/lib/db";
+import { adminsOutsideBreakGlass, countLocalPasswords, getSetting, listUsers, sessionSid } from "@/lib/db";
 import { breakGlassIds } from "@/lib/sign-in-security";
 import { duoView } from "@/lib/duo-view";
 import { getAppSettings } from "@/lib/settings-store";
-import { eePresent, featureEnabled } from "@/lib/ee";
+import { eePresent, featureEnabled, featureEnforced } from "@/lib/ee";
 import { SsoSettings } from "@/components/SsoSettings";
 import { SamlPanel } from "@/components/SamlPanel";
 import { ScimPanel } from "@/components/ScimPanel";
@@ -44,6 +44,9 @@ export default async function SsoAdminPage() {
   // 1.20.27 (security review H1): the break-glass accounts SSO only still lets in with a password.
   const breakGlass = await breakGlassIds();
   const localPasswords = await countLocalPasswords(breakGlass);
+  // 1.20.27 (second review M5, M7): the administrators SSO only keeps out, and a lapsed licence's limits.
+  const outside = await adminsOutsideBreakGlass(breakGlass);
+  const lapsed = !enabled && (await featureEnforced("sso"));
   const breakGlassUsers = people
     .filter((u) => u.status === "active" || breakGlass.includes(u.id))
     .map((u) => ({ id: u.id, label: u.name || u.username, sublabel: `${u.username} · ${u.role}${u.status === "active" ? "" : " · disabled"}` }));
@@ -70,8 +73,11 @@ export default async function SsoAdminPage() {
           sso_only: cfg.ssoOnly,
           break_glass_user_ids: breakGlass,
           local_password_count: localPasswords,
+          admins_outside_break_glass: outside.map((a) => a.name || a.username),
+          lapsed,
         }}
         users={breakGlassUsers}
+        viewerId={user.id}
       />
       <SamlPanel
         initial={{

@@ -8,12 +8,12 @@ import {
   AckReasonRequiredError,
 } from "@/lib/db";
 import { ackDecisionRequired, auditedAckPolicy, ACK_POLICY_ERROR } from "@/lib/ack-decision";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { getComplianceSettings } from "@/lib/compliance-settings";
 import { apiGuard } from "@/lib/api-auth";
 import { audit, auditAckDecision, actorFrom, ipFrom } from "@/lib/audit";
 import { notifySpaceSubscribers } from "@/lib/subscriptions";
 import { notifyCrSubmitted } from "@/lib/notifications";
-import { requestOrigin } from "@/lib/oauth";
 import { canPublishDirectly, spaceScopeFor, scopeAllows, canEditSpace } from "@/lib/access";
 import type { SessionUser } from "@/lib/types";
 
@@ -136,7 +136,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       title: branch.title,
       actorId: user.id,
       actorName: user.name || user.username,
-      origin: requestOrigin(req),
+      origin: await mailOrigin(),
     });
     return NextResponse.json({ pending: true, changeRequestId: crId, docId: source.id });
   }
@@ -172,7 +172,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       ackSource: "merge",
       ackActor: { id: user.id, name: user.name || user.username },
       ackKeepReasonRequired: keepReasonRequired,
-      ackOrigin: requestOrigin(req),
+      ackOrigin: await mailOrigin(),
     });
   } catch (e) {
     if (e instanceof AckReasonRequiredError) {
@@ -216,7 +216,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       kind: "updated",
       actorUserId: user.id,
       actorName: user.name || user.username,
-      origin: requestOrigin(req),
+      origin: await mailOrigin(),
     });
   }
   // The confirmation decision a merge of a confirmed, published document

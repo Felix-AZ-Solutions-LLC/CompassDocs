@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { apiGuard } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { importFromZip } from "@/lib/transfer";
-import { requestOrigin } from "@/lib/oauth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import type { SessionUser } from "@/lib/types";
 
@@ -47,7 +47,7 @@ export async function POST(req: Request) {
       { id: user.id, name: user.name || user.username },
       {
         overwritePolicies,
-        origin: requestOrigin(req),
+        origin: await mailOrigin(),
         audit: { actor: actorFrom(user), ip: ipFrom(req) },
       }
     );

@@ -13,9 +13,9 @@ import { apiGuard } from "@/lib/api-auth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { SESSION_COOKIE } from "@/lib/auth";
 import { featureEnabled } from "@/lib/ee";
-import { getUserById, getUserByUsername, removeLocalPasswords } from "@/lib/db";
+import { removeLocalPasswords } from "@/lib/db";
 import { signInSetup } from "@/lib/sign-in-routing";
-import { breakGlassIds, isSecurityAdmin } from "@/lib/sign-in-security";
+import { breakGlassIds, usableBreakGlass } from "@/lib/sign-in-security";
 
 export const dynamic = "force-dynamic";
 
@@ -29,17 +29,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Turn on SSO only (and save) before removing local passwords." }, { status: 409 });
   }
   const keep = await breakGlassIds();
-  let usable = false;
-  for (const id of keep) {
-    const u = await getUserById(id);
-    if (!u || u.status !== "active") continue;
-    const full = await getUserByUsername(u.username);
-    if (full?.password_hash && (await isSecurityAdmin(u))) {
-      usable = true;
-      break;
-    }
-  }
-  if (!usable) {
+  if ((await usableBreakGlass(keep)).length === 0) {
     return NextResponse.json(
       { error: "Name at least one break-glass account first: an active administrator with a password, who can still sign in if single sign-on fails." },
       { status: 409 }

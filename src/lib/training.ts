@@ -15,6 +15,7 @@ import {
   listTrainingDecks,
 } from "@/lib/db";
 import { notify } from "@/lib/notifications";
+import { mailOrigin } from "./workspace-origin";
 import { renderEmail } from "@/lib/email-templates";
 import { sendMail } from "@/lib/mailer";
 import { getSmtpConfig, smtpConfigured } from "@/lib/smtp-config";
@@ -234,7 +235,7 @@ export async function notifyTrainingAssigned(input: {
   if (!users.length) return;
   const { emailGate } = await import("@/lib/notify-policy");
   const gate = await emailGate(users.map((u) => u.id), "training_assigned");
-  const origin = input.origin || (settings.custom_domain ? `https://${settings.custom_domain}` : "");
+  const origin = input.origin || (await mailOrigin());
   const { subject, text, html } = await renderEmail(
     "training_assigned",
     {
@@ -265,7 +266,7 @@ export async function remindDueTraining(): Promise<void> {
   if (!due.length) return;
 
   const settings = await getAppSettings();
-  const origin = settings.custom_domain ? `https://${settings.custom_domain}` : "";
+  const origin = await mailOrigin();
 
   for (const r of due) {
     void notify([r.user_id], {
@@ -334,7 +335,7 @@ export async function remindAssignmentsNow(
   if (smtpConfigured(smtp)) {
     const { emailGate } = await import("@/lib/notify-policy");
     const gate = await emailGate(rows.map((r) => r.user_id), "training_due");
-    const origin = settings.custom_domain ? `https://${settings.custom_domain}` : "";
+    const origin = await mailOrigin();
     for (const r of rows) {
       if (!r.email) continue;
       if (!gate.allows(r.user_id)) continue;
@@ -474,7 +475,7 @@ export async function monthlyTrainingEvidence(): Promise<void> {
   if (!smtpConfigured(smtp)) return;
 
   const settings = await getAppSettings();
-  const origin = settings.custom_domain ? `https://${settings.custom_domain}` : "";
+  const origin = await mailOrigin();
   const summary = await trainingReportSummary();
   const recipients = (await listUsers()).filter(
     (u) => report.user_ids.includes(u.id) && u.email && u.status === "active"

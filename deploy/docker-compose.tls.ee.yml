@@ -43,6 +43,8 @@ services:
       COMPASSDOCS_BASE_URL: ${COMPASSDOCS_BASE_URL:-}
       COMPASSDOCS_TRUSTED_PROXY_HOPS: ${COMPASSDOCS_TRUSTED_PROXY_HOPS:-}
       COMPASSDOCS_SETUP_TOKEN: ${COMPASSDOCS_SETUP_TOKEN:-}
+      # 1.20.27: the emergency switch for SSO only (set to 1 and restart if single sign-on breaks).
+      COMPASSDOCS_SSO_ONLY_DISABLED: ${COMPASSDOCS_SSO_ONLY_DISABLED:-}
       # Lets the app drive the Caddy reverse proxy from the setup wizard and
       # Settings → Domain & HTTPS.
       COMPASSDOCS_CADDY_ADMIN: http://caddy:2019

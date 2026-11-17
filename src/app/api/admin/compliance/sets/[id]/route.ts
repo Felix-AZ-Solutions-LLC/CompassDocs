@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { complianceGuard } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { featureEnabled } from "@/lib/ee";
 import { actorFrom, audit, ipFrom } from "@/lib/audit";
-import { requestOrigin } from "@/lib/oauth";
 import { assignPolicySet, deletePolicySet, getPolicySet, updatePolicySet, PolicySetError } from "@/lib/db";
 import { parseSetPatch, parseSetTarget, SET_NOT_FOUND } from "@/lib/policy-sets";
 import type { PolicySetAssignResult, PolicySetRow, SessionUser } from "@/lib/types";
@@ -130,7 +130,7 @@ export async function POST(req: Request, ctx: Ctx) {
     const set = await getPolicySet(g.id);
     if (!set) return NextResponse.json({ error: SET_NOT_FOUND }, { status: 404 });
     setName = set.name;
-    result = await assignPolicySet(g.id, parsed.value, actor, { origin: requestOrigin(req) });
+    result = await assignPolicySet(g.id, parsed.value, actor, { origin: await mailOrigin() });
   } catch (e) {
     if (e instanceof PolicySetError) return NextResponse.json({ error: e.message }, { status: e.status });
     throw e;

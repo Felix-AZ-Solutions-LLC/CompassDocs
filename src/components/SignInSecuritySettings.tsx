@@ -29,6 +29,7 @@ import {
   type TwoStepScope,
 } from "@/lib/sign-in-security-shared";
 import type { CredentialRow } from "@/lib/db";
+import { ROLE_ORDER, type Role } from "@/lib/types";
 
 export interface SignInSecurityState {
   two_step: TwoStepScope;
@@ -36,7 +37,16 @@ export interface SignInSecurityState {
   credentials: CredentialRow[];
 }
 
-export function SignInSecuritySettings({ initial, canRevoke }: { initial: SignInSecurityState; canRevoke: boolean }) {
+export function SignInSecuritySettings({
+  initial,
+  canRevoke,
+  viewer,
+}: {
+  initial: SignInSecurityState;
+  canRevoke: boolean;
+  /** Who is looking (1.20.27): a row is revocable when it is theirs, they are an administrator, or its owner's role is below theirs. */
+  viewer?: { id: number; role: Role };
+}) {
   const [twoStep, setTwoStep] = useState<TwoStepScope>(initial.two_step);
   const [days, setDays] = useState(String(initial.session_max_days));
   const [credentials, setCredentials] = useState(initial.credentials);
@@ -117,7 +127,7 @@ export function SignInSecuritySettings({ initial, canRevoke }: { initial: SignIn
 
       <SaveRow dirty={dirty} busy={saving} onSave={save} disabled={Boolean(daysError)} label="Save" />
 
-      <Credentials rows={credentials} setRows={setCredentials} canRevoke={canRevoke} />
+      <Credentials rows={credentials} setRows={setCredentials} canRevoke={canRevoke} viewer={viewer} />
     </div>
   );
 }
@@ -126,11 +136,17 @@ function Credentials({
   rows,
   setRows,
   canRevoke,
+  viewer,
 }: {
   rows: CredentialRow[];
   setRows: (r: CredentialRow[]) => void;
   canRevoke: boolean;
+  viewer?: { id: number; role: Role };
 }) {
+  // The server's rule (api/admin/sign-in-security mayRevokeFor), so no row offers a button that would be refused.
+  const revocable = (r: CredentialRow) =>
+    canRevoke &&
+    (!viewer || viewer.role === "admin" || r.user_id === viewer.id || ROLE_ORDER.indexOf(r.user_role) < ROLE_ORDER.indexOf(viewer.role));
   const [q, setQ] = useState("");
   const fmt = useFormatDate();
   const shown = useMemo(() => {
@@ -236,7 +252,7 @@ function Credentials({
                   </td>
                   {canRevoke && (
                     <td className={`${TD} ${FIT}`}>
-                      <button
+                      {revocable(r) && <button
                         type="button"
                         onClick={() => void revoke(r)}
                         className={iconButtonClass("quiet", "sm")}
@@ -244,7 +260,7 @@ function Credentials({
                         aria-label={r.kind === "token" ? `Revoke the token ${r.name} of ${r.username}` : `Disconnect ${r.name || "the app"} for ${r.username}`}
                       >
                         <Ban className="h-4 w-4" />
-                      </button>
+                      </button>}
                     </td>
                   )}
                 </tr>

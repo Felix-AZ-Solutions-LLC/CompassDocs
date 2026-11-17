@@ -329,7 +329,10 @@ describe("the uploads half of a backup (security review H5)", () => {
   test("every file comes back byte for byte; the key file, links and scratch files never go in", async () => {
     await writeFile(join(root, "a1b2c3d4e5f60718293a4b5c6d7e8f90.png"), Buffer.from([0, 1, 2, 255]));
     await writeFile(join(root, ".secret.key"), "the master key");
-    await writeFile(join(root, "x.dump.tmp"), "scratch");
+    // Scratch files by their exact generated names (second review M3); an attachment's own ".tmp" is content.
+    await writeFile(join(root, "compassdocs-20260101-000000.dump.enc.tmp"), "scratch");
+    await writeFile(join(root, ".a1b2.png.4242.restore.part"), "scratch");
+    await writeFile(join(root, "notes.tmp"), "a user's notes");
     await mkdir(join(root, "hd-import", "deep".repeat(40)), { recursive: true });
     const long = join(root, "hd-import", "deep".repeat(40), "f".repeat(90) + ".csv");
     await writeFile(long, "a,b\n1,2\n");
@@ -337,7 +340,8 @@ describe("the uploads half of a backup (security review H5)", () => {
     await symlink("/etc/passwd", join(root, "link"));
     const tar = join(out, "files.tar");
     const r = await backupFiles.writeFilesArchive(tar, { root });
-    assert.equal(r.files, 3, "the png, the long-named csv and the empty file");
+    assert.equal(r.files, 4, "the png, the long-named csv, the empty file and notes.tmp");
+    assert.equal(r.vanished, 0);
     const raw = await readFile(tar);
     assert.ok(!raw.includes(Buffer.from("the master key")), "the key file is never archived");
     assert.ok(!raw.includes(Buffer.from("scratch")));
@@ -348,12 +352,72 @@ describe("the uploads half of a backup (security review H5)", () => {
     await writeFile(join(dest, ".secret.key"), "the NEW host's key");
     await writeFile(join(dest, "added-after.txt"), "kept");
     const x = await backupFiles.extractFilesArchive(tar, { root: dest });
-    assert.equal(x.files, 3);
+    assert.equal(x.files, 4);
+    assert.equal(await readFile(join(dest, "notes.tmp"), "utf8"), "a user's notes", "an attachment named .tmp is restored");
     assert.deepEqual(await readFile(join(dest, "a1b2c3d4e5f60718293a4b5c6d7e8f90.png")), Buffer.from([0, 1, 2, 255]));
     assert.equal(await readFile(join(dest, "hd-import", "deep".repeat(40), "f".repeat(90) + ".csv"), "utf8"), "a,b\n1,2\n");
     assert.equal(await readFile(join(dest, ".secret.key"), "utf8"), "the NEW host's key", "never overwritten");
     assert.equal(await readFile(join(dest, "added-after.txt"), "utf8"), "kept", "files added since stay");
     assert.ok(!(await readdir(dest)).includes("link"));
+  });
+
+  test("a file or folder deleted while the archive is written is skipped and counted, not a failed backup (second review M3)", async () => {
+    const live = await mkdtemp(join(tmpdir(), "cd-vanish-"));
+    try {
+      for (let i = 0; i < 40; i++) await writeFile(join(live, `f${String(i).padStart(2, "0")}.bin`), Buffer.alloc(64 * 1024, i));
+      await mkdir(join(live, "zz-folder"));
+      for (let i = 0; i < 5; i++) await writeFile(join(live, "zz-folder", `g${i}.bin`), "x");
+      // Delete files while the writer walks the folder (a retention purge running at the same time).
+      const doomed = [5, 17, 29, 38].map((i) => join(live, `f${String(i).padStart(2, "0")}.bin`));
+      const tar = join(out, "vanish.tar");
+      const writing = backupFiles.writeFilesArchive(tar, { root: live });
+      await Promise.all([...doomed.map((f) => rm(f, { force: true })), rm(join(live, "zz-folder"), { recursive: true, force: true })]);
+      const r = await writing;
+      // Whatever the interleaving: the backup succeeds, and holds every file that was still there.
+      assert.ok(r.files >= 36 && r.files <= 45, `archived ${r.files}, vanished ${r.vanished}`);
+      const dest = join(out, "vanish-restored");
+      await mkdir(dest);
+      const x = await backupFiles.extractFilesArchive(tar, { root: dest });
+      assert.equal(x.files, r.files, "what was archived restores");
+    } finally {
+      await rm(live, { recursive: true, force: true });
+    }
+  });
+
+  test("a vanished file is skipped deterministically (lstat sees it, open does not)", async () => {
+    const live = await mkdtemp(join(tmpdir(), "cd-vanish2-"));
+    try {
+      await writeFile(join(live, "a.txt"), "a");
+      await writeFile(join(live, "b.txt"), "b");
+      const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
+      const realOpen = fsp.open;
+      // The first open of b.txt finds it gone, as if deleted between the listing and the read.
+      (fsp as { open: typeof realOpen }).open = (async (p: Parameters<typeof realOpen>[0], ...rest: unknown[]) => {
+        if (String(p).endsWith("b.txt")) {
+          const e = new Error("ENOENT: no such file") as NodeJS.ErrnoException;
+          e.code = "ENOENT";
+          throw e;
+        }
+        return (realOpen as (...a: unknown[]) => ReturnType<typeof realOpen>)(p, ...rest);
+      }) as typeof realOpen;
+      try {
+        const r = await backupFiles.writeFilesArchive(join(out, "v2.tar"), { root: live });
+        assert.deepEqual({ files: r.files, vanished: r.vanished }, { files: 1, vanished: 1 });
+      } finally {
+        (fsp as { open: typeof realOpen }).open = realOpen;
+      }
+    } finally {
+      await rm(live, { recursive: true, force: true });
+    }
+  });
+
+  test("scratch files are matched by their exact generated names", () => {
+    assert.equal(backupFiles.excluded("compassdocs-20260101-000000.dump.enc.tmp", null), true);
+    assert.equal(backupFiles.excluded("compassdocs-20260101-000000.files.tar.enc.plain.tmp", null), true);
+    assert.equal(backupFiles.excluded("hd/.x.pdf.123.restore.part", null), true);
+    assert.equal(backupFiles.excluded("report.tmp", null), false);
+    assert.equal(backupFiles.excluded("download.part", null), false);
+    assert.equal(backupFiles.excluded("a/.secret.key", null), true);
   });
 
   test("a path that would leave the uploads directory is refused", () => {

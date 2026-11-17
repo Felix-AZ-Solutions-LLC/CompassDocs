@@ -749,7 +749,23 @@ focus):
   goes with it (**Remove local passwords…**, `UserX`) is a `danger` `sm`
   `Button` beside a sentence counting what it would change, shown only
   while the page is saved and there is something to change, and asks
-  with `confirmDialog({ danger: true, typeToConfirm })`.
+  with `confirmDialog({ danger: true, typeToConfirm })`. Under the
+  picker, a `notice-warn` (`ShieldAlert`) tells the viewer when they are
+  not on the list themselves, and one `text-xs text-slate-500` sentence
+  names the administrators the rule keeps out (1.20.27 second review).
+- **A server emergency switch** (`COMPASSDOCS_DUO_DISABLED`, 1.20.5;
+  `COMPASSDOCS_SSO_ONLY_DISABLED`, 1.20.27) is one `notice-warn` on every
+  settings page (the admin layout), above the licence notice, naming the
+  variable in `font-mono text-xs` and saying how to undo it ("Remove it
+  and restart…"), shown only while the rule it holds off is saved as on.
+- **Settings a lapsed licence still enforces** (Single sign-on, 1.20.27
+  second review): the form stays, with a `notice-warn` (`ShieldAlert`)
+  above it listing the only changes that save; every other control is
+  `disabled` (a toggle that may only be turned off is disabled while
+  off), and the one-click setup is hidden.
+- **Revoking someone else's credential** shows the icon-only Revoke only
+  on rows the viewer may act on (their own, any as an administrator,
+  else accounts with a lower role); the column stays for alignment.
 - **Expiry on a personal token** (1.20.27, `ApiTokens`): a
   `Select` (`w-auto`, `aria-label` "Token expires after") beside the name
   input, 30 days / 90 days (the default) / 1 year, and "No expiry" only

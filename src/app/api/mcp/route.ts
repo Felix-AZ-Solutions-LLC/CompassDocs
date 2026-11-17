@@ -1861,6 +1861,13 @@ async function authenticate(req: Request): Promise<User | Response> {
       headers: { "content-type": "application/json" },
     });
   }
+  // Second review: a never-expiring personal token of an account that owes two-step set-up waits until it is done.
+  if (user && (await (await import("@/lib/sign-in-security")).bearerOwesTwoStep(user))) {
+    return new Response(
+      JSON.stringify({ error: "Set up two-step sign-in in CompassDocs first: this workspace requires it for your account." }),
+      { status: 403, headers: { "content-type": "application/json" } }
+    );
+  }
   if (!user) {
     // Point OAuth-capable clients (Claude's custom-connector UI) at our
     // discovery document so they can start the authorization flow themselves.

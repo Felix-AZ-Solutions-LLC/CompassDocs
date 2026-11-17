@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { sectionApiGuard } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { createAnnouncement, listAllAnnouncements } from "@/lib/db";
 import { emailAnnouncement } from "@/lib/announcements";
 import { notifyWebhooks } from "@/lib/webhooks";
 import { getAppSettings } from "@/lib/settings-store";
-import { requestOrigin } from "@/lib/oauth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import type { SessionUser } from "@/lib/types";
 
@@ -63,7 +63,7 @@ export async function POST(req: Request) {
   });
 
   const settings = await getAppSettings();
-  const origin = requestOrigin(req);
+  const origin = await mailOrigin();
 
   if (body?.notify_webhooks === true) {
     void notifyWebhooks("announcement.posted", {

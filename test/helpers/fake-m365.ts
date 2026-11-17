@@ -218,6 +218,8 @@ export interface FakeM365 {
   deleteFails: boolean;
   /** The tenant the next device-code sign-in lands in (default: tenantId). */
   deviceTenant: string;
+  /** 1.20.27: domains the public OpenID discovery document resolves, to their tenant (contoso.example: tenantId). */
+  tenantDomains: Record<string, string>;
   /** Polls answered "authorization_pending" before the sign-in is approved. */
   devicePending: number;
   /** The delta query's next page link points at another host. */
@@ -309,6 +311,7 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
     deviceScopes: [],
     deleteFails: false,
     deviceTenant: tenantId,
+    tenantDomains: { "contoso.example": tenantId },
     devicePending: 1,
     evilNextLink: false,
     addApp(over = {}) {
@@ -956,6 +959,12 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
 
   async function login(req: http.IncomingMessage, res: http.ServerResponse, path: string): Promise<void> {
     const form = new URLSearchParams((await read(req)).toString("utf8"));
+    // 1.20.27: the public discovery document, which names a domain's tenant in its issuer.
+    const disc = path.match(/^\/([^/]+)\/v2\.0\/\.well-known\/openid-configuration$/);
+    if (disc && req.method === "GET") {
+      const t = fake.tenantDomains[decodeURIComponent(disc[1])];
+      return t ? send(res, 200, { issuer: `https://login.microsoftonline.com/${t}/v2.0` }) : send(res, 400, { error: "invalid_tenant" });
+    }
     if (path === "/organizations/oauth2/v2.0/devicecode") {
       const code = randomBytes(24).toString("base64url");
       fake.deviceScopes.push(form.get("scope") ?? "");

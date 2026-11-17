@@ -116,17 +116,42 @@ export interface CurrentSession {
 /**
  * The step a session owes (1.20.27), or null. A forced password change
  * comes first. "Require two-step sign-in" covers sessions opened with a
- * password only (single sign-on and Duo bring their own second factor; a
- * session opened before 1.20.27 records no method and is asked at its next
+ * password only (single sign-on brings its own second factor; a session
+ * opened before 1.20.27 records no method and is asked at its next
  * sign-in), and only accounts without an authenticator set up.
+ *
+ * Duo counts as the second factor (second review M6): a session Duo
+ * approved (sessions.mfa_at, method "duo") owes nothing, and one that still
+ * owes its sign-in Duo approval is sent to Duo, not to the authenticator
+ * set-up (currentSession). A session let in because Duo could not be
+ * reached ("duo_unreachable") had no second factor and is asked.
+ *
+ * A session opened through the break-glass door (a password while SSO
+ * only is on, Settings → Single sign-on) by an account with no
+ * authenticator ("break_glass") must set one up first, whatever the
+ * two-step rule says (second review, Low: the owner's "ideally requiring
+ * TOTP"); lib/sign-in-security twoStepRequiredFor keeps it from being
+ * turned off again.
  */
 async function pendingStep(
-  session: { id: number; role: Role; must_change_password: number; totp_enabled: number; session_auth_method: string | null },
+  session: {
+    id: number;
+    role: Role;
+    must_change_password: number;
+    totp_enabled: number;
+    session_auth_method: string | null;
+    mfa_at?: string | null;
+    mfa_method?: string | null;
+  },
   sec: SignInSecurity
 ): Promise<PendingStep | null> {
   if (session.must_change_password === 1) return "password_change";
-  if (sec.twoStep === "off" || session.totp_enabled === 1) return null;
+  if (session.totp_enabled === 1) return null;
+  // Signed in through the break-glass door with no authenticator: one first, whatever the rule.
+  if (session.session_auth_method === "break_glass") return "two_step";
   if (session.session_auth_method !== "password" && session.session_auth_method !== "setup") return null;
+  if (session.mfa_at && session.mfa_method === "duo") return null;
+  if (sec.twoStep === "off") return null;
   return (await twoStepCovers(sec.twoStep, session)) ? "two_step" : null;
 }
 
@@ -181,7 +206,8 @@ export async function currentSession(): Promise<CurrentSession | null> {
   if (!duoSwitchedOn(settings)) return { user, token, duo: DUO_NOTHING_OWED, pending };
   const standing = await (await import("./duo-gate")).duoSessionStanding(settings, session, token);
   duoStandings.set(user, standing);
-  return { user, token, duo: standing.verdict, pending };
+  // Duo at sign-in is still to come: it is the second factor, so it is asked first (M6).
+  return { user, token, duo: standing.verdict, pending: pending === "two_step" && standing.verdict.signIn ? null : pending };
 }
 
 // What the Duo check says about the session a SessionUser came from, kept
@@ -439,9 +465,11 @@ export async function login(
   username: string,
   password: string,
   totpCode?: string,
-  device?: { ip?: string | null; userAgent?: string | null }
+  device?: { ip?: string | null; userAgent?: string | null },
+  /** The account the sign-in route already resolved the identifier to (1.20.27: its throttle is the account's). */
+  resolved?: { record: SignInRecord | undefined }
 ): Promise<{ token: string; user: User; breakGlass?: boolean } | { totp_required: true } | { refused: LoginRefusal } | null> {
-  const record = await resolveSignInAccount(username);
+  const record = resolved ? resolved.record : await resolveSignInAccount(username);
   // 1.20.27 (security review H1): "SSO only" is enforced here, not only by
   // hiding the form. With it on, a password signs in only an account on the
   // break-glass list (Settings → Single sign-on); every other attempt, an
@@ -507,7 +535,8 @@ export async function login(
   const token = newToken();
   const timeoutMs = (await getSessionTimeoutMinutes()) * 60_000;
   const expires = new Date(Date.now() + timeoutMs).toISOString();
-  const method = record.totp_enabled === 1 && record.totp_secret ? "password_totp" : "password";
+  // A break-glass sign-in without an authenticator is marked, so that session must set one up first (pendingStep).
+  const method = record.totp_enabled === 1 && record.totp_secret ? "password_totp" : breakGlass ? "break_glass" : "password";
   await createSession(token, record.id, expires, device?.ip, device?.userAgent, method);
   await markLogin(record.id);
   return { token, user: record, ...(breakGlass ? { breakGlass: true } : {}) };

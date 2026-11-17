@@ -120,15 +120,31 @@ function redact(v: unknown, depth = 0): unknown {
 }
 
 /** The fields the mirror writes for one entry (exported for tests). */
+/**
+ * Actions whose actor name and target label are what someone TYPED into
+ * the sign-in form (1.20.27, second review, Low): a password typed into
+ * the username field must not reach the log shipper. The stdout mirror
+ * carries a fingerprint instead (the same text gives the same one, so
+ * attempts still correlate); the audit log in the database keeps the text,
+ * as before, for the administrators who read it.
+ */
+const TYPED_IDENTIFIER_ACTIONS = new Set(["auth.login_failed", "auth.lockout", "auth.lookup_throttled"]);
+
+function typedFingerprint(v: string | null): string | null {
+  if (v == null || v === "system") return v;
+  return `typed:${createHash("sha256").update(v.toLowerCase().trim()).digest("hex").slice(0, 12)}`;
+}
+
 export function auditLogFields(entry: AuditEntry): Record<string, unknown> {
+  const typed = TYPED_IDENTIFIER_ACTIONS.has(entry.action) && entry.actor?.id == null;
   return {
     action: entry.action,
     actor_id: entry.actor?.id ?? null,
-    actor_name: redact(entry.actor?.name ?? "system"),
+    actor_name: typed ? typedFingerprint(entry.actor?.name ?? "system") : redact(entry.actor?.name ?? "system"),
     actor_role: entry.actor?.role ?? null,
     target_type: entry.targetType ?? null,
     target_id: entry.targetId != null ? String(entry.targetId) : null,
-    target_label: redact(entry.targetLabel ?? null),
+    target_label: typed ? typedFingerprint(entry.targetLabel ?? null) : redact(entry.targetLabel ?? null),
     details: entry.details ? redact(entry.details) : null,
     ip: entry.ip ?? null,
   };

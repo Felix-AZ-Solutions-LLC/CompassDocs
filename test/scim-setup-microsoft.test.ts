@@ -266,6 +266,8 @@ describe("the one-click setups (enterprise overlay)", { skip: !HAS_EE && "the en
 
   before(async () => {
     fake = await startFakeM365();
+    // 1.20.27 (second review): the Tenant URL Entra is given is the configured workspace address, never the request's.
+    process.env.COMPASSDOCS_BASE_URL = "http://localhost";
     process.env.COMPASSDOCS_SSO_SETUP_LOGIN_BASE = `${fake.base}/login`;
     process.env.COMPASSDOCS_SSO_SETUP_GRAPH_BASE = `${fake.base}/graph`;
     /* eslint-disable @typescript-eslint/no-require-imports */
@@ -283,6 +285,7 @@ describe("the one-click setups (enterprise overlay)", { skip: !HAS_EE && "the en
   });
 
   after(async () => {
+    delete process.env.COMPASSDOCS_BASE_URL;
     delete process.env.COMPASSDOCS_SSO_SETUP_LOGIN_BASE;
     delete process.env.COMPASSDOCS_SSO_SETUP_GRAPH_BASE;
     await fake.close();
@@ -547,13 +550,35 @@ describe("the one-click setups (enterprise overlay)", { skip: !HAS_EE && "the en
     const r = await runScim({ rotate: true });
     assert.equal(r.status, 502);
     assert.match(r.body.error, /^You signed in to a different Microsoft Entra tenant than the one single sign-on uses, so nothing was changed\./);
-    await ssoConfig.updateSsoConfig({ tenant: "contoso.example" }); // a domain, not a tenant ID: no comparison
+    // 1.20.27 (second review): a domain is resolved to its tenant (Microsoft's public discovery document) and compared too.
+    await ssoConfig.updateSsoConfig({ tenant: "contoso.example" });
+    const d = await runScim({ rotate: true });
+    assert.match(d.body.error, /^You signed in to a different Microsoft Entra tenant than the one single sign-on uses, so nothing was changed\./);
+    await ssoConfig.updateSsoConfig({ tenant: "unknown.example" });
+    const u = await runScim({ rotate: true });
+    assert.match(u.body.error, /^Could not confirm which Microsoft Entra tenant the single sign-on domain unknown\.example belongs to, so nothing was changed\./);
+    // No tenant named by sign-in at all: the last setup's still holds.
+    await ssoConfig.updateSsoConfig({ tenant: "" });
     const p = await runScim({ rotate: true });
     assert.match(p.body.error, /^You signed in to a different Microsoft Entra tenant than the one provisioning was set up in, so nothing was changed\./);
     fake.deviceTenant = fake.tenantId;
     await ssoConfig.updateSsoConfig({ tenant: fake.tenantId });
     assert.equal(n("/graph/"), graphCalls);
     assert.equal(await getSetting("scim_token_hash"), hash);
+  });
+
+  test("no workspace address configured: refused before Microsoft is asked, never the request's Host (second review)", async () => {
+    const before = n("/login/");
+    delete process.env.COMPASSDOCS_BASE_URL;
+    try {
+      const s = await scimStart({ rotate: true });
+      assert.equal(s.status, 409);
+      assert.equal(s.body.code, "no_address");
+      assert.match(s.body.error, /^Set the workspace's address first/);
+      assert.equal(n("/login/"), before, "no device sign-in was started");
+    } finally {
+      process.env.COMPASSDOCS_BASE_URL = "http://localhost";
+    }
   });
 
   test("no token yet: no confirmation needed, and the step says it was made rather than rotated", async () => {

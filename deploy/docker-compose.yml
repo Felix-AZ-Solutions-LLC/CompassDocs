@@ -50,6 +50,8 @@ services:
       COMPASSDOCS_BASE_URL: ${COMPASSDOCS_BASE_URL:-}
       COMPASSDOCS_TRUSTED_PROXY_HOPS: ${COMPASSDOCS_TRUSTED_PROXY_HOPS:-}
       COMPASSDOCS_SETUP_TOKEN: ${COMPASSDOCS_SETUP_TOKEN:-}
+      # 1.20.27: the emergency switch for SSO only (set to 1 and restart if single sign-on breaks).
+      COMPASSDOCS_SSO_ONLY_DISABLED: ${COMPASSDOCS_SSO_ONLY_DISABLED:-}
       # Optional off-site backup destinations (see deploy/.env.example).
       BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
       BACKUP_S3_REGION: ${BACKUP_S3_REGION:-}

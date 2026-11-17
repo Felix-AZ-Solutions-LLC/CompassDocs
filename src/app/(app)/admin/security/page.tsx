@@ -16,13 +16,15 @@ export default async function SignInSecurityPage() {
   const [sec, credentials, canRevoke] = await Promise.all([
     getSignInSecurity(),
     listAllBearerCredentials(),
-    userHolds(user, "user.reset_password", { legacyMin: "admin" }),
+    // The password reset's permission (1.20.27, second review); each row also checks the owner's role.
+    userHolds(user, "user.update_role", { legacyMin: "admin" }),
   ]);
   return (
     <SettingsPage href="/admin/security">
       <SignInSecuritySettings
         initial={{ two_step: sec.twoStep, session_max_days: sec.sessionMaxDays, credentials: JSON.parse(JSON.stringify(credentials)) }}
         canRevoke={canRevoke}
+        viewer={{ id: user.id, role: user.role }}
       />
     </SettingsPage>
   );

@@ -3,7 +3,7 @@ import { passwordProblem } from "@/lib/password-policy";
 import { currentSession } from "@/lib/auth";
 import { crossOriginRejection } from "@/lib/api-auth";
 import { deleteOtherSessions, getUserByUsername, revokeUserBearerCredentials, setUserPassword } from "@/lib/db";
-import { hashPassword, verifyPassword } from "@/lib/password";
+import { hashPassword, verifyPassword, PasswordBusyError } from "@/lib/password";
 import { actorFrom, audit, ipFrom } from "@/lib/audit";
 import { pairRetryAfter, recordLoginSuccess, recordPairFailure } from "@/lib/login-guard";
 
@@ -51,7 +51,18 @@ export async function POST(req: Request) {
   }
   // Counted before the (asynchronous) check, given back when it passes.
   const lockEngaged = recordPairFailure(sessionUser.username, ip);
-  if (!(await verifyPassword(currentPassword, record.password_hash, record.password_salt))) {
+  let matches: boolean;
+  try {
+    matches = await verifyPassword(currentPassword, record.password_hash, record.password_salt);
+  } catch (e) {
+    // 1.20.27 (second review M2): too many password checks at once. The attempt keeps its count
+    // (clearing the pair here would let a flood reset it).
+    if (e instanceof PasswordBusyError) {
+      return NextResponse.json({ error: e.message, code: "busy" }, { status: 503, headers: { "Retry-After": String(e.retryAfter) } });
+    }
+    throw e;
+  }
+  if (!matches) {
     await audit({
       actor: actorFrom(sessionUser),
       action: "auth.login_failed",

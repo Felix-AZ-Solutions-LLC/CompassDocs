@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { complianceGuard, type ComplianceKey } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { featureEnabled } from "@/lib/ee";
 import {
   complianceDocs,
@@ -19,7 +20,6 @@ import {
 import { requestAcknowledgement, enqueueReminder, sweepDefaults, workspaceDueDefaults } from "@/lib/compliance";
 import { audit, auditAck, actorFrom, ipFrom } from "@/lib/audit";
 import { userHolds } from "@/lib/access";
-import { requestOrigin } from "@/lib/oauth";
 import { versionProvenance, provenanceCells } from "@/lib/version-provenance";
 import { csvCell } from "@/lib/csv";
 import {
@@ -416,7 +416,7 @@ export async function POST(req: Request) {
     // The flip itself is the claim: when two requests race, only the one
     // that switched the requirement on queues a notice and is on the record;
     // the other is answered as a request for a policy that already asks.
-    const { queued, switched_on } = await requestAcknowledgement(doc, sender, requestOrigin(req), { notify });
+    const { queued, switched_on } = await requestAcknowledgement(doc, sender, (await mailOrigin()), { notify });
     if (!switched_on) {
       return NextResponse.json({ error: "This document already asks for a read confirmation." }, { status: 400 });
     }
@@ -451,7 +451,7 @@ export async function POST(req: Request) {
     // guarded on the hour): the check above gives the friendly refusal,
     // and two clicks that pass it in the same second still queue one row,
     // the loser answering the same 429.
-    const { queued, claimed } = await enqueueReminder(doc, sender, requestOrigin(req));
+    const { queued, claimed } = await enqueueReminder(doc, sender, (await mailOrigin()));
     if (!claimed) {
       return NextResponse.json(
         { error: "A reminder went out less than an hour ago. Give people a moment." },

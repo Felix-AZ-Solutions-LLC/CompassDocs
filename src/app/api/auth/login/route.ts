@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { login, IDENTIFIER_MAX, SESSION_COOKIE, cookieOptions, SESSION_MAX_AGE, secureCookie } from "@/lib/auth";
+import { login, resolveSignInAccount, IDENTIFIER_MAX, SESSION_COOKIE, cookieOptions, SESSION_MAX_AGE, secureCookie } from "@/lib/auth";
+import { knownSignInAddress } from "@/lib/db";
+import { PasswordBusyError } from "@/lib/password";
 import { audit, ipFrom } from "@/lib/audit";
 import { metric } from "@/lib/metrics";
 import { beginLoginAttempt, refundLoginAttempt } from "@/lib/login-guard";
@@ -34,30 +36,41 @@ export async function POST(req: Request) {
 
   const ip = ipFrom(req) || "unknown";
 
-  // Throttle before touching the database or credentials: repeated failures
-  // for this identifier+IP (or a spray from this IP) get a temporary lockout.
-  // Keyed on what was typed, so a lock never depends on which account, if
-  // any, an email belongs to. The attempt is counted here, in the same step
-  // as the check, and given back below when it did not fail: counted after
-  // the await, a burst sent at once all passed the check.
-  const attempt = beginLoginAttempt(username, ip);
+  // 1.20.27 (second review M1): the throttle's budget is the account's,
+  // whichever of its names was typed, and whether this address has signed
+  // that account in before comes from the database (lib/login-guard). Both
+  // are read first; the attempt is then checked and counted in one
+  // synchronous step, and given back below when it did not fail: counted
+  // after an await, a burst sent at once all passed the check. An unknown
+  // identifier's budget is the typed text's, so a lock never says which
+  // account, if any, an email belongs to.
+  const record = await resolveSignInAccount(username);
+  const known = record ? await knownSignInAddress(record.id, ip) : false;
+  const attempt = beginLoginAttempt(username, ip, { account: record?.id ?? null, known });
   if (attempt.wait > 0) {
     const wait = attempt.wait;
     return NextResponse.json(
-      { error: `Too many failed attempts. Try again in ${Math.ceil(wait / 60)} minute${wait > 60 ? "s" : ""}.` },
+      {
+        error:
+          wait < 60
+            ? `Too many attempts. Try again in ${wait} second${wait === 1 ? "" : "s"}.`
+            : `Too many failed attempts. Try again in ${Math.ceil(wait / 60)} minute${wait > 60 ? "s" : ""}.`,
+      },
       { status: 429, headers: { "Retry-After": String(wait) } }
     );
   }
+  // An address this account signs in from is never refused by the locks, only slowed (M1).
+  if (attempt.slowMs) await new Promise((r) => setTimeout(r, attempt.slowMs));
 
   let result: Awaited<ReturnType<typeof login>>;
   try {
-    result = await login(username, password, totpCode, {
-      ip,
-      userAgent: req.headers.get("user-agent"),
-    });
+    result = await login(username, password, totpCode, { ip, userAgent: req.headers.get("user-agent") }, { record });
   } catch (err) {
-    // A database error is not a wrong password.
+    // A database error, or too many password checks at once (lib/password, second review M2), is not a wrong password.
     refundLoginAttempt(attempt, false);
+    if (err instanceof PasswordBusyError) {
+      return NextResponse.json({ error: err.message, code: "busy" }, { status: 503, headers: { "Retry-After": String(err.retryAfter) } });
+    }
     throw err;
   }
   if (!result || "refused" in result) {

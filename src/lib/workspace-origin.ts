@@ -33,6 +33,18 @@ export function envBaseOrigin(): string | null {
   }
 }
 
+/**
+ * The origin every link CompassDocs sends out is built from (1.20.27,
+ * security review M4): mail (comments and mentions, change requests,
+ * announcements, training, confirmations, newsletters, status notices…)
+ * and the chat and webhook posts that carry the same links. The configured
+ * address, or "" when none is, so links are relative. Never the Host or
+ * X-Forwarded-Host of the request that caused the notice.
+ */
+export async function mailOrigin(): Promise<string> {
+  return ((await workspaceOrigin()) ?? "").replace(/\/+$/, "");
+}
+
 /** The configured workspace address, or null when none is configured. */
 export async function workspaceOrigin(): Promise<string | null> {
   try {

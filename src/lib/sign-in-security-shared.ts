@@ -75,3 +75,16 @@ export const PENDING_ERROR: Record<PendingStep, string> = {
   password_change: "Set a new password first.",
   two_step: "Set up two-step sign-in first.",
 };
+
+/**
+ * The emergency switch for "SSO only" (1.20.27, second review H1):
+ * COMPASSDOCS_SSO_ONLY_DISABLED=1 in the server's environment (and a
+ * restart) lets every account with a password sign in with it again,
+ * whatever is saved; single sign-on itself keeps working, and the settings
+ * pages say so on every page until it is removed. An environment variable
+ * and not a setting, like COMPASSDOCS_DUO_DISABLED: it is for "nobody can
+ * sign in to change the setting".
+ */
+export function ssoOnlyDisabledByEnv(): boolean {
+  return process.env.COMPASSDOCS_SSO_ONLY_DISABLED === "1";
+}

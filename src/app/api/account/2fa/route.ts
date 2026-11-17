@@ -10,7 +10,7 @@ import { NextResponse } from "next/server";
 import QRCode from "qrcode";
 import { apiGuardAllowing } from "@/lib/api-auth";
 import { pairRetryAfter, recordLoginSuccess, recordPairFailure } from "@/lib/login-guard";
-import { getSignInSecurity, twoStepCovers } from "@/lib/sign-in-security";
+import { twoStepRequiredFor } from "@/lib/sign-in-security";
 import {
   setPendingTotpSecret,
   getTotpState,
@@ -45,8 +45,7 @@ export async function GET() {
 
 /** Does "Require two-step sign-in" cover this person (so they may not turn it off)? */
 async function requiredFor(user: SessionUser): Promise<boolean> {
-  const sec = await getSignInSecurity();
-  return twoStepCovers(sec.twoStep, user).catch(() => true);
+  return twoStepRequiredFor(user).catch(() => true);
 }
 
 export async function POST(req: Request) {

@@ -2,14 +2,16 @@
 //   GET    → { two_step, session_max_days, credentials: [...] }
 //   PATCH  { two_step?, session_max_days? }   (workspace.settings_manage; audited)
 //   DELETE ?kind=token&id=<token id> | ?kind=connector&id=<client id>&user=<user id>
-//          revokes any account's personal token or connector grant
-//          (user.reset_password; audited against the account).
+//          revokes an account's personal token or connector grant
+//          (user.update_role, the password reset's permission, and, unless
+//          you are an administrator, only an account whose role is below
+//          yours; audited against the account).
 
 import { NextResponse } from "next/server";
 import { apiGuard } from "@/lib/api-auth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
-import { adminDeleteApiToken, getUserById, listAllBearerCredentials, revokeOAuthGrant, setSetting } from "@/lib/db";
-import { getSignInSecurity } from "@/lib/sign-in-security";
+import { adminDeleteApiToken, apiTokenOwner, getUserById, listAllBearerCredentials, revokeOAuthGrant, setSetting } from "@/lib/db";
+import { getSignInSecurity, mayRevokeFor } from "@/lib/sign-in-security";
 import {
   asTwoStepScope,
   clampSessionMaxDays,
@@ -75,8 +77,12 @@ export async function PATCH(req: Request) {
   return NextResponse.json({ ok: true, ...(await view()) });
 }
 
+const RANK_REFUSED = () =>
+  NextResponse.json({ error: "You can only revoke the tokens of people whose role is below yours." }, { status: 403 });
+
 export async function DELETE(req: Request) {
-  const gate = await apiGuard("admin", "user.reset_password");
+  // The password reset's own permission (PATCH /api/admin/users/[id]).
+  const gate = await apiGuard("admin", "user.update_role");
   if (gate instanceof NextResponse) return gate;
   const url = new URL(req.url);
   const kind = url.searchParams.get("kind");
@@ -84,6 +90,10 @@ export async function DELETE(req: Request) {
   if (kind === "token") {
     const n = Number(id);
     if (!Number.isInteger(n) || n <= 0) return NextResponse.json({ error: "Not found." }, { status: 404 });
+    const owner = await apiTokenOwner(n);
+    const may = owner === null ? "not_found" : await mayRevokeFor(gate, owner);
+    if (may === "not_found") return NextResponse.json({ error: "Not found." }, { status: 404 });
+    if (may === "forbidden") return RANK_REFUSED();
     const gone = await adminDeleteApiToken(n);
     if (!gone) return NextResponse.json({ error: "Not found." }, { status: 404 });
     await audit({
@@ -100,7 +110,9 @@ export async function DELETE(req: Request) {
   if (kind === "connector") {
     const userId = Number(url.searchParams.get("user"));
     const user = Number.isInteger(userId) && userId > 0 ? await getUserById(userId) : undefined;
-    if (!user || !id || !(await revokeOAuthGrant(user.id, id))) return NextResponse.json({ error: "Not found." }, { status: 404 });
+    if (!user || !id) return NextResponse.json({ error: "Not found." }, { status: 404 });
+    if ((await mayRevokeFor(gate, user.id)) === "forbidden") return RANK_REFUSED();
+    if (!(await revokeOAuthGrant(user.id, id))) return NextResponse.json({ error: "Not found." }, { status: 404 });
     await audit({
       actor: actorFrom(gate),
       action: "user.credential_revoked",

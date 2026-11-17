@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sectionApiGuard } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { featureEnabled } from "@/lib/ee";
 import {
   getTrainingDeck,
@@ -10,7 +11,6 @@ import {
   expandTrainingAudience,
 } from "@/lib/db";
 import { notifyTrainingAssigned } from "@/lib/training";
-import { publicOrigin } from "@/lib/oauth";
 import { audit, actorFrom } from "@/lib/audit";
 import type { SessionUser } from "@/lib/types";
 
@@ -120,7 +120,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       deckTitle: `${program.name} (${program.decks.length} decks)`,
       dueAt: null,
       assignerName: user.name || user.username,
-      origin: await publicOrigin(req),
+      origin: await mailOrigin(),
     });
   }
   await audit({

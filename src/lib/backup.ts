@@ -126,8 +126,8 @@ export interface BackupInfo {
 export interface CreateBackupResult extends BackupInfo {
   uploaded: string[]; // destination labels the copy reached
   uploadErrors: string[];
-  /** Files and bytes the uploads archive holds (1.20.27). */
-  archived: { files: number; bytes: number };
+  /** Files and bytes the uploads archive holds (1.20.27), and files deleted while it was written (left out). */
+  archived: { files: number; bytes: number; vanished: number };
 }
 
 export async function createBackup(now: Date = new Date()): Promise<CreateBackupResult> {
@@ -151,7 +151,7 @@ export async function createBackup(now: Date = new Date()): Promise<CreateBackup
 
   // 1.20.27 (security review H5): the uploads volume, as the set's second file.
   const filesPlain = filesPath + ".tmp";
-  let archived = { files: 0, bytes: 0 };
+  let archived = { files: 0, bytes: 0, vanished: 0 };
   try {
     const { writeFilesArchive } = await import("./backup-files");
     archived = await writeFilesArchive(filesPlain, { skip: [dir] });
@@ -251,6 +251,26 @@ export interface RestoreResult {
   files: number | null;
   /** Audit rows written after the backup and kept through the restore (security review M3). */
   audit_rows_kept: number;
+  /** Where the kept audit rows were saved when they could not be put back (a table name), else null. */
+  audit_rows_saved_in: string | null;
+}
+
+/**
+ * A restore that stopped part-way (1.20.27, second review, Low), saying
+ * exactly what it had done: `stage` "files" means nothing was changed
+ * except attachments already put back (`files`); "database" means the
+ * attachments were put back and the database restore failed (pg_restore
+ * --clean may have left it partly restored).
+ */
+export class RestoreError extends Error {
+  constructor(
+    message: string,
+    readonly stage: "files" | "database",
+    readonly files: number | null
+  ) {
+    super(message);
+    this.name = "RestoreError";
+  }
 }
 
 /** Decrypt `src` to a scratch file next to it when it is encrypted; the caller deletes `scratch`. */
@@ -283,17 +303,43 @@ export async function restoreBackup(name: string): Promise<RestoreResult> {
   const filesPath = join(backupDir(), filesNameFor(name));
   const hasFiles = Boolean(await stat(filesPath).catch(() => null));
 
+  // 1.20.27 (second review, Low): the attachments go back FIRST. Adding
+  // files never removes one, so if this step fails the database has not
+  // been touched and the workspace is as it was; if the database step
+  // fails after it, the error says the attachments were already put back.
+  // Both halves are decrypted before either is applied, so a damaged or
+  // wrongly keyed file stops the restore before anything changes.
+  let files: number | null = null;
+  const archive = hasFiles ? await plainCopy(filesPath) : null;
+  let dump: { path: string; scratch: string | null } | null = null;
+  try {
+    dump = await plainCopy(p);
+    if (archive) {
+      try {
+        const { extractFilesArchive } = await import("./backup-files");
+        files = (await extractFilesArchive(archive.path)).files;
+      } catch (e) {
+        throw new RestoreError(
+          `The attachments could not be restored, so the database was not touched: ${e instanceof Error ? e.message : String(e)}`,
+          "files",
+          null
+        );
+      }
+    }
+  } catch (e) {
+    if (archive?.scratch) await unlink(archive.scratch).catch(() => {});
+    if (dump?.scratch) await unlink(dump.scratch).catch(() => {});
+    throw e;
+  }
+  if (archive?.scratch) await unlink(archive.scratch).catch(() => {});
+
   const keeper = await pool().connect();
   let audit_rows_kept = 0;
-  let files: number | null = null;
+  let audit_rows_saved_in: string | null = null;
+  let failure: unknown = null;
   try {
     await keeper.query("DROP TABLE IF EXISTS pg_temp.audit_keep");
     await keeper.query("CREATE TEMP TABLE audit_keep AS SELECT * FROM audit_log");
-
-    // Encrypted dumps are decrypted to a scratch file for pg_restore, then wiped.
-    // Checked by content, not extension, so a renamed file still does the right thing.
-    // 1.20.27 (security review, Low): the scratch file is removed whatever happens.
-    const dump = await plainCopy(p);
     try {
       const env = pgEnv();
       await run(pgBin("pg_restore"), [
@@ -305,30 +351,51 @@ export async function restoreBackup(name: string): Promise<RestoreResult> {
         env.PGDATABASE as string,
         dump.path,
       ]);
+    } catch (e) {
+      failure = e;
     } finally {
       if (dump.scratch) await unlink(dump.scratch).catch(() => {});
-    }
-
-    if (hasFiles) {
-      const archive = await plainCopy(filesPath);
-      try {
-        const { extractFilesArchive } = await import("./backup-files");
-        files = (await extractFilesArchive(archive.path)).files;
-      } finally {
-        if (archive.scratch) await unlink(archive.scratch).catch(() => {});
-      }
     }
   } finally {
     try {
       audit_rows_kept = await putBackAuditRows(keeper);
     } catch (e) {
-      console.error("[backup] could not keep the audit log's newer rows through the restore:", e);
-    } finally {
-      await keeper.query("DROP TABLE IF EXISTS pg_temp.audit_keep").catch(() => {});
-      keeper.release();
+      console.error("[backup] could not put the audit log's newer rows back after the restore:", e);
     }
+    // 1.20.27 (second review, Low): a restore that failed with audit_log
+    // gone (or a put-back that failed) must not lose the kept rows: they are
+    // saved in a table of their own, and the log and the error say where.
+    if (audit_rows_kept === 0) audit_rows_saved_in = await saveKeptAuditRows(keeper).catch(() => null);
+    await keeper.query("DROP TABLE IF EXISTS pg_temp.audit_keep").catch(() => {});
+    keeper.release();
   }
-  return { files, audit_rows_kept };
+  if (failure) {
+    const reason = failure instanceof Error ? failure.message : String(failure);
+    const filesPart = files === null ? "" : `The attachments were already put back (${files} file${files === 1 ? "" : "s"}). `;
+    const auditPart = audit_rows_saved_in ? ` The audit log's rows were saved in the table ${audit_rows_saved_in}.` : "";
+    throw new RestoreError(`${filesPart}The database restore failed: ${reason}${auditPart}`, "database", files);
+  }
+  return { files, audit_rows_kept, audit_rows_saved_in };
+}
+
+/**
+ * Keep the copied audit rows in a real table when they could not be put
+ * back (1.20.27): only when audit_log is missing, or lacks rows the copy
+ * has. Answers the table's name, or null when nothing needed saving.
+ */
+async function saveKeptAuditRows(client: import("pg").PoolClient): Promise<string | null> {
+  const present = await client.query("SELECT to_regclass('public.audit_log') IS NOT NULL AS ok");
+  if (present.rows[0]?.ok) {
+    const missing = await client.query("SELECT 1 FROM audit_keep k WHERE NOT EXISTS (SELECT 1 FROM audit_log a WHERE a.id = k.id) LIMIT 1");
+    if (!missing.rowCount) return null;
+  } else {
+    const any = await client.query("SELECT 1 FROM audit_keep LIMIT 1");
+    if (!any.rowCount) return null;
+  }
+  const name = `audit_log_kept_${Date.now()}`;
+  await client.query(`CREATE TABLE ${name} AS SELECT * FROM audit_keep`);
+  console.error(`[backup] the audit log's rows were saved in the table ${name}; put them back with INSERT ... OVERRIDING SYSTEM VALUE once the database is restored.`);
+  return name;
 }
 
 /** Put back the kept audit rows the restored log lacks; answers how many. */

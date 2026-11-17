@@ -115,3 +115,36 @@ test("a database-only backup from before 1.20.27 still restores", async () => {
   const r = await backup.restoreBackup(made.name);
   assert.equal(r.files, null);
 });
+
+test("a damaged attachments archive stops the restore before the database is touched (second review, Low)", async () => {
+  const made = await backup.createBackup(new Date("2026-11-17T12:00:00Z"));
+  await db.pool().query("INSERT INTO users (username, name) VALUES ('after-damaged', 'After')");
+  // Cut the encrypted archive short: it no longer decrypts.
+  const filesPath = join(backupDir, made.files!.name);
+  const whole = await readFile(filesPath);
+  await writeFile(filesPath, whole.subarray(0, Math.max(16, whole.length - 40)));
+  await assert.rejects(backup.restoreBackup(made.name));
+  assert.equal(await count("SELECT count(*)::int AS n FROM users WHERE username = 'after-damaged'"), 1, "the database was not restored");
+  assert.ok(!(await readdir(backupDir)).some((n) => n.endsWith(".tmp")), "no plaintext scratch file left");
+});
+
+test("a database restore that fails says the attachments were already put back, and keeps the audit log", async () => {
+  await writeFile(join(uploadDir, "aaaabbbbccccddddeeeeffff00001111.txt"), "an attachment");
+  const made = await backup.createBackup(new Date("2026-11-17T13:00:00Z"));
+  // A dump pg_restore cannot read: encrypted with our key, so it decrypts, then fails to restore.
+  const { encryptFile } = require("../src/lib/secretbox") as typeof import("../src/lib/secretbox"); // eslint-disable-line @typescript-eslint/no-require-imports
+  const junk = join(backupDir, "junk.plain");
+  await writeFile(junk, "this is not a pg_dump archive");
+  await encryptFile(junk, join(backupDir, made.name));
+  await unlink(junk);
+  await unlink(join(uploadDir, "aaaabbbbccccddddeeeeffff00001111.txt"));
+  const err = await backup.restoreBackup(made.name).then(
+    () => null,
+    (e: unknown) => e
+  );
+  assert.ok(err instanceof backup.RestoreError, String(err));
+  assert.equal((err as InstanceType<typeof backup.RestoreError>).stage, "database");
+  assert.match((err as Error).message, /attachments were already put back/);
+  assert.equal(await readFile(join(uploadDir, "aaaabbbbccccddddeeeeffff00001111.txt"), "utf8"), "an attachment", "the files half went back first");
+  assert.ok((await count("SELECT count(*)::int AS n FROM audit_log")) > 0, "the audit log is still there");
+});

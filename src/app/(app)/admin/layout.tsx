@@ -10,6 +10,7 @@ import { duoSwitchedOn } from "@/lib/duo-policy";
 import { licenseState } from "@/lib/license";
 import { licenceDaysLeft } from "@/lib/license-enforcement";
 import { eePresent } from "@/lib/ee";
+import { ssoOnlyDisabledByEnv } from "@/lib/sign-in-security-shared";
 
 /** Days before expiry the settings pages start saying so (1.20.27, security review M4). */
 const LICENCE_WARN_DAYS = 30;
@@ -27,6 +28,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   // 1.20.5: the server's emergency switch is holding the Duo rules off. Say so
   // on every settings page until it is removed. Read only when the switch is set.
   const duoHeldOff = process.env.COMPASSDOCS_DUO_DISABLED === "1" && duoSwitchedOn(await getAllSettings());
+  // 1.20.27 (second review H1): the same for SSO only's emergency switch, while SSO only is saved as on.
+  const ssoOnlyHeldOff = ssoOnlyDisabledByEnv() && (await getAllSettings()).sso_only === "1";
   // 1.20.27 (security review M4): a licence about to lapse, or lapsed, is
   // said on every settings page to whoever can open the License section.
   // Its security controls keep being enforced after it lapses; only their
@@ -52,6 +55,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           for Duo. Remove it and restart to enforce your Duo rules again.
         </div>
       )}
+      {ssoOnlyHeldOff && (
+        <div className="notice-warn mb-4 rounded-lg border px-3 py-2 text-sm">
+          SSO only is switched off on the server (<code className="font-mono text-xs">COMPASSDOCS_SSO_ONLY_DISABLED=1</code>). Every account
+          with a password can sign in with it. Remove it and restart to enforce SSO only again.
+        </div>
+      )}
       {licenceNote && (
         <div className={`${licenceNote.days < 0 ? "notice-error" : "notice-warn"} mb-4 rounded-lg border px-3 py-2 text-sm`}>
           {licenceNote.days > 0
@@ -59,8 +68,9 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             : licenceNote.days === 0
               ? "Your Enterprise licence expires today. "
               : "Your Enterprise licence has expired. "}
-          Single sign-on, SSO only, SCIM deprovisioning and Duo keep being enforced after it lapses, but their settings can&apos;t be changed,
-          and other Enterprise features stop, until it is renewed.{" "}
+          After it lapses, SSO only (and single sign-on with it), SCIM deprovisioning and Duo keep being enforced, but no new accounts are
+          created at sign-in, their settings can only be relaxed (SSO only off, the break-glass accounts, a new client secret), and other
+          Enterprise features stop, until it is renewed.{" "}
           <a href="/admin/license" className="link font-medium">
             Open License
           </a>

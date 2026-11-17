@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { apiGuard } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { addStatusService, deleteStatusService } from "@/lib/db";
 import { refreshDueStatuses, STATUS_PROVIDERS } from "@/lib/status";
-import { requestOrigin } from "@/lib/oauth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import type { SessionUser } from "@/lib/types";
 
@@ -44,7 +44,7 @@ export async function POST(req: Request) {
     ip: ipFrom(req),
   });
   // First poll now (fire-and-forget — the row shows "unknown" until it lands).
-  void refreshDueStatuses(requestOrigin(req)).catch(() => {});
+  void refreshDueStatuses((await mailOrigin())).catch(() => {});
   return NextResponse.json({ service }, { status: 201 });
 }
 

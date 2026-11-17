@@ -10,14 +10,19 @@
 // long for it), written and read here so nothing outside Node is needed.
 // It never contains the master key file (`.secret.key`, or wherever
 // COMPASSDOCS_KEY_FILE points), anything that is not a regular file or a
-// directory (no links, no devices), or the scratch files a backup itself
-// leaves in the volume. Extraction writes only regular files, only under the
-// uploads directory, never over the key file, and never through a link.
+// directory (no links, no devices), or the scratch files a backup or a
+// restore itself leaves in the volume, matched by the exact names they are
+// given (second review M3: an attachment keeps its own extension, so a
+// user's "notes.tmp" is content and is archived). A file deleted while the
+// archive is written (an attachment removed, the trash purged) is skipped
+// and counted, never a failed backup. Extraction writes only regular files,
+// only under the uploads directory, never over the key file, and never
+// through a link.
 //
 // Server-only.
 
 import "server-only";
-import { createReadStream, createWriteStream } from "node:fs";
+import { createWriteStream } from "node:fs";
 import { lstat, mkdir, open, readdir, rename, unlink } from "node:fs/promises";
 import { basename, dirname, join, normalize, relative, resolve, sep } from "node:path";
 import { once } from "node:events";
@@ -32,12 +37,28 @@ function keyFileRelative(root: string): string | null {
   return rel && !rel.startsWith("..") && !rel.startsWith(sep) ? rel.split(sep).join("/") : null;
 }
 
+/**
+ * The scratch files backups and restores make, by their exact generated
+ * names: lib/backup's "compassdocs-<stamp>.dump.enc.tmp" (and ".files.tar.enc.tmp",
+ * ".plain.tmp" while decrypting), and extraction's own
+ * ".<name>.<pid>.restore.part" beside the file it is restoring.
+ */
+const SCRATCH_RE = [
+  /^compassdocs-[0-9A-Za-z_-]+\.(?:dump\.enc|files\.tar\.enc)(?:\.tmp|\.plain\.tmp)$/,
+  /^\..+\.\d+\.restore\.part$/,
+];
+
 /** A path the archive never holds and extraction never writes. */
-function excluded(rel: string, keyRel: string | null): boolean {
+export function excluded(rel: string, keyRel: string | null): boolean {
   const name = rel.split("/").pop() || "";
   if (keyRel && rel === keyRel) return true;
   if (name === ".secret.key") return true; // the default name, wherever the env points
-  return /\.(tmp|plain\.tmp|part)$/.test(name); // scratch files, never content
+  return SCRATCH_RE.some((re) => re.test(name));
+}
+
+function vanished(e: unknown): boolean {
+  const code = (e as NodeJS.ErrnoException)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 // --- Writing -------------------------------------------------------------------------
@@ -96,6 +117,8 @@ function padding(size: number): Buffer {
 export interface FilesArchiveResult {
   files: number;
   bytes: number;
+  /** Files and folders deleted while the archive was being written: left out, not a failure. */
+  vanished: number;
 }
 
 /**
@@ -112,10 +135,42 @@ export async function writeFilesArchive(dest: string, opts: { root?: string; ski
   const closed = once(out, "close");
   let files = 0;
   let bytes = 0;
+  let gone = 0;
 
   async function entry(rel: string, abs: string): Promise<void> {
-    const st = await lstat(abs);
-    if (st.isSymbolicLink() || (!st.isFile() && !st.isDirectory())) return;
+    // A regular file is opened before anything is written for it: one that
+    // has vanished since the folder was listed is skipped, and once it is
+    // open, deleting it no longer matters (the open handle still reads it).
+    let fh: import("node:fs/promises").FileHandle | null = null;
+    let st: import("node:fs").Stats;
+    try {
+      st = await lstat(abs);
+      if (st.isSymbolicLink() || (!st.isFile() && !st.isDirectory())) return;
+      if (st.isFile()) {
+        fh = await open(abs, "r");
+        const now = await fh.stat();
+        if (!now.isFile() || now.ino !== st.ino) {
+          await fh.close();
+          return; // replaced by something else between the two looks
+        }
+        st = now;
+      }
+    } catch (e) {
+      if (fh) await fh.close().catch(() => {});
+      if (vanished(e)) {
+        gone++;
+        return;
+      }
+      throw e;
+    }
+    try {
+      await writeEntry(rel, st, fh);
+    } finally {
+      if (fh) await fh.close().catch(() => {});
+    }
+  }
+
+  async function writeEntry(rel: string, st: import("node:fs").Stats, fh: import("node:fs/promises").FileHandle | null): Promise<void> {
     const path = st.isDirectory() ? `${rel}/` : rel;
     const split = ustarName(path);
     if (!split) {
@@ -131,7 +186,7 @@ export async function writeFilesArchive(dest: string, opts: { root?: string; ski
     }
     await writeAll(out, header(name, st.size, st.mode, st.mtimeMs, "0", prefix));
     let written = 0;
-    for await (const chunk of createReadStream(abs, { start: 0, end: Math.max(0, st.size - 1) })) {
+    for await (const chunk of fh!.createReadStream({ start: 0, end: Math.max(0, st.size - 1), autoClose: false })) {
       const buf = chunk as Buffer;
       // A file that grew while it was read is cut at the size its header promised.
       const part = buf.subarray(0, Math.max(0, st.size - written));
@@ -153,14 +208,23 @@ export async function writeFilesArchive(dest: string, opts: { root?: string; ski
     try {
       names = (await readdir(dirAbs)).sort();
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT" && !dirRel) return;
+      if (vanished(e)) {
+        if (dirRel) gone++; // a folder removed while it was walked
+        return;
+      }
       throw e;
     }
     for (const n of names) {
       const rel = dirRel ? `${dirRel}/${n}` : n;
       const abs = join(root, rel);
       if (excluded(rel, keyRel) || skip.has(resolve(abs))) continue;
-      const st = await lstat(abs).catch(() => null);
+      let st: import("node:fs").Stats | null = null;
+      try {
+        st = await lstat(abs);
+      } catch (e) {
+        if (!vanished(e)) throw e;
+        gone++;
+      }
       if (!st || st.isSymbolicLink()) continue;
       if (st.isDirectory()) {
         await entry(rel, abs);
@@ -178,7 +242,7 @@ export async function writeFilesArchive(dest: string, opts: { root?: string; ski
     out.end();
     await closed;
   }
-  return { files, bytes };
+  return { files, bytes, vanished: gone };
 }
 
 // --- Reading -------------------------------------------------------------------------

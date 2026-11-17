@@ -5,13 +5,14 @@
 
 import "server-only";
 import { getAllSettings, getSetting } from "./db";
-import { roleAtLeast, type Role } from "./types";
+import { ROLE_ORDER, roleAtLeast, type Role } from "./types";
 import type { PermissionKey } from "./permissions";
 import {
   asTwoStepScope,
   clampSessionMaxDays,
   parseBreakGlass,
   SESSION_MAX_DAYS_DEFAULT,
+  ssoOnlyDisabledByEnv,
   SIGN_IN_SECURITY_KEYS as K,
   type TwoStepScope,
 } from "./sign-in-security-shared";
@@ -36,6 +37,44 @@ export async function getSignInSecurity(): Promise<SignInSecurity> {
 
 export async function breakGlassIds(): Promise<number[]> {
   return parseBreakGlass(await getSetting(K.breakGlass));
+}
+
+export { ssoOnlyDisabledByEnv } from "./sign-in-security-shared";
+
+/** Is "SSO only" saved as on (the raw setting; whether a provider is usable and licensed is lib/sign-in-routing's)? */
+export function ssoOnlySavedOn(map: Record<string, string>): boolean {
+  return map.sso_only === "1" && !ssoOnlyDisabledByEnv();
+}
+
+/**
+ * The break-glass accounts among `ids` that can actually get in when single
+ * sign-on fails (1.20.27): active, with a password, and an administrator in
+ * the two-step rule's sense (isSecurityAdmin). "Remove local passwords",
+ * saving SSO only or the list, and the upgrade's seeding all ask this.
+ */
+export async function usableBreakGlass(ids: number[]): Promise<number[]> {
+  if (!ids.length) return [];
+  const { getUserById, getUserByUsername } = await import("./db");
+  const out: number[] = [];
+  for (const id of ids) {
+    const u = await getUserById(id);
+    if (!u || u.status !== "active") continue;
+    const full = await getUserByUsername(u.username);
+    if (full?.password_hash && (await isSecurityAdmin(u))) out.push(id);
+  }
+  return out;
+}
+
+/**
+ * Must `user` have an authenticator app set up? The two-step rule
+ * (twoStepCovers), or (second review, Low) being a break-glass account
+ * while SSO only is on. Such a person may not turn it off.
+ */
+export async function twoStepRequiredFor(user: { id: number; role: Role }): Promise<boolean> {
+  const map = await getAllSettings();
+  const sec = signInSecurityFrom(map);
+  if (ssoOnlySavedOn(map) && sec.breakGlass.includes(user.id)) return true;
+  return twoStepCovers(sec.twoStep, user);
 }
 
 /**
@@ -65,6 +104,42 @@ export async function twoStepCovers(scope: TwoStepScope, user: { id: number; rol
   if (scope !== "admins_agents") return false;
   const { hasDeskSideAccess } = await import("./helpdesk/access");
   return hasDeskSideAccess(user as never);
+}
+
+/**
+ * Refuse a personal API token? (1.20.27, second review, Low.) A token that
+ * never expires (made before 1.20.27, or by a settings administrator) of a
+ * password account that "Require two-step sign-in" covers but that has no
+ * authenticator set up yet: such an account could otherwise keep working
+ * through the token without ever enrolling. It works again once its owner
+ * sets two-step sign-in up. Single sign-on accounts are not asked (their
+ * identity provider is their second factor), nor are expiring tokens,
+ * which were made by a session that had to pass the rule.
+ */
+export async function bearerOwesTwoStep(user: {
+  id: number;
+  role: Role;
+  auth_provider?: string | null;
+  totp_enabled?: number;
+  token_never_expires?: boolean;
+}): Promise<boolean> {
+  if (!user.token_never_expires || user.totp_enabled === 1) return false;
+  if (user.auth_provider && user.auth_provider !== "local") return false;
+  return twoStepRequiredFor(user).catch(() => false);
+}
+
+/**
+ * May `actor` revoke the credentials of account `targetId`? (1.20.27, second
+ * review, Low.) Their own, always; an administrator's, anyone's; anyone
+ * else's, only an account whose role is below theirs, so a delegated role
+ * cannot switch off an administrator's or an integration's token.
+ */
+export async function mayRevokeFor(actor: { id: number; role: Role }, targetId: number): Promise<"ok" | "not_found" | "forbidden"> {
+  const { getUserById } = await import("./db");
+  const target = await getUserById(targetId);
+  if (!target) return "not_found";
+  if (target.id === actor.id || actor.role === "admin") return "ok";
+  return ROLE_ORDER.indexOf(target.role) < ROLE_ORDER.indexOf(actor.role) ? "ok" : "forbidden";
 }
 
 /**

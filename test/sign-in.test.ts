@@ -502,6 +502,9 @@ describe("POST /api/auth/login", () => {
     }
   }
 
+  const accountId = async (username: string): Promise<number> =>
+    (await pool().query<{ id: number }>("SELECT id FROM users WHERE username = $1", [username])).rows[0].id;
+
   const audited = async (action: string, label: string) =>
     (await pool().query("SELECT details FROM audit_log WHERE action = $1 AND target_label = $2 ORDER BY id", [action, label])).rows.map(
       (r) => r.details
@@ -568,6 +571,8 @@ describe("POST /api/auth/login", () => {
     const ip = "203.0.113.53";
     const since = new Date();
     const name = `${STAMP}-pw`;
+    // 1.20.27 (second review M1): the budget is the account's, whichever name was typed, and earlier tests spent it.
+    clearIdentifierThrottle(await accountId(name));
     let answered = 0;
     const burst = Array.from({ length: 12 }, () => send({ username: name, password: "wrong" }, ip).finally(() => answered++));
     for (let i = 0; i < 1000 && loginRetryAfter(name, ip) === 0; i++) await new Promise((r) => setImmediate(r));
@@ -593,12 +598,18 @@ describe("POST /api/auth/login", () => {
   test("a sign-in gives its count back and clears the name's failures", async () => {
     const ip = "203.0.113.56";
     const name = `${STAMP}-pw`;
-    // 1.20.27: earlier tests spent this name's address-independent budget (lib/login-guard); start it afresh.
-    clearIdentifierThrottle(name);
+    // 1.20.27: earlier tests spent this account's address-independent budget (lib/login-guard); start it afresh.
+    clearIdentifierThrottle(await accountId(name));
     for (let i = 0; i < 4; i++) assert.equal(await send({ username: name, password: "wrong" }, ip), 401);
     assert.equal(await send({ username: name, password: "Secret-pass-1" }, ip), 200, "the fifth attempt, right");
     for (let i = 1; i <= 5; i++) assert.equal(await send({ username: name, password: "wrong" }, ip), 401, `failure ${i} after it`);
-    assert.equal(await send({ username: name, password: "Secret-pass-1" }, ip), 429);
+    // 1.20.27 (second review M1): this address has now signed the account in (the database says so), so
+    // no lock refuses it any more: five failures from it, and the right password still signs in.
+    assert.equal(await send({ username: name, password: "Secret-pass-1" }, ip), 200, "a known address is slowed, never refused");
+    // A stranger's address is still locked after five.
+    const other = "203.0.113.66";
+    for (let i = 1; i <= 5; i++) assert.equal(await send({ username: name, password: "wrong" }, other), 401, `stranger's failure ${i}`);
+    assert.equal(await send({ username: name, password: "Secret-pass-1" }, other), 429);
   });
 
   test("the right password with the code still to come gives its count back, the fifth attempt too", async () => {

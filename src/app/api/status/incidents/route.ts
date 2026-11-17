@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiGuard } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import {
   createStatusIncident,
   addStatusIncidentUpdate,
@@ -8,7 +9,6 @@ import {
   listStatusServices,
 } from "@/lib/db";
 import { alertManualIncident } from "@/lib/status";
-import { requestOrigin } from "@/lib/oauth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import type { SessionUser } from "@/lib/types";
 
@@ -69,7 +69,7 @@ export async function POST(req: Request) {
       title,
       severity,
       resolved: false,
-      origin: requestOrigin(req),
+      origin: await mailOrigin(),
       serviceId: service.id,
     }).catch(() => {});
     return NextResponse.json({ id }, { status: 201 });
@@ -116,7 +116,7 @@ export async function POST(req: Request) {
       title: resolved.title,
       severity: "outage",
       resolved: true,
-      origin: requestOrigin(req),
+      origin: await mailOrigin(),
       serviceId: service?.id,
     }).catch(() => {});
     return NextResponse.json({ ok: true });

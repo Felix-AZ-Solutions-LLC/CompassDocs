@@ -7,7 +7,8 @@ import "server-only";
 // makes, plus the raw OIDC config for the one case it hides: an Entra
 // multi-tenant authority with no domain list, which is set up but unusable.
 
-import { featureEnforced } from "./ee";
+import { featureEnabled, featureEnforced } from "./ee";
+import { ssoOnlyDisabledByEnv } from "./sign-in-security-shared";
 import { getSsoConfig, ssoConfigured } from "./sso-config";
 import { getSamlConfig } from "./saml-config";
 import { oidcUsable, setupFrom, type SignInSetup } from "./sign-in-routing";
@@ -100,5 +101,9 @@ export function summarizeRouting(setup: SignInSetup, opts: { oidcStuck: boolean;
 export async function signInRoutingSummary(origin: string): Promise<SignInRoutingSummary> {
   if (!(await featureEnforced("sso"))) return { sentences: [EVERYONE_PASSWORD], warnings: [], localUrl: null };
   const [sso, saml] = await Promise.all([getSsoConfig(), getSamlConfig()]);
-  return summarizeRouting(setupFrom(sso, saml), { oidcStuck: ssoConfigured(sso) && !oidcUsable(sso), origin });
+  // As lib/sign-in-routing signInSetup (1.20.27, second review M7 and H1).
+  if (!sso.ssoOnly && !(await featureEnabled("sso"))) return { sentences: [EVERYONE_PASSWORD], warnings: [], localUrl: null };
+  const setup = setupFrom(sso, saml);
+  if (setup.ssoOnly && ssoOnlyDisabledByEnv()) setup.ssoOnly = false;
+  return summarizeRouting(setup, { oidcStuck: ssoConfigured(sso) && !oidcUsable(sso), origin });
 }

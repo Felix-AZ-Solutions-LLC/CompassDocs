@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { getDocument } from "@/lib/db";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { apiGuard } from "@/lib/api-auth";
 import { spaceScopeFor, scopeAllows, canSeeDrafts, userHolds } from "@/lib/access";
 import { featureEnabled } from "@/lib/ee";
 import { actorFrom, ipFrom } from "@/lib/audit";
-import { requestOrigin } from "@/lib/oauth";
 import { parseAssignmentRequest } from "@/lib/ack-assignments";
 import { runAssignmentAction } from "@/lib/ack-assignment-actions";
 import type { SessionUser } from "@/lib/types";
@@ -69,7 +69,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     doc: { id: doc.id, title: doc.title },
     actor: { id: user.id, name: user.name || user.username },
     audit: { actor: actorFrom(user), ip: ipFrom(req) },
-    origin: requestOrigin(req),
+    origin: await mailOrigin(),
   });
   return NextResponse.json(outcome.body, { status: outcome.status });
 }

@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { createSuggestion, getDocument } from "@/lib/db";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { apiGuard } from "@/lib/api-auth";
 import { notifyWebhooks } from "@/lib/webhooks";
-import { requestOrigin } from "@/lib/oauth";
 import type { SessionUser } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -40,7 +40,7 @@ export async function POST(req: Request) {
     title: doc?.title || String(body?.proposed_title ?? "").trim(),
     actor: user.name || user.username,
     note: text.length > 140 ? text.slice(0, 137) + "…" : text,
-    url: doc ? `${requestOrigin(req)}/doc/${doc.id}` : requestOrigin(req),
+    url: doc ? `${await mailOrigin()}/doc/${doc.id}` : await mailOrigin(),
     spaceId: doc?.space_id,
     spaceName: doc?.space_name,
   });
