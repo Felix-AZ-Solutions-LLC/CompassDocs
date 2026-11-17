@@ -95,19 +95,16 @@ export async function PATCH(req: Request) {
   // changes that relax them or keep them working can be saved: turning SSO
   // only off, the break-glass list, and a new client secret (one that
   // expired during the lapse would otherwise leave nobody able to sign in).
-  // Without a licence that ever granted SSO, nothing changes.
-  if (!(await featureEnabled("sso"))) {
-    const lapsed = await featureEnforced("sso");
-    if (!lapsed || !onlyRelaxing(body ?? {}, await getSsoConfig())) {
-      return NextResponse.json(
-        {
-          error: lapsed
-            ? "Your licence has lapsed: you can turn SSO only off, change the break-glass accounts or enter a new client secret, and nothing else, until it is renewed."
-            : "Your licence doesn't include single sign-on, so its settings can't be changed.",
-        },
-        { status: 402 }
-      );
-    }
+  // Without a licence that ever granted SSO the settings save as before
+  // (nothing is enforced until one does), so a workspace can prepare them.
+  if (!(await featureEnabled("sso")) && (await featureEnforced("sso")) && !onlyRelaxing(body ?? {}, await getSsoConfig())) {
+    return NextResponse.json(
+      {
+        error:
+          "Your licence has lapsed: you can turn SSO only off, change the break-glass accounts or enter a new client secret, and nothing else, until it is renewed.",
+      },
+      { status: 402 }
+    );
   }
 
   let breakGlass: { from: number[]; to: number[] } | null = null;
