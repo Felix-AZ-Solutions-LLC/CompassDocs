@@ -9,6 +9,7 @@ import { eePresent, featureEnabled } from "@/lib/ee";
 import { SsoSettings } from "@/components/SsoSettings";
 import { SamlPanel } from "@/components/SamlPanel";
 import { ScimPanel } from "@/components/ScimPanel";
+import { scimAdminStatus } from "@/lib/scim";
 import { DuoSettings } from "@/components/DuoSettings";
 import { SettingsPage } from "@/components/SettingsPage";
 
@@ -24,7 +25,10 @@ export default async function SsoAdminPage() {
   const duoUsers = people
     .filter((u) => u.status === "active" || duo.bypass_user_ids.includes(u.id))
     .map((u) => ({ id: u.id, label: u.name || u.username, sublabel: `${u.username} · ${u.role}${u.status === "active" ? "" : " · disabled"}` }));
-  const [cfg, samlCfg, app, bundled, enabled, secretExpires, scimLicensed, scimEnabled, scimTokenHash, scimLast] =
+  const h = await headers();
+  const proto = h.get("x-forwarded-proto") || "http";
+  const host = h.get("x-forwarded-host") || h.get("host") || "localhost";
+  const [cfg, samlCfg, app, bundled, enabled, secretExpires, scim] =
     await Promise.all([
       getSsoConfig(),
       getSamlConfig(),
@@ -32,15 +36,10 @@ export default async function SsoAdminPage() {
       Promise.resolve(eePresent()),
       featureEnabled("sso"),
       getSetting("sso_secret_expires"),
-      featureEnabled("scim"),
-      getSetting("scim_enabled"),
-      getSetting("scim_token_hash"),
-      getSetting("scim_last_request_at"),
+      // The SCIM card's state, as GET /api/admin/scim answers it (1.20.27: with the setup with Microsoft).
+      scimAdminStatus(`${proto}://${host}/api/scim/v2`),
     ]);
 
-  const h = await headers();
-  const proto = h.get("x-forwarded-proto") || "http";
-  const host = h.get("x-forwarded-host") || h.get("host") || "localhost";
   const origin = app.custom_domain ? `https://${app.custom_domain}` : `${proto}://${host}`;
   const sp = samlSpUrls(origin);
 
@@ -82,17 +81,7 @@ export default async function SsoAdminPage() {
           sp_metadata_url: sp.metadata,
         }}
       />
-      {bundled && (
-        <ScimPanel
-          initial={{
-            licensed: scimLicensed,
-            enabled: scimEnabled === "1",
-            token_set: Boolean(scimTokenHash),
-            last_request_at: scimLast || null,
-            base_url: `${proto}://${host}/api/scim/v2`,
-          }}
-        />
-      )}
+      {bundled && <ScimPanel initial={scim} />}
       <DuoSettings initial={duo} users={duoUsers} />
     </>
     </SettingsPage>

@@ -135,7 +135,7 @@ export function SsoSettings({ initial }: { initial: SsoState }) {
           startUrl="/api/ee/sso/setup/start"
           pollUrl="/api/ee/sso/setup/poll"
           refreshUrl="/api/admin/sso"
-          blurb="Signs you in once as a tenant admin and creates the app registration, secret, and settings below — nothing to copy by hand."
+          blurb="Signs you in once as a tenant admin and creates the app registration, secret, and settings below — nothing to copy by hand. Since 1.20.27 the app is made from Entra's non-gallery template, so SCIM provisioning (below) can use it too."
           doneMessage="Done — the Entra app was created and the settings below were filled in and enabled."
           onDone={(state) => {
             markClean();

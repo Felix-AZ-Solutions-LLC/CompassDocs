@@ -618,6 +618,9 @@ export const AUDIT_LABELS: Record<string, string> = {
   "scim.token_generated": "Generated SCIM token",
   "scim.enabled": "Enabled SCIM provisioning",
   "scim.disabled": "Disabled SCIM provisioning",
+  // The one-click setup with Microsoft (1.20.27, the enterprise overlay)
+  "scim.setup_with_microsoft": "Set up SCIM provisioning with Microsoft",
+  "scim.setup_with_microsoft_failed": "Could not set up SCIM provisioning with Microsoft",
   "license.set": "Installed license",
   "license.removed": "Removed license",
   "backup.create": "Created backup",

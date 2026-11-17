@@ -5808,6 +5808,21 @@ addresses 1.20.5 (`lib/helpdesk/send-addresses`).
   Offer it only while it has something to create: Intune's is hidden once
   an app registration of its own is saved, because a second run would
   leave a second app in Entra.
+- **A one-click setup of several steps** (1.20.27, SCIM's "Set up
+  provisioning with Microsoft", `components/ScimMicrosoftSetup`) is the
+  same `<MsDeviceSetup>` with its words in `label`, the choices the
+  server acts on as native checkboxes under the button (`children`, sent
+  with the start through `startBody`), and a `confirmDialog` in
+  `beforeStart` when it replaces something that works today (a secret
+  token). Under the closing notice, and under the red line when it
+  stopped part-way, `details` lists each step as one sentence with a
+  16px lucide mark (`CircleCheck` emerald done, `CircleMinus` slate not
+  needed, `TriangleAlert` `ink-warn` warning, `CircleX` red failed) and
+  an `sr-only` status word before it; a failed step carries Microsoft's
+  own words. It may run again: the server finds what it made rather than
+  making it twice, so the button is never hidden by what it made (it is
+  offered again on the next visit, beside a line saying what the last
+  run set up).
 
 ## Helpdesk: desk settings
 

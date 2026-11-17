@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual, randomBytes } from "node:crypto";
 import { getSetting, setSetting } from "./db";
 import { featureEnabled } from "./ee";
 import type { User } from "./types";
+import { NON_GALLERY_TEMPLATE_ID, type ScimEntraState, type ScimStatus, type SsoAppKind } from "./scim-setup-shared";
 
 // SCIM 2.0 service-provider support (enterprise): Microsoft Entra ID (or any
 // SCIM client) pushes user lifecycle changes — create, update, deactivate —
@@ -41,6 +42,85 @@ export function hashScimToken(raw: string): string {
 
 export function newScimToken(): string {
   return "cdscim_" + randomBytes(24).toString("hex");
+}
+
+/**
+ * Make `raw` THE token (1.20.27; the Generate button and the setup with
+ * Microsoft both come here): only its hash is kept, the previous token stops
+ * working at once, and the endpoint is switched on. `replaced` says whether
+ * there was a previous token.
+ */
+export async function storeScimToken(raw: string): Promise<{ replaced: boolean; at: string }> {
+  const replaced = Boolean(await getSetting("scim_token_hash"));
+  const at = new Date().toISOString();
+  await setSetting("scim_token_hash", hashScimToken(raw));
+  await setSetting("scim_token_at", at);
+  await setSetting("scim_enabled", "1");
+  return { replaced, at };
+}
+
+// --- Set up with Microsoft (1.20.27) --------------------------------------------
+
+export const SCIM_ENTRA_KEY = "scim_entra";
+/** Which app the one-click single sign-on setup made: { client_id, template_id }. */
+export const SSO_APP_KEY = "sso_app_template";
+
+export async function getScimEntraState(): Promise<ScimEntraState | null> {
+  try {
+    const v = JSON.parse((await getSetting(SCIM_ENTRA_KEY)) || "null");
+    return v && typeof v === "object" && typeof v.sp_id === "string" ? (v as ScimEntraState) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveScimEntraState(state: ScimEntraState): Promise<void> {
+  await setSetting(SCIM_ENTRA_KEY, JSON.stringify(state));
+}
+
+/** The single sign-on setup records the template its app came from (empty: App registrations). */
+export async function recordSsoApp(clientId: string, templateId: string): Promise<void> {
+  await setSetting(SSO_APP_KEY, JSON.stringify({ client_id: clientId.toLowerCase(), template_id: templateId }));
+}
+
+/** Can the single sign-on app carry provisioning too? Known only for apps the one-click setup made. */
+export async function ssoAppKind(): Promise<SsoAppKind> {
+  const { getSsoConfig } = await import("./sso-config");
+  const [cfg, raw] = await Promise.all([getSsoConfig(), getSetting(SSO_APP_KEY)]);
+  if (!cfg.clientId) return "none";
+  try {
+    const rec = JSON.parse(raw || "null");
+    if (rec?.client_id && rec.client_id === cfg.clientId.trim().toLowerCase()) {
+      return rec.template_id === NON_GALLERY_TEMPLATE_ID ? "provisioning" : "sign_in_only";
+    }
+  } catch {
+    /* unreadable: unknown */
+  }
+  return "unknown";
+}
+
+/** The SCIM card's state (the admin route and the Single sign-on page). */
+export async function scimAdminStatus(baseUrl: string): Promise<ScimStatus> {
+  const [licensed, enabled, tokenHash, lastRequest, tokenAt, entra, sso] = await Promise.all([
+    featureEnabled("scim"),
+    getSetting("scim_enabled"),
+    getSetting("scim_token_hash"),
+    getSetting("scim_last_request_at"),
+    getSetting("scim_token_at"),
+    getScimEntraState(),
+    ssoAppKind(),
+  ]);
+  return {
+    licensed,
+    enabled: enabled === "1",
+    token_set: Boolean(tokenHash),
+    last_request_at: lastRequest || null,
+    base_url: baseUrl,
+    entra,
+    // A token made here after the setup put its own in Entra (the Generate button): Entra's copy no longer works.
+    entra_token_stale: Boolean(entra && tokenAt && entra.token_at && tokenAt > entra.token_at),
+    sso_app: sso,
+  };
 }
 
 /**

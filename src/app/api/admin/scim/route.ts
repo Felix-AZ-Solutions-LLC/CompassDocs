@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { apiGuard } from "@/lib/api-auth";
-import { getSetting, setSetting } from "@/lib/db";
+import { setSetting } from "@/lib/db";
 import { featureEnabled } from "@/lib/ee";
-import { newScimToken, hashScimToken } from "@/lib/scim";
+import { newScimToken, scimAdminStatus, storeScimToken } from "@/lib/scim";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { requestOrigin } from "@/lib/oauth";
 import type { SessionUser } from "@/lib/types";
@@ -11,22 +11,11 @@ export const dynamic = "force-dynamic";
 
 // Admin controls for SCIM provisioning: status, enable/disable, and bearer
 // token generation. The raw token is returned exactly once; only its SHA-256
-// is stored.
+// is stored. The one-click setup with Microsoft (1.20.27) is the enterprise
+// overlay's (/api/ee/scim/setup/*); its outcome is part of the status here.
 
 async function status(req: Request) {
-  const [licensed, enabled, tokenHash, lastRequest] = await Promise.all([
-    featureEnabled("scim"),
-    getSetting("scim_enabled"),
-    getSetting("scim_token_hash"),
-    getSetting("scim_last_request_at"),
-  ]);
-  return {
-    licensed,
-    enabled: enabled === "1",
-    token_set: Boolean(tokenHash),
-    last_request_at: lastRequest || null,
-    base_url: `${requestOrigin(req)}/api/scim/v2`,
-  };
+  return scimAdminStatus(`${requestOrigin(req)}/api/scim/v2`);
 }
 
 export async function GET(req: Request) {
@@ -47,8 +36,7 @@ export async function POST(req: Request) {
   }
 
   const token = newScimToken();
-  await setSetting("scim_token_hash", hashScimToken(token));
-  await setSetting("scim_enabled", "1");
+  await storeScimToken(token);
   await audit({
     actor: actorFrom(user),
     action: "scim.token_generated",
