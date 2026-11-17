@@ -1816,8 +1816,12 @@ text-slate-500` before them ("Notary · Phoenix").
   `<TableWrap>` so it scrolls sideways instead of breaking the page.
   **A table that scrolls says so** (1.20.27): `TableWrap` (and so `Table
   scroll`) fades out over 2rem at an edge with columns past it
-  (`components/edge-fade`, `.edge-fade[data-fade]` in globals.css), so a
-  cut-off column reads as "scroll". A settings grid of controls a phone
+  (`components/edge-fade`; `.edge-fade-frame` in globals.css), so a
+  cut-off column reads as "scroll". The table's fade is an overlay drawn
+  from a frame around the scroller, never a mask on it: a mask clips
+  everything inside, including a row's ⋯ menu where it reaches past the
+  table, and the page under it then takes the click. (A `SubNav` tab row,
+  which holds no menus, keeps the mask.) A settings grid of controls a phone
   must use (Reply targets) is the stacked grid list instead
   (§Business-time counting: "A settings list that must stack on a phone").
 - `<Table scroll minWidth>` wraps a wide table in a sideways scroll

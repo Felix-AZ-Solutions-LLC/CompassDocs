@@ -46,9 +46,13 @@ export const FIT = "w-px whitespace-nowrap";
  *  (components/edge-fade), so a cut-off column reads as "scroll". */
 export function TableWrap({ children, className = "" }: { children: ReactNode; className?: string }) {
   const ref = useEdgeFade<HTMLDivElement>();
+  // The fade is an overlay beside the scroller (edge-fade-frame), never a mask on it: a mask clips everything
+  // inside, including a row's ⋯ menu where it reaches past the table, and the page under it then takes the click.
   return (
-    <div ref={ref} className={`edge-fade overflow-x-auto print:overflow-visible ${className}`.trim()}>
-      {children}
+    <div className={`edge-fade-frame relative ${className}`.trim()}>
+      <div ref={ref} className="overflow-x-auto print:overflow-visible">
+        {children}
+      </div>
     </div>
   );
 }

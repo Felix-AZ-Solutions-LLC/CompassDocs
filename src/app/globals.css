@@ -1046,6 +1046,41 @@ table {
   -webkit-mask-image: linear-gradient(to right, transparent, #000 2rem, #000 calc(100% - 2rem), transparent);
   mask-image: linear-gradient(to right, transparent, #000 2rem, #000 calc(100% - 2rem), transparent);
 }
+/* TableWrap (components/Table): the same fade drawn over the scroller's edges
+ * from its frame, so nothing inside is masked (a row's menu that reaches past
+ * the table stays visible and clickable). It fades to the card's surface. */
+.edge-fade-frame::before,
+.edge-fade-frame::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2rem;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 150ms;
+  z-index: 1;
+}
+.edge-fade-frame::before {
+  left: 0;
+  background: linear-gradient(to right, rgb(var(--surface)), rgb(var(--surface) / 0));
+}
+.edge-fade-frame::after {
+  right: 0;
+  background: linear-gradient(to left, rgb(var(--surface)), rgb(var(--surface) / 0));
+}
+.edge-fade-frame:has(> [data-fade="start"])::before,
+.edge-fade-frame:has(> [data-fade="both"])::before,
+.edge-fade-frame:has(> [data-fade="end"])::after,
+.edge-fade-frame:has(> [data-fade="both"])::after {
+  opacity: 1;
+}
+@media print {
+  .edge-fade-frame::before,
+  .edge-fade-frame::after {
+    display: none;
+  }
+}
 @media print {
   .edge-fade[data-fade] {
     -webkit-mask-image: none;
