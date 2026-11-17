@@ -654,9 +654,21 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
       }
       if (tail === "/attachments" && method === "GET") {
         if (fake.fail.attachments) return send(res, fake.fail.attachments, gerr("ErrorInternalServerError", "Try again."));
+        // 1.20.26: as Graph does, a $select naming a property the base attachment type lacks (contentId is
+        // fileAttachment's) refuses the whole list.
+        const base = new Set(["id", "name", "contenttype", "size", "isinline", "lastmodifieddatetime"]);
+        const bad = (Array.isArray(select) ? select : String(select ?? "").split(",")).map((x) => x.trim()).filter((x) => x && !x.includes("/") && !base.has(x.toLowerCase()));
+        if (bad.length) return send(res, 400, gerr("BadRequest", `Could not find a property named '${bad[0]}' on type 'microsoft.graph.attachment'.`));
         return send(res, 200, {
-          value: m.attachments.map((a) => ({ "@odata.type": a.odataType ?? "#microsoft.graph.fileAttachment", id: a.id, name: a.name, contentType: a.contentType, size: a.size ?? a.data.length, isInline: a.isInline === true, ...(a.contentId && (!select || select.includes("contentId")) ? { contentId: a.contentId } : {}) })),
+          value: m.attachments.map((a) => ({ "@odata.type": a.odataType ?? "#microsoft.graph.fileAttachment", id: a.id, name: a.name, contentType: a.contentType, size: a.size ?? a.data.length, isInline: a.isInline === true })),
         });
+      }
+      const one = tail.match(/^\/attachments\/([^/]+)$/);
+      if (one && method === "GET") {
+        const a = m.attachments.find((x) => x.id === decodeURIComponent(one[1]));
+        if (a && fake.fail.attachmentValue && (!fake.failAttachmentId || fake.failAttachmentId === a.id)) return send(res, fake.fail.attachmentValue, gerr("ErrorInternalServerError", "Try again."));
+        if (!a) return send(res, 404, gerr("ErrorItemNotFound", "No such attachment."));
+        return send(res, 200, { "@odata.type": a.odataType ?? "#microsoft.graph.fileAttachment", id: a.id, name: a.name, contentType: a.contentType, size: a.size ?? a.data.length, isInline: a.isInline === true, ...(a.contentId ? { contentId: a.contentId } : {}), contentBytes: a.data.toString("base64") });
       }
       const att = tail.match(/^\/attachments\/([^/]+)\/\$value$/);
       if (att && method === "GET") {

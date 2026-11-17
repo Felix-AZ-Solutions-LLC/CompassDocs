@@ -4,6 +4,24 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.26] - 2026-11-17
+
+Microsoft 365 mail with attachments comes in again.
+
+### Fixed
+- **Emails with attachments or signature pictures were held back** by the
+  Microsoft 365 mailbox connection since 1.20.8, waiting with "Microsoft 365
+  refused to read a message's attachments (error 400, BadRequest)". The desk
+  asked Microsoft for a field the attachment list doesn't have, so Microsoft
+  refused the whole list. Waiting messages are taken in at the next check,
+  or press Try all waiting now.
+- **An attachment problem never holds an email back for long:** after two
+  tries the email is taken in without the files it couldn't read, and the
+  ticket names them.
+- **A message Microsoft refused** now says so on its Last messages line,
+  instead of "Microsoft didn't answer in time".
+- **Messages dropped before 1.20.25** can be taken in anyway too.
+
 ## [1.20.25] - 2026-11-16
 
 Microsoft 365 mail: see why, and take it in anyway.

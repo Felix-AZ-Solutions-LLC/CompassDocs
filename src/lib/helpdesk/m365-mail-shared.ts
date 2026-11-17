@@ -186,7 +186,10 @@ export function m365LineWords(d: M365MessageDiag, clock: (iso: string) => string
     if (d.reason_code === "desk_busy") return { text: `The desk was taking in a lot of mail at once. ${later}` };
     if (d.reason_code === "take_in") return { text: `Being taken in anyway. ${later}` };
     if (d.reason_code === "microsoft" && d.reason_detail === "retry_after") return { text: `Microsoft asked the desk to wait${err}. ${later}` };
-    return { text: `Microsoft didn't answer in time or asked the desk to wait${d.error ? `: ${d.error.replace(/\.$/, "")}` : ""}${err}. ${later}` };
+    // 1.20.26: a wait Microsoft asked for (or no answer) is "microsoft"; anything else waiting is a refusal that counts
+    // as one of the message's tries, and says so.
+    if (d.reason_code === "microsoft") return { text: `Microsoft didn't answer in time or asked the desk to wait${d.error ? `: ${d.error.replace(/\.$/, "")}` : ""}${err}. ${later}` };
+    return { text: `Microsoft 365 refused it${d.error ? `: ${d.error.replace(/\.$/, "")}` : ""}${err}. ${later} It is given up after five tries.` };
   }
   if (d.outcome === "failed") {
     if (d.reason_code === "access_denied") return { text: `Could not be taken in: Microsoft refused access to this message${err}. It's still in the Inbox. Check the mailbox's permissions, then press Try again.` };
