@@ -7,7 +7,10 @@
 import { useState } from "react";
 import { SaveRow } from "@/components/SaveRow";
 import { useLeaveGuard, useUnsavedChanges } from "@/lib/use-unsaved";
-import { Check } from "lucide-react";
+import { Check, ShieldAlert, UserX } from "lucide-react";
+import { EntityPicker, type PickerOption } from "@/components/EntityPicker";
+import { Button } from "@/components/Button";
+import { confirmDialog } from "@/components/Dialog";
 import { EnterpriseBadge } from "@/components/Chip";
 import { buttonClass } from "@/components/Button";
 import { MsDeviceSetup } from "./MsDeviceSetup";
@@ -29,12 +32,17 @@ export interface SsoState {
   allowed_domains: string;
   sso_only: boolean;
   secret_expires: string;
+  /** 1.20.27 (security review H1): the accounts that may still sign in with a password while SSO only is on. */
+  break_glass_user_ids?: number[];
+  /** Accounts other than those that still have a password ("Remove local passwords" would clear them). */
+  local_password_count?: number;
 }
 
-export function SsoSettings({ initial }: { initial: SsoState }) {
+export function SsoSettings({ initial, users = [] }: { initial: SsoState; users?: PickerOption[] }) {
   const [s, setSRaw] = useState(initial);
   const [secret, setSecretRaw] = useState("");
   const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   const { dirty, markDirty, markClean, hasUnsavedChanges } = useUnsavedChanges(JSON.stringify([s, secret]));
   useLeaveGuard(dirty, hasUnsavedChanges);
@@ -97,6 +105,7 @@ export function SsoSettings({ initial }: { initial: SsoState }) {
         default_role: s.default_role,
         allowed_domains: s.allowed_domains,
         sso_only: s.sso_only,
+        break_glass_user_ids: s.break_glass_user_ids ?? [],
       }),
     });
     setSaving(false);
@@ -109,6 +118,28 @@ export function SsoSettings({ initial }: { initial: SsoState }) {
     if (data?.state) setSRaw(data.state);
     setSecretRaw("");
     toast("ok", "Single sign-on settings saved.");
+  }
+
+  async function removePasswords() {
+    const n = s.local_password_count ?? 0;
+    const ok = await confirmDialog({
+      title: `Remove ${n} local password${n === 1 ? "" : "s"}?`,
+      body: "Every account except the break-glass accounts loses its password, and with it its API tokens and connected apps. People keep signing in with single sign-on. It can't be undone: a password can only be set again by an administrator's reset.",
+      confirmLabel: "Remove passwords",
+      danger: true,
+      typeToConfirm: "REMOVE",
+    });
+    if (ok !== true) return;
+    setRemoving(true);
+    const res = await fetch("/api/admin/sso/remove-passwords", { method: "POST" });
+    setRemoving(false);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast("error", data?.error || "Could not remove the passwords.");
+      return;
+    }
+    setSRaw({ ...s, local_password_count: 0 });
+    toast("ok", `Removed ${data.removed ?? 0} local password${data.removed === 1 ? "" : "s"}.`);
   }
 
   const redirectUri =
@@ -272,17 +303,50 @@ export function SsoSettings({ initial }: { initial: SsoState }) {
             disabled={!configured && !s.sso_enabled}
           />
           <Toggle
-            label="Hide the username/password form (SSO only)"
+            label="SSO only: passwords sign in only the break-glass accounts"
             checked={s.sso_only}
             onChange={(next) => setS({ ...s, sso_only: next })}
             disabled={!s.sso_enabled}
           />
           {s.sso_only && (
-            <p className="text-xs ink-warn">
-              Break-glass: SSO only hides the password form; it doesn&apos;t remove passwords. Anyone with a
-              password, administrators included, can still sign in at{" "}
-              <code className="font-mono">/login?local=1</code>. Bookmark it before you turn this on.
-            </p>
+            <div id="break-glass" className="scroll-mt-6 border-t border-slate-100 pt-4">
+              <h4 className="text-sm font-semibold text-slate-900">Break-glass accounts</h4>
+              <p className="mb-2 mt-0.5 text-xs text-slate-500">
+                With SSO only on, a password signs in only these accounts, at <code className="font-mono">/login?local=1</code>. Every one of
+                their sign-ins is written to the audit log. Pick one or two administrators, give them long passwords and two-step sign-in,
+                and keep the details somewhere safe.
+              </p>
+              <div className="max-w-xl">
+                <EntityPicker
+                  options={users}
+                  value={s.break_glass_user_ids ?? []}
+                  onChange={(ids) => setS({ ...s, break_glass_user_ids: ids })}
+                  label="Break-glass accounts"
+                  placeholder="Search people…"
+                  emptyText="No account matches."
+                />
+              </div>
+              {(s.break_glass_user_ids ?? []).length === 0 && (
+                <div className="notice-warn mt-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-sm">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                  <p>
+                    No break-glass account. If single sign-on stops working, nobody can sign in with a password to fix it. Administrators are
+                    never linked to single sign-on, so name at least one of them here.
+                  </p>
+                </div>
+              )}
+              {s.sso_only && !dirty && (s.local_password_count ?? 0) > 0 && (
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <Button variant="danger" size="sm" icon={<UserX />} busy={removing} onClick={() => void removePasswords()}>
+                    Remove local passwords…
+                  </Button>
+                  <p className="min-w-0 flex-1 basis-64 text-xs text-slate-500">
+                    {s.local_password_count} other account{s.local_password_count === 1 ? " still has" : "s still have"} a password
+                    that can no longer sign in. Removing them also ends those accounts&apos; API tokens and app connections.
+                  </p>
+                </div>
+              )}
+            </div>
           )}
         </div>
 

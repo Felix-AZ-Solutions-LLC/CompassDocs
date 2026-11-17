@@ -58,7 +58,9 @@ const nextConfig = {
     const base = [
       { key: "X-Content-Type-Options", value: "nosniff" },
       { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-      { key: "Strict-Transport-Security", value: "max-age=15552000" },
+      // 1.20.27 (security review, Low): at least ASVS 14.4.5's 15724800 s (182 days); a year. No
+      // includeSubDomains: the workspace cannot speak for its sibling hosts.
+      { key: "Strict-Transport-Security", value: "max-age=31536000" },
       { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
     ];
     // Content-Security-Policy. Two disjoint rules — /addin/* must stay frameable

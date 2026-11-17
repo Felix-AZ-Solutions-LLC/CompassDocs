@@ -8,6 +8,8 @@
 //   "compassdocs": { "command": "npx", "args": ["-y", "mcp-remote",
 //     "https://YOUR-HOST/api/mcp", "--header", "Authorization: Bearer cdk_…"] }
 
+import { createHash } from "node:crypto";
+import { mcpRateLimited } from "@/lib/rate-limit";
 import {
   getUserByApiToken,
   getUserByOAuthToken,
@@ -1851,6 +1853,14 @@ async function authenticate(req: Request): Promise<User | Response> {
       { status: 403, headers: { "content-type": "application/json" } }
     );
   }
+  // 1.20.27 (security review M2): an account that must set a new password
+  // (a temporary one from an administrator) uses nothing until it has.
+  if (user && user.must_change_password === 1) {
+    return new Response(JSON.stringify({ error: "Set a new password in CompassDocs first." }), {
+      status: 403,
+      headers: { "content-type": "application/json" },
+    });
+  }
   if (!user) {
     // Point OAuth-capable clients (Claude's custom-connector UI) at our
     // discovery document so they can start the authorization flow themselves.
@@ -1943,6 +1953,13 @@ async function mcpBodyLimit(): Promise<number> {
   }
 }
 
+/**
+ * The most JSON-RPC messages one request may carry (1.20.27, security review
+ * app M5). MCP 2025-06 dropped batching; clients that still batch send a
+ * handful. A larger batch is refused whole, before any of it runs.
+ */
+const MCP_BATCH_MAX = 20;
+
 export async function POST(req: Request) {
   const user = await authenticate(req);
   if (user instanceof Response) return user;
@@ -1956,13 +1973,29 @@ export async function POST(req: Request) {
   } catch {
     return json(rpcError(null, -32700, "Parse error"), 400);
   }
+  if (Array.isArray(body) && body.length > MCP_BATCH_MAX) {
+    return json(rpcError(null, -32600, `A batch can carry at most ${MCP_BATCH_MAX} messages.`), 400);
+  }
+  // 1.20.27 (security review app M5): 120 calls a minute per credential (a
+  // batch counts each message), like the helpdesk API and /api/v1.
+  const credential = createHash("sha256").update((req.headers.get("authorization") || "").slice(7).trim()).digest("hex");
+  const wait = mcpRateLimited(credential, Array.isArray(body) ? body.length : 1);
+  if (wait > 0) {
+    return new Response(JSON.stringify(rpcError(Array.isArray(body) ? null : (body?.id ?? null), -32000, "Rate limit exceeded (120 calls a minute). Slow down and retry.")), {
+      status: 429,
+      headers: { "content-type": "application/json", "retry-after": String(wait) },
+    });
+  }
 
   const origin = await publicOrigin(req);
   const ip = ipFrom(req);
   if (Array.isArray(body)) {
-    const replies = (await Promise.all(body.map((m) => handleRpc(user, m, origin, ip)))).filter(
-      (r) => r !== undefined
-    );
+    // One at a time: a batch never fans out into concurrent tool calls.
+    const replies: unknown[] = [];
+    for (const m of body) {
+      const r = await handleRpc(user, m, origin, ip);
+      if (r !== undefined) replies.push(r);
+    }
     return replies.length ? json(replies) : new Response(null, { status: 202 });
   }
   const reply = await handleRpc(user, body, origin, ip);

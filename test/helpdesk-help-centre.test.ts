@@ -84,7 +84,7 @@ const edition = { present: true, features: ["helpdesk"] as string[] };
   ee.exports = {
     ee: () => edition,
     eePresent: () => true,
-    featureEnabled: async (feature: string) => edition.features.includes(feature),
+    featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature),
   };
   require.cache[EE_STUB] = ee;
   const loader = Module as unknown as {
@@ -125,6 +125,8 @@ const STAMP = `hdhc${Date.now()}${Math.floor(Math.random() * 1e6)}`;
 const WORD = `zq${STAMP.replace(/\d/g, (d) => "abcdefghij"[Number(d)])}`;
 const HOST = "portal.example.test";
 const ORIGIN = `http://${HOST}`;
+// 1.20.27 (security review app H1): sign-in links come only from the workspace's configured address.
+process.env.COMPASSDOCS_BASE_URL = ORIGIN;
 const LOCK = 728661;
 const AUTHOR_EMAIL = `jane.author@${STAMP}.corp.test`;
 const COMMENTER_EMAIL = `cora.commenter@${STAMP}.corp.test`;

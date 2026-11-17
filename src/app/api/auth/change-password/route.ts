@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { passwordProblem } from "@/lib/password-policy";
-import { getCurrentUser } from "@/lib/auth";
-import { getUserByUsername, setUserPassword } from "@/lib/db";
+import { currentSession } from "@/lib/auth";
+import { crossOriginRejection } from "@/lib/api-auth";
+import { deleteOtherSessions, getUserByUsername, revokeUserBearerCredentials, setUserPassword } from "@/lib/db";
 import { hashPassword, verifyPassword } from "@/lib/password";
 import { actorFrom, audit, ipFrom } from "@/lib/audit";
 import { pairRetryAfter, recordLoginSuccess, recordPairFailure } from "@/lib/login-guard";
@@ -9,8 +10,15 @@ import { pairRetryAfter, recordLoginSuccess, recordPairFailure } from "@/lib/log
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  const sessionUser = await getCurrentUser();
-  if (!sessionUser) return NextResponse.json({ error: "Not signed in." }, { status: 401 });
+  // 1.20.27 (security review M1 sweep): a cookie-authenticated write refuses a foreign Origin like the rest.
+  const cross = await crossOriginRejection();
+  if (cross) return cross;
+  // 1.20.27: read the session itself, not getCurrentUser: a session that
+  // owes this very change (must_change_password) or two-step set-up must
+  // still reach it. A session still owing its Duo approval may not.
+  const session = await currentSession();
+  if (!session || session.duo.signIn) return NextResponse.json({ error: "Not signed in." }, { status: 401 });
+  const sessionUser = session.user;
 
   let body: any;
   try {
@@ -41,8 +49,9 @@ export async function POST(req: Request) {
       { status: 429, headers: { "Retry-After": String(wait) } }
     );
   }
-  if (!verifyPassword(currentPassword, record.password_hash, record.password_salt)) {
-    const lockEngaged = recordPairFailure(sessionUser.username, ip);
+  // Counted before the (asynchronous) check, given back when it passes.
+  const lockEngaged = recordPairFailure(sessionUser.username, ip);
+  if (!(await verifyPassword(currentPassword, record.password_hash, record.password_salt))) {
     await audit({
       actor: actorFrom(sessionUser),
       action: "auth.login_failed",
@@ -67,7 +76,21 @@ export async function POST(req: Request) {
   }
   recordLoginSuccess(sessionUser.username, ip);
 
-  const { hash, salt } = hashPassword(newPassword);
+  const { hash, salt } = await hashPassword(newPassword);
   await setUserPassword(record.id, hash, salt, false);
-  return NextResponse.json({ ok: true });
+  // 1.20.27 (security review H4): a changed password ends everything the
+  // old one could have minted: API tokens, connector grants, and every
+  // other session. This session stays signed in.
+  const revoked = await revokeUserBearerCredentials(record.id);
+  const signedOut = await deleteOtherSessions(record.id, session.token);
+  await audit({
+    actor: actorFrom(sessionUser),
+    action: "auth.password_changed",
+    targetType: "user",
+    targetId: record.id,
+    targetLabel: record.username,
+    details: { forced: record.must_change_password === 1, ...revoked, other_sessions: signedOut },
+    ip,
+  });
+  return NextResponse.json({ ok: true, revoked: { ...revoked, other_sessions: signedOut } });
 }

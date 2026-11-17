@@ -17,6 +17,7 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { logEvent } from "../../log";
+import { readTextCapped } from "../../body-reader";
 import { helpdeskLicensed } from "../access";
 import { CHAT_LIMITS, type HdChatApp } from "../chat-shared";
 import {
@@ -57,10 +58,10 @@ const num = (v: unknown): number | null => {
 class TooLarge extends Error {}
 
 async function readBody(req: Request): Promise<string> {
-  const len = Number(req.headers.get("content-length"));
-  if (Number.isFinite(len) && len > CHAT_LIMITS.bodyBytes) throw new TooLarge();
-  const text = await req.text();
-  if (Buffer.byteLength(text) > CHAT_LIMITS.bodyBytes) throw new TooLarge();
+  // 1.20.27 (security review app L5): a chunked body is read no further
+  // than the limit, before its signature is checked.
+  const text = await readTextCapped(req, CHAT_LIMITS.bodyBytes);
+  if (text === null) throw new TooLarge();
   return text;
 }
 

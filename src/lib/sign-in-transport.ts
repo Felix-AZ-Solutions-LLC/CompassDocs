@@ -96,6 +96,8 @@ export function realTransport(router: { push: (href: string) => void; refresh: (
       if (res.status === 401) return { kind: "invalid", error: String(data?.error || "Invalid username or password.") };
       if (res.status === 429) return { kind: "limited", error: String(data?.error || BROKEN) };
       if (res.status === 400) return { kind: "invalid", error: String(data?.error || BROKEN) };
+      // 1.20.27: "SSO only" refuses passwords but a break-glass account's (lib/auth login).
+      if (res.status === 403 && data?.code === "sso_only") return { kind: "invalid", error: String(data.error) };
       if (res.status === 403) return { kind: "error", error: RELOAD };
       return { kind: "error", error: BROKEN };
     },

@@ -43,12 +43,12 @@
 // the portal's own pages: portalOriginRejection insists on an Origin (or
 // Sec-Fetch-Site) that is this host.
 //
-// Links in mail (1.19.1 review). A portal request's Host is a stranger's
-// to choose, so it never feeds lib/helpdesk/email's remembered origin:
-// notices caused by portal writes link to the custom domain, else to the
-// origin signed-in app traffic left (portalHookOrigin). Only the sign-in
-// link itself falls back to the request's origin when no domain is set
-// (portalLinkOrigin; the settings page warns about it).
+// Links in mail (1.19.1 review; 1.20.27, security review app H1). A
+// portal request's Host is a stranger's to choose, so no link in any mail
+// is ever built from it: sign-in links and notices link to the workspace's
+// configured address (lib/workspace-origin) and, with none configured, the
+// portal sends no sign-in links at all (portalLinkOrigin; the portal
+// settings and the desk's setup page say so).
 //
 // Merges. A portal ticket merged into another (lib/helpdesk/merge) shows
 // "Joined with #N", and the contact reaches the ticket it was merged into
@@ -367,28 +367,28 @@ export function portalReplyLimited(contactId: number): boolean {
 
 // --- Sign-in links ------------------------------------------------------------------
 
-export type LinkOutcome = "sent" | "off" | "not_allowed" | "blocked" | "limited" | "mail_failed";
+export type LinkOutcome = "sent" | "off" | "not_allowed" | "blocked" | "limited" | "mail_failed" | "no_address";
 
-/** The workspace's configured domain as an origin, or null when none is set. */
+/** The workspace's configured address (lib/workspace-origin), or null when none is set. */
 async function configuredOrigin(): Promise<string | null> {
-  try {
-    const s = await getAppSettings();
-    if (s.custom_domain) return `https://${s.custom_domain}`;
-  } catch {
-    /* fall through */
-  }
-  return null;
+  const { workspaceOrigin } = await import("../workspace-origin");
+  return workspaceOrigin();
 }
 
 /**
- * Where a sign-in link points: the custom domain when set (never a Host
- * header a stranger chose), else the request's origin. The request's
- * origin is used for that one mail only: it is never handed to
- * lib/helpdesk/email helpdeskOrigin, whose remembered origin every later
- * mail without one of its own links to (1.19.1 review).
+ * Where a sign-in link (or a portal notice's link) points: the workspace's
+ * configured address only, or null when none is configured.
+ *
+ * 1.20.27 (security review app H1): never the request's origin. A sign-in
+ * link built from a Host header a stranger chose let them have a genuine
+ * link mailed to a contact pointing at their own server, and replay the
+ * token it carried. With no address configured the portal sends no sign-in
+ * links at all (deliverSignInLink answers "no_address"), and the portal
+ * settings and the desk's setup page tell the administrator to set one.
+ * `_requestOrigin` is ignored, kept so older callers compile.
  */
-export async function portalLinkOrigin(requestOrigin: string): Promise<string> {
-  return (await configuredOrigin()) ?? requestOrigin;
+export async function portalLinkOrigin(_requestOrigin?: string): Promise<string | null> {
+  return configuredOrigin();
 }
 
 /**
@@ -415,7 +415,8 @@ export function setPortalLinkSpyForTests(spy: typeof linkSpy): void {
  */
 export async function deliverSignInLink(
   rawEmail: string,
-  opts: { origin: string; next?: string; ip?: string | null; settings?: PortalSettings; journey?: unknown }
+  /** `origin` is ignored since 1.20.27 (links use the configured address only). */
+  opts: { origin?: string; next?: string; ip?: string | null; settings?: PortalSettings; journey?: unknown }
 ): Promise<LinkOutcome> {
   const email = cleanEmail(rawEmail);
   if (!email) return "not_allowed";
@@ -436,6 +437,14 @@ export async function deliverSignInLink(
     [mailbox]
   );
   if ((n?.n ?? 0) >= perHour) return "limited";
+  // 1.20.27 (security review app H1): no configured address, no link (portalLinkOrigin).
+  const base = await portalLinkOrigin();
+  if (!base) {
+    logEvent("warn", "helpdesk.portal_link_no_address", {
+      message: "The customer portal sent no sign-in link: set the workspace's address (Settings → Domain & HTTPS, or COMPASSDOCS_BASE_URL).",
+    });
+    return "no_address";
+  }
   const contact = existing ?? (await ensureContact(email));
   const token = newPortalToken();
   await hq(
@@ -443,7 +452,6 @@ export async function deliverSignInLink(
     "INSERT INTO hd_portal_links (token_hash, contact_id, next_path, expires_at, hc_journey) VALUES ($1, $2, $3, $4, $5)",
     [hashPortalToken(token), contact.id, cleanNextPath(opts.next ?? ""), new Date(Date.now() + PORTAL_LINK_TTL_MS), cleanJourneyId(opts.journey)]
   );
-  const base = await portalLinkOrigin(opts.origin);
   const url = `${base}${PORTAL_PATH}/signin?token=${encodeURIComponent(token)}`;
   linkSpy?.(email, url);
   const brand = await portalBrand(settings);

@@ -701,6 +701,39 @@ focus):
   the row's other controls take the typed label. Add is wrapped in
   `Tooltip` ("Up to 24 markers.") once the limit is reached.
   `MarkersCard` is the worked example.
+- **Settings → Sign-in security** (1.20.27, `SignInSecuritySettings`) is
+  stacked cards sharing one `SaveRow`: **Require two-step sign-in** is a
+  `RadioCards` group of four scopes (Nobody / Administrators /
+  Administrators and desk agents / Everyone) with one `text-xs` sentence
+  under it once a scope is chosen; **Session lifetime** is one `xs`
+  number `Field` with `rangeError`. **API tokens and app connections** is
+  a `padding="none"` `Card` holding a `Table` (Person, Token or app with
+  its `KeyRound` / `Plug` icon and prefix, Last used as `RelativeTime`,
+  Expires as a date, `warn` chip **No expiry**, or `neutral` chip
+  **Expired**), a `ListFilter` strip past eight rows, and one icon-only
+  quiet **Revoke** (`Ban`, `data-tt` "Revoke", the `aria-label` naming the
+  token and its owner) that asks with `confirmDialog({ danger: true })`
+  and acts at once, outside the Save row.
+- **A break-glass list** (the Duo bypass list, 1.20.5; the SSO only
+  break-glass accounts, 1.20.27) is an `EntityPicker` of people under an
+  `h4` and one `text-xs text-slate-500` sentence saying what being on it
+  allows and that each use is audited, with a `notice-warn`
+  (`ShieldAlert`) while it is empty. A one-off destructive action that
+  goes with it (**Remove local passwords…**, `UserX`) is a `danger` `sm`
+  `Button` beside a sentence counting what it would change, shown only
+  while the page is saved and there is something to change, and asks
+  with `confirmDialog({ danger: true, typeToConfirm })`.
+- **Expiry on a personal token** (1.20.27, `ApiTokens`): a
+  `Select` (`w-auto`, `aria-label` "Token expires after") beside the name
+  input, 30 days / 90 days (the default) / 1 year, and "No expiry" only
+  for administrators; each row says "expires {date}" in its facts line
+  and carries a `warn` chip **No expiry** or a `neutral` chip **Expired**.
+- **A backup set** (1.20.27, `BackupsClient`): each row's name is
+  followed by an `ok` chip **With attachments** or a `neutral` chip
+  **Database only** (made before 1.20.27); the size is the set's; and a
+  second `secondary` `sm` link **Attachments** downloads the uploads
+  archive beside **Download** (the database), each with a `data-tt`
+  saying which.
 - **An image upload on a settings page acts at once**, like the logo
   (1.16.0, the sign-in artwork): Upload and Replace store the file, toast
   and `router.refresh()`, and never dirty the page's `SaveRow`, so a typed
@@ -823,7 +856,8 @@ One field recipe, one input recipe, one width scale. Everything lives in
   bounded card. Never wrap a Field in a `max-w-*` div — that is what the
   prop is for.
 - **Passwords** have one minimum, `PASSWORD_MIN` in `lib/password-policy`
-  (8). Every form shows `PASSWORD_HELP` under the field and validates with
+  (12 since 1.20.27; a password set before keeps working until it is
+  changed). Every form shows `PASSWORD_HELP` under the field and validates with
   `passwordProblem()`; every route refuses with the same function. Never a
   literal number in a form or a route.
 - **On sign-in surfaces** (1.16.0, §Sign-in surfaces) inputs are
@@ -984,6 +1018,25 @@ mechanical and comes later.
   `notice-warn` bar fixed at the top with one button that opens the step in
   a **second tab**, so the screen the agent is working on is never
   navigated away.
+- **The two-step set-up** (`/account/two-step`, 1.20.27, "Require
+  two-step sign-in") is the forced password change's twin: `AuthShell`,
+  `AuthHeading` ("Set up two-step sign-in", with one sentence saying the
+  workspace asks for it), an `IdentifierRow` with **Sign out**, then one
+  step at a time in the column (`components/auth/TwoStepEnrolForm`): one
+  primary "Set up two-step sign-in"; the QR code (`ring-1
+  ring-slate-200`, never `bg-white`: the PNG carries its own white) with
+  the manual key in `text-xs text-slate-500` and a "6-digit code" `Field`
+  (`autoComplete="one-time-code"`, the sign-in input recipe); the
+  recovery codes in a `notice-warn` box with a `CopyButton`, and "I've
+  saved them, continue". Every step's submit is the `lg` full-width
+  primary with `aria-disabled` while busy; a failure is the `FormError`
+  above it. `requireUser(…, { allowPending })` lets exactly this page (and
+  the forced password change) render while its step is owed; every other
+  page and API is refused until it is done.
+- **The first-run setup token** (1.20.27): `/setup`'s first field is
+  **Setup token**, a monospace `TextInput` whose help says where it is
+  (`docker compose logs app`); `/setup?token=…` fills it. A wrong token
+  is the form's `FormError` like any refusal.
 - **`AuthShell` is the only auth shell** (`components/auth/AuthShell`,
   server-safe, styled by the `.auth-*` block in `globals.css`). From 64rem
   it is a **cover** beside a plain, card-less **form column**; below 64rem
@@ -1430,6 +1483,18 @@ like this, and nothing else in the app invents its own way:
   (`components/LicenseGate`): one warning notice naming the feature and
   the entitlement, with an "Open License" button only when the viewer can
   open that page. Never a grey box with no way forward.
+- **A licence about to lapse** (1.20.27): from 30 days before it expires,
+  every settings page opens with one `notice-warn` line under the
+  "Settings" eyebrow (`notice-error` once it has expired) for whoever can
+  open License, saying what keeps being enforced (single sign-on, SSO
+  only, SCIM deprovisioning, Duo) and what stops, with an "Open License"
+  link. Written by `admin/layout.tsx` only; never repeated on a page.
+- **A workspace with no address** (1.20.27, `lib/workspace-origin`): mail
+  links are built only from the configured address, so the desk's setup
+  page and the portal settings say so in a `notice-warn` (the portal's is
+  `notice-error` while the portal is on, since it then sends no sign-in
+  links), linking Settings, Domain & HTTPS and naming
+  `COMPASSDOCS_BASE_URL`.
 - **Prerequisite states** ("SMTP is not set up", "this role is built in")
   are `notice-warn` banners with the action that clears them — never a
   bare amber sentence (it reads as a validation error and fails AA in
@@ -4445,6 +4510,16 @@ Merging duplicate tickets and changing many at once from the queue
   ticket's **…** menu ("Merge into another ticket…") the same dialog first
   shows a search over the agent's queues; the found ticket is chosen to
   keep. Refusals show in the dialog's `FormError`, one line per ticket.
+- **Tickets from different requesters** (1.20.27): above **What
+  happens**, one `notice-warn` box (`TriangleAlert`) whose first line is
+  `crossRequesterWarning`'s sentence from `lib/helpdesk/merge-shared`
+  ("These tickets are from different people: A and B. Once merged, each
+  will see the other's conversation and files…"), then a small list of
+  each requester with their email and ticket numbers. It shows at once
+  from what the queue knows and is then confirmed by the server's
+  `{ preview: true }` answer (which compares email addresses too); the
+  merge is never blocked, and the merge's own answer and audit row carry
+  the same facts.
 - **On the tickets**: the kept ticket's side column has a **Related** card
   (eyebrow, `GitMerge` lines: "Merged in: #1051, #1052", each a link in
   the same queue view, the subject as `data-tt`); a moved message's meta

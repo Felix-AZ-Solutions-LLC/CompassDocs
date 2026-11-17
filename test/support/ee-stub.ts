@@ -26,7 +26,7 @@ if (!require.cache[EE_STUB]) {
   ee.exports = {
     ee: () => edition,
     eePresent: () => edition.present,
-    featureEnabled: async (feature: string) => edition.features.includes(feature),
+    featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature),
   };
   require.cache[EE_STUB] = ee;
 

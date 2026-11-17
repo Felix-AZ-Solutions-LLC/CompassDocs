@@ -60,13 +60,15 @@ export async function POST(req: Request) {
     refundLoginAttempt(attempt, false);
     throw err;
   }
-  if (!result) {
+  if (!result || "refused" in result) {
     metric("login_failure");
+    const refused = result && "refused" in result ? result.refused : null;
     await audit({
       actor: { name: username },
       action: "auth.login_failed",
       targetType: "user",
       targetLabel: username,
+      ...(refused ? { details: { reason: refused } } : {}),
       ip,
     });
     if (attempt.lockEngaged) {
@@ -75,9 +77,25 @@ export async function POST(req: Request) {
         action: "auth.lockout",
         targetType: "user",
         targetLabel: username,
-        details: { minutes: 15 },
+        // 1.20.27: "account" when the identifier's own budget (whatever the address) began its delays.
+        details: attempt.identLockEngaged ? { scope: "account" } : { minutes: 15 },
         ip,
       });
+    }
+    // 1.20.27 (security review H1, M2): "SSO only" refuses every password
+    // but a break-glass account's with one answer, whatever was typed; an
+    // expired temporary password is named only to someone who typed it.
+    if (refused === "sso_only") {
+      return NextResponse.json(
+        { error: "This workspace signs in with single sign-on. Only its break-glass accounts can use a password.", code: "sso_only" },
+        { status: 403 }
+      );
+    }
+    if (refused === "temp_expired") {
+      return NextResponse.json(
+        { error: "This temporary password has expired. Ask an administrator to reset it again.", code: "temp_password_expired" },
+        { status: 401 }
+      );
     }
     return NextResponse.json({ error: "Invalid username or password." }, { status: 401 });
   }
@@ -123,6 +141,18 @@ export async function POST(req: Request) {
     action: "auth.login",
     ip,
   });
+  // 1.20.27 (security review H1): a password sign-in while "SSO only" is on
+  // is a break-glass account's, and every one is on the record.
+  if (result.breakGlass) {
+    await audit({
+      actor: { id: result.user.id, name: result.user.name || result.user.username, role: result.user.role },
+      action: "auth.break_glass_login",
+      targetType: "user",
+      targetId: result.user.id,
+      targetLabel: result.user.username,
+      ip,
+    });
+  }
 
   const res = NextResponse.json({
     ok: true,

@@ -108,3 +108,17 @@ export function csvCell(v: unknown): string {
   const safe = FORMULA_START.test(s) ? `'${s}` : s;
   return `"${safe.replace(/"/g, '""')}"`;
 }
+
+/**
+ * csvCell's twin for exports that quote a cell only when it must (1.20.27,
+ * security review app M3: the directory and helpdesk exports had weaker
+ * guards of their own). The same formula defence; quotes only when the cell
+ * holds a quote, a line break, a comma or (`also`) another delimiter. A
+ * defused cell keeps its leading apostrophe, unquoted when nothing else needs it.
+ */
+export function csvCellMinimal(v: unknown, also: string = ""): string {
+  const s = v == null ? "" : String(v);
+  const safe = FORMULA_START.test(s) ? `'${s}` : s;
+  const needs = /[",\r\n]/.test(safe) || (also !== "" && [...also].some((c) => safe.includes(c)));
+  return needs ? `"${safe.replace(/"/g, '""')}"` : safe;
+}

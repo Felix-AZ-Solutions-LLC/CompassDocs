@@ -1,4 +1,5 @@
-import { getCurrentUser } from "@/lib/auth";
+import { redirect } from "next/navigation";
+import { currentSession, getCurrentUser, pendingStepHref } from "@/lib/auth";
 import { AddinAuthClient } from "@/components/OutlookPane";
 
 // Sign-in target for the Office dialog (displayDialogAsync). The dialog shares
@@ -8,6 +9,9 @@ import { AddinAuthClient } from "@/components/OutlookPane";
 export const dynamic = "force-dynamic";
 
 export default async function AddinAuthPage() {
+  // 1.20.27: a session that owes a new password or two-step set-up does it here first, then comes back.
+  const pending = (await currentSession())?.pending;
+  if (pending) redirect(pendingStepHref(pending, "/addin/outlook/auth"));
   const user = await getCurrentUser();
   return <AddinAuthClient authed={Boolean(user)} />;
 }

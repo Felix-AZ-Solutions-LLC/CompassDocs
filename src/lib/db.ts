@@ -541,6 +541,10 @@ const SCHEMA_SQL = `
   ALTER TABLE sessions ADD COLUMN IF NOT EXISTS mfa_at timestamptz;
   ALTER TABLE sessions ADD COLUMN IF NOT EXISTS mfa_method text;
   ALTER TABLE sessions ADD COLUMN IF NOT EXISTS mfa_bypass_at timestamptz;
+  -- How the session was opened (1.20.27): 'password', 'password_totp',
+  -- 'setup'; NULL for single sign-on and every session opened before 1.20.27.
+  -- "Require two-step sign-in" applies to the password ones only.
+  ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auth_method text;
   -- One in-flight Duo step (1.20.5): the state and nonce sent to Duo, bound to
   -- the session that started it. Keyed on a hash of the state; a row is deleted
   -- when its callback arrives (single use) and goes with its session.
@@ -579,6 +583,10 @@ const SCHEMA_SQL = `
   ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_prefs jsonb NOT NULL DEFAULT '{}'::jsonb;
   -- ISO week ("2026-W31") of the user's last weekly digest, for per-timezone sends.
   ALTER TABLE users ADD COLUMN IF NOT EXISTS digest_last_week text NOT NULL DEFAULT '';
+  -- A temporary password (an administrator's reset or a new account's first
+  -- password) stops working at this time unless its owner has changed it
+  -- (1.20.27, security review M2: 72 hours). NULL: not a temporary password.
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS temp_password_expires_at timestamptz;
 
   -- Per-user notification inbox (the bell). Rows are cheap and pruned by the
   -- hourly maintenance sweep once read and older than 90 days.
@@ -612,6 +620,9 @@ const SCHEMA_SQL = `
   -- read+write (matches their historical behavior with the MCP connector).
   ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS
     scopes jsonb NOT NULL DEFAULT '["read","write"]'::jsonb;
+  -- When the token stops working (1.20.27, security review H4). NULL: no
+  -- expiry (every token made before 1.20.27, and an administrator's choice).
+  ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS expires_at timestamptz;
 
   -- OAuth 2.1 authorization server for the MCP connector ("Add custom
   -- connector" in Claude): dynamically registered clients, short-lived auth
@@ -641,6 +652,10 @@ const SCHEMA_SQL = `
     last_used_at timestamptz
   );
   CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user ON oauth_tokens(user_id);
+  -- When the grant behind a token pair was approved (1.20.27, security
+  -- review H4): carried across every refresh, so a connector grant has an
+  -- absolute lifetime (OAUTH_GRANT_MAX_DAYS) however often it refreshes.
+  ALTER TABLE oauth_tokens ADD COLUMN IF NOT EXISTS grant_started_at timestamptz NOT NULL DEFAULT now();
 
   -- Outgoing notification webhooks (Webex, Teams, Slack, generic JSON).
   CREATE TABLE IF NOT EXISTS webhooks (
@@ -3220,11 +3235,22 @@ async function bootstrapAuth(client: import("pg").PoolClient) {
   const password = process.env.COMPASSDOCS_ADMIN_PASSWORD;
   if (!password) return;
   const username = process.env.COMPASSDOCS_ADMIN_USER || "admin";
-  const { hash, salt } = hashPassword(password);
+  const { hash, salt } = await hashPassword(password);
+  // 1.20.27 (security review M7): the headless password goes through the
+  // password policy too. This runs only on a fresh install (no users yet),
+  // so an existing install's admin is never touched. A password the policy
+  // refuses does not stop the boot (a container that will not start helps
+  // nobody): the admin is created, must choose a new password at first
+  // sign-in, and the log says why.
+  const { passwordProblem } = await import("./password-policy");
+  const problem = passwordProblem(password);
+  if (problem) {
+    console.warn(`[setup] COMPASSDOCS_ADMIN_PASSWORD: ${problem} The admin account "${username}" was created and must set a new password at first sign-in.`);
+  }
   await client.query(
     `INSERT INTO users (username, email, name, password_hash, password_salt, role, must_change_password)
-     VALUES ($1,$2,$3,$4,$5,'admin',0)`,
-    [username, `${username}@compassdocs.local`, "Administrator", hash, salt]
+     VALUES ($1,$2,$3,$4,$5,'admin',$6)`,
+    [username, `${username}@compassdocs.local`, "Administrator", hash, salt, problem ? 1 : 0]
   );
 }
 
@@ -4770,6 +4796,18 @@ export async function runDbMaintenance(): Promise<{ sessions: number; oauthCodes
   await ready();
   const sessions = await pool().query("DELETE FROM sessions WHERE expires_at < now()");
   const codes = await pool().query("DELETE FROM oauth_codes WHERE expires_at < now()");
+  // 1.20.27 (security review H4, M1): connector grants past their absolute
+  // lifetime, client registrations nobody used within a day, and personal
+  // tokens 30 days past their expiry (kept that long so their owner sees
+  // "Expired" rather than a token that silently vanished).
+  await pool().query(`DELETE FROM oauth_tokens WHERE grant_started_at < now() - make_interval(days => ${OAUTH_GRANT_MAX_DAYS})`);
+  await pool().query(
+    `DELETE FROM oauth_clients c
+      WHERE c.created_at < now() - make_interval(hours => ${OAUTH_CLIENT_UNUSED_HOURS})
+        AND NOT EXISTS (SELECT 1 FROM oauth_tokens t WHERE t.client_id = c.client_id)
+        AND NOT EXISTS (SELECT 1 FROM oauth_codes o WHERE o.client_id = c.client_id)`
+  );
+  await pool().query("DELETE FROM api_tokens WHERE expires_at IS NOT NULL AND expires_at < now() - interval '30 days'");
   // Read notifications older than 90 days are noise nobody revisits.
   await pool().query(
     "DELETE FROM notifications WHERE read_at IS NOT NULL AND created_at < now() - interval '90 days'"
@@ -5419,8 +5457,9 @@ export async function createUser(input: {
 }): Promise<User> {
   // The check and the insert are one statement, as in setUserEmailByAdmin.
   const r = await q<{ id: number }>(
-    `INSERT INTO users (username, email, name, password_hash, password_salt, role, must_change_password)
-     SELECT $1::text, $2::text, $3::text, $4::text, $5::text, $6::text, $7::int
+    `INSERT INTO users (username, email, name, password_hash, password_salt, role, must_change_password, temp_password_expires_at)
+     SELECT $1::text, $2::text, $3::text, $4::text, $5::text, $6::text, $7::int,
+            CASE WHEN $7::int = 1 THEN now() + make_interval(hours => ${TEMP_PASSWORD_HOURS}) END
       WHERE $2::text = '' OR NOT EXISTS (
               SELECT 1 FROM users o
                WHERE lower(o.email) = lower($2::text) OR lower(o.username) = lower($2::text))
@@ -5484,6 +5523,14 @@ export async function setUserEmailByAdmin(id: number, email: string): Promise<bo
   return rows.length > 0;
 }
 
+/**
+ * How long a temporary password works (1.20.27, security review M2): an
+ * administrator's reset, or a new account's first password, must be changed
+ * within 72 hours or it stops signing in (lib/auth login refuses it; an
+ * administrator resets it again).
+ */
+export const TEMP_PASSWORD_HOURS = 72;
+
 export async function setUserPassword(
   id: number,
   hash: string,
@@ -5491,9 +5538,74 @@ export async function setUserPassword(
   mustChange = false
 ): Promise<void> {
   await q(
-    "UPDATE users SET password_hash = $1, password_salt = $2, must_change_password = $3 WHERE id = $4",
+    `UPDATE users SET password_hash = $1, password_salt = $2, must_change_password = $3,
+            temp_password_expires_at = CASE WHEN $3 = 1 THEN now() + make_interval(hours => ${TEMP_PASSWORD_HOURS}) END
+      WHERE id = $4`,
     [hash, salt, mustChange ? 1 : 0, id]
   );
+}
+
+/**
+ * Store a password again under the current hashing parameters after it
+ * verified (lib/password needsRehash; 1.20.27). Only when the row still
+ * holds the hash that was checked, so a change made meanwhile wins. Leaves
+ * must_change_password and the temporary expiry as they are.
+ */
+export async function rehashUserPassword(id: number, oldHash: string, hash: string, salt: string): Promise<void> {
+  await q("UPDATE users SET password_hash = $1, password_salt = $2 WHERE id = $3 AND password_hash = $4", [hash, salt, id, oldHash]);
+}
+
+/**
+ * Every bearer credential of the account (1.20.27, security review H4):
+ * its personal API tokens and its connector (OAuth) grants and codes. A
+ * password reset or change calls this, so a credential an attacker minted
+ * stops with the password. Answers how many of each went.
+ */
+export async function revokeUserBearerCredentials(userId: number): Promise<{ api_tokens: number; oauth_grants: number }> {
+  const t = await pool().query("DELETE FROM api_tokens WHERE user_id = $1", [userId]);
+  const g = await q<{ n: number }>(
+    "WITH d AS (DELETE FROM oauth_tokens WHERE user_id = $1 RETURNING client_id) SELECT count(DISTINCT client_id)::int AS n FROM d",
+    [userId]
+  );
+  await pool().query("DELETE FROM oauth_codes WHERE user_id = $1", [userId]);
+  return { api_tokens: t.rowCount ?? 0, oauth_grants: g[0]?.n ?? 0 };
+}
+
+/**
+ * "Remove local passwords" (1.20.27, security review H1): clear the
+ * password of every account in an SSO-only workspace except the
+ * break-glass accounts (`keep`), with their pending two-step secrets left
+ * alone. Each cleared account's bearer credentials go too, and every
+ * session of it not opened by single sign-on (sessions from before 1.20.27
+ * have no method recorded, so they go as well), except `exceptToken`'s,
+ * the administrator's own. Answers the accounts cleared.
+ */
+export async function removeLocalPasswords(keep: number[], exceptToken = ""): Promise<{ id: number; username: string }[]> {
+  const rows = await q<{ id: number; username: string }>(
+    `UPDATE users SET password_hash = NULL, password_salt = NULL, must_change_password = 0, temp_password_expires_at = NULL
+      WHERE password_hash IS NOT NULL AND status <> 'service' AND NOT (id = ANY($1::int[]))
+      RETURNING id, username`,
+    [keep]
+  );
+  const ids = rows.map((r) => r.id);
+  if (ids.length) {
+    await pool().query(
+      "DELETE FROM sessions WHERE user_id = ANY($1::int[]) AND auth_method IS DISTINCT FROM 'sso' AND token <> $2",
+      [ids, exceptToken ? sessionKey(exceptToken) : ""]
+    );
+    await pool().query("DELETE FROM api_tokens WHERE user_id = ANY($1::int[])", [ids]);
+    await pool().query("DELETE FROM oauth_tokens WHERE user_id = ANY($1::int[])", [ids]);
+  }
+  return rows;
+}
+
+/** How many accounts "Remove local passwords" would clear (the button's confirmation says so). */
+export async function countLocalPasswords(keep: number[]): Promise<number> {
+  const r = await q<{ n: number }>(
+    "SELECT count(*)::int AS n FROM users WHERE password_hash IS NOT NULL AND status <> 'service' AND NOT (id = ANY($1::int[]))",
+    [keep]
+  );
+  return r[0]?.n ?? 0;
 }
 
 export async function markLogin(id: number): Promise<void> {
@@ -5583,9 +5695,20 @@ export interface ApiToken {
   scopes: string[];
   created_at: string;
   last_used_at: string | null;
+  /** When it stops working (1.20.27); null: no expiry. */
+  expires_at: string | null;
 }
 
 export const API_TOKEN_SCOPES = ["read", "write"] as const;
+
+/**
+ * How long a new personal token lasts (1.20.27, security review H4): one of
+ * these numbers of days, 90 by default. `null` (no expiry) is for
+ * administrators only (account/tokens route); tokens made before 1.20.27
+ * keep working and show "No expiry".
+ */
+export const API_TOKEN_DAYS = [30, 90, 365] as const;
+export const API_TOKEN_DEFAULT_DAYS = 90;
 
 function hashApiToken(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
@@ -5595,16 +5718,19 @@ function hashApiToken(raw: string): string {
 export async function createApiToken(
   userId: number,
   name: string,
-  scopes: string[] = ["read", "write"]
+  scopes: string[] = ["read", "write"],
+  /** Days until it expires (1.20.27); null: no expiry. */
+  days: number | null = API_TOKEN_DEFAULT_DAYS
 ): Promise<{ token: string; record: ApiToken }> {
   const clean = [...new Set(scopes.filter((s) => (API_TOKEN_SCOPES as readonly string[]).includes(s)))];
   const finalScopes = clean.length ? clean : ["read"];
   const raw = "cdk_" + randomBytes(24).toString("base64url");
   const prefix = raw.slice(0, 12) + "…";
-  const r = await q<{ id: number; created_at: string }>(
-    `INSERT INTO api_tokens (user_id, name, token_hash, prefix, scopes)
-     VALUES ($1,$2,$3,$4,$5) RETURNING id, created_at`,
-    [userId, name.trim().slice(0, 60) || "token", hashApiToken(raw), prefix, JSON.stringify(finalScopes)]
+  const r = await q<{ id: number; created_at: string; expires_at: string | null }>(
+    `INSERT INTO api_tokens (user_id, name, token_hash, prefix, scopes, expires_at)
+     VALUES ($1,$2,$3,$4,$5, CASE WHEN $6::int IS NULL THEN NULL ELSE now() + make_interval(days => $6::int) END)
+     RETURNING id, created_at, expires_at`,
+    [userId, name.trim().slice(0, 60) || "token", hashApiToken(raw), prefix, JSON.stringify(finalScopes), days]
   );
   return {
     token: raw,
@@ -5615,16 +5741,61 @@ export async function createApiToken(
       scopes: finalScopes,
       created_at: r[0].created_at,
       last_used_at: null,
+      expires_at: r[0].expires_at,
     },
   };
 }
 
 export async function listApiTokens(userId: number): Promise<ApiToken[]> {
   return q(
-    `SELECT id, name, prefix, scopes, created_at, last_used_at FROM api_tokens
+    `SELECT id, name, prefix, scopes, created_at, last_used_at, expires_at FROM api_tokens
      WHERE user_id = $1 ORDER BY created_at DESC`,
     [userId]
   );
+}
+
+/** Every account's personal tokens and connector grants (1.20.27: Settings → Sign-in security). */
+export interface CredentialRow {
+  kind: "token" | "connector";
+  /** api_tokens.id for a token; the client_id for a connector grant. */
+  id: string;
+  user_id: number;
+  username: string;
+  user_name: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+}
+
+export async function listAllBearerCredentials(): Promise<CredentialRow[]> {
+  const tokens = await q<CredentialRow>(
+    `SELECT 'token' AS kind, t.id::text AS id, t.user_id, u.username, u.name AS user_name, t.name, t.prefix, t.scopes,
+            t.created_at, t.last_used_at, t.expires_at
+       FROM api_tokens t JOIN users u ON u.id = t.user_id
+      ORDER BY t.created_at DESC
+      LIMIT 2000`
+  );
+  const grants = await q<CredentialRow>(
+    `SELECT 'connector' AS kind, t.client_id AS id, t.user_id, u.username, u.name AS user_name, c.name, '' AS prefix,
+            '["read","write"]'::jsonb AS scopes, min(t.grant_started_at) AS created_at, max(t.last_used_at) AS last_used_at,
+            min(t.grant_started_at) + make_interval(days => ${OAUTH_GRANT_MAX_DAYS}) AS expires_at
+       FROM oauth_tokens t JOIN users u ON u.id = t.user_id JOIN oauth_clients c ON c.client_id = t.client_id
+      GROUP BY t.client_id, t.user_id, u.username, u.name, c.name
+      ORDER BY min(t.grant_started_at) DESC
+      LIMIT 2000`
+  );
+  return [...tokens, ...grants].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+}
+
+/** An administrator revokes any account's token (1.20.27). Answers the token's owner and name, or null. */
+export async function adminDeleteApiToken(id: number): Promise<{ user_id: number; username: string; name: string } | null> {
+  const r = await q<{ user_id: number; name: string }>("DELETE FROM api_tokens WHERE id = $1 RETURNING user_id, name", [id]);
+  if (!r[0]) return null;
+  const u = await q<{ username: string }>("SELECT username FROM users WHERE id = $1", [r[0].user_id]);
+  return { user_id: r[0].user_id, username: u[0]?.username ?? "", name: r[0].name };
 }
 
 export async function deleteApiToken(userId: number, id: number): Promise<boolean> {
@@ -5646,7 +5817,7 @@ export async function getUserByApiToken(
       .map((c) => "u." + c.trim())
       .join(", ")}, t.id AS token_id, t.scopes AS token_scopes
      FROM api_tokens t JOIN users u ON u.id = t.user_id
-     WHERE t.token_hash = $1 AND u.status = 'active'`,
+     WHERE t.token_hash = $1 AND u.status = 'active' AND (t.expires_at IS NULL OR t.expires_at > now())`,
     [hashApiToken(raw)]
   );
   const hit = rows[0];
@@ -5661,6 +5832,14 @@ export async function getUserByApiToken(
 
 const ACCESS_TTL_MS = 60 * 60 * 1000; // 1h — clients refresh silently
 const CODE_TTL_MS = 10 * 60 * 1000;
+/**
+ * A connector grant's absolute lifetime (1.20.27, security review H4): its
+ * refresh token rotates on every use, but the grant it belongs to ends this
+ * many days after it was approved, and the person approves again.
+ */
+export const OAUTH_GRANT_MAX_DAYS = 90;
+/** An unused client registration is forgotten after this long (runDbMaintenance, 1.20.27). */
+export const OAUTH_CLIENT_UNUSED_HOURS = 24;
 
 export interface OAuthClient {
   client_id: string;
@@ -5726,35 +5905,50 @@ export async function consumeOAuthCode(code: string): Promise<
 
 export async function createOAuthTokens(
   clientId: string,
-  userId: number
+  userId: number,
+  /** When the grant was approved (a refresh carries it over); now for a new grant. */
+  grantStartedAt?: string | Date
 ): Promise<{ accessToken: string; refreshToken: string; expiresIn: number }> {
   const access = "cdo_" + randomBytes(24).toString("base64url");
   const refresh = "cdr_" + randomBytes(24).toString("base64url");
   await q(
-    `INSERT INTO oauth_tokens (client_id, user_id, access_hash, refresh_hash, access_expires_at)
-     VALUES ($1,$2,$3,$4,$5)`,
+    `INSERT INTO oauth_tokens (client_id, user_id, access_hash, refresh_hash, access_expires_at, grant_started_at)
+     VALUES ($1,$2,$3,$4,$5, COALESCE($6::timestamptz, now()))`,
     [
       clientId,
       userId,
       hashApiToken(access),
       hashApiToken(refresh),
       new Date(Date.now() + ACCESS_TTL_MS).toISOString(),
+      grantStartedAt ? new Date(grantStartedAt).toISOString() : null,
     ]
   );
   return { accessToken: access, refreshToken: refresh, expiresIn: ACCESS_TTL_MS / 1000 };
 }
 
-/** Refresh-token rotation: the old pair dies, a fresh pair is issued. */
+/**
+ * Refresh-token rotation: the old pair dies, a fresh pair is issued.
+ *
+ * 1.20.27: `clientId`, when the request names one, must be the token's
+ * own, checked inside the DELETE (security review L4): a request with
+ * another client's id changes nothing and the real client's token keeps
+ * working. A grant past its absolute lifetime (OAUTH_GRANT_MAX_DAYS) is
+ * deleted and refused, and so is one whose account is no longer active.
+ */
 export async function rotateOAuthTokens(
-  refreshToken: string
+  refreshToken: string,
+  clientId?: string | null
 ): Promise<{ accessToken: string; refreshToken: string; expiresIn: number; clientId: string } | undefined> {
-  const rows = await q<{ client_id: string; user_id: number }>(
-    "DELETE FROM oauth_tokens WHERE refresh_hash = $1 RETURNING client_id, user_id",
-    [hashApiToken(refreshToken)]
+  const rows = await q<{ client_id: string; user_id: number; grant_started_at: string; expired: boolean; active: boolean }>(
+    `DELETE FROM oauth_tokens t WHERE t.refresh_hash = $1 AND ($2::text IS NULL OR t.client_id = $2::text)
+     RETURNING t.client_id, t.user_id, t.grant_started_at,
+               t.grant_started_at < now() - make_interval(days => ${OAUTH_GRANT_MAX_DAYS}) AS expired,
+               EXISTS (SELECT 1 FROM users u WHERE u.id = t.user_id AND u.status = 'active') AS active`,
+    [hashApiToken(refreshToken), clientId || null]
   );
   const r = rows[0];
-  if (!r) return undefined;
-  const fresh = await createOAuthTokens(r.client_id, r.user_id);
+  if (!r || r.expired || !r.active) return undefined;
+  const fresh = await createOAuthTokens(r.client_id, r.user_id, r.grant_started_at);
   return { ...fresh, clientId: r.client_id };
 }
 
@@ -5765,7 +5959,8 @@ export async function getUserByOAuthToken(raw: string): Promise<User | undefined
     `SELECT ${USER_COLUMNS.split(",").map((c) => "u." + c.trim()).join(", ")},
             t.id AS token_id, t.access_expires_at
      FROM oauth_tokens t JOIN users u ON u.id = t.user_id
-     WHERE t.access_hash = $1 AND u.status = 'active'`,
+     WHERE t.access_hash = $1 AND u.status = 'active'
+       AND t.grant_started_at > now() - make_interval(days => ${OAUTH_GRANT_MAX_DAYS})`,
     [hashApiToken(raw)]
   );
   const hit = rows[0];
@@ -5785,6 +5980,12 @@ export async function listOAuthGrants(
      WHERE t.user_id = $1 GROUP BY t.client_id, c.name ORDER BY min(t.created_at) DESC`,
     [userId]
   );
+}
+
+/** How many clients registered in the last hour (1.20.27: registration is limited in total as well as per address). */
+export async function countRecentOAuthClients(): Promise<number> {
+  const r = await q<{ n: number }>("SELECT count(*)::int AS n FROM oauth_clients WHERE created_at > now() - interval '1 hour'");
+  return r[0]?.n ?? 0;
 }
 
 export async function revokeOAuthGrant(userId: number, clientId: string): Promise<boolean> {
@@ -16218,19 +16419,24 @@ function sessionKey(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+/** How a session was opened (1.20.27, sessions.auth_method). Single sign-on is "sso"; null for sessions from before 1.20.27. */
+export type SessionAuthMethod = "password" | "password_totp" | "setup" | "sso";
+
 export async function createSession(
   token: string,
   userId: number,
   expiresAt: string,
   ip?: string | null,
-  userAgent?: string | null
+  userAgent?: string | null,
+  authMethod?: SessionAuthMethod | null
 ): Promise<void> {
-  await q("INSERT INTO sessions (token, user_id, expires_at, ip, user_agent) VALUES ($1,$2,$3,$4,$5)", [
+  await q("INSERT INTO sessions (token, user_id, expires_at, ip, user_agent, auth_method) VALUES ($1,$2,$3,$4,$5,$6)", [
     sessionKey(token),
     userId,
     expiresAt,
     ip || null,
     (userAgent || "").slice(0, 300) || null,
+    authMethod ?? null,
   ]);
 }
 
@@ -16377,6 +16583,10 @@ export interface SessionFacts {
   mfa_at: string | null;
   mfa_method: string | null;
   mfa_bypass_at: string | null;
+  /** When the session was opened (1.20.27: the absolute lifetime counts from here). */
+  session_created_at: string;
+  /** sessions.auth_method (1.20.27). */
+  session_auth_method: string | null;
 }
 
 export async function getSessionUser(
@@ -16387,7 +16597,8 @@ export async function getSessionUser(
     .join(", ");
   return (
     await q<User & SessionFacts>(
-      `SELECT ${cols}, s.expires_at, s.mfa_at, s.mfa_method, s.mfa_bypass_at
+      `SELECT ${cols}, s.expires_at, s.mfa_at, s.mfa_method, s.mfa_bypass_at,
+              s.created_at AS session_created_at, s.auth_method AS session_auth_method
        FROM sessions s JOIN users u ON u.id = s.user_id
        WHERE s.token = $1 AND s.expires_at > now() AND u.status = 'active'`,
       [sessionKey(token)]

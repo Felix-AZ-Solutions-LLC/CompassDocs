@@ -1,5 +1,7 @@
 import {
   scimGuard,
+  scimLapsed,
+  SCIM_LAPSED_DETAIL,
   scimJson,
   scimError,
   toScimUser,
@@ -59,6 +61,8 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const denied = await scimGuard(req);
   if (denied) return denied;
+  // 1.20.27: a lapsed licence deactivates but never creates.
+  if (await scimLapsed()) return scimError(403, SCIM_LAPSED_DETAIL);
   const origin = requestOrigin(req);
 
   let payload: any;

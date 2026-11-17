@@ -7,8 +7,10 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { redirect } from "next/navigation";
 import { buttonClass } from "@/components/Button";
-import { getCurrentUser, owesDeskDuo } from "@/lib/auth";
+import { currentSession, owesDeskDuo, pendingStepHref } from "@/lib/auth";
 import { duoStepHref } from "@/lib/duo-policy";
+import { userHolds } from "@/lib/access";
+import { consentToken } from "@/lib/oauth-consent";
 import { hasDeskSideAccess } from "@/lib/helpdesk/access";
 import { getOAuthClient } from "@/lib/db";
 import { getAppSettings } from "@/lib/settings-store";
@@ -24,14 +26,14 @@ export default async function AuthorizePage({
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const params = await searchParams;
-  const user = await getCurrentUser();
-  if (!user) {
-    // Bounce through login and come straight back with the same query.
-    const qs = new URLSearchParams(
-      Object.entries(params).filter(([, v]) => v !== undefined) as [string, string][]
-    );
-    redirect(`/login?next=${encodeURIComponent(`/oauth/authorize?${qs}`)}`);
-  }
+  const here = `/oauth/authorize?${new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined) as [string, string][])}`;
+  const session = await currentSession();
+  // Bounce through login and come straight back with the same query.
+  if (!session) redirect(`/login?next=${encodeURIComponent(here)}`);
+  if (session.duo.signIn) redirect(duoStepHref(here));
+  // 1.20.27: a new password or two-step set-up first, then back here.
+  if (session.pending) redirect(pendingStepHref(session.pending, here));
+  const user = session.user;
 
   // 1.20.5: someone with desk-side access whose session owes the desk its
   // Duo approval gives it before approving an app (api/oauth/approve refuses
@@ -54,7 +56,15 @@ export default async function AuthorizePage({
         ? "Unsupported response type."
         : !params.code_challenge || (params.code_challenge_method || "S256") !== "S256"
           ? "This app didn't send a valid PKCE challenge."
-          : "";
+          : // 1.20.27 (security review H4): connecting an app takes the API-token permission.
+            !(await userHolds(user, "account.token_create", { legacyMin: "viewer" }))
+            ? "Your role doesn't allow connecting apps to CompassDocs. Ask an administrator."
+            : "";
+  // 1.20.27 (security review M1): the form carries a token bound to this
+  // session and to exactly this client, address and challenge.
+  const csrf = problem
+    ? ""
+    : consentToken(session.token, { client_id: client!.client_id, redirect_uri: redirectUri, code_challenge: params.code_challenge || "" });
 
   let redirectHost = "";
   try {
@@ -89,8 +99,8 @@ export default async function AuthorizePage({
               </h1>
               <p className="mt-2 text-sm text-slate-600">
                 It will act in CompassDocs as{" "}
-                <span className="font-semibold">{user!.name || user!.username}</span>{" "}
-                <span className="text-slate-500">({ROLE_LABEL[user!.role]})</span> — searching and
+                <span className="font-semibold">{user.name || user.username}</span>{" "}
+                <span className="text-slate-500">({ROLE_LABEL[user.role]})</span> — searching and
                 reading documents, and creating or editing them within your permissions and the
                 approval workflow.
               </p>
@@ -99,6 +109,7 @@ export default async function AuthorizePage({
                 access anytime under your name → API tokens.
               </p>
               <form method="POST" action="/api/oauth/approve" className="mt-4 space-y-2">
+                <input type="hidden" name="consent_token" value={csrf} />
                 {(["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "scope"] as const).map(
                   (k) =>
                     params[k] !== undefined ? (

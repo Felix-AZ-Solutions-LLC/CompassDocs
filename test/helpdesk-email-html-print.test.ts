@@ -82,7 +82,7 @@ const AUTH_REAL = path.join(__dirname, "..", "src", "lib", "auth.ts");
   virtual(EE_STUB, {
     ee: () => ({ present: true, features: ["helpdesk"] }),
     eePresent: () => true,
-    featureEnabled: async (feature: string) => licensed && feature === "helpdesk",
+    featureEnabled: async (feature: string) => licensed && feature === "helpdesk", featureEnforced: async (feature: string) => licensed && feature === "helpdesk",
   });
   // The Duo desk rule for the session of the request in hand: lib/auth reads the rule from duo-policy, and a session
   // with no rule switched on gets DUO_NOTHING_OWED. For a session in `owesDuo` that answer says the desk is owed.

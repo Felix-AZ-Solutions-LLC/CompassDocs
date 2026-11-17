@@ -4,13 +4,18 @@ import { eePresent } from "@/lib/ee";
 import { proxyManaged } from "@/lib/caddy";
 import { SetupForm } from "@/components/SetupForm";
 import { Brand } from "@/components/Brand";
+import { printSetupToken } from "@/lib/setup-token";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Set up workspace", robots: { index: false, follow: false } };
 
-export default async function SetupPage() {
+export default async function SetupPage({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
   // Once an admin exists, setup is done — send people to sign in.
   if (!(await needsSetup())) redirect("/login");
+  // 1.20.27 (security review M11): the token goes to the server log again,
+  // in case the start-up lines have scrolled away (at most once a minute).
+  printSetupToken("page");
+  const token = (await searchParams).token;
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-linear-to-br from-slate-100 to-compass-50 px-4 py-10">
@@ -23,7 +28,11 @@ export default async function SetupPage() {
           </p>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-surface p-6 shadow-xs">
-          <SetupForm enterprise={eePresent()} proxyManaged={proxyManaged()} />
+          <SetupForm
+            enterprise={eePresent()}
+            proxyManaged={proxyManaged()}
+            initialToken={typeof token === "string" ? token.slice(0, 200) : ""}
+          />
         </div>
         <p className="mt-4 text-center text-xs text-slate-500">
           You can add teammates and adjust settings later from the Admin console.

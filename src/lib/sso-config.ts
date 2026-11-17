@@ -52,7 +52,11 @@ export interface SsoConfig {
   defaultRole: Role;
   /** Optional comma-separated email-domain allowlist (empty = any). */
   allowedDomains: string[];
-  /** Hide the username/password form on the login page (break-glass: admins can still POST /api/auth/login). */
+  /**
+   * SSO only: the sign-in page offers single sign-on alone, and since
+   * 1.20.27 a password signs in only the break-glass accounts
+   * (lib/sign-in-security, lib/auth login), each use audited.
+   */
   ssoOnly: boolean;
   /** Which vendor's defaults to apply. Absent means "microsoft" (0.96). */
   vendor: SsoVendor;

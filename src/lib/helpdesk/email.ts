@@ -42,7 +42,6 @@ import { randomBytes } from "node:crypto";
 import nodemailer from "nodemailer";
 import { getSmtpConfig, smtpConfigured } from "../smtp-config";
 import { renderEmail } from "../email-templates";
-import { getAppSettings } from "../settings-store";
 import { getUserById } from "../db";
 import { logEvent } from "../log";
 import { hq, hqOne } from "./db-core";
@@ -145,26 +144,25 @@ export function isNoteNoticeMessageId(id: string): boolean {
 
 // --- Origin ----------------------------------------------------------------------
 
-let lastOrigin = "";
+/**
+ * Before 1.20.27 routes handed their request's origin here and it was
+ * remembered for later mail. Nothing is remembered any more (security
+ * review app M1); kept so an older caller still compiles.
+ */
+export function rememberOrigin(_origin: string | undefined | null): void {}
 
-/** Routes call this with the request's origin so later sweeps can still link (the custom domain wins when set). */
-export function rememberOrigin(origin: string | undefined | null): void {
-  if (origin && /^https?:\/\/[^/\s]+$/.test(origin)) lastOrigin = origin;
-}
-
-/** The links' origin: the one given, else the custom domain, else the last request's, else '' (relative). */
-export async function helpdeskOrigin(given?: string | null): Promise<string> {
-  if (given) {
-    rememberOrigin(given);
-    return given;
-  }
-  try {
-    const s = await getAppSettings();
-    if (s.custom_domain) return `https://${s.custom_domain}`;
-  } catch {
-    /* settings unreadable: fall through */
-  }
-  return lastOrigin;
+/**
+ * The links' origin: the workspace's configured address (lib/workspace-origin:
+ * the custom domain, else COMPASSDOCS_BASE_URL), else '' (relative links).
+ *
+ * 1.20.27 (security review app M1): `given` (a route's request origin,
+ * from Host / X-Forwarded-Host) is never used and never remembered. Mail
+ * that a stranger's request causes ("new ticket" to the agents) must not
+ * link to a host that stranger chose.
+ */
+export async function helpdeskOrigin(_given?: string | null): Promise<string> {
+  const { workspaceOrigin } = await import("../workspace-origin");
+  return (await workspaceOrigin()) ?? "";
 }
 
 /** Where each audience lands. */

@@ -17,6 +17,8 @@ const field = controlClass(false);
 interface TotpState {
   enabled: boolean;
   recovery_left: number;
+  /** 1.20.27: the workspace requires it of this account ("Require two-step sign-in"), so it cannot be turned off. */
+  required?: boolean;
 }
 
 export function SecurityPanel({
@@ -194,7 +196,14 @@ function TwoFactor({ initial }: { initial: TotpState }) {
         </div>
       )}
 
-      {totp.enabled && phase === "idle" && (
+      {totp.enabled && phase === "idle" && initial.required && (
+        <p className="mt-3 text-xs text-slate-500">
+          {totp.recovery_left} recovery code{totp.recovery_left === 1 ? "" : "s"} left. Your workspace requires two-step sign-in for your
+          account, so it stays on. If you lose your authenticator, an administrator can reset it.
+        </p>
+      )}
+
+      {totp.enabled && phase === "idle" && !initial.required && (
         <form onSubmit={disable} className="mt-3">
           <p className="text-xs text-slate-500">
             {totp.recovery_left} recovery code{totp.recovery_left === 1 ? "" : "s"} left.

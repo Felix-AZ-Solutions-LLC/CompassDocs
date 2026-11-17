@@ -68,7 +68,7 @@ const edition = { present: true, features: ["helpdesk"] as string[] };
   ee.exports = {
     ee: () => edition,
     eePresent: () => true,
-    featureEnabled: async (feature: string) => edition.features.includes(feature),
+    featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature),
   };
   require.cache[EE_STUB] = ee;
 
@@ -163,7 +163,7 @@ async function ticketDues(id: number): Promise<{ first_reply_due: string | null;
 
 before(async () => {
   await getSetting("__schema_bootstrap__");
-  const creds = hashPassword("Helpdesk!Cal123");
+  const creds = await hashPassword("Helpdesk!Cal123");
   const expires = new Date(Date.now() + 3_600_000).toISOString();
   for (const k of PEOPLE) {
     const r = await fixtureQuery(

@@ -10,7 +10,9 @@ import {
   disableTotp,
   countUserAttestations,
   setUserEmailByAdmin,
+  revokeUserBearerCredentials,
 } from "@/lib/db";
+import { clearIdentifierThrottle } from "@/lib/login-guard";
 import { countGlobalUserAdmins } from "@/lib/authz";
 import { hashPassword } from "@/lib/password";
 import { apiGuard } from "@/lib/api-auth";
@@ -44,18 +46,26 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     if (pwProblem) {
       return NextResponse.json({ error: pwProblem }, { status: 400 });
     }
-    const { hash, salt } = hashPassword(body.resetPassword);
+    const { hash, salt } = await hashPassword(body.resetPassword);
     await setUserPassword(target.id, hash, salt, true);
     await deleteUserSessions(target.id); // force re-login with the new password
+    // 1.20.27 (security review H4): and every bearer credential the old
+    // password could have minted. The new password is temporary: it must be
+    // changed at first sign-in, within 72 hours (db TEMP_PASSWORD_HOURS).
+    const revoked = await revokeUserBearerCredentials(target.id);
+    // The owner can sign in at once, whatever an attacker did to the name's sign-in budget (lib/login-guard).
+    clearIdentifierThrottle(target.username);
+    if (target.email) clearIdentifierThrottle(target.email);
     await audit({
       actor: actorFrom(admin),
       action: "user.reset_password",
       targetType: "user",
       targetId: target.id,
       targetLabel: target.username,
+      details: revoked,
       ip: ipFrom(req),
     });
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, revoked });
   }
 
   // 2FA reset — the admin escape hatch for a user who lost their authenticator

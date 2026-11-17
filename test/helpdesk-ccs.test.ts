@@ -66,7 +66,7 @@ const EE_REAL = path.join(__dirname, "..", "src", "lib", "ee");
   const ee = new Module(EE_STUB);
   ee.filename = EE_STUB;
   ee.loaded = true;
-  ee.exports = { ee: () => ({ present: true, features: ["helpdesk"] }), eePresent: () => true, featureEnabled: async (f: string) => f === "helpdesk" };
+  ee.exports = { ee: () => ({ present: true, features: ["helpdesk"] }), eePresent: () => true, featureEnabled: async (f: string) => f === "helpdesk", featureEnforced: async (f: string) => f === "helpdesk" };
   require.cache[EE_STUB] = ee;
   const loader = Module as unknown as {
     _resolveFilename: (request: string, parent: { filename?: string } | null, ...rest: unknown[]) => string;
@@ -187,7 +187,7 @@ before(async () => {
   // This file sends helpdesk mail through the workspace's mail configuration (test/support/mail-lock).
   mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
-  const creds = hashPassword(PASSWORD);
+  const creds = await hashPassword(PASSWORD);
   const names = { req: "Daniel Okafor", agent: "Ana Kowalski", agent2: "Sam Lee", colleague: "Priya Natarajan", stranger: "Tom Becker", outsider_agent: "Grace Lin" };
   const expires = new Date(Date.now() + 3_600_000).toISOString();
   for (const [k, name] of Object.entries(names) as [keyof typeof U, string][]) {

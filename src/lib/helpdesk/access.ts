@@ -23,6 +23,7 @@
 
 import "server-only";
 import { NextResponse } from "next/server";
+import { readTextCapped } from "../body-reader";
 import { cache } from "react";
 import { apiSession, crossOriginRejection, mfaRequired } from "../api-auth";
 import { owesDeskDuo } from "../auth";
@@ -349,8 +350,9 @@ export async function helpdeskCapabilities(user: U): Promise<{
 
 /** JSON body helper with a size limit (bytes). Null on bad JSON or too big. */
 export async function readJson<T = Record<string, unknown>>(req: Request, maxBytes = 256 * 1024): Promise<T | null> {
-  const text = await req.text().catch(() => "");
-  if (text.length > maxBytes) return null;
+  // 1.20.27 (security review app L5): read no further than the limit.
+  const text = await readTextCapped(req, maxBytes).catch(() => null);
+  if (text === null) return null;
   try {
     const v = JSON.parse(text || "{}");
     return v && typeof v === "object" && !Array.isArray(v) ? (v as T) : null;

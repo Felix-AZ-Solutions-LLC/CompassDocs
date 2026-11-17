@@ -40,7 +40,7 @@ const EE_REAL = path.join(__dirname, "..", "src", "lib", "ee");
   const ee = new Module(EE_STUB);
   ee.filename = EE_STUB;
   ee.loaded = true;
-  ee.exports = { ee: () => ({ present: true, features: ["helpdesk"] }), eePresent: () => true, featureEnabled: async (f: string) => f === "helpdesk" };
+  ee.exports = { ee: () => ({ present: true, features: ["helpdesk"] }), eePresent: () => true, featureEnabled: async (f: string) => f === "helpdesk", featureEnforced: async (f: string) => f === "helpdesk" };
   require.cache[EE_STUB] = ee;
   const loader = Module as unknown as { _resolveFilename: (r: string, p: { filename?: string } | null, ...rest: unknown[]) => string };
   const orig = loader._resolveFilename;

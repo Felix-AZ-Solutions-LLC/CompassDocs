@@ -2,7 +2,8 @@ import { cookies, headers } from "next/headers";
 import { requireSettingsSection, SESSION_COOKIE } from "@/lib/auth";
 import { getSsoConfig, ssoAuthority } from "@/lib/sso-config";
 import { getSamlConfig, samlConfigured, samlSpUrls } from "@/lib/saml-config";
-import { getSetting, listUsers, sessionSid } from "@/lib/db";
+import { countLocalPasswords, getSetting, listUsers, sessionSid } from "@/lib/db";
+import { breakGlassIds } from "@/lib/sign-in-security";
 import { duoView } from "@/lib/duo-view";
 import { getAppSettings } from "@/lib/settings-store";
 import { eePresent, featureEnabled } from "@/lib/ee";
@@ -40,6 +41,12 @@ export default async function SsoAdminPage() {
       scimAdminStatus(`${proto}://${host}/api/scim/v2`),
     ]);
 
+  // 1.20.27 (security review H1): the break-glass accounts SSO only still lets in with a password.
+  const breakGlass = await breakGlassIds();
+  const localPasswords = await countLocalPasswords(breakGlass);
+  const breakGlassUsers = people
+    .filter((u) => u.status === "active" || breakGlass.includes(u.id))
+    .map((u) => ({ id: u.id, label: u.name || u.username, sublabel: `${u.username} · ${u.role}${u.status === "active" ? "" : " · disabled"}` }));
   const origin = app.custom_domain ? `https://${app.custom_domain}` : `${proto}://${host}`;
   const sp = samlSpUrls(origin);
 
@@ -61,7 +68,10 @@ export default async function SsoAdminPage() {
           default_role: cfg.defaultRole,
           allowed_domains: cfg.allowedDomains.join(", "),
           sso_only: cfg.ssoOnly,
+          break_glass_user_ids: breakGlass,
+          local_password_count: localPasswords,
         }}
+        users={breakGlassUsers}
       />
       <SamlPanel
         initial={{

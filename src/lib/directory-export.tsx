@@ -13,6 +13,7 @@ import "server-only";
 
 import { Document, Image, Page, StyleSheet, Text, View, renderToBuffer } from "@react-pdf/renderer";
 import type { ExportPreset } from "./directory-export-config";
+import { csvCellMinimal } from "./csv";
 import type { DirectoryField, DirectoryPerson } from "./directory";
 import {
   assistantText,
@@ -733,11 +734,9 @@ export function renderDirectoryCsv(input: Omit<ExportInput, "logo" | "printedOn"
   const grouped = prepared.sections.some((s) => s.label !== null);
   const marked = prepared.markers.length > 0;
   const headed = prepared.headsColumn;
-  const cell = (v: string) => {
-    let s = String(v ?? "");
-    if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
-    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
+  // 1.20.27 (security review app M3): lib/csv csvCell, the one writer (it
+  // also defuses a formula after leading spaces and the full-width forms).
+  const cell = (v: string) => csvCellMinimal(v);
   const lines: string[] = [];
   lines.push(
     [...(grouped ? ["Group"] : []), ...prepared.columns.map((c) => c.label), ...(marked ? ["Markers"] : []), ...(headed ? ["Section head of"] : [])]

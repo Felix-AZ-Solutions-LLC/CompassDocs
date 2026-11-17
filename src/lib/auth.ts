@@ -12,10 +12,13 @@ import {
   markLogin,
   consumeRecoveryCode,
   recordTotpStep,
+  rehashUserPassword,
 } from "./db";
 import { verifyTotpStep } from "./totp";
 import { openSecret } from "./secretbox";
-import { verifyPassword, verifyNothing, newToken } from "./password";
+import { verifyPassword, verifyNothing, newToken, needsRehash, hashPassword } from "./password";
+import { signInSecurityFrom, twoStepCovers, type SignInSecurity } from "./sign-in-security";
+import type { PendingStep } from "./sign-in-security-shared";
 import { getSessionTimeoutMinutes, getSecureCookieMode, sessionTimeoutFrom } from "./settings-store";
 import { DUO_NOTHING_OWED, DUO_NO_STANDING, duoStepHref, duoSwitchedOn, isDeskPath, type DuoStanding, type DuoVerdict } from "./duo-policy";
 import { SESSION_TIMEOUT_MAX } from "./settings";
@@ -102,6 +105,36 @@ export interface CurrentSession {
   token: string;
   /** lib/duo-policy: `signIn` true means this session may not use CompassDocs yet, `desk` true that it may not use the desk yet. */
   duo: DuoVerdict;
+  /**
+   * 1.20.27: a step the session owes before it may use anything else: a new
+   * password (must_change_password, security review M2) or two-step
+   * sign-in set up ("Require two-step sign-in", H3). Null when nothing is.
+   */
+  pending: PendingStep | null;
+}
+
+/**
+ * The step a session owes (1.20.27), or null. A forced password change
+ * comes first. "Require two-step sign-in" covers sessions opened with a
+ * password only (single sign-on and Duo bring their own second factor; a
+ * session opened before 1.20.27 records no method and is asked at its next
+ * sign-in), and only accounts without an authenticator set up.
+ */
+async function pendingStep(
+  session: { id: number; role: Role; must_change_password: number; totp_enabled: number; session_auth_method: string | null },
+  sec: SignInSecurity
+): Promise<PendingStep | null> {
+  if (session.must_change_password === 1) return "password_change";
+  if (sec.twoStep === "off" || session.totp_enabled === 1) return null;
+  if (session.session_auth_method !== "password" && session.session_auth_method !== "setup") return null;
+  return (await twoStepCovers(sec.twoStep, session)) ? "two_step" : null;
+}
+
+/** Where a session that owes `step` is sent, coming back to `next` afterwards. */
+export function pendingStepHref(step: PendingStep, next: string): string {
+  const base = step === "password_change" ? "/account/password" : "/account/two-step";
+  const back = next && next !== "/" && !next.startsWith(base) ? `?next=${encodeURIComponent(next)}` : "";
+  return `${base}${back}`;
 }
 
 /**
@@ -122,21 +155,33 @@ export async function currentSession(): Promise<CurrentSession | null> {
   const session = await getSessionUser(token);
   if (!session) return null;
 
-  // One settings read serves the idle timeout and the Duo rules.
+  // One settings read serves the idle timeout, the absolute lifetime, the
+  // two-step rule and the Duo rules.
   const settings = await getAllSettings();
+  const sec = signInSecurityFrom(settings);
+  // 1.20.27 (security review M8): an absolute lifetime from the session's
+  // creation, whatever its activity (a polling desk tab never keeps one
+  // alive past it). The idle timeout below slides within it.
+  const created = new Date(session.session_created_at).getTime();
+  const lifetimeEnd = Number.isNaN(created) ? Infinity : created + sec.sessionMaxDays * 86_400_000;
+  if (Date.now() >= lifetimeEnd) {
+    await deleteSession(token);
+    return null;
+  }
   // Sliding idle timeout: push the expiry back to now + configured window.
   // Throttled so an active session updates the row at most ~once a minute.
-  const target = Date.now() + sessionTimeoutFrom(settings) * 60_000;
+  const target = Math.min(Date.now() + sessionTimeoutFrom(settings) * 60_000, lifetimeEnd);
   const current = new Date(session.expires_at).getTime();
   if (!Number.isNaN(current) && target - current > TOUCH_THROTTLE_MS) {
     await touchSession(token, new Date(target).toISOString());
   }
   const user = toSessionUser(session);
   user.newsletter_role = await newsletterLevel(user);
-  if (!duoSwitchedOn(settings)) return { user, token, duo: DUO_NOTHING_OWED };
+  const pending = await pendingStep(session, sec);
+  if (!duoSwitchedOn(settings)) return { user, token, duo: DUO_NOTHING_OWED, pending };
   const standing = await (await import("./duo-gate")).duoSessionStanding(settings, session, token);
   duoStandings.set(user, standing);
-  return { user, token, duo: standing.verdict };
+  return { user, token, duo: standing.verdict, pending };
 }
 
 // What the Duo check says about the session a SessionUser came from, kept
@@ -178,7 +223,10 @@ export function owesDeskDuo(user: object): boolean {
  */
 export async function getCurrentUser(): Promise<SessionUser | null> {
   const s = await currentSession();
-  return s && !s.duo.signIn ? s.user : null;
+  // 1.20.27: so is one that owes a new password or two-step set-up
+  // (CurrentSession.pending), for the same reason: the step's own page and
+  // routes read currentSession, everything else sees no one signed in.
+  return s && !s.duo.signIn && !s.pending ? s.user : null;
 }
 
 /**
@@ -226,7 +274,11 @@ export async function currentPagePath(): Promise<string> {
  * with the page they wanted as `?next=`, so a link to a document that was
  * opened signed-out lands on the document after sign-in, not the dashboard.
  */
-export async function requireUser(scope: "app" | "desk" = "app"): Promise<SessionUser> {
+export async function requireUser(
+  scope: "app" | "desk" = "app",
+  /** 1.20.27: the step's own page passes the step it serves, so it can render while that step is owed. */
+  opts: { allowPending?: PendingStep } = {}
+): Promise<SessionUser> {
   const s = await currentSession();
   if (!s) redirect(loginHref(await currentPagePath()));
   // 1.20.5: signed in, but the Duo check is still owed (lib/duo-policy): for
@@ -239,6 +291,8 @@ export async function requireUser(scope: "app" | "desk" = "app"): Promise<Sessio
   if (s.duo.signIn || (s.duo.desk && (scope === "desk" || isDeskPath(await currentPagePath())))) {
     redirect(duoStepHref(await currentPagePath(), { desk: scope === "desk" }));
   }
+  // 1.20.27: a new password or two-step set-up is owed: its page first, and back here after.
+  if (s.pending && s.pending !== opts.allowPending) redirect(pendingStepHref(s.pending, await currentPagePath()));
   return s.user;
 }
 
@@ -379,17 +433,55 @@ export async function resolveSignInAccount(identifier: string): Promise<SignInRe
  * spends the same scrypt as a real one, so timing says nothing about the
  * account.
  */
+export type LoginRefusal = "sso_only" | "temp_expired";
+
 export async function login(
   username: string,
   password: string,
   totpCode?: string,
   device?: { ip?: string | null; userAgent?: string | null }
-): Promise<{ token: string; user: User } | { totp_required: true } | null> {
+): Promise<{ token: string; user: User; breakGlass?: boolean } | { totp_required: true } | { refused: LoginRefusal } | null> {
   const record = await resolveSignInAccount(username);
-  if (!record || record.status !== "active" || !record.password_hash || !record.password_salt) {
-    return verifyNothing(password) || null;
+  // 1.20.27 (security review H1): "SSO only" is enforced here, not only by
+  // hiding the form. With it on, a password signs in only an account on the
+  // break-glass list (Settings → Single sign-on); every other attempt, an
+  // unknown name or a wrong password included, gets the same refusal after
+  // the same scrypt, so the answer says nothing about the account or the
+  // password.
+  const { signInSetup } = await import("./sign-in-routing");
+  const ssoOnly = (await signInSetup()).ssoOnly;
+  let breakGlass = false;
+  if (ssoOnly) {
+    const { breakGlassIds } = await import("./sign-in-security");
+    breakGlass = !!record && (await breakGlassIds()).includes(record.id);
+    if (!breakGlass) {
+      await verifyNothing(password);
+      return { refused: "sso_only" };
+    }
   }
-  if (!verifyPassword(password, record.password_hash, record.password_salt)) return null;
+  if (!record || record.status !== "active" || !record.password_hash || !record.password_salt) {
+    return (await verifyNothing(password)) || (ssoOnly ? { refused: "sso_only" } : null);
+  }
+  if (!(await verifyPassword(password, record.password_hash, record.password_salt))) {
+    return ssoOnly ? { refused: "sso_only" } : null;
+  }
+  // 1.20.27 (security review M2): a temporary password stops working 72
+  // hours after it was set (db TEMP_PASSWORD_HOURS). Said only to someone
+  // who typed it correctly.
+  const tempExpires = (record as { temp_password_expires_at?: string | Date | null }).temp_password_expires_at;
+  if (record.must_change_password === 1 && tempExpires && new Date(tempExpires).getTime() < Date.now()) {
+    return { refused: "temp_expired" };
+  }
+  // 1.20.27 (security review M7): a hash made with older scrypt parameters
+  // is stored again under the current ones, now that the password is known.
+  if (needsRehash(record.password_hash)) {
+    try {
+      const fresh = await hashPassword(password);
+      await rehashUserPassword(record.id, record.password_hash, fresh.hash, fresh.salt);
+    } catch (e) {
+      console.error("[auth] could not rehash a password:", e);
+    }
+  }
 
   if (record.totp_enabled === 1 && record.totp_secret) {
     const code = (totpCode || "").trim();
@@ -415,9 +507,10 @@ export async function login(
   const token = newToken();
   const timeoutMs = (await getSessionTimeoutMinutes()) * 60_000;
   const expires = new Date(Date.now() + timeoutMs).toISOString();
-  await createSession(token, record.id, expires, device?.ip, device?.userAgent);
+  const method = record.totp_enabled === 1 && record.totp_secret ? "password_totp" : "password";
+  await createSession(token, record.id, expires, device?.ip, device?.userAgent, method);
   await markLogin(record.id);
-  return { token, user: record };
+  return { token, user: record, ...(breakGlass ? { breakGlass: true } : {}) };
 }
 
 export async function logout(token: string | undefined): Promise<void> {

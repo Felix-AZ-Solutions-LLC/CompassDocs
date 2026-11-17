@@ -22,7 +22,8 @@ import { ChatSettingsError, chatSettingsView, saveChatSettings } from "@/lib/hel
 export const dynamic = "force-dynamic";
 
 async function origin(req: Request): Promise<string> {
-  return (await helpdeskOrigin(await publicOrigin(req).catch(() => ""))) || "";
+  // 1.20.27: the configured address, else (for this administrator's own view only, never remembered) the request's.
+  return (await helpdeskOrigin()) || (await publicOrigin(req).catch(() => ""));
 }
 
 export async function GET(req: Request) {

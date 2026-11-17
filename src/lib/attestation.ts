@@ -94,8 +94,11 @@ export async function verifyAttestation(
       };
     }
     const password = typeof input.password === "string" ? input.password : "";
-    if (!verifyPassword(password, record.password_hash, record.password_salt)) {
-      const lockEngaged = recordPairFailure(user.username, ip);
+    // 1.20.27: the check is asynchronous now (lib/password), so the attempt
+    // is counted before it and given back when it passes: a burst still
+    // cannot all pass the throttle.
+    const lockEngaged = recordPairFailure(user.username, ip);
+    if (!(await verifyPassword(password, record.password_hash, record.password_salt))) {
       return {
         ok: false,
         status: 409,

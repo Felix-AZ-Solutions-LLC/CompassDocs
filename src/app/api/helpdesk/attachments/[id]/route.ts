@@ -47,7 +47,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(att.name)}`,
     "X-Content-Type-Options": "nosniff",
     "Content-Security-Policy": "default-src 'none'; sandbox",
-    "Cache-Control": "private, max-age=3600",
+    // 1.20.27 (security review app L3): client files never stay in a shared workstation's cache after sign-out.
+    "Cache-Control": "private, no-store",
     "Accept-Ranges": "bytes",
   };
   const m = /^bytes=(\d*)-(\d*)$/.exec((req.headers.get("range") ?? "").trim());

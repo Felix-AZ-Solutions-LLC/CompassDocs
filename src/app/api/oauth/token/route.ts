@@ -56,11 +56,12 @@ export async function POST(req: Request) {
   }
 
   if (grant === "refresh_token") {
-    const rotated = await rotateOAuthTokens(params.get("refresh_token") || "");
-    if (!rotated) return err("invalid_grant", "Unknown or revoked refresh token.");
-    if (params.get("client_id") && params.get("client_id") !== rotated.clientId) {
-      return err("invalid_grant", "client_id does not match the token.");
-    }
+    // 1.20.27 (security review L4): the client_id is checked inside the
+    // rotation, before anything is deleted, so a mismatched request leaves
+    // the real client's refresh token working. A grant past its 90-day
+    // lifetime is refused here too (db OAUTH_GRANT_MAX_DAYS).
+    const rotated = await rotateOAuthTokens(params.get("refresh_token") || "", params.get("client_id"));
+    if (!rotated) return err("invalid_grant", "Unknown, expired or revoked refresh token, or another client's.");
     return corsJson({
       access_token: rotated.accessToken,
       token_type: "Bearer",

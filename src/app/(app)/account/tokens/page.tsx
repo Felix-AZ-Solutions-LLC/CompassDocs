@@ -1,6 +1,7 @@
 import { AccountPage } from "@/components/AccountPage";
 import { requireUser } from "@/lib/auth";
-import { listApiTokens, listOAuthGrants } from "@/lib/db";
+import { API_TOKEN_DAYS, API_TOKEN_DEFAULT_DAYS, listApiTokens, listOAuthGrants } from "@/lib/db";
+import { mayMintForever } from "@/lib/sign-in-security";
 import { ROLE_LABEL } from "@/lib/types";
 import { ApiTokens } from "@/components/ApiTokens";
 
@@ -9,9 +10,10 @@ export const metadata = { title: "API tokens" };
 
 export default async function ApiTokensPage() {
   const user = await requireUser();
-  const [tokens, connections] = await Promise.all([
+  const [tokens, connections, neverAllowed] = await Promise.all([
     listApiTokens(user.id),
     listOAuthGrants(user.id),
+    mayMintForever(user),
   ]);
 
   return (
@@ -23,7 +25,11 @@ export default async function ApiTokensPage() {
       }
     >
       <div className="rounded-xl border border-slate-200 bg-surface p-5 shadow-xs">
-        <ApiTokens initial={tokens} initialConnections={connections} />
+        <ApiTokens
+          initial={tokens}
+          initialConnections={connections}
+          expiry={{ days: [...API_TOKEN_DAYS], default_days: API_TOKEN_DEFAULT_DAYS, never_allowed: neverAllowed }}
+        />
       </div>
     </AccountPage>
   );

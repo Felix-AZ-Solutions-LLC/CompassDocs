@@ -47,7 +47,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "That username is already taken." }, { status: 409 });
   }
 
-  const { hash, salt } = hashPassword(password);
+  const { hash, salt } = await hashPassword(password);
   let user;
   try {
     user = await createUser({

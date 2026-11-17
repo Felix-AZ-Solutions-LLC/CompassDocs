@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { csvCell } from "@/lib/csv";
 import { sectionApiGuard } from "@/lib/api-auth";
 import { featureEnabled } from "@/lib/ee";
 import {
@@ -28,7 +29,8 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   if (url.searchParams.get("format") === "csv") {
     const rows = await trainingOrgRows();
-    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    // 1.20.27 (security review app M3): lib/csv csvCell also defuses spreadsheet formulas.
+    const esc = csvCell;
     const lines = [
       "training,name,username,email,assigned_at,due_at,completed_at,confirmed_version,quiz_score,quiz_total,prior_completions,signed_name,content_sha256,status",
     ];

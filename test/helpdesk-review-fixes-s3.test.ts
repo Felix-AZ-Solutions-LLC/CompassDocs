@@ -59,7 +59,7 @@ const edition = { present: true, features: ["helpdesk"] as string[] };
   ee.exports = {
     ee: () => edition,
     eePresent: () => true,
-    featureEnabled: async (feature: string) => edition.features.includes(feature),
+    featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature),
   };
   require.cache[EE_STUB] = ee;
 
@@ -599,15 +599,23 @@ describe("digests", () => {
     assert.equal(await queued(id), 0, "cleaned up");
   });
 
-  test("#41 digest links are absolute without a custom domain (the remembered origin)", async () => {
+  test("#41 digest links are absolute without a custom domain (1.20.27: the configured COMPASSDOCS_BASE_URL, never a remembered request origin)", async () => {
     const id = P.lead2.id;
-    hdEmail.rememberOrigin("https://desk.example.test");
-    await policy.enqueueDigest(id, "mention", "digest_hourly", { title: `${STAMP} Linked`, link: "/desk/tickets/1047" });
-    const box: Sent[] = [];
-    await policy.sendNotificationDigests({ now: new Date("2026-11-04T06:10:00Z"), mailer: capture(box), userIds: [id] });
-    assert.equal(box.length, 1);
-    assert.match(box[0].text, /https?:\/\/[^\s]+\/desk\/tickets\/1047/);
-    assert.match(box[0].text, /Change how often these arrive: https?:\/\//);
+    const was = process.env.COMPASSDOCS_BASE_URL;
+    process.env.COMPASSDOCS_BASE_URL = "https://desk.example.test";
+    hdEmail.rememberOrigin("https://evil.example.test"); // remembers nothing since 1.20.27 (security review app M1)
+    try {
+      await policy.enqueueDigest(id, "mention", "digest_hourly", { title: `${STAMP} Linked`, link: "/desk/tickets/1047" });
+      const box: Sent[] = [];
+      await policy.sendNotificationDigests({ now: new Date("2026-11-04T06:10:00Z"), mailer: capture(box), userIds: [id] });
+      assert.equal(box.length, 1);
+      assert.match(box[0].text, /https?:\/\/[^\s]+\/desk\/tickets\/1047/);
+      assert.match(box[0].text, /Change how often these arrive: https?:\/\//);
+      assert.ok(!box[0].text.includes("evil.example.test"), "a request's origin is never remembered");
+    } finally {
+      if (was === undefined) delete process.env.COMPASSDOCS_BASE_URL;
+      else process.env.COMPASSDOCS_BASE_URL = was;
+    }
   });
 });
 

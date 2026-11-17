@@ -2,23 +2,38 @@
 // client) register itself before the authorize step. Public clients only:
 // no secret is issued, PKCE is mandatory at the token endpoint.
 
-import { registerOAuthClient } from "@/lib/db";
+import { countRecentOAuthClients, registerOAuthClient } from "@/lib/db";
 import { corsJson, corsPreflight, redirectUriAllowed } from "@/lib/oauth";
+import { ipFrom } from "@/lib/audit";
+import { readTextCapped } from "@/lib/body-reader";
+import { oauthRegisterRateLimited } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
+/** Registrations accepted from all addresses together in an hour (1.20.27). */
+const REGISTRATIONS_PER_HOUR = 200;
+
 export async function POST(req: Request) {
+  // 1.20.27 (security review M1): registration is open by design (Claude
+  // registers itself), so it is rate limited: 10 an hour per address and
+  // REGISTRATIONS_PER_HOUR in all. A registration nobody uses within a day
+  // is forgotten (db runDbMaintenance).
+  if (oauthRegisterRateLimited(ipFrom(req) || "unknown") || (await countRecentOAuthClients()) >= REGISTRATIONS_PER_HOUR) {
+    return corsJson({ error: "temporarily_unavailable", error_description: "Too many registrations. Try again later." }, 429);
+  }
   let body: any;
   try {
-    body = await req.json();
+    const text = await readTextCapped(req, 16 * 1024);
+    if (text === null) return corsJson({ error: "invalid_client_metadata" }, 413);
+    body = JSON.parse(text);
   } catch {
     return corsJson({ error: "invalid_client_metadata" }, 400);
   }
 
   const uris: string[] = Array.isArray(body?.redirect_uris)
-    ? body.redirect_uris.map((u: unknown) => String(u)).filter(Boolean)
+    ? body.redirect_uris.map((u: unknown) => String(u)).filter(Boolean).slice(0, 10)
     : [];
-  if (!uris.length || !uris.every(redirectUriAllowed)) {
+  if (!uris.length || !uris.every((u) => u.length <= 2000 && redirectUriAllowed(u))) {
     return corsJson(
       {
         error: "invalid_redirect_uri",

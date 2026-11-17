@@ -71,8 +71,8 @@ const EE_REAL = path.join(__dirname, "..", "src", "lib", "ee");
   ee.exports = {
     ee: () => edition,
     eePresent: () => edition.present,
-    featureEnabled: async (f: string) => edition.features.includes(f),
-    featureEnabledFrom: (f: string) => edition.features.includes(f),
+    featureEnabled: async (f: string) => edition.features.includes(f), featureEnforced: async (f: string) => edition.features.includes(f),
+    featureEnabledFrom: (f: string) => edition.features.includes(f), featureEnforcedFrom: (f: string) => edition.features.includes(f),
   };
   require.cache[EE_STUB] = ee;
   const loader = Module as unknown as { _resolveFilename: (request: string, parent: { filename?: string } | null, ...rest: unknown[]) => string };

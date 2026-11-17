@@ -69,7 +69,7 @@ const edition = { present: true, features: ["helpdesk"] as string[] };
   const ee = new Module(EE_STUB);
   ee.filename = EE_STUB;
   ee.loaded = true;
-  ee.exports = { ee: () => edition, eePresent: () => true, featureEnabled: async (f: string) => edition.features.includes(f) };
+  ee.exports = { ee: () => edition, eePresent: () => true, featureEnabled: async (f: string) => edition.features.includes(f), featureEnforced: async (f: string) => edition.features.includes(f) };
   require.cache[EE_STUB] = ee;
   const loader = Module as unknown as { _resolveFilename: (r: string, p: { filename?: string } | null, ...rest: unknown[]) => string };
   const resolve = loader._resolveFilename;
@@ -226,7 +226,7 @@ before(async () => {
   await lockClient.query("SELECT pg_advisory_lock($1)", [CARDS_LOCK]);
   savedCards = await getSetting("helpdesk_contact_cards");
 
-  const creds = hashPassword("Helpdesk!Cards123");
+  const creds = await hashPassword("Helpdesk!Cards123");
   const expires = new Date(Date.now() + 3_600_000).toISOString();
   for (const k of PEOPLE) {
     const email = `${STAMP}-${k}@example.test`;

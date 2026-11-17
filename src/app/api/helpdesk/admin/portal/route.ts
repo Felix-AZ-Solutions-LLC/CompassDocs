@@ -33,7 +33,9 @@ async function extras() {
     hq<{ id: number; name: string }>("SELECT id, name FROM hd_teams ORDER BY position, name, id"),
     getAppSettings().catch(() => ({ custom_domain: "" })),
   ]);
-  return { teams, custom_domain: app.custom_domain || "", path: PORTAL_PATH };
+  // 1.20.27 (security review app H1): the address mail links use; null: the portal sends no sign-in links.
+  const { workspaceOrigin } = await import("@/lib/workspace-origin");
+  return { teams, custom_domain: app.custom_domain || "", workspace_address: await workspaceOrigin(), path: PORTAL_PATH };
 }
 
 export async function GET() {

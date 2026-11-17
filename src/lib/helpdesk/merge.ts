@@ -39,7 +39,7 @@ import { canWorkTicket } from "./access";
 import { hdCan } from "./roles";
 import { cleanTicketTags, getTicketByNumber, parseTicketNumber, TICKET_LIMITS } from "./tickets";
 import { addCcs, moveCcs, moveFollowers } from "./ccs";
-import { listNumbers, mergedNote, MERGE_MAX, type HdMergeInfo } from "./merge-shared";
+import { crossRequesterWarning, listNumbers, mergedNote, MERGE_MAX, type CrossRequesterWarning, type HdMergeInfo } from "./merge-shared";
 import type { HdTicket, HdTicketRow } from "./types";
 import type { Role } from "../types";
 
@@ -75,6 +75,8 @@ export interface MergeInput {
   keep: number;
   merge: number[];
   notify: boolean;
+  /** 1.20.27: check and say what the merge would bring together, change nothing (previewMerge). */
+  preview?: boolean;
 }
 
 export interface MergeResult {
@@ -85,6 +87,8 @@ export interface MergeResult {
   moved: { messages: number; attachments: number; ccs: number; followers: number; requesters_ccd: number; time_entries: number; timers: number };
   /** For the audit row: undo by hand. */
   attachment_ids: number[];
+  /** 1.20.27 (security review app H2): the tickets came from different people, who now see each other's conversation. */
+  cross_requester: CrossRequesterWarning | null;
 }
 
 /** Parse and check the body's shape. Throws HdMergeError(400). */
@@ -101,7 +105,29 @@ export function validateMergeInput(raw: Record<string, unknown>): MergeInput {
     if (!merge.includes(n)) merge.push(n);
   }
   if (raw.notify !== undefined && typeof raw.notify !== "boolean") throw new HdMergeError("notify must be true or false.");
-  return { keep, merge, notify: raw.notify !== false };
+  if (raw.preview !== undefined && typeof raw.preview !== "boolean") throw new HdMergeError("preview must be true or false.");
+  return { keep, merge, notify: raw.notify !== false, preview: raw.preview === true };
+}
+
+/** The cross-requester warning for checked tickets (merge-shared crossRequesterWarning). */
+function warningFor(keep: HdTicket, merge: HdTicket[]): CrossRequesterWarning | null {
+  const party = (t: HdTicket) => ({ number: t.number, requester_id: t.requester_id, requester_name: t.requester_name, requester_email: t.requester_email });
+  return crossRequesterWarning(party(keep), merge.map(party));
+}
+
+/**
+ * Check a merge and say what it would bring together, changing nothing
+ * (1.20.27, security review app H2): the dialog asks this as the agent
+ * picks the ticket to keep, so it can name both requesters before the
+ * agent confirms. Throws HdMergeError like mergeTickets.
+ */
+export async function previewMerge(user: MergeActor, input: MergeInput): Promise<{ keep: number; merge: number[]; cross_requester: CrossRequesterWarning | null }> {
+  const checked = await checkMerge(user, input);
+  return {
+    keep: checked.keep.number,
+    merge: checked.merge.map((t) => t.number),
+    cross_requester: warningFor(checked.keep, checked.merge),
+  };
 }
 
 async function runActive(ticketId: number, client?: HdQueryable): Promise<boolean> {
@@ -195,8 +221,10 @@ export async function mergeTickets(user: MergeActor, input: MergeInput, ctx: { o
       already: true,
       moved: { messages: 0, attachments: 0, ccs: 0, followers: 0, requesters_ccd: 0, time_entries: 0, timers: 0 },
       attachment_ids: [],
+      cross_requester: null,
     };
   }
+  const cross_requester = warningFor(keep, checked.merge);
   const who = user.name || "Someone";
   const now = new Date();
   const res = await withTx(async (client) => {
@@ -278,6 +306,7 @@ export async function mergeTickets(user: MergeActor, input: MergeInput, ctx: { o
       already: true,
       moved: { messages: 0, attachments: 0, ccs: 0, followers: 0, requesters_ccd: 0, time_entries: 0, timers: 0 },
       attachment_ids: [],
+      cross_requester: null,
     };
   }
   // 1.19.2: a major incident's own ticket merged away ends the incident (agent W1, lib/helpdesk/incidents).
@@ -313,6 +342,7 @@ export async function mergeTickets(user: MergeActor, input: MergeInput, ctx: { o
     already: false,
     moved: res.moved,
     attachment_ids: res.attachmentIds,
+    cross_requester,
   };
 }
 

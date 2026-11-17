@@ -5,6 +5,7 @@
 // Server-only: uses the Postgres pool.
 
 import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 import { pool, getAckDecision } from "./db";
 import { logEvent } from "./log";
 import type { AckOutcomeInfo, SessionUser } from "./types";
@@ -53,23 +54,98 @@ export function actorFrom(user: Pick<SessionUser, "id" | "name" | "username" | "
  * of trusted proxies in front of the app (COMPASSDOCS_TRUSTED_PROXY_HOPS,
  * default 1 for the bundled Caddy). Set it higher when another proxy
  * (Cloudflare, a load balancer) sits in front of Caddy.
+ *
+ * 1.20.27 (security review H2): only a well-formed address is believed. A
+ * value that is not an IP (a forged header carrying text, a formula meant
+ * for a spreadsheet export) is no address at all: null, never stored. An
+ * IPv4-mapped IPv6 address ("::ffff:203.0.113.9") reads as its IPv4 form,
+ * so one client never counts as two in the sign-in throttle. Nothing in the
+ * app can see the TCP peer behind these headers (Next fills the header from
+ * the socket only when it is missing), so an install that publishes port
+ * 3000 directly AND sits behind a proxy must keep 3000 off the network:
+ * deploy/docker-compose.yml binds it to COMPASSDOCS_BIND for that.
  */
 export function ipFrom(req: Request): string | null {
   const xff = req.headers.get("x-forwarded-for");
   if (xff) {
     const parts = xff.split(",").map((s) => s.trim()).filter(Boolean);
     if (parts.length) {
-      const hops = Math.max(1, Number(process.env.COMPASSDOCS_TRUSTED_PROXY_HOPS) || 1);
+      const hops = Math.max(1, Math.floor(Number(process.env.COMPASSDOCS_TRUSTED_PROXY_HOPS)) || 1);
       // Rightmost is the proxy's own peer; step left by (hops-1) trusted hops.
       const idx = Math.max(0, parts.length - hops);
-      return parts[idx];
+      return cleanIp(parts[idx]);
     }
   }
-  return req.headers.get("x-real-ip");
+  return cleanIp(req.headers.get("x-real-ip"));
+}
+
+/** A literal IP address, normalised; null for anything else (1.20.27). */
+export function cleanIp(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  let v = raw.trim();
+  // "[2001:db8::1]:443" and "203.0.113.9:443" carry a port some proxies add.
+  const bracket = /^\[([^\]]+)\](?::\d+)?$/.exec(v);
+  if (bracket) v = bracket[1];
+  else if (/^\d{1,3}(\.\d{1,3}){3}:\d+$/.test(v)) v = v.replace(/:\d+$/, "");
+  if (v.length > 64 || !isIP(v)) return null;
+  const mapped = /^::ffff:(\d{1,3}(\.\d{1,3}){3})$/i.exec(v);
+  return (mapped ? mapped[1] : v).toLowerCase();
+}
+
+// --- The stdout mirror (1.20.27, security review M3) --------------------------------
+//
+// Every audit row is also written to the structured logger (lib/log; one
+// JSON line with COMPASSDOCS_LOG_FORMAT=json), so a log shipper hands it to
+// a SIEM the moment it happens and a later change to the table (a restore,
+// someone with database access) cannot take back what was already shipped.
+// Written even when the database insert fails. Never carries a secret:
+// details keys that name one are redacted, long strings are cut, and the
+// value is bounded in depth and size. COMPASSDOCS_AUDIT_STDOUT=0 turns it off.
+
+const SECRET_KEY = /(secret|password|passwd|passcode|token(?!_id|_name|s_revoked|_count)|api_?key|authorization|cookie|recovery|private_?key|signature)/i;
+
+function redact(v: unknown, depth = 0): unknown {
+  if (v == null || typeof v === "number" || typeof v === "boolean") return v;
+  if (typeof v === "string") return v.length > 500 ? `${v.slice(0, 500)}…` : v;
+  if (depth >= 4) return "[…]";
+  if (Array.isArray(v)) return v.slice(0, 50).map((x) => redact(x, depth + 1));
+  if (typeof v === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v as Record<string, unknown>).slice(0, 50)) {
+      out[k] = SECRET_KEY.test(k) && x !== null && typeof x !== "boolean" && typeof x !== "number" ? "[redacted]" : redact(x, depth + 1);
+    }
+    return out;
+  }
+  return String(v);
+}
+
+/** The fields the mirror writes for one entry (exported for tests). */
+export function auditLogFields(entry: AuditEntry): Record<string, unknown> {
+  return {
+    action: entry.action,
+    actor_id: entry.actor?.id ?? null,
+    actor_name: redact(entry.actor?.name ?? "system"),
+    actor_role: entry.actor?.role ?? null,
+    target_type: entry.targetType ?? null,
+    target_id: entry.targetId != null ? String(entry.targetId) : null,
+    target_label: redact(entry.targetLabel ?? null),
+    details: entry.details ? redact(entry.details) : null,
+    ip: entry.ip ?? null,
+  };
+}
+
+function mirror(entry: AuditEntry): void {
+  if (process.env.COMPASSDOCS_AUDIT_STDOUT === "0") return;
+  try {
+    logEvent("info", "audit", auditLogFields(entry));
+  } catch {
+    /* the mirror is never load-bearing */
+  }
 }
 
 /** Record an audit entry. Never throws. */
 export async function audit(entry: AuditEntry): Promise<void> {
+  mirror(entry);
   try {
     await pool().query(
       `INSERT INTO audit_log

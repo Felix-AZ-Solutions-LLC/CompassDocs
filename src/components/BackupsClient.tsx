@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Check, Circle } from "lucide-react";
+import { chipClass } from "@/components/Chip";
 import { buttonClass } from "@/components/Button";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toasts";
@@ -17,6 +18,8 @@ interface BackupInfo {
   name: string;
   size: number;
   created_at: string;
+  /** The uploads half of the set (1.20.27); null for a database-only backup. */
+  files?: { name: string; size: number } | null;
 }
 interface Dest {
   key: string;
@@ -72,7 +75,8 @@ export function BackupsClient({
       return;
     }
     const up = data.backup?.uploaded?.length ? ` · uploaded to ${data.backup.uploaded.join(", ")}` : "";
-    toast("ok", `Backup created (${bytes(data.backup?.size ?? 0)})${up}.`);
+    const total = (data.backup?.size ?? 0) + (data.backup?.files?.size ?? 0);
+    toast("ok", `Backup created (${bytes(total)}, with attachments)${up}.`);
     router.refresh();
   }
 
@@ -80,7 +84,7 @@ export function BackupsClient({
     if (
       !(await confirmDialog({
         title: `Delete backup ${b.name}?`,
-        body: "This removes it locally and from every remote destination.",
+        body: "This removes the copy on this server. Off-site copies are kept: remove those with your storage's own retention rules.",
         confirmLabel: "Delete backup",
         danger: true,
       }))
@@ -101,7 +105,9 @@ export function BackupsClient({
     if (
       !(await confirmDialog({
         title: `Restore from ${b.name}?`,
-        body: "This overwrites the entire database: every current user, document and setting is replaced with the contents of this backup. It cannot be undone, and everyone will need to sign in again.",
+        body: b.files
+          ? "This overwrites the entire database: every current user, document and setting is replaced with the contents of this backup, and its attachments are put back. Files added since are kept, and so is the audit log's record of everything since the backup. It cannot be undone, and everyone will need to sign in again."
+          : "This overwrites the entire database: every current user, document and setting is replaced with the contents of this backup. This backup was made before attachments were included, so files are left as they are. The audit log's record of everything since the backup is kept. It cannot be undone, and everyone will need to sign in again.",
         confirmLabel: "Restore database",
         danger: true,
         typeToConfirm: "RESTORE",
@@ -112,7 +118,8 @@ export function BackupsClient({
     const res = await fetch(`/api/backups/${b.name}/restore`, { method: "POST" });
     setBusy(null);
     if (res.ok) {
-      toast("ok", "Database restored. You may need to sign in again.");
+      const r = await res.json().catch(() => ({}));
+      toast("ok", typeof r?.files === "number" ? `Restored, with ${r.files} attachment file${r.files === 1 ? "" : "s"}. You may need to sign in again.` : "Database restored. You may need to sign in again.");
       router.refresh();
     } else {
       toast("error", (await res.json().catch(() => ({})))?.error || "Restore failed.");
@@ -126,7 +133,7 @@ export function BackupsClient({
         <div id="schedule" className="scroll-mt-6 rounded-xl border border-slate-200 bg-surface p-4 shadow-xs">
           <h3 className="mb-1 font-semibold text-slate-900">Automatic backups</h3>
           <p className="mb-3 text-sm text-slate-500">
-            Run a full database backup on a schedule, keeping the newest few.
+            Back up the database and its attachments on a schedule, keeping the newest few.
           </p>
           <div className="flex flex-wrap items-end gap-3">
             <Field label="Frequency">
@@ -159,7 +166,8 @@ export function BackupsClient({
         <div id="destinations" className="scroll-mt-6 rounded-xl border border-slate-200 bg-surface p-4 shadow-xs">
           <h3 className="mb-1 font-semibold text-slate-900">Destinations</h3>
           <p className="mb-3 text-sm text-slate-500">
-            Backups are written locally and mirrored to any off-site destination configured below.
+            Backups are written locally and mirrored to any off-site destination configured below. Deleting a backup here never removes its
+            off-site copy.
           </p>
           <div className="flex flex-wrap gap-2">
             {destinations.map((d) => (
@@ -200,18 +208,35 @@ export function BackupsClient({
             {backups.map((b) => (
               <div key={b.name} className={`flex items-center justify-between py-2.5 ${busy === b.name ? "opacity-50" : ""}`}>
                 <div className="min-w-0">
-                  <div className="truncate font-mono text-xs text-slate-700">{b.name}</div>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate font-mono text-xs text-slate-700">{b.name}</span>
+                    {b.files ? (
+                      <span className={chipClass("ok", "sm")}>With attachments</span>
+                    ) : (
+                      <span className={chipClass("neutral", "sm")}>Database only</span>
+                    )}
+                  </div>
                   <div className="text-xs text-slate-500">
-                    {formatDateTime(b.created_at, settings)} · {bytes(b.size)}
+                    {formatDateTime(b.created_at, settings)} · {bytes(b.size + (b.files?.size ?? 0))}
                   </div>
                 </div>
                 <div className="flex shrink-0 gap-1.5 text-xs">
                   <a
                     href={`/api/backups/${b.name}`}
                     className={buttonClass("secondary", "sm")}
+                    data-tt="Download the database"
                   >
                     Download
                   </a>
+                  {b.files && (
+                    <a
+                      href={`/api/backups/${b.files.name}`}
+                      className={buttonClass("secondary", "sm")}
+                      data-tt="Download the attachments"
+                    >
+                      Attachments
+                    </a>
+                  )}
                   <button
                     onClick={() => restore(b)}
                     disabled={busy === b.name}

@@ -1,7 +1,7 @@
 import "server-only";
 import { createHash, timingSafeEqual, randomBytes } from "node:crypto";
 import { getSetting, setSetting } from "./db";
-import { featureEnabled } from "./ee";
+import { featureEnabled, featureEnforced } from "./ee";
 import type { User } from "./types";
 import { NON_GALLERY_TEMPLATE_ID, type ScimEntraState, type ScimStatus, type SsoAppKind } from "./scim-setup-shared";
 
@@ -128,7 +128,10 @@ export async function scimAdminStatus(baseUrl: string): Promise<ScimStatus> {
  * a valid bearer token. Returns null when authorized, else the error response.
  */
 export async function scimGuard(req: Request): Promise<Response | null> {
-  if (!(await featureEnabled("scim"))) {
+  // 1.20.27 (security review M4): a licence that has lapsed still lets the
+  // identity provider in, so leavers are still deactivated; what it may do
+  // then is narrowed by scimLapsed (no new or changed accounts).
+  if (!(await featureEnforced("scim"))) {
     return scimError(403, "SCIM provisioning is not included in this workspace's license.");
   }
   const storedHash = (await getSetting("scim_token_hash")) || "";
@@ -162,6 +165,19 @@ export async function scimGuard(req: Request): Promise<Response | null> {
   setSetting("scim_last_request_at", new Date().toISOString()).catch(() => {});
   return null;
 }
+
+/**
+ * After scimGuard (1.20.27): true when the licence that granted SCIM has
+ * lapsed. Then only deactivation is carried out (PATCH or PUT active=false,
+ * DELETE): accounts are not created, changed or re-activated until it is
+ * renewed.
+ */
+export async function scimLapsed(): Promise<boolean> {
+  return !(await featureEnabled("scim"));
+}
+
+export const SCIM_LAPSED_DETAIL =
+  "This workspace's licence has lapsed: SCIM can still deactivate accounts, but cannot create, change or re-activate them until it is renewed.";
 
 // --- Mapping ------------------------------------------------------------------
 

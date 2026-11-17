@@ -67,7 +67,7 @@ const edition = { present: true, features: ["helpdesk"] as string[] };
   ee.exports = {
     ee: () => edition,
     eePresent: () => true,
-    featureEnabled: async (feature: string) => edition.features.includes(feature),
+    featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature),
   };
   require.cache[EE_STUB] = ee;
   const loader = Module as unknown as {
@@ -190,7 +190,7 @@ before(async () => {
   mailLock = await lockWorkspaceMail("shared");
   await getSetting("__schema_bootstrap__");
   await integrations.ensureIntakeSchema();
-  const creds = hashPassword(PASSWORD);
+  const creds = await hashPassword(PASSWORD);
   const names = { admin: "Ada Admin", agent: "Priya Shah", req: "Matthew Felix", plain: "Ben Lo" };
   const expires = new Date(Date.now() + 3_600_000).toISOString();
   for (const [k, name] of Object.entries(names) as [keyof typeof U, string][]) {

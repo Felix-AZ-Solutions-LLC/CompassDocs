@@ -28,20 +28,20 @@ test("single-key shortcuts off: '/' does nothing, Ctrl+K still opens the palette
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
 });
 
-test("one password minimum: the API refuses 7 characters everywhere", async ({ page }) => {
+test("one password minimum: the API refuses 11 characters everywhere (12 since 1.20.27)", async ({ page }) => {
   await login(page, ADMIN);
   const change = await api(page, "/api/auth/change-password", {
     method: "POST",
-    body: { currentPassword: ADMIN.password, newPassword: "short77" },
+    body: { currentPassword: ADMIN.password, newPassword: "elevenchars" },
   });
   expect(change.status).toBe(400);
-  expect(change.body?.error).toMatch(/8 characters/);
+  expect(change.body?.error).toMatch(/12 characters/);
   const create = await api(page, "/api/admin/users", {
     method: "POST",
-    body: { username: `e2e-pw-${Date.now()}`, password: "short77", role: "viewer" },
+    body: { username: `e2e-pw-${Date.now()}`, password: "elevenchars", role: "viewer" },
   });
   expect(create.status).toBe(400);
-  expect(create.body?.error).toMatch(/8 characters/);
+  expect(create.body?.error).toMatch(/12 characters/);
 });
 
 test("the security form says the minimum under the field", async ({ page }) => {
@@ -49,7 +49,7 @@ test("the security form says the minimum under the field", async ({ page }) => {
   await page.goto("/account/security");
   const field = page.getByLabel("New password", { exact: true });
   const describedBy = await field.getAttribute("aria-describedby");
-  await expect(page.locator(`[id="${describedBy}"]`)).toHaveText(/at least 8/i);
+  await expect(page.locator(`[id="${describedBy}"]`)).toHaveText(/at least 12/i);
 });
 
 test("relative times are <time> elements with the exact time behind them", async ({ page }) => {

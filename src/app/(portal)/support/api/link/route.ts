@@ -10,8 +10,7 @@
 import { after } from "next/server";
 import { ipFrom } from "@/lib/audit";
 import { logEvent } from "@/lib/log";
-import { originOf } from "@/lib/helpdesk/routes";
-import { PORTAL_LINK_SENT, cleanEmail, deliverSignInLink, getPortalSettings, linkIpLimited, portalHumanCheck, portalNotFound, portalOpen, portalOriginRejection } from "@/lib/helpdesk/portal";
+import { PORTAL_LINK_SENT, cleanEmail, deliverSignInLink, getPortalSettings, linkIpLimited, portalLinkOrigin, portalHumanCheck, portalNotFound, portalOpen, portalOriginRejection } from "@/lib/helpdesk/portal";
 import { portalJson, readSmallJson } from "@/lib/helpdesk/portal-http";
 
 export const dynamic = "force-dynamic";
@@ -21,6 +20,12 @@ export async function POST(req: Request) {
   if (!(await portalOpen(settings))) return portalNotFound();
   const cross = portalOriginRejection(req);
   if (cross) return cross;
+  // 1.20.27 (security review app H1): links are built only from the
+  // workspace's configured address; with none, no link is sent, and the
+  // visitor is told so (whether one is configured is no secret).
+  if (!(await portalLinkOrigin())) {
+    return portalJson({ error: "Sign-in by email isn't available yet. Contact the support team another way." }, 503);
+  }
   const ip = ipFrom(req) ?? "unknown";
   if (linkIpLimited(ip)) return portalJson({ error: "Too many tries. Wait a few minutes and try again." }, 429);
   const b = await readSmallJson(req);
@@ -30,7 +35,7 @@ export async function POST(req: Request) {
     return portalJson({ error: "Please complete the check and try again." }, 403);
   }
   const work = () =>
-    deliverSignInLink(email, { origin: originOf(req), next: typeof b?.next === "string" ? b.next : "", ip, settings, journey: b?.j })
+    deliverSignInLink(email, { next: typeof b?.next === "string" ? b.next : "", ip, settings, journey: b?.j })
       .then((outcome) => logEvent("info", "helpdesk.portal_link", { outcome }))
       .catch((e) => logEvent("error", "helpdesk.portal_link_failed", { error: e instanceof Error ? e.message : String(e) }));
   try {

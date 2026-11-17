@@ -20,6 +20,7 @@ import { Field, FormError, TextInput } from "@/components/form";
 import { Spinner } from "@/components/Spinner";
 import { SignOutLink } from "@/components/SignOutLink";
 import { IdentifierRow } from "@/components/auth/IdentifierRow";
+import { toast } from "@/components/Toasts";
 import { PASSWORD_HELP, PASSWORD_MIN, passwordProblem } from "@/lib/password-policy";
 
 const UNREACHABLE = "Couldn't reach the server. Check your connection and try again.";
@@ -110,6 +111,12 @@ export function ChangePasswordForm(
     if (!res.ok) {
       const message = data?.error ? String(data.error) : forced ? GENERIC : "Could not change password.";
       return fail(message, /^current password/i.test(message) ? currentRef.current : null);
+    }
+    // 1.20.27: a changed password ends the account's other sessions, API tokens and app connections (the route says how many).
+    if (!forced) {
+      const r = data?.revoked ?? {};
+      const ended = (r.other_sessions ?? 0) + (r.api_tokens ?? 0) + (r.oauth_grants ?? 0);
+      toast("ok", ended > 0 ? "Password changed. Your other sessions, API tokens and connected apps were signed out." : "Password changed.");
     }
     // Busy stays on until the next page commits.
     router.push(forced ? destination : "/");

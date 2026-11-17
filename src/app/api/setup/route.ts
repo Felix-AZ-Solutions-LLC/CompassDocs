@@ -10,6 +10,7 @@ import { parseLicense } from "@/lib/license";
 import { setAnthropicKey } from "@/lib/ai-config";
 import { applyProxyConfig } from "@/lib/caddy";
 import { credentialSaveError } from "@/lib/api-auth";
+import { printSetupToken, setupTokenMatches } from "@/lib/setup-token";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,19 @@ export async function POST(req: Request) {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+  }
+
+  // 1.20.27 (security review M11): the setup token printed to the server
+  // log, so only the operator can claim a fresh install (lib/setup-token).
+  if (!setupTokenMatches(body?.setup_token)) {
+    printSetupToken("page");
+    return NextResponse.json(
+      {
+        error: "Enter the setup token from the server log (docker compose logs app).",
+        code: "setup_token",
+      },
+      { status: 403 }
+    );
   }
 
   const username = String(body?.username ?? "").trim();
@@ -65,7 +79,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Setup has already been completed." }, { status: 409 });
   }
 
-  const { hash, salt } = hashPassword(password);
+  const { hash, salt } = await hashPassword(password);
   let user;
   try {
     user = await createUser({
@@ -122,7 +136,7 @@ export async function POST(req: Request) {
   const expires = new Date(
     Date.now() + (await getSessionTimeoutMinutes()) * 60_000
   ).toISOString();
-  await createSession(token, user.id, expires);
+  await createSession(token, user.id, expires, null, req.headers.get("user-agent"), "setup");
   await markLogin(user.id);
 
   const res = NextResponse.json({ ok: true });

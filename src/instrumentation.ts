@@ -8,6 +8,17 @@ export async function register() {
 
   const CHECK_INTERVAL_MS = 60 * 60 * 1000; // hourly
 
+  // 1.20.27 (security review M11): a fresh install prints its first-run
+  // setup token to the log, where only the operator can read it.
+  void (async () => {
+    try {
+      const { needsSetup } = await import("./lib/db");
+      if (await needsSetup()) (await import("./lib/setup-token")).printSetupToken("boot");
+    } catch (e) {
+      console.error("[setup] could not check for first-run setup:", e);
+    }
+  })();
+
   const tick = async () => {
     try {
       const { runScheduledBackupIfDue } = await import("./lib/backup");

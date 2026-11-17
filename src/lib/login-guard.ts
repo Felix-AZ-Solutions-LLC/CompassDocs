@@ -26,6 +26,19 @@ import "server-only";
 //    there holds for the sign-in form too when the username is typed (an
 //    email is its own key); beginLoginAttempt and loginRetryAfter read the
 //    same map.
+//  - 1.20.27 (security review H2): a per-identifier budget that ignores the
+//    address, so a spray from many addresses (or forged X-Forwarded-For
+//    values on an install whose port 3000 is reachable) is slowed too.
+//    Within an hour, the first ID_FREE failures for an identifier cost
+//    nothing extra; after that each attempt must wait a delay that doubles
+//    with every failure (1 s, 2 s, 4 s … capped at ID_MAX_DELAY_MS), and
+//    ID_LIMIT failures soft-lock the identifier for the rest of the hour.
+//    It can never lock the owner out for good: an address that has signed
+//    in as this identifier in the last TRUSTED_MS is exempt (the owner's
+//    office or home keeps working through an attack from elsewhere), the
+//    lock ends with its hour, single sign-on never reads it, and an
+//    administrator's password reset clears it (clearIdentifierThrottle).
+//    No CAPTCHA: a soft lock answers 429 like the others.
 
 const WINDOW_MS = 15 * 60 * 1000;
 const LOCK_MS = 15 * 60 * 1000;
@@ -33,9 +46,20 @@ const PAIR_LIMIT = 5;
 const IP_LIMIT = 30;
 const MAX_ENTRIES = 50_000; // hard cap so a spray can't balloon memory
 
+const ID_WINDOW_MS = 60 * 60 * 1000;
+const ID_FREE = 10;
+const ID_LIMIT = 50;
+const ID_MAX_DELAY_MS = 5 * 60 * 1000;
+const TRUSTED_MS = 30 * 24 * 60 * 60 * 1000;
+
 type Entry = { fails: number; first: number; lockedUntil: number };
 const pairs = new Map<string, Entry>();
 const ips = new Map<string, Entry>();
+/** Per identifier, whatever the address (1.20.27): failures this hour and when the last one began. */
+type IdEntry = { fails: number; first: number; last: number };
+const idents = new Map<string, IdEntry>();
+/** identifier|address pairs that signed in, and when (1.20.27): exempt from the identifier's budget. */
+const trusted = new Map<string, number>();
 
 function bump(map: Map<string, Entry>, key: string, limit: number, now: number): boolean {
   let e = map.get(key);
@@ -64,6 +88,27 @@ function sweep(now: number): void {
       if (now - e.first > WINDOW_MS && e.lockedUntil <= now) map.delete(k);
     }
   }
+  for (const [k, e] of idents) if (now - e.first > ID_WINDOW_MS) idents.delete(k);
+  for (const [k, at] of trusted) if (now - at > TRUSTED_MS) trusted.delete(k);
+}
+
+function idKey(username: string): string {
+  return username.toLowerCase().trim();
+}
+
+/** The delay owed before the next attempt after `fails` failures this hour. */
+function idDelayMs(fails: number): number {
+  if (fails < ID_FREE) return 0;
+  return Math.min(ID_MAX_DELAY_MS, 1000 * 2 ** Math.min(20, fails - ID_FREE));
+}
+
+/** Seconds this identifier must wait whatever the address, or 0 (1.20.27). */
+function identifierWait(key: string, now: number): number {
+  const e = idents.get(key);
+  if (!e || now - e.first > ID_WINDOW_MS) return 0;
+  if (e.fails >= ID_LIMIT) return Math.ceil((e.first + ID_WINDOW_MS - now) / 1000);
+  const until = e.last + idDelayMs(e.fails);
+  return until > now ? Math.ceil((until - now) / 1000) : 0;
 }
 
 function pairKey(username: string, ip: string): string {
@@ -78,7 +123,16 @@ type Slot = { key: string; entry: Entry; engaged: boolean };
  * and not counted. `lockEngaged`: counting it engaged the pair or IP lock, to
  * be audited once if the attempt fails.
  */
-export type LoginAttempt = { wait: number; lockEngaged: boolean; pair?: Slot; ip?: Slot };
+export type LoginAttempt = {
+  wait: number;
+  lockEngaged: boolean;
+  pair?: Slot;
+  ip?: Slot;
+  /** The identifier's budget entry (1.20.27), absent for a trusted address; `last` before this attempt. */
+  ident?: { key: string; entry: IdEntry; prevLast: number };
+  /** Counting this attempt began the identifier's delays (ID_FREE reached): audited once if it fails. */
+  identLockEngaged?: boolean;
+};
 
 function reserve(map: Map<string, Entry>, key: string, limit: number, now: number): Slot {
   const engaged = bump(map, key, limit, now);
@@ -99,11 +153,32 @@ function release(map: Map<string, Entry>, slot: Slot): void {
 export function beginLoginAttempt(username: string, ip: string): LoginAttempt {
   const now = Date.now();
   const key = pairKey(username, ip);
-  const wait = Math.max(lockedFor(pairs, key, now), lockedFor(ips, ip, now));
+  const known = isTrusted(key, now);
+  const ik = idKey(username);
+  const wait = Math.max(lockedFor(pairs, key, now), lockedFor(ips, ip, now), known ? 0 : identifierWait(ik, now));
   if (wait > 0) return { wait, lockEngaged: false };
   const pair = reserve(pairs, key, PAIR_LIMIT, now);
   const addr = reserve(ips, ip, IP_LIMIT, now);
-  return { wait: 0, lockEngaged: pair.engaged || addr.engaged, pair, ip: addr };
+  let ident: LoginAttempt["ident"];
+  let identLockEngaged = false;
+  if (!known) {
+    let e = idents.get(ik);
+    if (!e || now - e.first > ID_WINDOW_MS) {
+      e = { fails: 0, first: now, last: 0 };
+      if (idents.size >= MAX_ENTRIES) sweep(now);
+      idents.set(ik, e);
+    }
+    ident = { key: ik, entry: e, prevLast: e.last };
+    e.fails++;
+    e.last = now;
+    identLockEngaged = e.fails === ID_FREE;
+  }
+  return { wait: 0, lockEngaged: pair.engaged || addr.engaged || identLockEngaged, pair, ip: addr, ident, identLockEngaged };
+}
+
+function isTrusted(key: string, now: number): boolean {
+  const at = trusted.get(key);
+  return at !== undefined && now - at <= TRUSTED_MS;
 }
 
 /**
@@ -112,19 +187,37 @@ export function beginLoginAttempt(username: string, ip: string): LoginAttempt {
  * still to come. A lock that counting it engaged is lifted. Once only.
  */
 export function refundLoginAttempt(attempt: LoginAttempt, signedIn: boolean): void {
-  const { pair, ip } = attempt;
-  attempt.pair = attempt.ip = undefined;
+  const { pair, ip, ident } = attempt;
+  attempt.pair = attempt.ip = attempt.ident = undefined;
   if (pair) {
-    if (signedIn) pairs.delete(pair.key);
-    else release(pairs, pair);
+    if (signedIn) {
+      pairs.delete(pair.key);
+      // The owner signed in from here: this address keeps working through an attack from elsewhere.
+      if (trusted.size >= MAX_ENTRIES) sweep(Date.now());
+      trusted.set(pair.key, Date.now());
+    } else release(pairs, pair);
   }
   if (ip) release(ips, ip);
+  if (ident && idents.get(ident.key) === ident.entry) {
+    ident.entry.fails = Math.max(0, ident.entry.fails - 1);
+    ident.entry.last = ident.prevLast;
+  }
+}
+
+/**
+ * Forget an identifier's address-independent budget (1.20.27): an
+ * administrator reset the account's password, so its owner can sign in at
+ * once whatever an attacker did to the identifier this hour.
+ */
+export function clearIdentifierThrottle(identifier: string): void {
+  if (identifier) idents.delete(idKey(identifier));
 }
 
 /** Seconds the caller must wait before another attempt, or 0 if allowed. */
 export function loginRetryAfter(username: string, ip: string): number {
   const now = Date.now();
-  return Math.max(lockedFor(pairs, pairKey(username, ip), now), lockedFor(ips, ip, now));
+  const key = pairKey(username, ip);
+  return Math.max(lockedFor(pairs, key, now), lockedFor(ips, ip, now), isTrusted(key, now) ? 0 : identifierWait(idKey(username), now));
 }
 
 /** Record a failed attempt. Returns true if this failure engaged a new lock

@@ -31,6 +31,8 @@ interface Checklist {
   done: number;
   total: number;
   setup_complete: boolean;
+  /** 1.20.27: the configured address mail links use; null when none is set. */
+  workspace_address?: string | null;
 }
 
 const STEPS: Record<StepState["key"], { icon: React.ReactNode; title: string; body: string; href: string }> = {
@@ -107,6 +109,19 @@ export function SetupChecklist() {
         {!c && !error && <LoadingRow className="py-10" />}
         {c && (
           <>
+            {c.workspace_address === null && (
+              <div className="notice-warn mb-4 rounded-lg border px-3 py-2 text-sm">
+                <p className="font-medium">Set your workspace&apos;s address first.</p>
+                <p className="mt-1">
+                  Links in desk and portal mail are built only from it, never from the address someone happened to use. Until it is set,
+                  links in mail are incomplete and the customer portal sends no sign-in links. Set it under{" "}
+                  <a href="/admin/domain" className="link font-medium">
+                    Settings, Domain &amp; HTTPS
+                  </a>
+                  , or with <code className="font-mono text-xs">COMPASSDOCS_BASE_URL</code> on the server.
+                </p>
+              </div>
+            )}
             <section aria-label="Progress" className={`${CARD_CLASS} p-5`}>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <p className="text-base font-semibold text-slate-900">

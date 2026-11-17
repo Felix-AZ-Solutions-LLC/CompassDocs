@@ -5,6 +5,7 @@ import { MasterKeyError } from "./secretbox";
 import { roleAtLeast } from "./types";
 import type { Role, SessionUser } from "./types";
 import type { PermissionKey } from "./permissions";
+import { PENDING_CODE, PENDING_ERROR, type PendingStep } from "./sign-in-security-shared";
 
 /**
  * Run a settings-save that may seal credentials, surfacing a MasterKeyError
@@ -67,11 +68,24 @@ export const MFA_REQUIRED = "mfa_required";
  * can tell "confirm with Duo" from "sign in". Scope "desk" is for the
  * agent-side desk API, which the "when opening the desk" rule also covers.
  */
-export async function apiSession(scope: "app" | "desk" = "app"): Promise<SessionUser | NextResponse> {
+export async function apiSession(
+  scope: "app" | "desk" = "app",
+  /** 1.20.27: the one step a route serves while it is owed (the two-step set-up routes pass "two_step"). */
+  opts: { allowPending?: PendingStep } = {}
+): Promise<SessionUser | NextResponse> {
   const s = await currentSession();
   if (!s) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   if (scope === "desk" ? s.duo.desk : s.duo.signIn) return mfaRequired();
+  // 1.20.27 (security review M2, H3): a session that owes a new password or
+  // two-step set-up may use nothing else, through any API, until it is done.
+  // The change-password and sign-out routes read the session themselves.
+  if (s.pending && s.pending !== opts.allowPending) return pendingRefusal(s.pending);
   return s.user;
+}
+
+/** The 403 an API answers while a session owes `step` (1.20.27): `code` tells a client where to send the person. */
+export function pendingRefusal(step: PendingStep): NextResponse {
+  return NextResponse.json({ error: PENDING_ERROR[step], code: PENDING_CODE[step] }, { status: 403 });
 }
 
 /** The 401 that says "signed in, but the Duo check is owed". */
@@ -169,6 +183,34 @@ async function observe(
   } catch {
     /* observability is never load-bearing */
   }
+}
+
+/**
+ * apiGuard for a route that serves a step a session may owe (1.20.27): the
+ * two-step set-up (`/api/account/2fa`) must answer a session that owes
+ * exactly that. Same origin check and permission rule as apiGuard.
+ */
+export async function apiGuardAllowing(
+  step: PendingStep,
+  min: Role,
+  permission: PermissionKey
+): Promise<SessionUser | NextResponse> {
+  const cross = await crossOriginRejection();
+  if (cross) return cross;
+  const user = await apiSession("app", { allowPending: step });
+  if (user instanceof NextResponse) return user;
+  const { legacyAuthzEnforcement, grantsFor, admits } = await import("./authz");
+  if (legacyAuthzEnforcement()) {
+    return roleAtLeast(user.role, min) ? user : NextResponse.json({ error: "You don't have permission for that." }, { status: 403 });
+  }
+  try {
+    if (!admits(await grantsFor(user.id), permission)) {
+      return NextResponse.json({ error: "You don't have permission for that." }, { status: 403 });
+    }
+  } catch {
+    return NextResponse.json({ error: "Could not evaluate permissions. Try again shortly." }, { status: 503 });
+  }
+  return user;
 }
 
 /**

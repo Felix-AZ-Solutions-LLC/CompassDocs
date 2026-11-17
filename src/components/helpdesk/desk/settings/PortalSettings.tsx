@@ -52,6 +52,8 @@ interface Loaded {
   types: TypeOption[];
   teams: { id: number; name: string }[];
   custom_domain: string;
+  /** The configured workspace address mail links use (1.20.27); null: none, so no sign-in links are sent. */
+  workspace_address?: string | null;
   path: string;
 }
 
@@ -105,7 +107,7 @@ export function PortalSettings() {
     setS({ ...s, ...p });
   };
   const setLimits = (p: Partial<Settings["limits"]>) => set({ limits: { ...s.limits, ...p } });
-  const host = data.custom_domain || (typeof window === "undefined" ? "" : window.location.host);
+  const host = (data.workspace_address ? data.workspace_address.replace(/^https?:\/\//, "") : "") || data.custom_domain || (typeof window === "undefined" ? "" : window.location.host);
   const teamName = (id: number | null) => data.teams.find((t) => t.id === id)?.name ?? null;
 
   function toggleType(t: TypeOption, on: boolean) {
@@ -186,10 +188,20 @@ export function PortalSettings() {
             onChange={(v) => set({ enabled: v })}
             size="full"
           />
-          {s.enabled && !data.custom_domain && (
-            <p className="notice-warn mt-3 rounded-lg border px-3 py-2 text-sm">
-              Set your workspace&apos;s domain under Settings, Domain, so sign-in links always point to it rather than to the address a visitor used.
-            </p>
+          {!data.workspace_address && (
+            <div className={`${s.enabled ? "notice-error" : "notice-warn"} mt-3 rounded-lg border px-3 py-2 text-sm`}>
+              <p>
+                {s.enabled ? "Customers can't sign in: the portal sends no sign-in links" : "The portal won't send sign-in links"} until your
+                workspace has an address. Links in mail are built only from it, never from the address a visitor used.
+              </p>
+              <p className="mt-1">
+                Set it under{" "}
+                <a href="/admin/domain" className="link font-medium">
+                  Settings, Domain &amp; HTTPS
+                </a>
+                , or with <code className="font-mono text-xs">COMPASSDOCS_BASE_URL</code> on the server.
+              </p>
+            </div>
           )}
         </Card>
 

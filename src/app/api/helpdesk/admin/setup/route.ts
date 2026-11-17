@@ -11,5 +11,8 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const gate = await hdCapGate("settings.manage");
   if (gate instanceof NextResponse) return gate;
-  return NextResponse.json(await setupChecklist());
+  // 1.20.27 (security review app H1, M1): the address desk and portal mail
+  // link to; null when none is configured (the checklist says what to do).
+  const { workspaceOrigin } = await import("@/lib/workspace-origin");
+  return NextResponse.json({ ...(await setupChecklist()), workspace_address: await workspaceOrigin() });
 }

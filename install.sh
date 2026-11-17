@@ -98,6 +98,7 @@ if [ "$TLS" = 1 ]; then
   if [ "$FRESH" = "1" ]; then
     echo
     echo "  → Open http://<this-server>/ (port 80) to create your admin account."
+    echo "    It asks for the setup token printed in the log: docker compose logs app | grep -i 'setup token'"
     echo "  → In the setup wizard, enter your domain and choose an HTTPS mode —"
     echo "    Caddy fetches a certificate automatically (public DNS + ports 80/443 open)."
   fi
@@ -106,6 +107,7 @@ else
   if [ "$FRESH" = "1" ]; then
     echo
     echo "  → Open http://localhost:${PORT_VAL} to create your admin account and finish setup."
+    echo "    It asks for the setup token printed in the log: docker compose logs app | grep -i 'setup token'"
   fi
 fi
 if [ "$FRESH" = "1" ] && [ "$EDITION" = "enterprise" ] && ! grep -qE '^COMPASSDOCS_LICENSE_KEY=.+' .env; then

@@ -95,7 +95,7 @@ describe("How people sign in", () => {
     // SSO only removes no password (docs admin/sso.md), so the sentence names no role.
     assert.deepEqual(s.sentences, [
       "Everyone continues to Microsoft.",
-      `Anyone with a password, administrators included, can still sign in at ${ORIGIN}/login?local=1.`,
+      `Only the break-glass accounts can sign in with a password, at ${ORIGIN}/login?local=1.`,
     ]);
   });
 });
