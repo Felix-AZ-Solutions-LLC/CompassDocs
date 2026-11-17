@@ -67,7 +67,7 @@ export function CsatSettings() {
       <PageHeader icon={<Star />} title="Satisfaction" subtitle="Ask one question when a ticket is solved: how did we do?" />
       <div className="flex flex-col gap-4">
         <Card id="survey" className="scroll-mt-6" title="The survey">
-          <Toggle
+          <Toggle size="full"
             label="Ask after every solved request"
             help="The requester gets it by email and on the request in Get help. Answers show in Reports."
             checked={s.csat_enabled}
@@ -82,7 +82,7 @@ export function CsatSettings() {
             <p className="text-sm font-semibold text-slate-900">How did we do with #1047?</p>
             <div className="mt-3 flex flex-wrap gap-2">
               {SCALE.map((l, i) => (
-                <span key={l} className={`rounded-lg border px-3 py-1.5 text-sm ${i === 4 ? "border-compass-300 bg-compass-50 text-compass-700" : "border-slate-200 bg-surface text-slate-700"}`}>
+                <span key={l} className={`rounded-lg border px-3 py-1.5 text-sm ${i === 4 ? "border-compass-300 dark:border-compass-500 bg-compass-50 text-compass-700" : "border-slate-200 bg-surface text-slate-700"}`}>
                   {l}
                 </span>
               ))}

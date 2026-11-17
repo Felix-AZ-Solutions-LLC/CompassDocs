@@ -45,7 +45,7 @@ export function PageHeader({
   if (sub && !back) {
     return (
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1 basis-80">
           <h2 className="sr-only">{title}</h2>
           {subtitle && <p className="text-sm text-slate-500">{subtitle}</p>}
         </div>
@@ -57,7 +57,10 @@ export function PageHeader({
     <div className={className}>
       {back && <BackLink href={back.href} label={back.label} />}
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
+        {/* 1.20.27: the title block grows from a 20rem basis, so a long
+            subtitle wraps beside the actions instead of pushing them under
+            it (Reports, Desk departments, the workflow builder). */}
+        <div className="min-w-0 flex-1 basis-80">
           <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900">
             {icon && (
               <span className="shrink-0 text-compass-600 [&>svg]:h-6 [&>svg]:w-6" aria-hidden>

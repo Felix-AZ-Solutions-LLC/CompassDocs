@@ -22,11 +22,16 @@ export const AUDIT_LABELS: Record<string, string> = {
   "auth.duo_bypass": "Skipped Duo (bypass list)",
   "auth.duo_unreachable_allowed": "Let through while Duo was unreachable",
   "auth.duo_unreachable_blocked": "Blocked while Duo was unreachable",
+  // 1.20.27 (security review)
+  "auth.break_glass_login": "Signed in with a break-glass password",
+  "auth.password_changed": "Changed own password",
 
   // Accounts (the Users section)
   "user.create": "Created user",
   "user.role_change": "Changed role",
   "user.reset_password": "Reset password",
+  "user.credential_revoked": "Revoked an API token or app connection",
+  "user.passwords_removed": "Removed local passwords",
   "user.email_change": "Changed email",
   "user.enable": "Enabled user",
   "user.disable": "Disabled user",
@@ -567,6 +572,8 @@ export const AUDIT_LABELS: Record<string, string> = {
   "settings.smtp": "Updated email delivery settings",
   "settings.public_site": "Updated public site settings",
   "settings.sso": "Updated SSO settings",
+  "settings.sign_in_security": "Updated sign-in security",
+  "settings.break_glass_seeded": "Named the administrators break-glass at the upgrade",
   "settings.duo": "Updated Duo settings",
   "settings.saml": "Updated SAML settings",
   "settings.section_access": "Changed section access",
@@ -618,11 +625,16 @@ export const AUDIT_LABELS: Record<string, string> = {
   "scim.token_generated": "Generated SCIM token",
   "scim.enabled": "Enabled SCIM provisioning",
   "scim.disabled": "Disabled SCIM provisioning",
+  // The one-click setup with Microsoft (1.20.27, the enterprise overlay)
+  "scim.setup_with_microsoft": "Set up SCIM provisioning with Microsoft",
+  "scim.setup_with_microsoft_failed": "Could not set up SCIM provisioning with Microsoft",
   "license.set": "Installed license",
   "license.removed": "Removed license",
   "backup.create": "Created backup",
   "backup.delete": "Deleted backup",
   "backup.restore": "Restored backup",
+  "backup.restore_failed": "Restore of a backup failed",
+  "backup.download": "Downloaded backup",
   "audit.export": "Exported audit log",
   "system.update_triggered": "Started system update",
 };

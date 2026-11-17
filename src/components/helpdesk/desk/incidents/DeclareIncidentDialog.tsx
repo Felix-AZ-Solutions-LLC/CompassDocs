@@ -221,7 +221,7 @@ export function DeclareIncidentDialog({
         {n > 0 && !fromStatus && (
           <fieldset className="mt-4">
             <legend className="text-sm font-medium text-slate-800">Link</legend>
-            <label className="mt-1 flex cursor-pointer gap-3 rounded-lg border border-compass-300 bg-compass-50/60 p-3">
+            <label className="mt-1 flex cursor-pointer gap-3 rounded-lg border border-compass-300 dark:border-compass-500 bg-compass-50/60 p-3">
               <input type="radio" name="declare-link" checked readOnly className="mt-0.5 h-4 w-4 shrink-0 accent-compass-600" />
               <span className="min-w-0">
                 <span className="block text-sm font-medium text-slate-800">

@@ -32,6 +32,7 @@ interface AgentRow {
   email: string;
   team_ids: number[];
   teams: string[];
+  role?: string;
   skill_ids: number[];
   languages: string[];
   manageable: boolean;
@@ -271,7 +272,10 @@ export function SkillsSettings() {
                           <span className="truncate font-medium text-slate-800">{a.name}</span>
                         </span>
                       </Td>
-                      <Td className="text-sm text-slate-600">{a.teams.length ? a.teams.join(", ") : <SectionEmpty>No team</SectionEmpty>}</Td>
+                      <Td className="text-sm text-slate-600">
+                        {/* 1.20.27: the words and size Settings → Agents uses for the same person. */}
+                        {a.teams.length ? a.teams.join(", ") : <span className="text-xs text-slate-500">{a.role === "manager" || a.role === "admin" ? "Every team" : "No team yet"}</span>}
+                      </Td>
                       <Td>
                         {a.skill_ids.length ? (
                           <span className="flex flex-wrap gap-1">

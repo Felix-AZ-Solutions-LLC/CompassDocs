@@ -6,6 +6,7 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import { logEvent } from "../log";
+import { readTextCapped } from "../body-reader";
 import { PORTAL_FILE_LIMITS, PortalRefusal, type PortalFile } from "./portal";
 
 /** JSON with no caching: portal answers are per contact. */
@@ -21,8 +22,9 @@ export function refusalResponse(e: unknown): NextResponse {
 
 /** A small JSON body, or null when it is not one or too big. */
 export async function readSmallJson(req: Request, maxBytes = 8 * 1024): Promise<Record<string, unknown> | null> {
-  const text = await req.text().catch(() => "");
-  if (text.length > maxBytes) return null;
+  // 1.20.27 (security review app L5): these routes are public; read no further than the limit.
+  const text = await readTextCapped(req, maxBytes).catch(() => null);
+  if (text === null) return null;
   try {
     const v = JSON.parse(text || "{}");
     return v && typeof v === "object" && !Array.isArray(v) ? v : null;

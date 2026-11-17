@@ -3,16 +3,29 @@
 // registered redirect URI with a single-use code — or error=access_denied.
 
 import { NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
+import { currentSession } from "@/lib/auth";
+import { crossOriginRejection } from "@/lib/api-auth";
+import { userHolds } from "@/lib/access";
 import { createOAuthCode, getOAuthClient } from "@/lib/db";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { deskDoorRefusal } from "@/lib/helpdesk/access";
+import { consentTokenValid } from "@/lib/oauth-consent";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  const user = await getCurrentUser();
-  if (!user) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
+  // 1.20.27 (security review M1): the one cookie-authenticated write that
+  // had no Origin check. A browser declaring another origin is refused.
+  const cross = await crossOriginRejection();
+  if (cross) return cross;
+  // The session itself (not getCurrentUser): its token binds the form's
+  // anti-forgery token. One that still owes Duo, a new password or two-step
+  // set-up approves nothing.
+  const session = await currentSession();
+  if (!session || session.duo.signIn || session.pending) {
+    return NextResponse.json({ error: "Sign in first." }, { status: 401 });
+  }
+  const user = session.user;
 
   const form = await req.formData();
   const get = (k: string) => String(form.get(k) ?? "");
@@ -22,11 +35,11 @@ export async function POST(req: Request) {
   if (!client || !client.redirect_uris.includes(redirectUri)) {
     return NextResponse.json({ error: "Invalid client or redirect URI." }, { status: 400 });
   }
-
   const target = new URL(redirectUri);
   const state = get("state");
   if (state) target.searchParams.set("state", state);
 
+  // Saying no is always allowed: a forged "deny" only sends the app its own refusal.
   if (get("decision") !== "approve") {
     target.searchParams.set("error", "access_denied");
     return NextResponse.redirect(target, 303);
@@ -39,6 +52,23 @@ export async function POST(req: Request) {
   // the page.)
   const duo = await deskDoorRefusal(user);
   if (duo) return duo;
+
+  // 1.20.27 (security review M1): an approval must come from the consent
+  // page this session was shown, for exactly this client, address and
+  // challenge (lib/oauth-consent). Refused before anything is redirected.
+  const fields = { client_id: client.client_id, redirect_uri: redirectUri, code_challenge: get("code_challenge") };
+  if (!consentTokenValid(get("consent_token"), session.token, fields)) {
+    return NextResponse.json({ error: "This approval page has expired. Start connecting the app again." }, { status: 403 });
+  }
+
+  // 1.20.27 (security review H4): a connector grant is a bearer credential
+  // like a personal API token, so it takes the same permission. A role
+  // without account.token_create cannot get one by this door either.
+  if (!(await userHolds(user, "account.token_create", { legacyMin: "viewer" }))) {
+    target.searchParams.set("error", "access_denied");
+    target.searchParams.set("error_description", "Your role doesn't allow connecting apps.");
+    return NextResponse.redirect(target, 303);
+  }
 
   const challenge = get("code_challenge");
   if (!challenge || (get("code_challenge_method") || "S256") !== "S256") {

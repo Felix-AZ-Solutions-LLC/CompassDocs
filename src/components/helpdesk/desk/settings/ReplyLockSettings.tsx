@@ -101,7 +101,7 @@ export function ReplyLockSettings() {
       <PageHeader icon={<LockKeyhole />} title="Reply lock" subtitle="One agent at a time writes a ticket's reply. Others see who, and can still add notes." />
       <div className="flex flex-col gap-4">
         <Card id="reply-lock" className="scroll-mt-6" title="Reply lock">
-          <Toggle
+          <Toggle size="full"
             label="Lock a ticket's reply while someone writes it"
             help="The first agent who starts a reply holds it. Everyone else sees who is replying and can't send a reply until they're done. Internal notes and field changes are never locked."
             checked={s.enabled}

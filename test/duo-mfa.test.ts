@@ -48,8 +48,8 @@ const EE_REAL = path.join(__dirname, "..", "src", "lib", "ee");
   ee.exports = {
     ee: () => edition,
     eePresent: () => edition.present,
-    featureEnabled: async (feature: string) => edition.features.includes(feature),
-    featureEnabledFrom: (feature: string) => edition.features.includes(feature),
+    featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature),
+    featureEnabledFrom: (feature: string) => edition.features.includes(feature), featureEnforcedFrom: (feature: string) => edition.features.includes(feature),
   };
   require.cache[EE_STUB] = ee;
   const loader = Module as unknown as {
@@ -86,6 +86,7 @@ const adminTestRoute = require("../src/app/api/admin/duo/test/route") as typeof 
 const logoutRoute = require("../src/app/api/auth/logout/route") as typeof import("../src/app/api/auth/logout/route");
 const tokensRoute = require("../src/app/api/account/tokens/route") as typeof import("../src/app/api/account/tokens/route");
 const oauthApproveRoute = require("../src/app/api/oauth/approve/route") as typeof import("../src/app/api/oauth/approve/route");
+const { consentToken } = require("../src/lib/oauth-consent") as typeof import("../src/lib/oauth-consent");
 const profileRoute = require("../src/app/api/account/profile/route") as typeof import("../src/app/api/account/profile/route");
 const hdRequestsRoute = require("../src/app/api/helpdesk/requests/route") as typeof import("../src/app/api/helpdesk/requests/route");
 const hdRequestRoute = require("../src/app/api/helpdesk/requests/[number]/route") as typeof import("../src/app/api/helpdesk/requests/[number]/route");
@@ -1331,6 +1332,8 @@ describe("findings 2, 3, 5, 7, 10b: the desk rule cannot be walked around", () =
     const approve = async (token: string, decision = "approve") => {
       const form = new FormData();
       for (const [k, v] of Object.entries({ client_id: client, redirect_uri: "https://claude.example.test/cb", state: "st", code_challenge: "c".repeat(43), code_challenge_method: "S256", decision })) form.set(k, v);
+      // 1.20.27 (security review M1): the consent page's anti-forgery token for this session.
+      form.set("consent_token", consentToken(token, { client_id: client, redirect_uri: "https://claude.example.test/cb", code_challenge: "c".repeat(43) }));
       currentToken = token;
       currentRequest = new Request(`${ORIGIN}/api/oauth/approve`, { method: "POST", body: form, headers: { "x-forwarded-host": "docs.example.test", "x-forwarded-proto": "https" } });
       const res = await oauthApproveRoute.POST(currentRequest);

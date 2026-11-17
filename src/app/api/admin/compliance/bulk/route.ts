@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { complianceGuard } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { featureEnabled } from "@/lib/ee";
 import { actorFrom, ipFrom } from "@/lib/audit";
-import { requestOrigin } from "@/lib/oauth";
 import { BULK_IDS_MAX, BULK_PEOPLE_IDS, bulkPeoplePolicies, parseBulkRequest, runBulkAction } from "@/lib/ack-bulk";
 import type { SessionUser } from "@/lib/types";
 
@@ -85,7 +85,7 @@ export async function POST(req: Request) {
     // The outbox rows' and the assignment rows' actor: the same name the audit rows carry.
     actor: { id: user.id, name: user.name || user.username },
     audit: { actor: actorFrom(user), ip: ipFrom(req) },
-    origin: requestOrigin(req),
+    origin: await mailOrigin(),
   });
   return NextResponse.json(outcome.body, { status: outcome.status });
 }

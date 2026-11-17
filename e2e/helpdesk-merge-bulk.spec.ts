@@ -101,6 +101,11 @@ test.describe("merge and bulk edit", () => {
       await expect(dialog.getByRole("heading", { name: "Merge 3 tickets" })).toBeVisible();
       await expect(dialog.getByRole("radio", { name: new RegExp(`^#${a} `) })).toBeChecked();
       await expect(dialog.getByText("Priya Merge and Daniel Merge are added as CCs")).toBeVisible();
+      // 1.20.27 (security review app H2): three requesters, so the dialog says each will see the others' conversations.
+      const cross = dialog.getByTestId("merge-cross-requester");
+      await expect(cross).toContainText("These tickets are from 3 different people");
+      await expect(cross).toContainText("Priya Merge");
+      await expect(cross).toContainText("Daniel Merge");
       const merged = page.waitForResponse((r) => r.url().endsWith("/api/helpdesk/tickets/merge"));
       await dialog.getByRole("button", { name: `Merge into #${a}` }).click();
       expect((await merged).status()).toBe(200);

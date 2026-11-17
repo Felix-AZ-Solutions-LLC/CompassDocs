@@ -94,7 +94,7 @@ export async function LatestTile({
                 <th scope="col" className={`hidden w-[10rem] @min-[40rem]:table-cell ${TH}`}>
                   Updated by
                 </th>
-                <th scope="col" className={`w-[5.5rem] text-right ${TH}`}>
+                <th scope="col" className={`w-[7.5rem] text-right ${TH}`}>
                   <span className="sr-only">Updated</span>
                 </th>
               </tr>
@@ -147,7 +147,7 @@ export async function LatestTile({
                     </span>
                     {d.author}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-right text-xs text-slate-500">
+                  <td className="truncate px-4 py-2.5 text-right text-xs text-slate-500">
                     <RelativeTime value={d.updated_at} />
                   </td>
                 </tr>

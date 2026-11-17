@@ -1,5 +1,6 @@
 import "server-only";
 import { claimPeriod, getSetting, setSetting, listTrainingDigestLeads, teamTrainingRows, teamPolicyRows } from "./db";
+import { mailOrigin } from "./workspace-origin";
 import type { TeamPolicyRow, TeamTrainingRow } from "./db";
 import { renderEmail } from "./email-templates";
 import { sendMail } from "./mailer";
@@ -227,7 +228,7 @@ export async function weeklyTeamDigest(opts: TeamDigestOptions = {}): Promise<Te
   await setSetting(LEGACY_TEAM_DIGEST_CLAIM_KEY, period);
 
   const settings = await getAppSettings();
-  const origin = settings.custom_domain ? `https://${settings.custom_domain}` : "";
+  const origin = await mailOrigin();
   const fmtDate = (iso: string) => formatDate(iso, settings);
   // The policies page is the one the digest's newest section describes; a
   // training-only workspace keeps its 1.13.0 link.

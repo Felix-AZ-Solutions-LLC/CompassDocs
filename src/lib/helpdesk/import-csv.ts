@@ -9,6 +9,8 @@
 //   - a record over IMPORT_CSV_LIMITS.recordChars is refused (CsvError),
 //     so a missing closing quote can't swallow the whole file into memory.
 
+import { csvCellMinimal } from "../csv";
+
 export const IMPORT_CSV_LIMITS = {
   /** One record, all fields together, in characters. */
   recordChars: 4_000_000,
@@ -217,11 +219,13 @@ export async function* csvRows(chunks: AsyncIterable<Buffer | string>, onHeaders
   if (!headers) onHeaders?.([]);
 }
 
-/** One CSV cell: quoted when it needs to be; a leading = + - @ is prefixed with ' (spreadsheet formulas). */
+/**
+ * One CSV cell. 1.20.27 (security review app M3): lib/csv csvCell, the one
+ * writer, which also defuses a formula after leading spaces or control
+ * characters and the full-width forms (= + - @); this one did not.
+ */
 export function csvCell(v: unknown): string {
-  let s = v === null || v === undefined ? "" : String(v);
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
-  return /[",\r\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  return csvCellMinimal(v, ";");
 }
 
 export function csvLine(cells: unknown[]): string {

@@ -9,6 +9,7 @@ import {
   AckReasonRequiredError,
 } from "@/lib/db";
 import { ackDecisionRequired, ackReasonUsable, auditedAckPolicy, ACK_POLICY_ERROR } from "@/lib/ack-decision";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { getComplianceSettings } from "@/lib/compliance-settings";
 import { apiGuard } from "@/lib/api-auth";
 import { spaceScopeFor, scopeAllows, userHolds } from "@/lib/access";
@@ -16,7 +17,6 @@ import { audit, actorFrom, ipFrom, auditAckDecision } from "@/lib/audit";
 import { notifyWebhooks } from "@/lib/webhooks";
 import { notify, ackOutcomeSentence, crResolvedBody } from "@/lib/notifications";
 import { notifySpaceSubscribers } from "@/lib/subscriptions";
-import { requestOrigin } from "@/lib/oauth";
 import type { SessionUser } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -127,7 +127,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     let ok: Awaited<ReturnType<typeof approveChangeRequest>>;
     try {
       ok = await approveChangeRequest(Number(id), user.id, user.name || user.username, note, {
-        origin: requestOrigin(req),
+        origin: await mailOrigin(),
         ackPolicy: reviewerPolicy,
         ackReason: reviewerReason,
         ackKeepReasonRequired: keepReasonRequired,
@@ -159,7 +159,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       title: cr?.title || `change request #${id}`,
       actor: user.name || user.username,
       note,
-      url: `${requestOrigin(req)}/review`,
+      url: `${await mailOrigin()}/review`,
       spaceId: crDoc?.space_id,
       spaceName: crDoc?.space_name,
     });
@@ -171,7 +171,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       body: crResolvedBody(note, ackOutcomeSentence(ok.ack_outcome)),
       link: `/doc/${cr.document_id}`,
       actorName: user.name || user.username,
-      origin: requestOrigin(req),
+      origin: await mailOrigin(),
     });
     // Subscribers hear about the change landing (the doc may have moved
     // spaces as part of the approval — notify its current space).
@@ -192,7 +192,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         kind: cr!.kind === "publish" ? "published" : "updated",
         actorUserId: cr!.created_by,
         actorName: cr!.author_name,
-        origin: requestOrigin(req),
+        origin: await mailOrigin(),
       });
     }
     return NextResponse.json({ ok: true, result: "approved", ack_outcome: ok.ack_outcome });
@@ -211,7 +211,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       title: cr?.title || `change request #${id}`,
       actor: user.name || user.username,
       note,
-      url: `${requestOrigin(req)}/review`,
+      url: `${await mailOrigin()}/review`,
       spaceId: crDoc?.space_id,
       spaceName: crDoc?.space_name,
     });
@@ -221,7 +221,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       body: note || undefined,
       link: `/doc/${cr.document_id}`,
       actorName: user.name || user.username,
-      origin: requestOrigin(req),
+      origin: await mailOrigin(),
     });
     return NextResponse.json({ ok: true, result: "rejected" });
   }

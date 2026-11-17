@@ -178,6 +178,11 @@ test.describe("customer portal (licensed)", () => {
     await setSetting("smtp_from", "help@acme.example");
     const portal = await api(page, "/api/helpdesk/admin/portal");
     expect(portal.status).toBe(200);
+    // 1.20.27 (security review app H1): sign-in links are built only from the
+    // workspace's configured address. A rig with none (no custom domain, no
+    // COMPASSDOCS_BASE_URL) gets one for this spec; the link is opened by its
+    // path, so any address will do.
+    if (!portal.body.workspace_address) await setSetting("custom_domain", "portal-e2e.example.test");
     await setSetting("helpdesk_portal", "{}");
     const put = await api(page, "/api/helpdesk/admin/portal", {
       method: "PUT",

@@ -36,6 +36,7 @@ export function TicketList({
   qs,
   onRetry,
   title,
+  emptyHint = "New tickets appear here as they arrive.",
   selection,
   motion,
   listKey = "",
@@ -46,6 +47,8 @@ export function TicketList({
   qs: string;
   onRetry: () => void;
   title: string;
+  /** 1.20.27: the empty list's second sentence, for the view ("Tickets assigned to you appear here."). */
+  emptyHint?: string;
   /** Row checkboxes for the bulk bar (1.19.1, merge/selection); omitted without tickets.bulk or tickets.merge. */
   selection?: RowSelection;
   /** 1.20.19: the live update's motion (QueueLayout's), and the list it belongs to. */
@@ -85,7 +88,7 @@ export function TicketList({
     return (
       <div className="px-4 py-10 text-center">
         <Inbox className="mx-auto h-8 w-8 text-slate-400" aria-hidden />
-        <SectionEmpty className="mt-3">Nothing in {title} right now. New tickets appear here as they arrive.</SectionEmpty>
+        <SectionEmpty className="mt-3">Nothing in {title} right now. {emptyHint}</SectionEmpty>
       </div>
     );
   }

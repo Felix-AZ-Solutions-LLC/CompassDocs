@@ -28,7 +28,7 @@ interface Account {
 
 /** A user row shaped like the sign-up paths write it: a local account with a hash, or an SSO identity without one. */
 async function newUser(tag: string, name: string, opts: { password?: string; provider?: string } = {}): Promise<Account> {
-  const creds = opts.password ? hashPassword(opts.password) : { hash: null, salt: null };
+  const creds = opts.password ? await hashPassword(opts.password) : { hash: null, salt: null };
   const r = await fixtureQuery(
     `INSERT INTO users (username, name, email, role, status, password_hash, password_salt, auth_provider, external_id)
      VALUES ($1, $2, $3, 'viewer', 'active', $4, $5, $6, $7) RETURNING id, username, name`,

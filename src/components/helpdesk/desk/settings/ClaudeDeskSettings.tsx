@@ -16,6 +16,7 @@ import { chipClass } from "@/components/Chip";
 import { Field, SectionEmpty, TextInput, Textarea, Toggle } from "@/components/form";
 import { PageHeader } from "@/components/PageHeader";
 import { PageContainer } from "@/components/PageWidth";
+import { SettingsLink } from "@/components/SettingsLink";
 import { Popover } from "@/components/Popover";
 import { SaveRow } from "@/components/SaveRow";
 import { LoadingRow } from "@/components/Spinner";
@@ -36,7 +37,6 @@ import {
   type ClaudeDeskConfig,
 } from "@/lib/helpdesk/claude/shared";
 import { getJson, sendJson } from "../api";
-import { DeskNewStrip } from "./DeskNew";
 
 interface Form {
   cfg: ClaudeDeskConfig;
@@ -140,7 +140,6 @@ export function ClaudeDeskSettings() {
 
   return (
     <PageContainer>
-      <DeskNewStrip />
       <PageHeader
         icon={<Sparkle />}
         title="Claude in the desk"
@@ -151,15 +150,25 @@ export function ClaudeDeskSettings() {
           <Toggle
             size="full"
             label="Claude in the desk"
-            help={`Uses the key and model set in Settings → AI · ${data.model_label}`}
+            help={
+              <>
+                Uses the key and model set in <SettingsLink href="/admin/ai" /> · {data.model_label}
+              </>
+            }
             checked={form.cfg.enabled}
             onChange={(v) => setCfg({ enabled: v })}
           />
           {!data.key_ready && (
             <p className="notice-warn mt-3 rounded-lg border px-3 py-2 text-sm">
-              {data.provider !== "anthropic"
-                ? "Settings → AI uses another provider. Claude in the desk needs the Anthropic provider and its API key."
-                : "There's no Anthropic API key in Settings → AI yet. Agents see Claude once a key is saved."}
+              {data.provider !== "anthropic" ? (
+                <>
+                  <SettingsLink href="/admin/ai" /> uses another provider. Claude in the desk needs the Anthropic provider and its API key.
+                </>
+              ) : (
+                <>
+                  There&apos;s no Anthropic API key in <SettingsLink href="/admin/ai" /> yet. Agents see Claude once a key is saved.
+                </>
+              )}
             </p>
           )}
           <p className="mt-4 mb-1.5 text-sm font-medium text-slate-800">Teams</p>

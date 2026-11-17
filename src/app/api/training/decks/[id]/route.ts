@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { csvCell } from "@/lib/csv";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { sectionApiGuard } from "@/lib/api-auth";
 import { featureEnabled } from "@/lib/ee";
 import {
@@ -19,7 +21,6 @@ import {
 } from "@/lib/db";
 import { notifyTrainingAssigned, remindAssignmentsNow } from "@/lib/training";
 import { deckQuestionStats } from "@/lib/training-audit";
-import { publicOrigin } from "@/lib/oauth";
 import { audit, actorFrom } from "@/lib/audit";
 import type { SessionUser } from "@/lib/types";
 
@@ -52,7 +53,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
   const url = new URL(req.url);
   if (url.searchParams.get("format") === "csv") {
-    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    // 1.20.27 (security review app M3): lib/csv csvCell also defuses spreadsheet formulas.
+    const esc = csvCell;
     const lines = [
       "training,name,username,email,assigned_at,due_at,completed_at,confirmed_version,quiz_score,quiz_total,prior_completions,signed_name,content_sha256,status",
     ];
@@ -246,7 +248,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         deckTitle: `${deck.title} (please retake)`,
         dueAt: reopened[0]?.due_at ?? null,
         assignerName: user.name || user.username,
-        origin: await publicOrigin(req),
+        origin: await mailOrigin(),
       });
     }
     await audit({
@@ -270,7 +272,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         deckTitle: `${deck.title} (updated — please retake)`,
         dueAt: reopened[0]?.due_at ?? null,
         assignerName: user.name || user.username,
-        origin: await publicOrigin(req),
+        origin: await mailOrigin(),
       });
     }
     await audit({
@@ -321,7 +323,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       deckTitle: deck.title,
       dueAt,
       assignerName: user.name || user.username,
-      origin: await publicOrigin(req),
+      origin: await mailOrigin(),
     });
   }
   await audit({

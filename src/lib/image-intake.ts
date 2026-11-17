@@ -25,7 +25,7 @@ import "server-only";
 import { createAttachment, getAttachment } from "./db";
 import { getAppSettings } from "./settings-store";
 import { saveUpload, sniffImage, uploadReadStream } from "./uploads";
-import { safeFetch } from "./safe-fetch";
+import { readResponseCapped, safeFetch } from "./safe-fetch";
 
 /** Everything an intake needs to produce, or the reason it couldn't. */
 export type IntakeResult =
@@ -106,12 +106,13 @@ export async function intakeFromUrl(rawUrl: string): Promise<IntakeResult> {
       headers: { accept: "image/*" },
       signal: AbortSignal.timeout(20_000),
     });
-  } catch (e) {
-    // safeFetch throws for private/blocked targets too — say so plainly rather
-    // than leaking whether the host resolved.
+  } catch {
+    // 1.20.27 (security review app L1): one sentence whatever went wrong. The
+    // reason (a blocked private address, a name that didn't resolve, a
+    // refused connection) would let the caller map the server's network.
     return {
       ok: false,
-      error: `Couldn't fetch that URL: ${e instanceof Error ? e.message : "request failed"}. It must be a public https address that returns the image directly.`,
+      error: "Couldn't fetch that URL. It must be a public https address that returns the image directly.",
     };
   }
   if (!res.ok) {
@@ -124,7 +125,9 @@ export async function intakeFromUrl(rawUrl: string): Promise<IntakeResult> {
   if (declared && declared > cap) {
     return { ok: false, error: `That image is ${(declared / 1024 / 1024).toFixed(1)} MB, over the ${max_attachment_mb} MB limit.` };
   }
-  const buf = Buffer.from(await res.arrayBuffer());
+  // 1.20.27 (security review app L1): streamed, and abandoned the moment it passes the limit.
+  const buf = await readResponseCapped(res, cap).catch(() => null);
+  if (!buf) return { ok: false, error: `That image is over the ${max_attachment_mb} MB limit, or it couldn't be read.` };
   return validateImage(buf);
 }
 

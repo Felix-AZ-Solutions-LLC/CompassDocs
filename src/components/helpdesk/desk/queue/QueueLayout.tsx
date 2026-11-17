@@ -33,7 +33,7 @@ import { TicketList } from "./TicketList";
 import { BulkBar } from "../merge/BulkBar";
 import { useRowSelection } from "../merge/selection";
 import { NewTicketModal } from "./NewTicketModal";
-import { SORTS, VIEWS, apiQs, readSel, selQs, type QueueSel } from "./views";
+import { SORTS, VIEWS, VIEW_EMPTY, apiQs, readSel, selQs, type QueueSel } from "./views";
 import { savedApiQs, useSavedViews } from "../views/saved";
 import { SavedViewsNav } from "../views/SavedViewsNav";
 import { EditViewButton, SaveViewButton } from "../views/ViewControls";
@@ -282,7 +282,8 @@ export function QueueLayout({ children }: { children: ReactNode }) {
         </nav>
         <section
           aria-labelledby="queue-title"
-          className={`min-h-0 w-full shrink-0 flex-col border-r border-slate-200 bg-surface lg:w-[23rem] ${binPage ? "hidden" : selected ? "hidden lg:flex" : "flex lg:flex"}`}
+          // 1.20.27: lg:border-r: alone on a phone the list runs to the screen edge, with no stray line there.
+          className={`min-h-0 w-full shrink-0 flex-col border-slate-200 bg-surface lg:w-[23rem] lg:border-r ${binPage ? "hidden" : selected ? "hidden lg:flex" : "flex lg:flex"}`}
         >
           <div className="flex h-12 shrink-0 items-center gap-1.5 border-b border-slate-200 px-3">
             <QueueTitle title={title} count={rows?.length} viewLinks={viewLinks} />
@@ -299,7 +300,7 @@ export function QueueLayout({ children }: { children: ReactNode }) {
                     {...p}
                     type="button"
                     aria-label={`Sort: ${SORTS.find((s) => s.value === sel.sort)?.label}`}
-                    className="inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+                    className="inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 pointer-coarse:h-9 pointer-coarse:px-2"
                   >
                     <ArrowDownUp className="h-3.5 w-3.5 sm:hidden" aria-hidden />
                     <span className="hidden sm:inline">{SORTS.find((s) => s.value === sel.sort)?.label}</span>
@@ -319,7 +320,7 @@ export function QueueLayout({ children }: { children: ReactNode }) {
             </div>
           </div>
           {sel.drill && (
-            <div className="border-b border-compass-200 bg-compass-50/70 text-xs text-slate-700">
+            <div className="border-b border-compass-200 bg-compass-50/70 text-xs text-slate-700 dark:border-compass-500/40">
               <div className="flex items-center gap-2 px-3 py-2">
                 <Filter className="h-3.5 w-3.5 shrink-0 text-compass-600" aria-hidden />
                 <span className="min-w-0 flex-1 truncate">
@@ -358,6 +359,7 @@ export function QueueLayout({ children }: { children: ReactNode }) {
                 qs={qs}
                 onRetry={load}
                 title={title}
+                emptyHint={sel.saved || sel.drill ? "Tickets that match appear here." : sel.team ? "New tickets for this team appear here as they arrive." : VIEW_EMPTY[sel.view as keyof typeof VIEW_EMPTY]}
                 selection={selectable ? selection : undefined}
                 motion={motion}
                 listKey={listQs ?? ""}

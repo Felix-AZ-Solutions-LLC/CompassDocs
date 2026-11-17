@@ -76,9 +76,12 @@ export function PageContainer({
     // with it rather than pinning text to one number at every setting — see
     // STYLEGUIDE "Reading measure". The attribute is inert on pages that
     // render no document body.
+    // 1.20.27: a 16px gutter on a phone (32px from sm), the gutter the desk's
+    // ticket, queue and settings bar already use; at 32px a settings card's
+    // text started 57px in and ran about 275px wide on a 390px phone.
     <div
       data-page-width={width}
-      className={`mx-auto px-8 py-8 print:max-w-none ${WIDTH_CLASS[width]} ${className}`}
+      className={`mx-auto px-4 py-5 sm:px-8 sm:py-8 print:max-w-none ${WIDTH_CLASS[width]} ${className}`}
     >
       {children}
     </div>

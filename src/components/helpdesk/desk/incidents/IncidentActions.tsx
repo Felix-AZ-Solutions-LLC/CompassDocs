@@ -146,7 +146,7 @@ export function LinkToIncidentDialog({ open, onClose, number }: { open: boolean;
           {list.map((i) => {
             const on = i.number === chosen;
             return (
-              <label key={i.id} className={`flex cursor-pointer gap-3 rounded-lg border p-3 transition ${on ? "border-compass-300 bg-compass-50/60" : "border-slate-200 hover:bg-slate-50"}`}>
+              <label key={i.id} className={`flex cursor-pointer gap-3 rounded-lg border p-3 transition ${on ? "border-compass-300 dark:border-compass-500 bg-compass-50/60" : "border-slate-200 hover:bg-slate-50"}`}>
                 <input
                   type="radio"
                   name="link-inc"

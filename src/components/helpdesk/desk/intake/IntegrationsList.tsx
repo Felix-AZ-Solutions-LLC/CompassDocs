@@ -46,7 +46,7 @@ export function IntegrationsList() {
         actions={
           rows && rows.length > 0 ? (
             <Button href="/desk/settings/integrations/new" icon={<Plus />}>
-              New integration
+              New alert source
             </Button>
           ) : undefined
         }
@@ -56,9 +56,9 @@ export function IntegrationsList() {
       {rows && rows.length === 0 && !error && (
         <EmptyState
           icon={<Plug />}
-          title="No integrations yet"
+          title="No alert sources yet"
           body="Connect Prometheus, Grafana, Datadog, Azure Monitor or a script, and their alerts open tickets here. Repeats update the same ticket, and a resolved alert solves it."
-          action={{ href: "/desk/settings/integrations/new", label: "New integration", icon: <Plus /> }}
+          action={{ href: "/desk/settings/integrations/new", label: "New alert source", icon: <Plus /> }}
         />
       )}
       {rows && rows.length > 0 && (

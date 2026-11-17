@@ -83,7 +83,9 @@ test.describe("send-from addresses (licensed)", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Email" })).toBeVisible({ timeout: 120_000 });
     await expect(page.getByRole("heading", { name: "Send-from addresses" })).toBeVisible();
     await expect(page.getByText("No send-from addresses yet.")).toBeVisible();
-    await expect(page.getByText("Mail goes out through your workspace mail server (Settings, Notifications, Email).")).toBeVisible();
+    // 1.20.27: the place is a link (SettingsLink) where the viewer can open it.
+    await expect(page.getByText(/Mail goes out through your workspace mail server/)).toBeVisible();
+    await expect(page.getByRole("link", { name: "Settings → Notifications → Email" })).toHaveAttribute("href", "/admin/notifications/email");
     await expect(page.getByText("Your mail provider, such as SMTP2GO, must allow each address")).toBeVisible();
 
     // --- Add two send-from addresses through the dialog ---

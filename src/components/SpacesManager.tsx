@@ -645,7 +645,7 @@ function SpaceForm({
           </p>
           <div className="w-72">
             {defaultTemplateId !== null ? (
-              <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-compass-200 bg-compass-50 px-3 py-2 text-sm font-medium text-compass-800">
+              <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-compass-200 bg-compass-50 px-3 py-2 text-sm font-medium text-compass-ink-strong">
                 <span className="truncate">
                   {templates.find((t) => t.id === defaultTemplateId)?.name ?? `#${defaultTemplateId}`}
                 </span>
@@ -750,7 +750,7 @@ function SpaceForm({
             <div className="mt-4 max-w-md">
               <span className="mb-1 block text-xs font-medium text-slate-500">Policy owner</span>
               {policyOwnerId !== null ? (
-                <span className="inline-flex items-center gap-1.5 rounded-lg border border-compass-200 bg-compass-50 px-3 py-1.5 text-sm font-medium text-compass-800">
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-compass-200 bg-compass-50 px-3 py-1.5 text-sm font-medium text-compass-ink-strong">
                   {users.find((u) => u.id === policyOwnerId)?.name ?? `User #${policyOwnerId}`}
                   <button
                     type="button"

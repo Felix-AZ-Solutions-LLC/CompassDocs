@@ -25,12 +25,12 @@
 
 import { NextResponse } from "next/server";
 import { ipFrom } from "@/lib/audit";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { readJson } from "@/lib/helpdesk/access";
 import { hdCapGate } from "@/lib/helpdesk/roles";
 import { applyMacroAs } from "@/lib/helpdesk/macros";
 import { claimMacroCard, releaseMacroCard } from "@/lib/helpdesk/claude/chats";
 import { HdTicketError } from "@/lib/helpdesk/tickets";
-import { requestOrigin } from "@/lib/oauth";
 
 export const dynamic = "force-dynamic";
 
@@ -55,7 +55,7 @@ export async function POST(req: Request, ctx: Ctx) {
   try {
     r = await applyMacroAs(gate, number, macroId, {
       preview: body.preview === true,
-      origin: requestOrigin(req),
+      origin: await mailOrigin(),
       // 1.20.5: closing answers for a macro that solves ("Before you solve", lib/helpdesk/solve-requirements).
       solveAnswers: body.solve_answers,
       guard: body,

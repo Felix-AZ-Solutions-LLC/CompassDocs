@@ -33,6 +33,6 @@ export async function POST(req: Request) {
     details: { app: b.app, ok: r.ok },
     ip: ipFrom(req),
   });
-  const settings = await chatSettingsView((await helpdeskOrigin(await publicOrigin(req).catch(() => ""))) || "");
+  const settings = await chatSettingsView((await helpdeskOrigin()) || (await publicOrigin(req).catch(() => "")));
   return NextResponse.json({ ...r, settings });
 }

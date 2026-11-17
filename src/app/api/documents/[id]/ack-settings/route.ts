@@ -16,13 +16,13 @@ import {
   canSeeSpace,
 } from "@/lib/db";
 import type { AckSettingsPatch, PolicySettingsNumbersPatch } from "@/lib/db";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { apiGuard } from "@/lib/api-auth";
 import { spaceScopeFor, scopeAllows, canSeeDrafts, userHolds } from "@/lib/access";
 import { featureEnabled } from "@/lib/ee";
 import { audit, auditAck, actorFrom, ipFrom } from "@/lib/audit";
 import { getComplianceSettings } from "@/lib/compliance-settings";
 import { movePolicyDeadlines, resolvePolicyDefaults, workspaceDueDefaults } from "@/lib/compliance";
-import { requestOrigin } from "@/lib/oauth";
 import { validateRecertPatch } from "@/lib/ack-recert";
 import type { RecertPatch } from "@/lib/ack-recert";
 import { isAudienceMode, sanitizeRules } from "@/lib/audience";
@@ -489,7 +489,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const saved = await saveAudienceRules(
       doc.id,
       { audience_mode, rules, exclude_stewards, assign_new_members },
-      { actor: ackActor, origin: requestOrigin(req) }
+      { actor: ackActor, origin: await mailOrigin() }
     );
     if (!saved) return NextResponse.json({ error: "Not found." }, { status: 404 });
     extras.added = saved.added;

@@ -7,7 +7,7 @@ import { isIntegrationKind } from "@/lib/helpdesk/intake/shared";
 import { canOpenIntegrations } from "../access";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "New integration" };
+export const metadata = { title: "New alert source" };
 
 export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string }> }) {
   const user = await requireUser();

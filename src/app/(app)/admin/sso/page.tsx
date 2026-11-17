@@ -2,13 +2,15 @@ import { cookies, headers } from "next/headers";
 import { requireSettingsSection, SESSION_COOKIE } from "@/lib/auth";
 import { getSsoConfig, ssoAuthority } from "@/lib/sso-config";
 import { getSamlConfig, samlConfigured, samlSpUrls } from "@/lib/saml-config";
-import { getSetting, listUsers, sessionSid } from "@/lib/db";
+import { adminsOutsideBreakGlass, countLocalPasswords, getSetting, listUsers, sessionSid } from "@/lib/db";
+import { breakGlassIds } from "@/lib/sign-in-security";
 import { duoView } from "@/lib/duo-view";
 import { getAppSettings } from "@/lib/settings-store";
-import { eePresent, featureEnabled } from "@/lib/ee";
+import { eePresent, featureEnabled, featureEnforced } from "@/lib/ee";
 import { SsoSettings } from "@/components/SsoSettings";
 import { SamlPanel } from "@/components/SamlPanel";
 import { ScimPanel } from "@/components/ScimPanel";
+import { scimAdminStatus } from "@/lib/scim";
 import { DuoSettings } from "@/components/DuoSettings";
 import { SettingsPage } from "@/components/SettingsPage";
 
@@ -24,7 +26,10 @@ export default async function SsoAdminPage() {
   const duoUsers = people
     .filter((u) => u.status === "active" || duo.bypass_user_ids.includes(u.id))
     .map((u) => ({ id: u.id, label: u.name || u.username, sublabel: `${u.username} · ${u.role}${u.status === "active" ? "" : " · disabled"}` }));
-  const [cfg, samlCfg, app, bundled, enabled, secretExpires, scimLicensed, scimEnabled, scimTokenHash, scimLast] =
+  const h = await headers();
+  const proto = h.get("x-forwarded-proto") || "http";
+  const host = h.get("x-forwarded-host") || h.get("host") || "localhost";
+  const [cfg, samlCfg, app, bundled, enabled, secretExpires, scim] =
     await Promise.all([
       getSsoConfig(),
       getSamlConfig(),
@@ -32,15 +37,19 @@ export default async function SsoAdminPage() {
       Promise.resolve(eePresent()),
       featureEnabled("sso"),
       getSetting("sso_secret_expires"),
-      featureEnabled("scim"),
-      getSetting("scim_enabled"),
-      getSetting("scim_token_hash"),
-      getSetting("scim_last_request_at"),
+      // The SCIM card's state, as GET /api/admin/scim answers it (1.20.27: with the setup with Microsoft).
+      scimAdminStatus(`${proto}://${host}/api/scim/v2`),
     ]);
 
-  const h = await headers();
-  const proto = h.get("x-forwarded-proto") || "http";
-  const host = h.get("x-forwarded-host") || h.get("host") || "localhost";
+  // 1.20.27 (security review H1): the break-glass accounts SSO only still lets in with a password.
+  const breakGlass = await breakGlassIds();
+  const localPasswords = await countLocalPasswords(breakGlass);
+  // 1.20.27 (second review M5, M7): the administrators SSO only keeps out, and a lapsed licence's limits.
+  const outside = await adminsOutsideBreakGlass(breakGlass);
+  const lapsed = !enabled && (await featureEnforced("sso"));
+  const breakGlassUsers = people
+    .filter((u) => u.status === "active" || breakGlass.includes(u.id))
+    .map((u) => ({ id: u.id, label: u.name || u.username, sublabel: `${u.username} · ${u.role}${u.status === "active" ? "" : " · disabled"}` }));
   const origin = app.custom_domain ? `https://${app.custom_domain}` : `${proto}://${host}`;
   const sp = samlSpUrls(origin);
 
@@ -62,7 +71,13 @@ export default async function SsoAdminPage() {
           default_role: cfg.defaultRole,
           allowed_domains: cfg.allowedDomains.join(", "),
           sso_only: cfg.ssoOnly,
+          break_glass_user_ids: breakGlass,
+          local_password_count: localPasswords,
+          admins_outside_break_glass: outside.map((a) => a.name || a.username),
+          lapsed,
         }}
+        users={breakGlassUsers}
+        viewerId={user.id}
       />
       <SamlPanel
         initial={{
@@ -82,17 +97,7 @@ export default async function SsoAdminPage() {
           sp_metadata_url: sp.metadata,
         }}
       />
-      {bundled && (
-        <ScimPanel
-          initial={{
-            licensed: scimLicensed,
-            enabled: scimEnabled === "1",
-            token_set: Boolean(scimTokenHash),
-            last_request_at: scimLast || null,
-            base_url: `${proto}://${host}/api/scim/v2`,
-          }}
-        />
-      )}
+      {bundled && <ScimPanel initial={scim} />}
       <DuoSettings initial={duo} users={duoUsers} />
     </>
     </SettingsPage>

@@ -6,7 +6,8 @@ import { Client } from "pg";
 import { ADMIN, api, ensureUser, login } from "./helpers";
 import { DESK_NEW_PAGES, DESK_NEW_RELEASE } from "../src/lib/helpdesk/whats-new-shared";
 
-const FIRST_NEW = DESK_NEW_PAGES[0];
+// 1.20.27: may be undefined (a release that lists no New page); the flow then checks that nothing is New.
+const FIRST_NEW = DESK_NEW_PAGES[0] as (typeof DESK_NEW_PAGES)[number] | undefined;
 
 // Helpdesk 1.19.2 loose ends (agent W5), on the licensed rig:
 //   - Desk settings: the rail's "New" chips clear once the page is opened,
@@ -100,9 +101,20 @@ test.describe("helpdesk 1.19.2 loose ends (licensed)", () => {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const desk = await ctx.newPage();
     await login(desk, DESK);
-    await desk.goto("/desk/settings/teams");
-    await expect(desk.getByRole("heading", { level: 1, name: "Teams" })).toBeVisible({ timeout: 120_000 });
+    // 1.20.27: the strip shows on the settings overview only, under its header.
+    await desk.goto("/desk/settings");
+    await expect(desk.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible({ timeout: 120_000 });
     const rail = desk.getByRole("navigation", { name: "Desk settings" });
+    if (!FIRST_NEW) {
+      // 1.20.27 lists no New page: no chip anywhere in the rail, no strip, and no stale 1.20.0 strip on Teams.
+      await expect(rail.getByText("New", { exact: true })).toHaveCount(0);
+      await expect(desk.getByRole("note").filter({ hasText: "New in" })).toHaveCount(0);
+      await desk.goto("/desk/settings/teams");
+      await expect(desk.getByRole("heading", { level: 1, name: "Teams" })).toBeVisible();
+      await expect(desk.getByRole("note").filter({ hasText: "New in" })).toHaveCount(0);
+      await ctx.close();
+      return;
+    }
     // The release's first New page (1.20.0: Claude in the desk; the list grows as areas land).
     const assets = rail.getByRole("link", { name: new RegExp(`^${FIRST_NEW.label}`) });
     await expect(assets).toContainText("New");
@@ -119,13 +131,13 @@ test.describe("helpdesk 1.19.2 loose ends (licensed)", () => {
     await desk.waitForURL((u) => u.pathname.startsWith(FIRST_NEW.href));
     await expect(assets).not.toContainText("New");
     await expect.poll(async () => (await db.query("SELECT 1 FROM hd_desk_seen WHERE user_id = $1 AND item = $2", [deskUserId, FIRST_NEW.href])).rowCount, { timeout: 60_000 }).toBe(1);
-    await desk.goto("/desk/settings/teams");
+    await desk.goto("/desk/settings");
     await expect(assets).not.toContainText("New");
     await strip.getByRole("button", { name: /Dismiss what's new/ }).click();
     await expect(strip).toHaveCount(0);
     await expect.poll(async () => (await db.query("SELECT 1 FROM hd_desk_seen WHERE user_id = $1 AND item = $2", [deskUserId, `strip:${DESK_NEW_RELEASE}`])).rowCount, { timeout: 60_000 }).toBe(1);
     await desk.reload();
-    await expect(desk.getByRole("heading", { level: 1, name: "Teams" })).toBeVisible();
+    await expect(desk.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
     await expect(desk.getByRole("note").filter({ hasText: `New in ${DESK_NEW_RELEASE}` })).toHaveCount(0);
     await ctx.close();
   });

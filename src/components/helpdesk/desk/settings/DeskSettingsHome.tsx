@@ -15,7 +15,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { CARD_CLASS } from "@/components/Card";
 import { CardTitle } from "@/components/Heading";
 import { deskSectionLanding, deskSectionPages, deskSettingsGroups, type DeskSettingsViewer } from "@/lib/helpdesk/desk-settings-registry";
-import { DeskNewChip, useDeskNew } from "./DeskNew";
+import { DeskNewChip, DeskNewStrip, useDeskNew } from "./DeskNew";
 
 export function DeskSettingsHome({ viewer }: { viewer: DeskSettingsViewer }) {
   const groups = deskSettingsGroups(viewer);
@@ -23,6 +23,8 @@ export function DeskSettingsHome({ viewer }: { viewer: DeskSettingsViewer }) {
   return (
     <PageContainer>
       <PageHeader icon={<Settings />} title="Settings" subtitle="How the desk works. Search for a setting, or pick a section." />
+      {/* 1.20.27: the "New in <release>" strip lives here only, under the overview's header, never above a page's h1. */}
+      <DeskNewStrip />
       {/* 1.20.16: columns, not a grid. The groups differ a lot in length (General has two
           sections, Requesters four with long lines), so grid rows left tall gaps under the short
           cards; columns stack each card straight under the one above. Reading order stays the

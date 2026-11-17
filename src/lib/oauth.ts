@@ -26,10 +26,9 @@ export function requestOrigin(req: Request): string {
  * (development, or an install reached only by IP).
  */
 export async function publicOrigin(req: Request): Promise<string> {
-  const { getAppSettings } = await import("./settings-store");
-  const domain = (await getAppSettings()).custom_domain;
-  if (domain) return `https://${domain}`;
-  return requestOrigin(req);
+  // 1.20.27: the configured workspace address (custom domain, else COMPASSDOCS_BASE_URL).
+  const { workspaceOrigin } = await import("./workspace-origin");
+  return (await workspaceOrigin()) ?? requestOrigin(req);
 }
 
 /**

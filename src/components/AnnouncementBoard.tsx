@@ -27,7 +27,7 @@ const STYLE = {
   info: {
     box: "border-compass-200 bg-compass-50/70 dark:border-compass-100 dark:bg-compass-50/60",
     title: "text-compass-900 dark:text-compass-300",
-    body: "text-compass-900/80",
+    body: "text-compass-900/80 dark:text-compass-ink-strong",
     icon: <Megaphone className="h-4 w-4 text-compass-600 dark:text-compass-400" />,
   },
   warning: {

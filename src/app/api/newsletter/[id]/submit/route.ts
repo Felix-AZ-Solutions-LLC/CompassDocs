@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiGuard } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import {
   getNewsletter,
   getNewsletterApproverIds,
@@ -9,7 +10,6 @@ import {
 } from "@/lib/db";
 import { canSubmit } from "@/lib/newsletter-access";
 import { sendWorkflowNotice } from "@/lib/newsletter";
-import { requestOrigin } from "@/lib/oauth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import type { SessionUser } from "@/lib/types";
 
@@ -56,7 +56,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const pool = await listNewsletterApproverPool();
   const override = await getNewsletterApproverIds(n.id);
   const inScope = override.length > 0 ? pool.filter((u) => override.includes(u.id)) : pool;
-  const origin = requestOrigin(req);
+  const origin = await mailOrigin();
   await sendWorkflowNotice(
     inScope.filter((u) => u.id !== user.id && u.email).map((u) => u.email),
     `Review requested: ${n.subject}`,

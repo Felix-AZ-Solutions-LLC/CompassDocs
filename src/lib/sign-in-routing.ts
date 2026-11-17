@@ -7,7 +7,8 @@ import "server-only";
 //   1. No usable provider: the password step (the page never asks; the
 //      community build and an unconfigured workspace keep one form).
 //   2. "SSO only" on: every identifier goes to SSO; the password step is the
-//      break-glass at /login?local=1.
+//      break-glass at /login?local=1, and since 1.20.27 it signs in only the
+//      accounts on the break-glass list (lib/auth login).
 //   3. An email whose domain is on a usable provider's allowed-domain list
 //      goes to that provider, whether or not an account exists yet, so a new
 //      colleague is created on first sign-in (JIT). Both lists claiming it:
@@ -25,7 +26,8 @@ import "server-only";
 // stay local; SSO linking refuses them), and can always type their username
 // (no "@", so rule 3 does not apply) or use "Use a password instead".
 
-import { featureEnabled } from "./ee";
+import { featureEnabled, featureEnforced } from "./ee";
+import { ssoOnlyDisabledByEnv } from "./sign-in-security-shared";
 import { getSsoConfig, ssoConfigured, type SsoConfig, type SsoVendor } from "./sso-config";
 import { getSamlConfig, samlConfigured, type SamlConfig } from "./saml-config";
 import { signInAccountFlags } from "./db";
@@ -64,11 +66,36 @@ export function oidcUsable(cfg: SsoConfig): boolean {
   return !(MULTI_TENANT.includes(cfg.tenant.toLowerCase()) && cfg.allowedDomains.length === 0);
 }
 
-/** The usable providers and the routing settings, read once per request. */
+/**
+ * The usable providers and the routing settings, read once per request.
+ * 1.20.27 (security review M4): asked of featureEnforced, so single sign-on
+ * and "SSO only" keep working after the licence lapses (its settings page
+ * is what stops changing). Second review M7: after a lapse the providers
+ * stay only while SSO only is saved as on (then passwords are refused, so
+ * single sign-on must keep working); with it off, a lapsed workspace signs
+ * in with passwords, like one that never had a licence. Second review H1:
+ * COMPASSDOCS_SSO_ONLY_DISABLED=1 turns SSO only off whatever is saved
+ * (lib/sign-in-security ssoOnlyDisabledByEnv); the providers stay.
+ */
 export async function signInSetup(): Promise<SignInSetup> {
-  if (!(await featureEnabled("sso"))) return { oidc: null, saml: null, ssoOnly: false };
+  const setup = setupForTests ? setupForTests() : await liveSetup();
+  return setup.ssoOnly && ssoOnlyDisabledByEnv() ? { ...setup, ssoOnly: false } : setup;
+}
+
+async function liveSetup(): Promise<SignInSetup> {
+  if (!(await featureEnforced("sso"))) return NO_SSO;
   const [sso, saml] = await Promise.all([getSsoConfig(), getSamlConfig()]);
+  if (!sso.ssoOnly && !(await featureEnabled("sso"))) return NO_SSO;
   return setupFrom(sso, saml);
+}
+
+const NO_SSO: SignInSetup = { oidc: null, saml: null, ssoOnly: false };
+
+let setupForTests: (() => SignInSetup) | null = null;
+
+/** Tests: answer signInSetup with `fn` (null restores the settings), so "SSO only" can be on without touching shared settings. */
+export function setSignInSetupForTests(fn: (() => SignInSetup) | null): void {
+  setupForTests = fn;
 }
 
 /** signInSetup's decision on given configs (exported for tests). */

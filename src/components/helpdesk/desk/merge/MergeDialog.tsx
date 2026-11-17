@@ -11,7 +11,7 @@
 // cards with the ticket each one is about.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { GitMerge, Search } from "lucide-react";
+import { GitMerge, Search, TriangleAlert } from "lucide-react";
 import { Modal } from "@/components/Modal";
 import { Button } from "@/components/Button";
 import { EYEBROW_TEXT } from "@/components/Heading";
@@ -19,7 +19,7 @@ import { controlClass, FormError, SectionEmpty } from "@/components/form";
 import { Spinner } from "@/components/Spinner";
 import { toast } from "@/components/Toasts";
 import { HD_STATUS_LABEL, type HdTicketListRow } from "@/lib/helpdesk/types";
-import { listNames, listNumbers, mergedNote, MERGE_MAX } from "@/lib/helpdesk/merge-shared";
+import { crossRequesterWarning, listNames, listNumbers, mergedNote, MERGE_MAX, type CrossRequesterWarning } from "@/lib/helpdesk/merge-shared";
 import { getJson, listOf } from "../api";
 import { compactDue } from "../ui";
 
@@ -82,6 +82,42 @@ export function MergeDialog({
   const others = all.filter((t) => t.number !== keep);
   const ccNames = [...new Set(others.filter((t) => t.requester_name && (t.requester_id === null || t.requester_id !== keepT?.requester_id)).map((t) => t.requester_name))];
   const ready = !!keepT && others.length > 0 && others.length <= MERGE_MAX;
+
+  // 1.20.27 (security review app H2): tickets from different people. Worked
+  // out here at once from what the queue knows, then confirmed by the
+  // server, which also compares email addresses (a preview changes nothing).
+  const othersKey = others.map((t) => t.number).join(",");
+  const localCross = useMemo(
+    // The queue has no addresses: a requester without an account is told apart by name until the server answers.
+    () => (keepT && others.length ? crossRequesterWarning(asParty(keepT), others.map(asParty)) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [keepT?.number, othersKey]
+  );
+  const [serverCross, setServerCross] = useState<{ key: string; warning: CrossRequesterWarning | null } | null>(null);
+  const crossKey = `${keepT?.number ?? ""}|${othersKey}`;
+  const cross = serverCross && serverCross.key === crossKey ? serverCross.warning : localCross;
+  useEffect(() => {
+    if (!open || !ready || !keepT) return;
+    const ctrl = new AbortController();
+    const id = setTimeout(() => {
+      fetch("/api/helpdesk/tickets/merge", {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ keep: keepT.number, merge: othersKey.split(",").map(Number), preview: true }),
+        signal: ctrl.signal,
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (d && "cross_requester" in d) setServerCross({ key: crossKey, warning: d.cross_requester ?? null });
+        })
+        .catch(() => {});
+    }, 150);
+    return () => {
+      clearTimeout(id);
+      ctrl.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, ready, crossKey]);
 
   async function submit() {
     if (!ready || !keepT || busy) return;
@@ -152,7 +188,7 @@ export function MergeDialog({
               <label
                 key={t.number}
                 className={`flex cursor-pointer gap-3 rounded-lg border p-3 transition ${
-                  checked ? "border-compass-300 bg-compass-50/60" : "border-slate-200 hover:bg-slate-50"
+                  checked ? "border-compass-300 dark:border-compass-500 bg-compass-50/60" : "border-slate-200 hover:bg-slate-50"
                 }`}
               >
                 <input
@@ -176,6 +212,23 @@ export function MergeDialog({
               </label>
             );
           })}
+        </div>
+      )}
+
+      {ready && keepT && cross && (
+        <div className="notice-warn mt-4 rounded-lg border px-3 py-2 text-sm" data-testid="merge-cross-requester">
+          <p className="flex items-start gap-2 font-medium">
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+            <span>{cross.text}</span>
+          </p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-10 text-xs">
+            {cross.requesters.map((r) => (
+              <li key={`${r.name}|${r.email}|${r.numbers.join(",")}`}>
+                {r.name}
+                {r.email.includes("@") && r.email !== r.name ? ` (${r.email})` : ""}: {listNumbers(r.numbers)}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
@@ -231,6 +284,11 @@ export function MergeDialog({
       </div>
     </Modal>
   );
+}
+
+/** A queue row as the merge warning compares it: an account by its id, anyone else by name (the queue carries no addresses). */
+function asParty(t: MergeCandidate) {
+  return { number: t.number, requester_id: t.requester_id, requester_name: t.requester_name, requester_email: t.requester_id ? null : t.requester_name.trim().toLowerCase() || null };
 }
 
 /** "Merge into another ticket…": a search over the agent's queues (any status but closed). */

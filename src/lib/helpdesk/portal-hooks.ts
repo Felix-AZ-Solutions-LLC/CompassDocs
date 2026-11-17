@@ -111,7 +111,8 @@ export async function portalRequesterNotice(
   if (!PORTAL_TEMPLATES.has(template)) return true;
   const { getPortalSettings, portalBrand, portalLinkOrigin } = await import("./portal");
   const brand = await portalBrand(await getPortalSettings());
-  const base = await portalLinkOrigin(origin ?? "");
+  // 1.20.27 (security review app H1): the configured address only; relative links without one.
+  const base = (await portalLinkOrigin()) ?? "";
   // "Joined with #N" links to the kept request, which the contact now reaches.
   const target = template === "hd_merged" && /^\d{1,10}$/.test(vars.target_number ?? "") ? vars.target_number : String(t.number);
   const out: Record<string, string> = {
@@ -125,7 +126,7 @@ export async function portalRequesterNotice(
   if (out.author_name) out.author_name = firstName(out.author_name) || "Support";
   if (out.agent_name) out.agent_name = firstName(out.agent_name) || "Support";
   const { sendHelpdeskTemplate } = await import("./email");
-  await sendHelpdeskTemplate(c.email, template, out, { ticketId: t.id, number: t.number, teamId: t.team_id }, base || origin);
+  await sendHelpdeskTemplate(c.email, template, out, { ticketId: t.id, number: t.number, teamId: t.team_id }, base || undefined);
   return true;
 }
 

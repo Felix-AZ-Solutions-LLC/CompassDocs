@@ -107,7 +107,7 @@ export function EntityPicker({
   }
 
   const chipTone =
-    accent === "violet" ? "bg-violet-50 text-violet-800" : "bg-compass-50 text-compass-800";
+    accent === "violet" ? "bg-violet-50 text-violet-800" : "bg-compass-50 text-compass-ink-strong";
   const hoverTone = accent === "violet" ? "bg-violet-50" : "bg-compass-50";
   const optionId = (id: number) => `${listId}-opt-${id}`;
 

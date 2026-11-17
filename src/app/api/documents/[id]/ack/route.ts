@@ -9,13 +9,13 @@ import {
   hasOpenAssignment,
 } from "@/lib/db";
 import { apiGuard } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { spaceScopeFor, scopeAllows, canSeeDrafts, userHolds } from "@/lib/access";
 import { featureEnabled } from "@/lib/ee";
 import { ackSummary } from "@/lib/db";
 import { audit, auditAck, actorFrom, ipFrom } from "@/lib/audit";
 import { requestAcknowledgement } from "@/lib/compliance";
 import { getComplianceSettings } from "@/lib/compliance-settings";
-import { requestOrigin } from "@/lib/oauth";
 import { readSecondsSince } from "@/lib/analytics";
 import { reachedEndFromBody } from "@/lib/read-evidence";
 import { verifyAttestation, signedNameFrom } from "@/lib/attestation";
@@ -393,7 +393,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         const r = await requestAcknowledgement(
           doc,
           { id: user.id, name: user.name || user.username },
-          requestOrigin(req),
+          (await mailOrigin()),
           { notify }
         );
         queued = r.queued;

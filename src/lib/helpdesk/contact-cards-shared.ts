@@ -47,7 +47,7 @@ export const HD_CARD_PART_LABEL: Record<HdCardPart, string> = {
   local_time: "Local time",
   manager: "Manager",
   desk_phone: "Desk phone",
-  cell_phone: "Cell phone",
+  cell_phone: "Mobile phone",
   email: "Email",
   teams: "Teams",
   webex: "Webex",
@@ -97,7 +97,7 @@ export type HdCardSlot = keyof HdCardFieldMap;
 
 export const HD_CARD_SLOT_LABEL: Record<HdCardSlot, string> = {
   desk_phone: "Desk phone",
-  cell_phone: "Cell phone",
+  cell_phone: "Mobile phone",
   email: "Email",
   office: "Office",
   department: "Department",

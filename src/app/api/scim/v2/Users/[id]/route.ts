@@ -1,5 +1,7 @@
 import {
   scimGuard,
+  scimLapsed,
+  SCIM_LAPSED_DETAIL,
   scimJson,
   scimError,
   toScimUser,
@@ -44,6 +46,14 @@ async function applyUpdate(
 ) {
   const user = await findUser(idParam);
   if (!user) return scimError(404, "User not found.");
+
+  // 1.20.27 (security review M4): with the licence lapsed only a
+  // deactivation is carried out; anything else in the request is ignored,
+  // and a request that does not deactivate is refused.
+  if (await scimLapsed()) {
+    if (fields.active !== false) return scimError(403, SCIM_LAPSED_DETAIL);
+    fields = { active: false };
+  }
 
   // A username change must not collide with another account.
   if (fields.userName && fields.userName.toLowerCase() !== user.username.toLowerCase()) {

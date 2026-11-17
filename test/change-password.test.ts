@@ -68,7 +68,7 @@ type Handler = (req: Request) => Promise<Response>;
 let route: { POST: Handler };
 
 async function account(tag: string, opts: { provider?: string } = {}) {
-  const pw = opts.provider ? null : hashPassword(PASSWORD);
+  const pw = opts.provider ? null : await hashPassword(PASSWORD);
   const username = `${STAMP}-${tag}`;
   const r = await db.pool().query<{ id: number }>(
     `INSERT INTO users (username, name, email, role, status, auth_provider, password_hash, password_salt)
@@ -145,7 +145,7 @@ test("five wrong current passwords lock the pair: the sixth, right or not, waits
   assert.deepEqual((await audited("auth.lockout", me.id)).map((r) => r.details), [{ minutes: 15, via: "change_password" }]);
 
   const row = await db.getUserByUsername(me.username);
-  assert.ok(verifyPassword(PASSWORD, row!.password_hash!, row!.password_salt!), "the password is unchanged");
+  assert.ok(await verifyPassword(PASSWORD, row!.password_hash!, row!.password_salt!), "the password is unchanged");
 });
 
 test("a burst sent at once gets five checks, not one each", async () => {
@@ -176,9 +176,10 @@ test("the right current password changes it and clears the pair's misses", async
   for (let i = 0; i < 4; i++) assert.equal((await one(me.session, wrong, ip)).status, 400);
   const ok = await one(me.session, right, ip);
   assert.equal(ok.status, 200);
-  assert.deepEqual(ok.body, { ok: true });
+  // 1.20.27: the change says what it ended (this account had nothing else).
+  assert.deepEqual(ok.body, { ok: true, revoked: { api_tokens: 0, oauth_grants: 0, other_sessions: 0 } });
   const row = await db.getUserByUsername(me.username);
-  assert.ok(verifyPassword(right.newPassword, row!.password_hash!, row!.password_salt!), "the new password is set");
+  assert.ok(await verifyPassword(right.newPassword, row!.password_hash!, row!.password_salt!), "the new password is set");
   const again = { currentPassword: "Not-the-one-1", newPassword: "Another-pass-1" };
   for (let i = 1; i <= 4; i++) assert.equal((await one(me.session, again, ip)).status, 400, `miss ${i} after it: not locked`);
   assert.equal((await audited("auth.lockout", me.id)).length, 0);

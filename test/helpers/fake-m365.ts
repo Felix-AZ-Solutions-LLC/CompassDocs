@@ -40,6 +40,23 @@
 //   one message 1.20.25: `failMessages` refuses the reads of one message by
 //               its id (a 403 ErrorAccessDenied on an item whose permissions
 //               were changed) while the mailbox and its other mail read.
+//   templates   1.20.27 (ee/sso-setup, ee/scim-setup): POST
+//               /applicationTemplates/{non-gallery}/instantiate makes an app
+//               AND its service principal, answered in Graph's documented
+//               shape (application.objectId, not id; the service principal
+//               with appRoleAssignmentRequired: true and the template's
+//               tags). A new app answers 404 Request_ResourceNotFound to its
+//               first `replicationLag` calls, as Microsoft can while it
+//               finishes making it.
+//   provisioning  1.20.27: /servicePrincipals/{id}/synchronization/…
+//               templates (only on an app made from the non-gallery
+//               template: an App registrations app lists none and refuses a
+//               job), jobs, the job's schema (externalId ← mailNickname, as
+//               Microsoft's default), secrets, validateCredentials (calls
+//               `scimProbe` with the BaseAddress and SecretToken: a test
+//               hands it the real SCIM endpoint) and start. Errors come back
+//               as the synchronization API words them: a JSON string inside
+//               error.message.
 
 import { randomBytes, randomUUID } from "node:crypto";
 import http from "node:http";
@@ -116,6 +133,24 @@ export interface FakeApp {
   sendScope: Set<string>;
   activeAt: number;
   deleted: boolean;
+  /** 1.20.27: the application template it was made from (null: POST /applications). */
+  templateId?: string | null;
+  /** The application's web platform (redirectUris, homePageUrl, …). */
+  web?: Record<string, unknown>;
+  signInAudience?: string;
+  /** The service principal's. */
+  appRoleAssignmentRequired?: boolean;
+  spTags?: string[];
+  /** Calls on this app still answered 404 (Microsoft not done making it). */
+  lag?: number;
+}
+
+/** 1.20.27: a provisioning (synchronization) job on a service principal. */
+export interface FakeSyncJob {
+  id: string;
+  templateId: string;
+  status: "NotConfigured" | "Active" | "Paused" | "Quarantine";
+  schema: Record<string, unknown>;
 }
 
 export interface FakeSubscription {
@@ -163,11 +198,28 @@ export interface FakeM365 {
   retryAfter: number;
   /** A new app cannot sign in for this long. */
   signInDelayMs: number;
-  /** Fail a step of the setup: "addPassword" | "servicePrincipals". */
+  /**
+   * Fail a step of the setup: "addPassword" | "servicePrincipals"; 1.20.27: "instantiate" | "patchApp" | "jobs" |
+   * "schema" | "secrets" | "validate" | "start" | "hide".
+   */
   failStep: string;
+  /** 1.20.27: a new app from a template answers 404 to this many calls first. */
+  replicationLag: number;
+  /** 1.20.27: provisioning jobs by service principal id. */
+  syncJobs: Map<string, FakeSyncJob>;
+  /** 1.20.27: the provisioning secrets saved per service principal id. */
+  syncSecrets: Map<string, { key: string; value: string }[]>;
+  /** 1.20.27: the synchronization templates a non-gallery app lists. */
+  syncTemplates: { id: string; factoryTag: string; default?: boolean }[];
+  /** 1.20.27: what validateCredentials does with the credentials (default: accepts them). */
+  scimProbe: ((baseAddress: string, secretToken: string) => Promise<{ ok: boolean; message?: string }>) | null;
+  /** 1.20.27: the scope of every device-code sign-in started. */
+  deviceScopes: string[];
   deleteFails: boolean;
   /** The tenant the next device-code sign-in lands in (default: tenantId). */
   deviceTenant: string;
+  /** 1.20.27: domains the public OpenID discovery document resolves, to their tenant (contoso.example: tenantId). */
+  tenantDomains: Record<string, string>;
   /** Polls answered "authorization_pending" before the sign-in is approved. */
   devicePending: number;
   /** The delta query's next page link points at another host. */
@@ -251,8 +303,15 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
     retryAfter: 0,
     signInDelayMs: 0,
     failStep: "",
+    replicationLag: 0,
+    syncJobs: new Map(),
+    syncSecrets: new Map(),
+    syncTemplates: [{ id: "scim", factoryTag: "scim", default: true }],
+    scimProbe: null,
+    deviceScopes: [],
     deleteFails: false,
     deviceTenant: tenantId,
+    tenantDomains: { "contoso.example": tenantId },
     devicePending: 1,
     evilNextLink: false,
     addApp(over = {}) {
@@ -438,6 +497,213 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
     return wide || scoped ? null : [403, gerr("ErrorAccessDenied", "Access is denied. Check credentials and try again.")];
   };
 
+  // --- 1.20.27: apps from the non-gallery template, and provisioning ----------------------
+  const NON_GALLERY = "8adf8e6e-67b2-4cf2-a259-e3dc5476c621";
+  const CUSTOM_SSO_HOME = "https://account.activedirectory.windowsazure.com:444/applications/default.aspx?metadata=customappsso|ISV9.1|primary|z";
+  /** An error as the synchronization API words it: its own JSON inside error.message. */
+  const syncErr = (code: string, message: string) => ({ error: { code: "BadRequest", message: JSON.stringify({ Message: message, Code: code, Details: null }) } });
+  const spJson = (a: FakeApp) => ({
+    id: a.spId,
+    appId: a.appId,
+    displayName: a.displayName,
+    applicationTemplateId: a.templateId ?? null,
+    appRoleAssignmentRequired: a.appRoleAssignmentRequired ?? false,
+    tags: a.spTags ?? [],
+  });
+  const jobJson = (j: FakeSyncJob) => ({ id: j.id, templateId: j.templateId, schedule: { interval: "PT40M", state: j.status === "Active" ? "Active" : "Disabled" }, status: { code: j.status } });
+  const map = (target: string, attribute: string, over: Record<string, unknown> = {}) => ({
+    defaultValue: null,
+    exportMissingReferences: false,
+    flowBehavior: "FlowWhenChanged",
+    flowType: "Always",
+    matchingPriority: 0,
+    targetAttributeName: target,
+    source: { expression: `[${attribute}]`, name: attribute, parameters: [], type: "Attribute" },
+    ...over,
+  });
+  /** Microsoft's default mappings for a non-gallery SCIM app (the parts that matter here). */
+  const defaultSchema = () => ({
+    id: "customappsso",
+    version: "Date:2026-11-01T00:00:00Z~###~Version:1",
+    directories: [
+      { id: "AzureActiveDirectory", name: "Azure Active Directory", objects: [] },
+      { id: "customappsso", name: "customappsso", objects: [] },
+    ],
+    synchronizationRules: [
+      {
+        id: "6c409270-f78a-4bc6-af23-7cf3ab6482fe",
+        name: "USER_OUTBOUND_USER",
+        sourceDirectoryName: "Azure Active Directory",
+        targetDirectoryName: "customappsso",
+        objectMappings: [
+          {
+            enabled: true,
+            flowTypes: "Add, Update, Delete",
+            name: "Provision Azure Active Directory Users",
+            sourceObjectName: "User",
+            targetObjectName: "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+            attributeMappings: [
+              map("userName", "userPrincipalName", { matchingPriority: 1 }),
+              map("active", "IsSoftDeleted", { source: { expression: 'Switch([IsSoftDeleted], , "False", "True", "True", "False")', name: "Switch", parameters: [], type: "Function" } }),
+              map("displayName", "displayName"),
+              map('emails[type eq "work"].value', "mail"),
+              map("externalId", "mailNickname"),
+            ],
+          },
+          {
+            enabled: true,
+            flowTypes: "Add, Update, Delete",
+            name: "Provision Azure Active Directory Groups",
+            sourceObjectName: "Group",
+            targetObjectName: "urn:ietf:params:scim:schemas:core:2.0:Group",
+            attributeMappings: [map("displayName", "displayName", { matchingPriority: 1 }), map("externalId", "objectId")],
+          },
+        ],
+      },
+    ],
+  });
+
+  /** The 1.20.27 setup calls; [status, body] to answer, "sent" when answered already, null when not one of them. */
+  async function entraSetup(
+    method: string,
+    path: string,
+    url: URL,
+    json: () => Record<string, unknown>,
+    bearer: string,
+    notYet: (a: FakeApp | undefined) => boolean
+  ): Promise<[number, unknown] | "sent" | null> {
+    const tenant = delegated.get(bearer)!;
+    const live = (a: FakeApp) => !a.deleted && a.tenant === tenant;
+    const denied: [number, unknown] = [403, gerr("Authorization_RequestDenied", "Insufficient privileges to complete the operation.")];
+
+    const inst = path.match(/^\/applicationTemplates\/([^/]+)\/instantiate$/);
+    if (inst && method === "POST") {
+      if (inst[1] !== NON_GALLERY) return [404, gerr("Request_ResourceNotFound", "No such application template.")];
+      if (fake.failStep === "instantiate") return denied;
+      const name = String(json().displayName ?? "");
+      const a = fake.addApp({
+        displayName: name,
+        tenant,
+        secrets: [],
+        activeAt: Date.now() + fake.signInDelayMs,
+        templateId: NON_GALLERY,
+        web: { homePageUrl: CUSTOM_SSO_HOME, logoutUrl: null, redirectUris: [], implicitGrantSettings: { enableAccessTokenIssuance: false, enableIdTokenIssuance: false }, redirectUriSettings: [] },
+        signInAudience: "AzureADMyOrg",
+        appRoleAssignmentRequired: true,
+        spTags: ["WindowsAzureActiveDirectoryCustomSingleSignOnApplication", "WindowsAzureActiveDirectoryIntegratedApp"],
+        lag: fake.replicationLag,
+      });
+      // As documented: the application in Azure AD Graph's older shape (objectId, no id).
+      return [
+        201,
+        {
+          "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#microsoft.graph.applicationServicePrincipal",
+          application: { objectId: a.objectId, appId: a.appId, applicationTemplateId: NON_GALLERY, displayName: name, homepage: CUSTOM_SSO_HOME, identifierUris: [], replyUrls: [], availableToOtherTenants: false, requiredResourceAccess: [] },
+          servicePrincipal: { ...spJson(a), accountEnabled: true, appDisplayName: name, servicePrincipalType: "Application" },
+        },
+      ];
+    }
+
+    const appPath = path.match(/^\/applications\/([^/]+)$/);
+    if (appPath && (method === "GET" || method === "PATCH")) {
+      const a = [...apps.values()].find((x) => x.objectId === appPath[1] && live(x));
+      if (notYet(a)) return "sent";
+      if (!a) return [404, gerr("Request_ResourceNotFound", "No such application.")];
+      if (method === "GET") return [200, { id: a.objectId, appId: a.appId, displayName: a.displayName, signInAudience: a.signInAudience ?? "AzureADMyOrg", web: a.web ?? { redirectUris: [] } }];
+      if (fake.failStep === "patchApp") return denied;
+      const b = json();
+      // A complex property is replaced whole.
+      if (b.web && typeof b.web === "object") a.web = b.web as Record<string, unknown>;
+      if (typeof b.signInAudience === "string") a.signInAudience = b.signInAudience;
+      return [204, undefined];
+    }
+
+    if (path === "/servicePrincipals" && method === "GET") {
+      const m = (url.searchParams.get("$filter") ?? "").match(/^(appId|displayName) eq '((?:[^']|'')*)'$/);
+      if (!m) return [400, gerr("Request_UnsupportedQuery", "Unsupported query.")];
+      const want = m[2].replace(/''/g, "'");
+      const value = [...apps.values()].filter((a) => live(a) && (m[1] === "appId" ? a.appId === want : a.displayName === want)).map(spJson);
+      return [200, { value }];
+    }
+
+    const spPath = path.match(/^\/servicePrincipals\/([^/]+)(\/.*)?$/);
+    if (!spPath) return null;
+    const a = [...apps.values()].find((x) => x.spId === spPath[1] && live(x));
+    const rest = spPath[2] ?? "";
+    if (rest === "/appRoleAssignments") return null;
+    if (notYet(a)) return "sent";
+    if (!a) return [404, gerr("Request_ResourceNotFound", "No such service principal.")];
+    if (rest === "" && method === "GET") return [200, spJson(a)];
+    if (rest === "" && method === "PATCH") {
+      const b = json();
+      if (Array.isArray(b.tags)) {
+        if (fake.failStep === "hide") return denied;
+        a.spTags = b.tags.map(String);
+      }
+      if (typeof b.appRoleAssignmentRequired === "boolean") a.appRoleAssignmentRequired = b.appRoleAssignmentRequired;
+      return [204, undefined];
+    }
+    const fromTemplate = a.templateId === NON_GALLERY;
+    if (rest === "/synchronization/templates" && method === "GET") {
+      return [200, { value: fromTemplate ? fake.syncTemplates.map((t) => ({ ...t, applicationId: a.appId, metadata: [] })) : [] }];
+    }
+    if (rest === "/synchronization/jobs" && method === "GET") {
+      const j = fake.syncJobs.get(a.spId);
+      return [200, { value: j ? [jobJson(j)] : [] }];
+    }
+    if (rest === "/synchronization/jobs" && method === "POST") {
+      if (fake.failStep === "jobs") return [403, syncErr("AuthorizationFailed", "The signed-in user is not allowed to configure provisioning for this application.")];
+      if (!fromTemplate) return [400, syncErr("ProvisioningNotSupported", "Out of the box automatic provisioning to this application is not supported today.")];
+      const templateId = String(json().templateId ?? "");
+      if (!fake.syncTemplates.some((t) => t.id === templateId)) return [404, syncErr("SyncTemplateNotFound", `The template ${templateId} was not found for this application.`)];
+      if (fake.syncJobs.has(a.spId)) {
+        fake.log.push("! second provisioning job asked for");
+        return [409, syncErr("JobAlreadyExists", "A job with this template already exists for this application.")];
+      }
+      const j: FakeSyncJob = { id: `${templateId}.${randomBytes(16).toString("hex")}.${randomUUID()}`, templateId, status: "NotConfigured", schema: defaultSchema() };
+      fake.syncJobs.set(a.spId, j);
+      return [201, jobJson(j)];
+    }
+    if (rest === "/synchronization/secrets" && method === "PUT") {
+      if (fake.failStep === "secrets") return [400, syncErr("InvalidSecret", "The secret token could not be saved for this application.")];
+      const v = json().value;
+      if (!Array.isArray(v)) return [400, gerr("BadRequest", "value is required.")];
+      fake.syncSecrets.set(a.spId, v.map((x: { key?: unknown; value?: unknown }) => ({ key: String(x?.key ?? ""), value: String(x?.value ?? "") })));
+      return [204, undefined];
+    }
+    const jp = rest.match(/^\/synchronization\/jobs\/([^/]+)(\/.*)?$/);
+    if (jp) {
+      const j = fake.syncJobs.get(a.spId);
+      if (!j || j.id !== decodeURIComponent(jp[1])) return [404, syncErr("SyncJobNotFound", "The job was not found.")];
+      const tail = jp[2] ?? "";
+      if (tail === "/schema" && method === "GET") {
+        if (fake.failStep === "schema") return [500, syncErr("InternalError", "The schema could not be read right now.")];
+        return [200, { "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#servicePrincipals('x')/synchronization/jobs('y')/schema/$entity", ...JSON.parse(JSON.stringify(j.schema)) }];
+      }
+      if (tail === "/schema" && method === "PUT") {
+        const b = json();
+        if (!Array.isArray(b.synchronizationRules) || !Array.isArray(b.directories)) return [400, gerr("BadRequest", "The schema is incomplete.")];
+        j.schema = b;
+        return [204, undefined];
+      }
+      if (tail === "/validateCredentials" && method === "POST") {
+        if (fake.failStep === "validate") return [400, syncErr("SystemForCrossDomainIdentityManagementCredentialValidationUnavailable", "You appear to have entered invalid credentials. Please confirm you are using the correct information for an administrative account.")];
+        const creds = (json().credentials ?? []) as { key: string; value: string }[];
+        const base = creds.find((c) => c.key === "BaseAddress")?.value ?? "";
+        const token = creds.find((c) => c.key === "SecretToken")?.value ?? "";
+        if (!base || !token) return [400, syncErr("CredentialsMissing", "BaseAddress and SecretToken are required.")];
+        const r = fake.scimProbe ? await fake.scimProbe(base, token) : { ok: true };
+        return r.ok ? [204, undefined] : [400, syncErr("SystemForCrossDomainIdentityManagementCredentialValidationUnavailable", `We received this unexpected response from your application: ${r.message ?? "no answer"}`)];
+      }
+      if (tail === "/start" && method === "POST") {
+        if (fake.failStep === "start") return [403, syncErr("AuthorizationFailed", "The signed-in user is not allowed to start provisioning for this application.")];
+        j.status = "Active";
+        return [204, undefined];
+      }
+    }
+    return null;
+  }
+
   async function graph(req: http.IncomingMessage, res: http.ServerResponse, url: URL, path: string): Promise<void> {
     const method = req.method ?? "GET";
     const bearer = (req.headers.authorization ?? "").replace(/^Bearer /, "");
@@ -452,6 +718,16 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
 
     // --- The one-click setup, as the signed-in admin ---
     if (delegated.has(bearer)) {
+      // 1.20.27: a new app from a template is not known everywhere at once.
+      const notYet = (a: FakeApp | undefined): boolean => {
+        if (!a || !(a.lag && a.lag > 0)) return false;
+        a.lag--;
+        send(res, 404, gerr("Request_ResourceNotFound", `Resource '${a.objectId}' does not exist or one of its queried reference-property objects are not present.`));
+        return true;
+      };
+      const entra = await entraSetup(method, path, url, json, bearer, notYet);
+      if (entra === "sent") return;
+      if (entra) return send(res, entra[0], entra[1]);
       if (method === "POST" && path === "/applications") {
         const b = json();
         if (Array.isArray(b.requiredResourceAccess) && b.requiredResourceAccess.length) fake.log.push("! setup asked for Graph permissions");
@@ -462,6 +738,7 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
       if (method === "POST" && pw) {
         if (fake.failStep === "addPassword") return send(res, 403, gerr("Authorization_RequestDenied", "Insufficient privileges to complete the operation."));
         const app = [...apps.values()].find((a) => a.objectId === pw[1]);
+        if (notYet(app)) return;
         if (!app) return send(res, 404, gerr("Request_ResourceNotFound", "No such application."));
         const secret = `fake~${randomBytes(24).toString("base64url")}`;
         app.secrets.push(secret);
@@ -682,8 +959,15 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
 
   async function login(req: http.IncomingMessage, res: http.ServerResponse, path: string): Promise<void> {
     const form = new URLSearchParams((await read(req)).toString("utf8"));
+    // 1.20.27: the public discovery document, which names a domain's tenant in its issuer.
+    const disc = path.match(/^\/([^/]+)\/v2\.0\/\.well-known\/openid-configuration$/);
+    if (disc && req.method === "GET") {
+      const t = fake.tenantDomains[decodeURIComponent(disc[1])];
+      return t ? send(res, 200, { issuer: `https://login.microsoftonline.com/${t}/v2.0` }) : send(res, 400, { error: "invalid_tenant" });
+    }
     if (path === "/organizations/oauth2/v2.0/devicecode") {
       const code = randomBytes(24).toString("base64url");
+      fake.deviceScopes.push(form.get("scope") ?? "");
       deviceCodes.set(code, { polls: 0, tenant: fake.deviceTenant });
       return send(res, 200, { device_code: code, user_code: "H7KQ2MZP9", verification_uri: "https://microsoft.com/devicelogin", interval: 1, expires_in: 900 });
     }
@@ -725,7 +1009,10 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
       log.length = 0;
       fake.requests.length = 0;
       fake.failMessages.clear();
-      Object.assign(fake, { fail: {}, retryAfter: 0, delayMs: 0, maxInflight: 0, failAttachmentId: "", signInDelayMs: 0, failStep: "", deleteFails: false, deviceTenant: tenantId, devicePending: 1, evilNextLink: false });
+      fake.syncJobs.clear();
+      fake.syncSecrets.clear();
+      fake.deviceScopes.length = 0;
+      Object.assign(fake, { fail: {}, retryAfter: 0, delayMs: 0, maxInflight: 0, failAttachmentId: "", signInDelayMs: 0, failStep: "", replicationLag: 0, scimProbe: null, deleteFails: false, deviceTenant: tenantId, devicePending: 1, evilNextLink: false });
       return send(res, 200, { ok: true });
     }
     if (op === "set") {

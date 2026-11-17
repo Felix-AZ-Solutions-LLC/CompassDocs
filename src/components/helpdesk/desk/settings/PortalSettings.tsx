@@ -22,6 +22,7 @@ import { chipClass } from "@/components/Chip";
 import { Field, SectionEmpty, Select, TextInput, Textarea, Toggle } from "@/components/form";
 import { RelativeTime } from "@/components/RelativeTime";
 import { SaveRow } from "@/components/SaveRow";
+import { WorkspaceAddressNotice } from "../WorkspaceAddressNotice";
 import { Segmented } from "@/components/Segmented";
 import { LoadingRow } from "@/components/Spinner";
 import { confirmDialog } from "@/components/Dialog";
@@ -52,6 +53,8 @@ interface Loaded {
   types: TypeOption[];
   teams: { id: number; name: string }[];
   custom_domain: string;
+  /** The configured workspace address mail links use (1.20.27); null: none, so no sign-in links are sent. */
+  workspace_address?: string | null;
   path: string;
 }
 
@@ -105,7 +108,9 @@ export function PortalSettings() {
     setS({ ...s, ...p });
   };
   const setLimits = (p: Partial<Settings["limits"]>) => set({ limits: { ...s.limits, ...p } });
-  const host = data.custom_domain || (typeof window === "undefined" ? "" : window.location.host);
+  // 1.20.27: the full address ("https://help.example.com/support"), not a bare host and path.
+  const origin = data.workspace_address || (data.custom_domain ? `https://${data.custom_domain}` : typeof window === "undefined" ? "" : window.location.origin);
+  const portalUrl = `${origin}${data.path}`;
   const teamName = (id: number | null) => data.teams.find((t) => t.id === id)?.name ?? null;
 
   function toggleType(t: TypeOption, on: boolean) {
@@ -171,7 +176,10 @@ export function PortalSettings() {
   return (
     <>
       <div className="flex flex-col gap-4">
+        {/* 1.20.27: the card has a title, so Open portal sits on a header row of its own rather than
+            floating over an empty one, and the help names the full address customers open. */}
         <Card
+          title="Portal"
           actions={
             <Button variant="secondary" size="sm" icon={<ExternalLink />} href={data.path} target="_blank" rel="noopener">
               Open portal
@@ -181,16 +189,12 @@ export function PortalSettings() {
         >
           <Toggle
             label={s.enabled ? "Portal is on" : "Portal is off"}
-            help={`${host} → ${data.path} · customers sign in with a one-time link sent to their email`}
+            help={`Customers open ${portalUrl} and sign in with a one-time link sent to their email.`}
             checked={s.enabled}
             onChange={(v) => set({ enabled: v })}
             size="full"
           />
-          {s.enabled && !data.custom_domain && (
-            <p className="notice-warn mt-3 rounded-lg border px-3 py-2 text-sm">
-              Set your workspace&apos;s domain under Settings, Domain, so sign-in links always point to it rather than to the address a visitor used.
-            </p>
-          )}
+          <WorkspaceAddressNotice address={data.workspace_address ?? null} portal portalOn={s.enabled} className="mt-3" />
         </Card>
 
         <div className="grid items-start gap-4 lg:grid-cols-2">
@@ -354,7 +358,7 @@ export function PortalSettings() {
           </Card>
         </div>
 
-        <p className="flex items-start gap-2 rounded-lg border border-compass-200 bg-compass-50 px-3 py-2.5 text-sm text-compass-800 dark:border-compass-500/40">
+        <p className="notice-info flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm">
           <Lock className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
           Customers only ever see their own requests and the public conversation. They never see CompassDocs, your directory or internal notes.
         </p>

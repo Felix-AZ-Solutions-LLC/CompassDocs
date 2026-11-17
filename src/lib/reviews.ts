@@ -7,6 +7,7 @@
 
 import "server-only";
 import { pool } from "./db";
+import { mailOrigin } from "./workspace-origin";
 
 async function q<T = any>(sql: string, params: any[] = []): Promise<T[]> {
   return (await pool().query(sql, params)).rows as T[];
@@ -138,7 +139,7 @@ export async function remindDueReviews(): Promise<void> {
   const settings = await getAppSettings();
   // No request context in the scheduler: the configured custom domain is the
   // best origin we have (links degrade to relative paths without one).
-  const origin = settings.custom_domain ? `https://${settings.custom_domain}` : "";
+  const origin = await mailOrigin();
 
   for (const doc of due) {
     try {

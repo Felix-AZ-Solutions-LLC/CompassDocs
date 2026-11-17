@@ -122,7 +122,7 @@ const EE_REAL = path.join(__dirname, "..", "src", "lib", "ee");
   ee.exports = {
     ee: () => edition,
     eePresent: () => true,
-    featureEnabled: async (feature: string) => edition.features.includes(feature),
+    featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature),
   };
   require.cache[EE_STUB] = ee;
 
@@ -739,7 +739,7 @@ describe("new accounts and the welcome notice", () => {
     const w2 = await newPolicy("welcome 2");
     const w3 = await newPolicy("welcome off");
     await retryOnTeardownRace(() => saveAudienceRules(w3.id, { assign_new_members: false }));
-    const { hash, salt } = hashPassword("Newbie!12345");
+    const { hash, salt } = await hashPassword("Newbie!12345");
     const newbie = await hooked(
       () =>
         createUser({
@@ -889,7 +889,7 @@ describe("new accounts and the welcome notice", () => {
       errors.push(a.map(String).join(" "));
     };
     try {
-      const { hash, salt } = hashPassword("Hookfail!12345");
+      const { hash, salt } = await hashPassword("Hookfail!12345");
       const user = await createUser({
         username,
         name: `Hookfail ${STAMP}`,

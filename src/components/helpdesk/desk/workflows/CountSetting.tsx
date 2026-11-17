@@ -108,7 +108,7 @@ function CountExampleStrip({ teamId, query }: { teamId: number | null; query: Co
   if (!text) return null;
   return (
     <p
-      className="mt-3 flex gap-2 rounded-lg border border-compass-200 bg-compass-50/70 px-3 py-2 text-sm text-slate-700"
+      className="notice-info mt-3 flex gap-2 rounded-lg border px-3 py-2 text-sm"
       data-testid="count-example"
     >
       <CalendarDays className="mt-0.5 h-4 w-4 shrink-0 text-compass-600" aria-hidden />

@@ -108,7 +108,7 @@ export function RequestDetail({
       <ProgressTracker createdAt={req.created_at} status={req.status} teamName={req.team_name} workflow={req.workflow} />
 
       {req.my_approval && (
-        <div className="mt-4 rounded-lg border border-compass-200 bg-compass-50/70 px-3 py-2 text-sm text-slate-700 print:hidden">
+        <div className="notice-info mt-4 rounded-lg border px-3 py-2 text-sm print:hidden">
           This request is waiting for your decision.{" "}
           <Link href="/help/approvals" className="link font-medium">
             Decide in Approvals

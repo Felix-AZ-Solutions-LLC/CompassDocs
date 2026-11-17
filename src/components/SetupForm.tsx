@@ -12,11 +12,15 @@ const optional = <span className="font-normal text-slate-500">(optional)</span>;
 export function SetupForm({
   enterprise = false,
   proxyManaged = false,
+  initialToken = "",
 }: {
   enterprise?: boolean;
   proxyManaged?: boolean;
+  /** 1.20.27: a token passed in the address (/setup?token=…) fills the field. */
+  initialToken?: string;
 }) {
   const router = useRouter();
+  const [setupToken, setSetupToken] = useState(initialToken);
   const [companyName, setCompanyName] = useState("");
   const [name, setName] = useState("");
   const [username, setUsername] = useState("");
@@ -50,6 +54,7 @@ export function SetupForm({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          setup_token: setupToken.trim(),
           username,
           name,
           email,
@@ -77,11 +82,34 @@ export function SetupForm({
     <form onSubmit={submit} className="space-y-4">
       <FormError>{error}</FormError>
 
+      {/* 1.20.27 (security review M11): only the operator can read the server log. */}
+      <Field
+        label="Setup token"
+        help={
+          <>
+            Printed in the server log when CompassDocs starts. Run{" "}
+            <code className="font-mono">docker compose logs app</code> on the server and look for &ldquo;setup token&rdquo;.
+          </>
+        }
+      >
+        <TextInput
+          value={setupToken}
+          onChange={(e) => setSetupToken(e.target.value)}
+          autoFocus={!initialToken}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="XXXXX-XXXXX-XXXXX-XXXXX"
+          className="font-mono"
+          maxLength={200}
+          required
+        />
+      </Field>
+
       <Field label={<>Company / workspace name {optional}</>}>
         <TextInput
           value={companyName}
           onChange={(e) => setCompanyName(e.target.value)}
-          autoFocus
+          autoFocus={!!initialToken}
           placeholder="CompassDocs"
           maxLength={80}
         />

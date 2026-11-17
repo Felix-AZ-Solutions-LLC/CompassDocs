@@ -13,8 +13,16 @@
 // finishes whatever the page does. The poll's answer goes to onDone and, when
 // doneMessage is a function, picks the closing words (doneWarn: as a
 // warning notice, for a setup that finished with something left to do).
+//
+// 1.20.27 (SCIM provisioning, a setup of several steps): `label` names the
+// button, `beforeStart` may ask first (a confirmDialog) and `startBody` is
+// sent with the start, so what the admin chose is what the server does.
+// `details` renders the poll's answer under the closing notice, and under
+// the error when the setup stopped part-way (its steps, in words);
+// `onError` hears that answer too (the panel refetches its state: a setup
+// can change things before it stops).
 
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { buttonClass } from "@/components/Button";
 
 export function MsDeviceSetup({
@@ -25,17 +33,35 @@ export function MsDeviceSetup({
   doneMessage,
   doneWarn,
   onDone,
+  label = "Set up automatically with Microsoft",
+  beforeStart,
+  startBody,
+  details,
+  onError,
+  children,
 }: {
   startUrl: string;
   pollUrl: string;
   /** Admin view endpoint refetched after success; its JSON goes to onDone. */
   refreshUrl: string;
-  blurb: string;
+  blurb: ReactNode;
   doneMessage: string | ((result: any) => string);
   /** True when the setup finished with something left for the admin to do: the closing notice is a warning. */
   doneWarn?: (result: any) => boolean;
   /** `result` is the poll's own answer ({ status: "done", … }). */
   onDone: (state: any, result: any) => void;
+  /** The button's words. */
+  label?: string;
+  /** Resolve false to stay put (the admin said no). */
+  beforeStart?: () => Promise<boolean>;
+  /** JSON sent with the start request. */
+  startBody?: () => unknown;
+  /** The poll's answer, done or failed, in detail (failed: the setup stopped). */
+  details?: (result: any, failed: boolean) => ReactNode;
+  /** The setup stopped: the poll's error answer. */
+  onError?: (body: any) => void;
+  /** Options shown under the button while idle. */
+  children?: ReactNode;
 }) {
   const [phase, setPhase] = useState<"idle" | "starting" | "waiting" | "done">("idle");
   const [code, setCode] = useState("");
@@ -43,13 +69,20 @@ export function MsDeviceSetup({
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
   const [result, setResult] = useState<any>(null);
+  const [failure, setFailure] = useState<any>(null);
   const stop = useRef(false);
 
   async function begin() {
+    if (beforeStart && !(await beforeStart())) return;
     setError("");
+    setFailure(null);
     setPhase("starting");
     stop.current = false;
-    const res = await fetch(startUrl, { method: "POST" });
+    const body = startBody?.();
+    const res = await fetch(
+      startUrl,
+      body === undefined ? { method: "POST" } : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+    );
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       // A 404 is an enterprise build from before this setup existed (the route is its own).
@@ -89,7 +122,9 @@ export function MsDeviceSetup({
       }
       if (!p.ok) {
         setError(pd?.error || "Setup failed.");
+        setFailure(pd);
         setPhase("idle");
+        onError?.(pd);
         return;
       }
     }
@@ -101,8 +136,11 @@ export function MsDeviceSetup({
 
   if (phase === "done") {
     return (
-      <div className={`${doneWarn?.(result) ? "notice-warn" : "notice-ok"} mb-4 rounded-lg border px-3 py-2 text-sm`} role="status">
-        {typeof doneMessage === "function" ? doneMessage(result) : doneMessage}
+      <div className="mb-4">
+        <div className={`${doneWarn?.(result) ? "notice-warn" : "notice-ok"} rounded-lg border px-3 py-2 text-sm`} role="status">
+          {typeof doneMessage === "function" ? doneMessage(result) : doneMessage}
+        </div>
+        {details?.(result, false)}
       </div>
     );
   }
@@ -154,12 +192,14 @@ export function MsDeviceSetup({
             disabled={phase === "starting"}
             className={buttonClass("primary")}
           >
-            {phase === "starting" ? "Contacting Microsoft…" : "Set up automatically with Microsoft"}
+            {phase === "starting" ? "Contacting Microsoft…" : label}
           </button>
           <span className="text-xs text-slate-500">{blurb}</span>
         </div>
       )}
+      {phase !== "waiting" && children}
       {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      {error && failure && details?.(failure, true)}
     </div>
   );
 }

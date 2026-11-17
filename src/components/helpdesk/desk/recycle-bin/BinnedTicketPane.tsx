@@ -131,7 +131,8 @@ export function BinnedTicketPane({
         <PageHeader className="sr-only" title={`Ticket #${t.number}: ${t.subject} (in the recycle bin)`} />
         <div role="status" className="notice-error flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 text-sm" data-testid="binned-banner">
           <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
-          <p className="min-w-0 flex-1">
+          {/* 1.20.27: a 16rem basis, so on a phone the buttons drop under the sentence instead of squeezing it to a word a line. */}
+          <p className="min-w-0 flex-1 basis-64">
             <b>This ticket is in the recycle bin.</b> {binBannerText(bin)}
           </p>
           <div className="flex flex-wrap gap-2">
@@ -147,8 +148,9 @@ export function BinnedTicketPane({
             )}
           </div>
         </div>
-        {/* Read-only: dimmed, out of the tab order and the accessibility tree's controls. */}
-        <div className="mt-5 opacity-60 print:opacity-100" inert>
+        {/* Read-only: dimmed, out of the tab order and the accessibility tree's controls. 1.20.27: 75% in
+            dark mode, where 60% took message text under 4.5:1. */}
+        <div className="mt-5 opacity-60 dark:opacity-75 print:opacity-100" inert>
           <p className="text-xs text-slate-500">
             #{t.number}
             {t.team_name && ` · ${t.team_name}`} · opened <RelativeTime value={t.created_at} /> by {t.requester_name || t.requester_email}

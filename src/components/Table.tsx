@@ -25,6 +25,7 @@
 import type { ReactNode } from "react";
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
 import { EYEBROW_TEXT } from "./Heading";
+import { useEdgeFade } from "./edge-fade";
 
 /** The header row: put it on <thead> (or the header <tr>). */
 export const TABLE_HEAD_ROW = `border-b border-slate-100 text-left ${EYEBROW_TEXT}`;
@@ -40,9 +41,20 @@ export const FIT = "w-px whitespace-nowrap";
 
 /** A table inside a card: the wrapper scrolls sideways on narrow screens
  *  instead of breaking the page. On paper nothing scrolls, so the wrapper
- *  lets the table show whole (with `Table`'s minimum width dropped, below). */
+ *  lets the table show whole (with `Table`'s minimum width dropped, below).
+ *  1.20.27: while columns are hidden past an edge, that edge fades out
+ *  (components/edge-fade), so a cut-off column reads as "scroll". */
 export function TableWrap({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`overflow-x-auto print:overflow-visible ${className}`.trim()}>{children}</div>;
+  const ref = useEdgeFade<HTMLDivElement>();
+  // The fade is an overlay beside the scroller (edge-fade-frame), never a mask on it: a mask clips everything
+  // inside, including a row's ⋯ menu where it reaches past the table, and the page under it then takes the click.
+  return (
+    <div className={`edge-fade-frame relative ${className}`.trim()}>
+      <div ref={ref} className="overflow-x-auto print:overflow-visible">
+        {children}
+      </div>
+    </div>
+  );
 }
 
 export function Table({

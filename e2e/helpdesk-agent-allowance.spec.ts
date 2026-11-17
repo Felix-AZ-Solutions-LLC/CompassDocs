@@ -114,7 +114,7 @@ test.describe("helpdesk agent allowance", () => {
     await expect(
       page.getByText("on your licence · 3 included, 3 bought · not enforced while the licence is in grace · over by 1 once renewed", { exact: true })
     ).toBeVisible();
-    await expect(page.locator(".notice-warn")).toHaveCount(0);
+    await expect(page.locator("#main .notice-warn")).toHaveCount(0);
     await expect(page.getByRole("meter", { name: "Helpdesk agents in use" }).locator("div")).toHaveClass(/bg-compass-600/);
   });
 
@@ -136,7 +136,7 @@ test.describe("helpdesk agent allowance", () => {
     await shot(page, "b2-agents-over-1440");
     await stubAgents(page, { ...within, used: 9, over: 3 });
     await openAgents(page);
-    await expect(page.locator(".notice-warn")).toContainText("To add someone new, buy 4 more agents or take 4 people off the desk.");
+    await expect(page.locator("#main .notice-warn")).toContainText("To add someone new, buy 4 more agents or take 4 people off the desk.");
   });
 
   test("Agents: unlimited on the rig's key is one muted line, no meter", async ({ page }) => {
@@ -144,7 +144,9 @@ test.describe("helpdesk agent allowance", () => {
     const real = await api(page, "/api/helpdesk/admin/agents");
     test.skip(real.body.licensed !== null, "the rig's key carries an agents claim");
     await openAgents(page);
-    await expect(page.getByText(`${real.body.used} agent${real.body.used === 1 ? "" : "s"} · unlimited on your licence`, { exact: true })).toBeVisible();
+    // 1.20.27: the line carries no count; the list's filter says how many, once.
+    await expect(page.getByText("Unlimited agents on your licence.", { exact: true })).toBeVisible();
+    await expect(page.getByText(`${real.body.used} agent${real.body.used === 1 ? "" : "s"}`, { exact: true })).toBeVisible();
     await expect(page.getByRole("meter")).toHaveCount(0);
     await expect(page.getByRole("link", { name: /Buy more agents/ })).toHaveCount(0);
   });

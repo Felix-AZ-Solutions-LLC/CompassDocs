@@ -200,8 +200,13 @@ export function OnCallSettings() {
             <div className="space-y-4">
               <div>
                 <p className="text-sm font-medium text-slate-800">People, in order</p>
-                {draft.user_ids.length === 0 ? (
-                  <SectionEmpty className="mt-1">Nobody on the rota yet.</SectionEmpty>
+                {draft.user_ids.length === 0 && members.length === 0 ? (
+                  // 1.20.27: not a dead end: with nobody in the team there is nobody to add, so say where to add them.
+                  <SectionEmpty className="mt-1" action={teamId ? { href: `/desk/settings/teams/${teamId}`, label: "Add people to the team" } : undefined}>
+                    Nobody is in this team yet, so there&apos;s nobody to put on the rota.
+                  </SectionEmpty>
+                ) : draft.user_ids.length === 0 ? (
+                  <SectionEmpty className="mt-1">Nobody on the rota yet. Add the team&apos;s people below, in the order they take turns.</SectionEmpty>
                 ) : (
                   <ol className="mt-2 divide-y divide-slate-100 rounded-lg border border-slate-200">
                     {draft.user_ids.map((id, i) => (

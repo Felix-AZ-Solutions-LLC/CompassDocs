@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiGuard } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import {
   getNewsletter,
   getNewsletterApproverIds,
@@ -9,7 +10,6 @@ import {
 } from "@/lib/db";
 import { canDecide } from "@/lib/newsletter-access";
 import { sendWorkflowNotice } from "@/lib/newsletter";
-import { requestOrigin } from "@/lib/oauth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import type { SessionUser } from "@/lib/types";
 
@@ -63,7 +63,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (n.created_by && n.created_by !== user.id) {
     const author = await getUserById(n.created_by);
     if (author?.email) {
-      const origin = requestOrigin(req);
+      const origin = await mailOrigin();
       await sendWorkflowNotice(
         [author.email],
         action === "approve"

@@ -472,7 +472,7 @@ function ChoiceCards({
             <label
               key={o.value}
               className={`flex cursor-pointer items-start gap-2.5 rounded-lg border px-3.5 py-3 transition ${
-                on ? "border-compass-300 bg-compass-50/60" : "border-slate-200 bg-surface hover:bg-slate-50"
+                on ? "border-compass-300 dark:border-compass-500 bg-compass-50/60" : "border-slate-200 bg-surface hover:bg-slate-50"
               }`}
             >
               <input

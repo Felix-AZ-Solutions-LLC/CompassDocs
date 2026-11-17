@@ -220,7 +220,7 @@ test.describe("Helpdesk requester strip", () => {
     await call.focus();
     await page.keyboard.press("Enter");
     const menu = page.getByRole("menu", { name: "Call Daniel Okafor" });
-    await expect(menu.getByRole("menuitem")).toHaveText([/^Desk phone\s*\+44 20 7946 0142$/, /^Cell phone\s*\+44 7700 900142$/]);
+    await expect(menu.getByRole("menuitem")).toHaveText([/^Desk phone\s*\+44 20 7946 0142$/, /^Mobile phone\s*\+44 7700 900142$/]);
     await expect(menu.getByRole("menuitem").first()).toHaveAttribute("href", "tel:+442079460142");
     await expect(menu.getByRole("menuitem").last()).toHaveAttribute("href", "tel:+447700900142");
     await expect(menu.getByRole("menuitem").first()).toBeFocused();
@@ -301,7 +301,7 @@ test.describe("Helpdesk requester strip", () => {
     await expect(strip.getByTestId("requester-facts")).toBeHidden();
     await expect(strip.getByTestId("requester-details")).toBeHidden();
     await expect(strip.getByRole("button", { name: "Hide requester details", exact: true })).toBeHidden();
-    await expect(strip.getByText(`${email} · Desk phone +44 20 7946 0142 · Cell phone +44 7700 900142`)).toBeVisible();
+    await expect(strip.getByText(`${email} · Desk phone +44 20 7946 0142 · Mobile phone +44 7700 900142`)).toBeVisible();
     await page.emulateMedia({ media: null });
 
     // Remembered: still open after a reload, and on another ticket of his; closed again stays closed.

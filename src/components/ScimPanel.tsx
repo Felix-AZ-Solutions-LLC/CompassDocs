@@ -11,18 +11,15 @@ import { timeAgo } from "@/lib/ui";
 import { Toggle } from "@/components/form";
 import { LicenseGate } from "@/components/LicenseGate";
 import { toast } from "@/components/Toasts";
+import { ScimMicrosoftSetup } from "@/components/ScimMicrosoftSetup";
+import type { ScimStatus } from "@/lib/scim-setup-shared";
 
 // Admin card for SCIM provisioning (enterprise): shows the tenant/base URL to
 // paste into Entra, generates/rotates the bearer token (displayed once), and
-// toggles the endpoint on and off.
+// toggles the endpoint on and off. 1.20.27: or "Set up provisioning with
+// Microsoft" does all of that in Entra (ScimMicrosoftSetup).
 
-export interface ScimStatus {
-  licensed: boolean;
-  enabled: boolean;
-  token_set: boolean;
-  last_request_at: string | null;
-  base_url: string;
-}
+export type { ScimStatus };
 
 export function ScimPanel({ initial }: { initial: ScimStatus }) {
   const [status, setStatus] = useState<ScimStatus>(initial);
@@ -39,14 +36,9 @@ export function ScimPanel({ initial }: { initial: ScimStatus }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Request failed.");
-      if (data.token) setFreshToken(data.token);
-      setStatus({
-        licensed: data.licensed,
-        enabled: data.enabled,
-        token_set: data.token_set,
-        last_request_at: data.last_request_at,
-        base_url: data.base_url,
-      });
+      const { token, ...next } = data;
+      if (token) setFreshToken(token);
+      setStatus(next as ScimStatus);
     } catch (e: any) {
       toast("error", e.message || "Request failed.");
     } finally {
@@ -159,6 +151,7 @@ export function ScimPanel({ initial }: { initial: ScimStatus }) {
             </a>
             .
           </p>
+          <ScimMicrosoftSetup status={status} onState={setStatus} />
         </div>
       )}
     </section>

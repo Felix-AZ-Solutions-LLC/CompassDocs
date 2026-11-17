@@ -75,7 +75,7 @@ const edition = { present: true, features: ["policy_ack"] as string[] };
   ee.exports = {
     ee: () => edition,
     eePresent: () => true,
-    featureEnabled: async (feature: string) => edition.features.includes(feature),
+    featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature),
   };
   require.cache[EE_STUB] = ee;
 

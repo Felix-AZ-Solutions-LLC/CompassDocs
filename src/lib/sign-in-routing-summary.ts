@@ -7,7 +7,8 @@ import "server-only";
 // makes, plus the raw OIDC config for the one case it hides: an Entra
 // multi-tenant authority with no domain list, which is set up but unusable.
 
-import { featureEnabled } from "./ee";
+import { featureEnabled, featureEnforced } from "./ee";
+import { ssoOnlyDisabledByEnv } from "./sign-in-security-shared";
 import { getSsoConfig, ssoConfigured } from "./sso-config";
 import { getSamlConfig } from "./saml-config";
 import { oidcUsable, setupFrom, type SignInSetup } from "./sign-in-routing";
@@ -65,9 +66,9 @@ export function summarizeRouting(setup: SignInSetup, opts: { oidcStuck: boolean;
     const where = names.length === 1 ? names[0] : `${list(names, "disjunction")}, whichever they pick`;
     return {
       sentences: [
-        // SSO only shapes the page; the server still takes any password (docs admin/sso.md).
+        // 1.20.27 (security review H1): SSO only is enforced; a password signs in only the break-glass accounts (lib/auth login).
         `Everyone continues to ${where}.`,
-        `Anyone with a password, administrators included, can still sign in at ${localUrl}.`,
+        `Only the break-glass accounts can sign in with a password, at ${localUrl}.`,
       ],
       warnings,
       localUrl,
@@ -98,7 +99,11 @@ export function summarizeRouting(setup: SignInSetup, opts: { oidcStuck: boolean;
 
 /** The workspace's routing in sentences. `origin` is the address people reach the workspace at. */
 export async function signInRoutingSummary(origin: string): Promise<SignInRoutingSummary> {
-  if (!(await featureEnabled("sso"))) return { sentences: [EVERYONE_PASSWORD], warnings: [], localUrl: null };
+  if (!(await featureEnforced("sso"))) return { sentences: [EVERYONE_PASSWORD], warnings: [], localUrl: null };
   const [sso, saml] = await Promise.all([getSsoConfig(), getSamlConfig()]);
-  return summarizeRouting(setupFrom(sso, saml), { oidcStuck: ssoConfigured(sso) && !oidcUsable(sso), origin });
+  // As lib/sign-in-routing signInSetup (1.20.27, second review M7 and H1).
+  if (!sso.ssoOnly && !(await featureEnabled("sso"))) return { sentences: [EVERYONE_PASSWORD], warnings: [], localUrl: null };
+  const setup = setupFrom(sso, saml);
+  if (setup.ssoOnly && ssoOnlyDisabledByEnv()) setup.ssoOnly = false;
+  return summarizeRouting(setup, { oidcStuck: ssoConfigured(sso) && !oidcUsable(sso), origin });
 }

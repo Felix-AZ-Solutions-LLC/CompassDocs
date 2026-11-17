@@ -62,7 +62,7 @@ const EE_REAL = path.join(__dirname, "..", "src", "lib", "ee");
   ee.exports = {
     ee: () => ({ present: true, features: ["helpdesk"] }),
     eePresent: () => true,
-    featureEnabled: async (feature: string) => feature === "helpdesk",
+    featureEnabled: async (feature: string) => feature === "helpdesk", featureEnforced: async (feature: string) => feature === "helpdesk",
   };
   require.cache[EE_STUB] = ee;
   const loader = Module as unknown as {
@@ -317,6 +317,30 @@ describe("merge", () => {
     // The agent's detail read carries the merge for the Related card.
     const d = await call(ticketRoute.GET, req(`/tickets/${keep.number}`, P.agent.session), { number: String(keep.number) });
     assert.deepEqual(d.body.merge.merged_in.map((x: { number: number }) => x.number), [a.number, b.number]);
+  });
+
+  test("1.20.27: tickets from different requesters are named, before (a preview that changes nothing) and on the merge, which still goes ahead", async () => {
+    const keep = await ticket({ requester: P.req1, at: new Date(Date.now() - 60_000) });
+    const same = await ticket({ requester: P.req1 });
+    const other = await ticket({ requester: P.req2 });
+    const quiet = await doMerge(P.agent, { keep: keep.number, merge: [same.number], preview: true });
+    assert.equal(quiet.status, 200, JSON.stringify(quiet.body));
+    assert.equal(quiet.body.preview, true);
+    assert.equal(quiet.body.cross_requester, null, "one requester: no warning");
+    const preview = await doMerge(P.agent, { keep: keep.number, merge: [same.number, other.number], preview: true });
+    assert.equal(preview.status, 200, JSON.stringify(preview.body));
+    assert.deepEqual(
+      preview.body.cross_requester.requesters.map((r: { name: string; numbers: number[] }) => [r.name, r.numbers]),
+      [[P.req1.name, [keep.number, same.number]], [P.req2.name, [other.number]]]
+    );
+    assert.match(preview.body.cross_requester.text, new RegExp(`${P.req1.name} and ${P.req2.name}`));
+    assert.equal((await row(other.id)).merged_into, null, "the preview changed nothing");
+    // Another agent of the team: the suite spends P.agent's 20 merges a minute.
+    const done = await doMerge(P.agent2, { keep: keep.number, merge: [same.number, other.number], notify: false });
+    assert.equal(done.status, 200, "not blocked");
+    assert.equal(done.body.cross_requester.requesters.length, 2);
+    const a = (await pool().query("SELECT details FROM audit_log WHERE action = 'helpdesk.ticket.merged' AND target_id = $1 ORDER BY id DESC LIMIT 1", [String(keep.id)])).rows[0];
+    assert.equal(a.details.cross_requester.length, 2, "the audit row says it too");
   });
 
   test("repeating a merge changes nothing; merging an already merged ticket elsewhere is refused", async () => {

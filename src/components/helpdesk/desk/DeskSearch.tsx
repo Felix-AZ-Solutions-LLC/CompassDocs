@@ -8,7 +8,8 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { FileText, Search, Ticket, UserRound } from "lucide-react";
+import { FileText, Search, Ticket, UserRound, X } from "lucide-react";
+import { iconButtonClass } from "@/components/Button";
 import { Popover } from "@/components/Popover";
 import { Spinner } from "@/components/Spinner";
 import { SectionEmpty, controlClass } from "@/components/form";
@@ -47,7 +48,22 @@ export function DeskSearch() {
     return () => mq.removeEventListener("change", on);
   }, []);
 
-  useDeskKeys({ "/": () => input.current?.focus() });
+  // 1.20.27: under sm the box is an icon until opened (the top bar's Claude, Upcoming, status, bell and
+  // avatar left it about 60px); open, it covers the bar, and closes when emptied and left.
+  const [expanded, setExpanded] = useState(false);
+  const collapsed = !wide && !expanded;
+  const openSearch = () => {
+    setExpanded(true);
+    // Focus once the input is drawn.
+    requestAnimationFrame(() => input.current?.focus());
+  };
+  const closeSearch = () => {
+    setExpanded(false);
+    setOpen(false);
+    setQ("");
+  };
+
+  useDeskKeys({ "/": () => (wide ? input.current?.focus() : openSearch()) });
 
   useEffect(() => {
     const term = q.trim();
@@ -119,8 +135,27 @@ export function DeskSearch() {
 
   const showPanel = open && q.trim().length >= 2;
 
+  if (collapsed) {
+    return (
+      <button type="button" onClick={openSearch} aria-label="Search tickets, people and documents" data-tt="Search" className={iconButtonClass("quiet", "md")}>
+        <Search aria-hidden />
+      </button>
+    );
+  }
+
   return (
-    <div className="relative min-w-0 flex-1 sm:max-w-[34rem]">
+    <div
+      className={
+        wide
+          ? "relative min-w-0 flex-1 sm:max-w-[34rem]"
+          : // Open on a phone: over the whole bar, with a close button.
+            "absolute inset-x-2 top-2 z-30 flex items-center gap-1 bg-surface"
+      }
+      onBlur={(e) => {
+        if (!wide && !q && !e.currentTarget.contains(e.relatedTarget as Node | null)) setExpanded(false);
+      }}
+    >
+      <div className="relative min-w-0 flex-1">
       <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden />
       <input
         ref={input}
@@ -139,12 +174,19 @@ export function DeskSearch() {
         }}
         onFocus={() => setOpen(true)}
         onKeyDown={onKeyDown}
-        className={controlClass(false, "h-9 w-full pl-9 pr-9 text-sm", false)}
+        // 1.20.27: 16px text on a phone, so iOS does not zoom in on focus (controlClass's own default).
+        className={controlClass(false, "h-9 w-full pl-9 pr-9", false)}
       />
       {singleKey && (
         <span className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 sm:block" aria-hidden>
           <kbd className="cmd-kbd">/</kbd>
         </span>
+      )}
+      </div>
+      {!wide && (
+        <button type="button" onClick={closeSearch} aria-label="Close search" data-tt="Close" className={iconButtonClass("quiet", "md")}>
+          <X aria-hidden />
+        </button>
       )}
       <Popover
         open={showPanel}

@@ -200,7 +200,7 @@ export function ApiWebhooksSettings() {
           title="API tokens"
           padding="none"
           actions={
-            <Button icon={<Plus />} onClick={() => setTokenOpen(true)}>
+            <Button variant="secondary" size="sm" icon={<Plus />} onClick={() => setTokenOpen(true)}>
               New token
             </Button>
           }
@@ -257,7 +257,7 @@ export function ApiWebhooksSettings() {
           title="Webhooks"
           padding="none"
           actions={
-            <Button icon={<Plus />} onClick={() => setHookEdit("new")}>
+            <Button variant="secondary" size="sm" icon={<Plus />} onClick={() => setHookEdit("new")}>
               New webhook
             </Button>
           }

@@ -103,19 +103,13 @@ export function TemplatesList({
                       </span>
                       <span className="mt-0.5 block text-sm text-slate-500 sm:truncate">{e.description}</span>
                       {sum && (
-                        <span className="mt-1.5 flex flex-wrap items-center gap-1">
+                        // 1.20.27: chips spaced by the gap alone; a "·" between them could start a wrapped line.
+                        <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
                           <span className="sr-only">, built from </span>
-                          {sum.slots.map((s, i) => (
-                            <span key={s.kind} className="inline-flex items-center gap-1">
-                              {i > 0 && (
-                                <span className="text-slate-400" aria-hidden>
-                                  ·
-                                </span>
-                              )}
-                              <span className={chipClass(s.changed ? "accent" : "neutral", "sm")}>
-                                <span className="sr-only">{KIND_LABEL[s.kind]}: </span>
-                                {s.name}
-                              </span>
+                          {sum.slots.map((s) => (
+                            <span key={s.kind} className={chipClass(s.changed ? "accent" : "neutral", "sm")}>
+                              <span className="sr-only">{KIND_LABEL[s.kind]}: </span>
+                              {s.name}
                             </span>
                           ))}
                         </span>

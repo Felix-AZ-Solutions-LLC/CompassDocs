@@ -8,11 +8,11 @@ import {
   AckReasonRequiredError,
 } from "@/lib/db";
 import { apiGuard } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { audit, auditAckDecision, actorFrom, ipFrom } from "@/lib/audit";
 import { notifyWebhooks } from "@/lib/webhooks";
 import { notifyCrSubmitted } from "@/lib/notifications";
 import { notifySpaceSubscribers } from "@/lib/subscriptions";
-import { requestOrigin } from "@/lib/oauth";
 import { getComplianceSettings } from "@/lib/compliance-settings";
 import { userHolds, canPublishDirectly, canSeeDrafts, spaceScopeFor, scopeAllows, canEditSpace } from "@/lib/access";
 import type { DocType, DocStatus, SessionUser } from "@/lib/types";
@@ -275,13 +275,13 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
       title: proposed.title,
       actorId: user.id,
       actorName: user.name || user.username,
-      origin: requestOrigin(req),
+      origin: await mailOrigin(),
     });
     void notifyWebhooks("change_request.submitted", {
       title: proposed.title,
       kind,
       actor: user.name || user.username,
-      url: `${requestOrigin(req)}/review`,
+      url: `${await mailOrigin()}/review`,
       spaceId: existing.space_id,
       spaceName: existing.space_name,
     });
@@ -307,7 +307,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
       ackReason,
       ackSource: "edit",
       ackKeepReasonRequired,
-      ackOrigin: requestOrigin(req),
+      ackOrigin: await mailOrigin(),
     });
   } catch (e) {
     if (e instanceof AckReasonRequiredError) {
@@ -382,7 +382,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     void notifyWebhooks("document.published", {
       title: proposed.title,
       actor: user.name || user.username,
-      url: `${requestOrigin(req)}/doc/${existing.id}`,
+      url: `${await mailOrigin()}/doc/${existing.id}`,
       spaceId: doc?.space_id ?? existing.space_id,
       spaceName: doc?.space_name ?? existing.space_name,
     });
@@ -396,7 +396,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
       kind: published ? "published" : "updated",
       actorUserId: user.id,
       actorName: user.name || user.username,
-      origin: requestOrigin(req),
+      origin: await mailOrigin(),
     });
   }
   await audit({

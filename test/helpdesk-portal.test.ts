@@ -76,7 +76,7 @@ const edition = { present: true, features: ["helpdesk"] as string[] };
   ee.exports = {
     ee: () => edition,
     eePresent: () => true,
-    featureEnabled: async (feature: string) => edition.features.includes(feature),
+    featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature),
   };
   require.cache[EE_STUB] = ee;
   const loader = Module as unknown as {
@@ -123,6 +123,10 @@ const CUST = `${STAMP}.clientco.test`;
 const OTHER = `${STAMP}.elsewhere.test`;
 const HOST = "portal.example.test";
 const ORIGIN = `http://${HOST}`;
+// 1.20.27 (security review app H1): mail links come only from the
+// workspace's configured address, so the suite configures one (the custom
+// domain still wins when a test sets it).
+process.env.COMPASSDOCS_BASE_URL = ORIGIN;
 const LOCK = 728661;
 let lockClient: PoolClient;
 let savedSettings: string | undefined;
@@ -370,6 +374,27 @@ describe("sign-in links", () => {
     assert.ok(stored.every((r) => r.token_hash !== first!.sessionToken), "sessions are hashed at rest too");
     const audit = (await pool().query("SELECT 1 FROM audit_log WHERE action = 'helpdesk.portal.signin' AND target_label = $1", [addr])).rows;
     assert.equal(audit.length, 1, "the sign-in is audited");
+  });
+
+  test("1.20.27: with no configured address the portal sends no link, and says so", async () => {
+    const before = await getSetting("custom_domain");
+    const env = process.env.COMPASSDOCS_BASE_URL;
+    try {
+      delete process.env.COMPASSDOCS_BASE_URL;
+      await pool().query("DELETE FROM settings WHERE key = 'custom_domain'");
+      const addr = `noaddress@${CUST}`;
+      links.delete(addr);
+      const n = Number((await pool().query("SELECT count(*)::int AS n FROM hd_portal_links")).rows[0].n);
+      assert.equal(await portal.deliverSignInLink(addr, { origin: "http://evil.example" }), "no_address");
+      assert.equal(links.has(addr), false, "nothing was mailed");
+      assert.equal(Number((await pool().query("SELECT count(*)::int AS n FROM hd_portal_links")).rows[0].n), n, "and no link was minted");
+      const r = await call(linkRoute.POST, "/support/api/link", { json: { email: addr } });
+      assert.equal(r.status, 503);
+      assert.match(String(r.body.error), /isn't available yet/);
+    } finally {
+      process.env.COMPASSDOCS_BASE_URL = env;
+      if (before !== undefined) await setSetting("custom_domain", before);
+    }
   });
 
   test("a link expires after 15 minutes", async () => {
@@ -872,8 +897,10 @@ describe("review fixes", () => {
     await settle();
     const later = await email.helpdeskOrigin();
     assert.ok(!later.includes(EVIL), `the remembered origin stays trusted (got ${later})`);
-    assert.equal(later, domain ? `https://${domain}` : "https://app.compass.example.test");
-    // Only the sign-in link itself may follow the request's Host (no domain set); nothing after it does.
+    // 1.20.27 (security review app M1): nothing is remembered from any request; the configured address alone.
+    assert.equal(later, domain ? `https://${domain}` : ORIGIN);
+    // 1.20.27 (security review app H1): not even the sign-in link follows the request's Host.
+    assert.ok(!links.get(addr)!.includes(EVIL), `the sign-in link names the configured address (got ${links.get(addr)})`);
     const after = mail.slice(n).filter((m) => !m.text.includes("/support/signin?token="));
     assert.ok(after.length > 0, "notices went out");
     for (const m of after) assert.ok(!`${m.text}${m.html}`.includes(EVIL), `no link to the forged host in "${m.subject}" to ${m.to}`);

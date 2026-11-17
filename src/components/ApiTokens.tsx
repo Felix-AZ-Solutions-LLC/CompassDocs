@@ -8,7 +8,8 @@ import { useState } from "react";
 import { buttonClass } from "@/components/Button";
 import { confirmDialog } from "@/components/Dialog";
 import { CopyButton } from "@/components/CopyButton";
-import { controlClass, SectionEmpty } from "@/components/form";
+import { controlClass, SectionEmpty, Select } from "@/components/form";
+import { chipClass } from "@/components/Chip";
 import type { ApiToken } from "@/lib/db";
 import { useFormatDate } from "./SettingsProvider";
 
@@ -21,17 +22,27 @@ interface Connection {
 
 const field = controlClass(false);
 
+/** 1.20.27: how long a new token may last (db API_TOKEN_DAYS); `never` only for administrators. */
+export interface TokenExpiryChoice {
+  days: readonly number[];
+  default_days: number;
+  never_allowed: boolean;
+}
+
 export function ApiTokens({
   initial,
   initialConnections = [],
+  expiry = { days: [30, 90, 365], default_days: 90, never_allowed: false },
 }: {
   initial: ApiToken[];
   initialConnections?: Connection[];
+  expiry?: TokenExpiryChoice;
 }) {
   const [tokens, setTokens] = useState(initial);
   const [connections, setConnections] = useState(initialConnections);
   const [name, setName] = useState("");
   const [canWrite, setCanWrite] = useState(true);
+  const [lasts, setLasts] = useState(String(expiry.default_days));
   const [fresh, setFresh] = useState<{ token: string; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -44,7 +55,11 @@ export function ApiTokens({
     const res = await fetch("/api/account/tokens", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, scopes: canWrite ? ["read", "write"] : ["read"] }),
+      body: JSON.stringify({
+        name,
+        scopes: canWrite ? ["read", "write"] : ["read"],
+        expires_in_days: lasts === "never" ? null : Number(lasts),
+      }),
     });
     setBusy(false);
     const data = await res.json().catch(() => ({}));
@@ -161,7 +176,7 @@ export function ApiTokens({
       )}
 
       <form onSubmit={create} className="flex flex-col gap-2">
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 sm:flex-nowrap">
           <input
             className={field}
             value={name}
@@ -170,6 +185,15 @@ export function ApiTokens({
             placeholder="Token name (e.g. Claude Desktop on my Mac)"
             maxLength={60}
           />
+          {/* 1.20.27 (security review H4): every new token expires; "No expiry" is for administrators' integrations. */}
+          <Select value={lasts} onChange={(e) => setLasts(e.target.value)} aria-label="Token expires after" className="w-auto">
+            {expiry.days.map((d) => (
+              <option key={d} value={String(d)}>
+                {d === 365 ? "1 year" : `${d} days`}
+              </option>
+            ))}
+            {expiry.never_allowed && <option value="never">No expiry</option>}
+          </Select>
           <button
             type="submit"
             disabled={busy}
@@ -272,8 +296,14 @@ function TokenRow({ t, onRevoke }: { t: ApiToken; onRevoke: () => void }) {
           {" · created "}
           {fmt.date(t.created_at)}
           {t.last_used_at ? ` · last used ${fmt.dateTime(t.last_used_at)}` : " · never used"}
+          {t.expires_at && new Date(t.expires_at).getTime() >= Date.now() ? ` · expires ${fmt.date(t.expires_at)}` : ""}
         </div>
       </div>
+      {!t.expires_at ? (
+        <span className={chipClass("warn", "sm")}>No expiry</span>
+      ) : new Date(t.expires_at).getTime() < Date.now() ? (
+        <span className={chipClass("neutral", "sm")}>Expired</span>
+      ) : null}
       <button
         onClick={onRevoke}
         className={buttonClass("danger", "sm")}

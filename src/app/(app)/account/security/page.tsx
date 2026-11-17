@@ -4,6 +4,7 @@ import { requireUser, SESSION_COOKIE } from "@/lib/auth";
 import { listUserSessions, getTotpState } from "@/lib/db";
 import { SecurityPanel } from "@/components/SecurityPanel";
 import { ChangePasswordForm } from "@/components/ChangePasswordForm";
+import { twoStepRequiredFor } from "@/lib/sign-in-security";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Security" };
@@ -11,10 +12,9 @@ export const metadata = { title: "Security" };
 export default async function SecurityPage() {
   const user = await requireUser();
   const token = (await cookies()).get(SESSION_COOKIE)?.value ?? "";
-  const [sessions, totp] = await Promise.all([
-    listUserSessions(user.id, token),
-    getTotpState(user.id),
-  ]);
+  const [sessions, totp] = await Promise.all([listUserSessions(user.id, token), getTotpState(user.id)]);
+  // 1.20.27: "Require two-step sign-in" covers this account (or it is a break-glass account under SSO only), so it cannot be turned off.
+  const required = await twoStepRequiredFor(user);
 
   return (
     <AccountPage href="/account/security">
@@ -31,6 +31,7 @@ export default async function SecurityPage() {
           initialTotp={{
             enabled: Boolean(totp?.enabled),
             recovery_left: totp?.enabled ? totp.recovery_left : 0,
+            required,
           }}
         />
       </div>

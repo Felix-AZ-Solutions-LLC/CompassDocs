@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { v1Auth, v1Error, v1Requires, v1Holds } from "@/lib/v1-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { v1Doc } from "@/lib/v1-serialize";
 import {
   listDocumentsV1,
@@ -13,7 +14,6 @@ import { findScopeFor } from "@/lib/handbook-visibility";
 import { type DocType } from "@/lib/types";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { notifySpaceSubscribers } from "@/lib/subscriptions";
-import { requestOrigin } from "@/lib/oauth";
 
 export const dynamic = "force-dynamic";
 
@@ -140,7 +140,7 @@ export async function POST(req: Request) {
       kind: "published",
       actorUserId: user.id,
       actorName: user.name || user.username,
-      origin: requestOrigin(req),
+      origin: await mailOrigin(),
     });
   }
 

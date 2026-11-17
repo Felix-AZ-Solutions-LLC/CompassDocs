@@ -51,6 +51,9 @@ async function view(gate: Gate, s: HdSettings) {
   return {
     settings: { ...publicSettings(s), trust_unverified_senders: auth.trust_unverified_senders, trusted_senders: auth.trusted_senders, per_sender_limit: auth.per_sender_limit },
     inbound_path: await inboundPath(gate, s),
+    // 1.20.27 (lib/workspace-origin): the address mail links are built from; null when none is
+    // configured, and Settings → Email then says desk emails have no working links.
+    workspace_address: await import("@/lib/workspace-origin").then((m) => m.workspaceOrigin()).catch(() => null),
   };
 }
 

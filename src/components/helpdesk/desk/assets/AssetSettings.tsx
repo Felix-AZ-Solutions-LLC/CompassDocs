@@ -249,7 +249,7 @@ function AssetSettings({ part }: { part: Part }) {
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-compass-50 text-compass-700" aria-hidden>
                 <Package className="h-5 w-5" />
               </span>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1 basis-40">
                 <h2 id="assets-snipeit" className="text-sm font-semibold text-slate-900">
                   Snipe-IT
                 </h2>
@@ -345,7 +345,7 @@ function AssetSettings({ part }: { part: Part }) {
             <p className="text-sm text-slate-600">
               Agents see the assets of the people whose tickets they can work. Requesters see their own devices when they raise a request, so they can pick the one with the problem.
             </p>
-            <Toggle
+            <Toggle size="full"
               className="mt-4"
               label="Agents can search all assets"
               help="By tag, serial or name, to link any device to a ticket. Off: only the assets of people whose tickets they can work."
@@ -490,7 +490,7 @@ function IntuneCard({ view, snipeConnected, onView }: { view: HdAssetSettingsVie
           <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-compass-50 text-compass-700" aria-hidden>
             <Laptop className="h-5 w-5" />
           </span>
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 basis-40">
             <h2 id="assets-intune" className="text-sm font-semibold text-slate-900">
               Connection
             </h2>
@@ -502,7 +502,7 @@ function IntuneCard({ view, snipeConnected, onView }: { view: HdAssetSettingsVie
         </div>
 
         {legacy && (
-          <div className="mt-4 rounded-lg border border-compass-200 bg-compass-50 px-3 py-2 text-sm text-compass-800 dark:border-compass-500/40" data-testid="assets-intune-legacy">
+          <div className="notice-info mt-4 rounded-lg border px-3 py-2 text-sm" data-testid="assets-intune-legacy">
             <p className="font-medium">Using the directory sync app</p>
             <p className="mt-0.5">
               Intune signs in as your Microsoft 365 directory sync&apos;s app registration, as it has since it was connected. Nothing changes until you enter an app registration of Intune&apos;s own below: the

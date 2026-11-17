@@ -18,6 +18,17 @@ export const VIEWS: { key: HdNamedView; label: string; icon: LucideIcon; alarm?:
   { key: "solved_week", label: "Solved this week", icon: CircleCheck },
 ];
 
+/** 1.20.27: what will appear in an empty view (My open only ever holds the agent's own tickets). */
+export const VIEW_EMPTY: Record<HdNamedView, string> = {
+  mine: "Tickets assigned to you appear here.",
+  unassigned: "New tickets nobody owns yet appear here as they arrive.",
+  open: "New tickets appear here as they arrive.",
+  overdue: "Tickets past a reply or resolve target appear here.",
+  workflow: "Requests with a workflow running appear here.",
+  waiting: "Tickets waiting on the requester or on hold appear here.",
+  solved_week: "Tickets solved this week appear here.",
+};
+
 export const SORTS: { value: HdTicketSort; label: string }[] = [
   { value: "due", label: "Due first" },
   { value: "priority", label: "Priority first" },

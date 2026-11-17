@@ -28,6 +28,7 @@ import {
   KeyRound,
   LayoutList,
   LayoutTemplate,
+  LockKeyhole,
   LogIn,
   Mail,
   Megaphone,
@@ -149,11 +150,17 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
           { href: "/admin/roles/health", label: "Health", icon: HeartPulse, keywords: "health orphan unused roles findings" },
         ] },
       { href: "/admin/groups", label: "Groups", icon: UsersRound, description: "Hand-made and Entra-synced groups.", keywords: "membership teams entra sync access leads", permission: "group.read", docs: "https://docs.compassdocs.io/admin/spaces-and-permissions/#groups" },
+      { href: "/admin/security", label: "Sign-in security", icon: LockKeyhole, description: "Two-step sign-in, how long a session lasts, and every API token and app connection.", keywords: "two-step 2fa mfa totp authenticator require enforce session lifetime absolute maximum days api tokens personal access token connector oauth grants claude revoke expiry", permission: "workspace.settings_manage", docs: "https://docs.compassdocs.io/admin/sign-in-security/", topics: [
+          { href: "/admin/security#two-step", label: "Require two-step sign-in", keywords: "2fa mfa totp authenticator enforce admins agents everyone" },
+          { href: "/admin/security#sessions", label: "Session lifetime", keywords: "absolute maximum days sign in again" },
+          { href: "/admin/security#credentials", label: "API tokens and app connections", keywords: "tokens personal access connector oauth claude revoke expiry" },
+        ] },
       { href: "/admin/sso", label: "Single sign-on", icon: Fingerprint, description: "OIDC and SAML sign-in, plus SCIM provisioning.", keywords: "oidc entra azure microsoft login saml identity scim provisioning", permission: "identity.sso_read", docs: "https://docs.compassdocs.io/admin/sso/", topics: [
           { href: "/admin/sso#oidc", label: "Microsoft Entra ID (OIDC)", keywords: "entra azure oidc tenant client secret" },
           { href: "/admin/sso#saml", label: "SAML 2.0", keywords: "saml idp metadata certificate okta" },
           { href: "/admin/sso#scim", label: "SCIM provisioning", keywords: "scim provisioning token entra users groups" },
           { href: "/admin/sso#duo", label: "Duo sign-in check", keywords: "duo mfa 2fa two-factor multi-factor push universal prompt bypass break-glass desk" },
+          { href: "/admin/sso#break-glass", label: "SSO only and break-glass accounts", keywords: "sso only password break-glass emergency remove local passwords" },
         ] },
       { href: "/admin/directory", label: "Directory", icon: BookUser, description: "People sync from Microsoft 365, attributes, and profiles.", keywords: "people microsoft 365 sync attributes profiles photos", permission: "directory.sync_manage", docs: "https://docs.compassdocs.io/guides/directory/", pages: [
           { href: "/admin/directory", label: "People", icon: Users, keywords: "people entries import csv" },

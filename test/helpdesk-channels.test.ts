@@ -43,6 +43,8 @@ function cookieJar(): Map<string, string> {
   return jar;
 }
 
+// 1.20.27 (security review app M1): links in mail come only from the workspace's configured address.
+process.env.COMPASSDOCS_BASE_URL = "https://docs.example.test";
 const HEADERS_STUB = path.join(__dirname, "stubs", "next-headers.helpdesk-channels.virtual.js");
 const EE_STUB = path.join(__dirname, "stubs", "ee.helpdesk-channels.virtual.js");
 const EE_REAL = path.join(__dirname, "..", "src", "lib", "ee");
@@ -70,7 +72,7 @@ const edition = { present: true, features: ["helpdesk"] as string[] };
   ee.exports = {
     ee: () => edition,
     eePresent: () => true,
-    featureEnabled: async (feature: string) => edition.features.includes(feature),
+    featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature),
   };
   require.cache[EE_STUB] = ee;
   const loader = Module as unknown as {
@@ -205,7 +207,7 @@ before(async () => {
   await getSetting("__schema_bootstrap__");
   uploadDirectory = await mkdtemp(path.join(tmpdir(), "compass-hdchan-"));
   process.env.COMPASSDOCS_UPLOAD_DIR = uploadDirectory;
-  const creds = hashPassword(PASSWORD);
+  const creds = await hashPassword(PASSWORD);
   const names = { req: "Matthew Felix", agent: "Priya Shah", lead: "Sara Haddad", other: "Ben Lo", manager: "Dana Whitfield" };
   const expires = new Date(Date.now() + 3_600_000).toISOString();
   for (const [k, name] of Object.entries(names) as [keyof typeof U, string][]) {

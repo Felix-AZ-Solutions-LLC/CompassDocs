@@ -1043,7 +1043,7 @@ export function DocEditor({
           {nestedEnabled && parentOptions.length > 0 && (
             <Field label="Parent page">
               {parentId !== null && parentId !== undefined ? (
-                <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-compass-200 bg-compass-50 px-3 py-2 text-sm font-medium text-compass-800">
+                <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-compass-200 bg-compass-50 px-3 py-2 text-sm font-medium text-compass-ink-strong">
                   <span className="truncate">
                     {parentOptions.find((o) => o.id === parentId)?.title ?? `#${parentId}`}
                   </span>
@@ -1411,7 +1411,7 @@ export function DocEditor({
           <p className="text-xs text-slate-500">Uploading image…</p>
         )}
         {autoDrafted && (
-          <p className="rounded-lg border border-compass-200 bg-compass-50 px-3 py-2 text-xs text-compass-800">
+          <p className="rounded-lg border border-compass-200 bg-compass-50 px-3 py-2 text-xs text-compass-ink-strong">
             A draft was saved automatically so your image had a document to attach to — keep
             editing and save as usual.
           </p>
@@ -1494,7 +1494,7 @@ function AssistPanel({
   return (
     <div className="rounded-lg border border-compass-200 bg-compass-50/60">
       <div className="flex items-center gap-2 border-b border-compass-100 px-4 py-2">
-        <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-compass-800">
+        <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-compass-ink-strong">
           <Sparkles className="h-4 w-4" aria-hidden /> {ASSIST_LABEL[action]}
         </span>
         <span className="ml-auto flex gap-2">

@@ -8,10 +8,10 @@ import {
   FORBIDDEN,
 } from "@/lib/email-parts-access";
 import { previewComposition } from "@/lib/email-parts";
+import { mailOrigin } from "@/lib/workspace-origin";
 import type { PreviewInput } from "@/lib/email-parts";
 import { sendMail } from "@/lib/mailer";
 import { getSmtpConfig, smtpConfigured } from "@/lib/smtp-config";
-import { requestOrigin } from "@/lib/oauth";
 import { logEvent } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
@@ -35,7 +35,7 @@ export async function POST(req: Request) {
   if (!smtpConfigured(await getSmtpConfig())) {
     return NextResponse.json({ error: "Email isn't set up yet. Add the SMTP server under Settings → Notifications → Email." }, { status: 409 });
   }
-  const out = await previewComposition(body as PreviewInput, requestOrigin(req));
+  const out = await previewComposition(body as PreviewInput, (await mailOrigin()));
   if ("error" in out) return NextResponse.json({ error: out.error }, { status: out.status });
   if (!allowTestSend(gate.user.id)) {
     return NextResponse.json({ error: "That's a lot of test emails. Try again in a few minutes." }, { status: 429 });

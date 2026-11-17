@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { getDocument, claimReconfirmation, ACK_REASON_MIN } from "@/lib/db";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { apiGuard } from "@/lib/api-auth";
 import { spaceScopeFor, scopeAllows, canSeeDrafts, userHolds } from "@/lib/access";
 import { featureEnabled } from "@/lib/ee";
 import { auditAck, actorFrom, ipFrom } from "@/lib/audit";
-import { requestOrigin } from "@/lib/oauth";
 import { askedAgainError, minutesSince } from "@/lib/ack-assignment-actions";
 import { emitPolicyRequested } from "@/lib/compliance-webhooks";
 import type { SessionUser } from "@/lib/types";
@@ -129,7 +129,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     actor: { id: user.id, name: user.name || user.username },
     // And the request's origin, so the notice's links are absolute on a
     // workspace without custom_domain.
-    origin: requestOrigin(req),
+    origin: await mailOrigin(),
   });
   if (!claim.claimed) {
     if (claim.cooldown?.length) {
@@ -197,7 +197,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
   // The channel notice (H3, 1.14.0): the whole-audience ask, once, after the
   // claim queued the outbox row; never awaited here.
-  void emitPolicyRequested(doc.id, { actor: user.name || user.username, people: claim.eligible, origin: requestOrigin(req) });
+  void emitPolicyRequested(doc.id, { actor: user.name || user.username, people: claim.eligible, origin: await mailOrigin() });
   // `queued` is everyone pending now, which after the reset is the whole
   // audience; the drain resolves the list again at delivery.
   return NextResponse.json({ ok: true, reset: claim.confirmations_reset, queued: claim.eligible });

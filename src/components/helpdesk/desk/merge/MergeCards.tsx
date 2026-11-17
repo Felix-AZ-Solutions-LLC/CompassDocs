@@ -67,7 +67,7 @@ export function MergedNotice({ d }: { d: HdTicketDetail }) {
   const into = d.merge?.into;
   if (!into) return null;
   return (
-    <p className="flex items-start gap-2 rounded-lg border border-compass-200 bg-compass-50/70 px-3 py-2 text-sm text-slate-700">
+    <p className="notice-info flex items-start gap-2 rounded-lg border px-3 py-2 text-sm">
       <GitMerge className="mt-0.5 h-4 w-4 shrink-0 text-compass-600" aria-hidden />
       <span>
         Merged into{" "}

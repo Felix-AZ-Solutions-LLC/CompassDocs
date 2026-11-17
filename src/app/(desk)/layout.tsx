@@ -9,7 +9,7 @@
 
 import { redirect } from "next/navigation";
 import type { Metadata, Viewport } from "next";
-import { requireUser, currentPagePath } from "@/lib/auth";
+import { requireUser, currentPagePath, reachableSettingsSections } from "@/lib/auth";
 import { safeReturnPath } from "@/lib/return-to";
 import { getAppSettings } from "@/lib/settings-store";
 import { settingsForUser } from "@/lib/format";
@@ -42,6 +42,18 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = deskPwaViewport;
 
+/** A desk admin's workspace-address warning: null while an address is configured. */
+async function deskAddressWarning(user: Awaited<ReturnType<typeof requireUser>>): Promise<{ canSet: boolean } | null> {
+  try {
+    const { workspaceOrigin } = await import("@/lib/workspace-origin");
+    if (await workspaceOrigin()) return null;
+    const sections = await reachableSettingsSections(user).catch(() => [] as string[]);
+    return { canSet: sections.includes("/admin/domain") };
+  } catch {
+    return null;
+  }
+}
+
 export default async function DeskLayout({ children }: { children: React.ReactNode }) {
   // "desk" (1.20.5): the Duo desk rule is asked here whatever path the request claims to be for.
   const user = await requireUser("desk");
@@ -71,6 +83,10 @@ export default async function DeskLayout({ children }: { children: React.ReactNo
       agentEmailView(user.id),
     ]);
     const reports = access.reports || role.can("reports.own") || role.can("reports.team") || role.can("reports.all");
+    // 1.20.27 (lib/workspace-origin): with no configured address desk mail has no working links and the
+    // portal sends no sign-in links; desk admins see a dismissible strip saying so, linking Domain & HTTPS
+    // when they can open it.
+    const addressWarning = access.admin ? await deskAddressWarning(user) : null;
     body = (
       <DeskShell
         user={{ id: user.id, name: user.name || user.username }}
@@ -85,6 +101,7 @@ export default async function DeskLayout({ children }: { children: React.ReactNo
         role={role.role}
         roleCaps={role.caps}
         claude={claude}
+        addressWarning={addressWarning}
         unread={unread}
         availability={availability}
         emailView={emailView}

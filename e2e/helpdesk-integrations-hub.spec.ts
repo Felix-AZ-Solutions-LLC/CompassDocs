@@ -53,10 +53,12 @@ test.describe("integrations hub (licensed)", () => {
     expect(hub.intune.status).toBe(view.intune.on ? hub.intune.status : "not_set_up");
     expect(hub["snipe-it"].status === "not_set_up").toBe(!(view.snipeit.url && view.snipeit.key_set));
     const label: Record<string, string> = { connected: "Connected", not_set_up: "Not set up", attention: "Needs attention" };
+    // 1.20.27: a connection's tile says "Not connected", as its own page does.
+    const connections = new Set(["snipe-it", "intune", "teams", "slack"]);
     for (const k of all) {
       const st = hub[k].status as string;
-      if (st === "none") await expect(tile(k)).not.toContainText(/Connected|Not set up|Needs attention/);
-      else await expect(tile(k)).toContainText(label[st]);
+      if (st === "none") await expect(tile(k)).not.toContainText(/Connected|Not set up|Not connected|Needs attention/);
+      else await expect(tile(k)).toContainText(st === "not_set_up" && connections.has(k) ? "Not connected" : label[st]);
     }
     await expect(tile("intune")).toContainText("Device management");
     await expect(tile("snipe-it").getByRole("link", { name: /^Docs/ })).toHaveAttribute("href", /docs\.compassdocs\.io\/helpdesk\/assets/);

@@ -48,6 +48,7 @@ import type {
   AuditExtractRow,
 } from "@/lib/db";
 import type { AckNotice } from "@/lib/types";
+import { mailOrigin } from "./workspace-origin";
 import type { AppSettings } from "@/lib/settings";
 import { sha256Hex, csvLine, manifestFor, addStreamed, addStreamedCsv, hashCsv, collectZip } from "@/lib/evidence";
 import type { StreamedFile } from "@/lib/evidence";
@@ -974,7 +975,7 @@ async function sendComplianceReport(input: {
   const recipients = input.recipients ?? (await activeReportRecipients(ack_report));
   if (recipients.length === 0) return 0;
   const settings = await getAppSettings();
-  const origin = settings.custom_domain ? `https://${settings.custom_domain}` : "";
+  const origin = await mailOrigin();
   const { markdown } = await complianceReportSummary(input.period, { now: input.now });
   const vars = {
     period: input.period,

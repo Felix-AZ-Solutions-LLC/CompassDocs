@@ -172,7 +172,7 @@ function Bar({ label, count, onClear, busy, children }: { label: string; count: 
       aria-label={label}
       className="flex flex-wrap items-center gap-2 rounded-lg border border-compass-200 bg-compass-50/70 px-3 py-2 print:hidden"
     >
-      <span className="text-sm font-semibold text-compass-800">{count}</span>
+      <span className="text-sm font-semibold text-compass-ink-strong">{count}</span>
       <Button variant="ghost" size="sm" onClick={onClear} disabled={busy}>
         Clear selection
       </Button>
@@ -599,7 +599,7 @@ function OwnerModal({
       <div>
         <span className="mb-1 block text-xs font-medium text-slate-500">Policy owner</span>
         {picked !== null ? (
-          <span className="inline-flex items-center gap-1.5 rounded-lg border border-compass-200 bg-compass-50 px-3 py-1.5 text-sm font-medium text-compass-800">
+          <span className="inline-flex items-center gap-1.5 rounded-lg border border-compass-200 bg-compass-50 px-3 py-1.5 text-sm font-medium text-compass-ink-strong">
             {pickedName}
             <button type="button" onClick={() => setPicked(null)} data-tt="Clear owner" aria-label="Clear owner" className={iconButtonClass("quiet", "sm", "-mr-1")}>
               <X />

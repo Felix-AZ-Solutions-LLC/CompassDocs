@@ -40,7 +40,13 @@ export async function v1Auth(req: Request, need: "read" | "write"): Promise<V1Us
     return v1Error(401, "Authentication required: Authorization: Bearer <token>.");
   }
   const user = await getUserByApiToken(token);
-  if (!user) return v1Error(401, "Invalid or revoked API token.");
+  if (!user) return v1Error(401, "Invalid, expired or revoked API token.");
+  // 1.20.27 (security review M2): an account that must set a new password uses nothing until it has.
+  if (user.must_change_password === 1) return v1Error(403, "Set a new password in CompassDocs first.");
+  // Second review: a never-expiring token of an account that owes two-step set-up waits until it is done.
+  if (await (await import("./sign-in-security")).bearerOwesTwoStep(user)) {
+    return v1Error(403, "Set up two-step sign-in in CompassDocs first: this workspace requires it for your account.");
+  }
   if (apiV1RateLimited(String(user.id))) {
     return v1Error(429, "Rate limit exceeded (120 requests/minute). Slow down and retry.");
   }

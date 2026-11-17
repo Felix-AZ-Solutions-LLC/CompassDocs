@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiGuard } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import {
   getDocument,
   listDocComments,
@@ -12,7 +13,6 @@ import { canSeeDrafts, spaceScopeFor, scopeAllows } from "@/lib/access";
 import { getAppSettings } from "@/lib/settings-store";
 import { findBlockedWord, notifyMentions, COMMENT_MAX_LEN } from "@/lib/comments";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
-import { requestOrigin } from "@/lib/oauth";
 
 export const dynamic = "force-dynamic";
 
@@ -110,7 +110,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     ip: ipFrom(req),
   });
 
-  const origin = requestOrigin(req);
+  const origin = await mailOrigin();
   if (comment.mentions.length > 0) {
     const targets = await getMentionTargets(comment.mentions.map((m) => m.id));
     void notifyMentions({

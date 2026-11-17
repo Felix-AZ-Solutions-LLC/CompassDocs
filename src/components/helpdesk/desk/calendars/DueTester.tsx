@@ -11,7 +11,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CalendarClock, Timer } from "lucide-react";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
-import { Field, Select, TextInput } from "@/components/form";
+import { Field, SectionEmpty, Select, TextInput } from "@/components/form";
 import { LoadingRow } from "@/components/Spinner";
 import { Segmented } from "@/components/Segmented";
 import { toast } from "@/components/Toasts";
@@ -102,6 +102,7 @@ export function DueTester({ initialTeam = null }: { initialTeam?: number | null 
           <Segmented
             label="What to add"
             size="sm"
+            className="self-start"
             value={mode}
             onChange={(v) => { setMode(v); setResult(null); }}
             options={[
@@ -172,7 +173,10 @@ export function DueTester({ initialTeam = null }: { initialTeam?: number | null 
             )}
           </Card>
         ) : (
-          <div className="rounded-xl border border-dashed border-slate-200 px-5 py-10 text-center text-sm text-slate-500">The due time and the hours it counts appear here.</div>
+          // 1.20.27: a solid card and the section empty line; a dashed box is the drop-zone idiom (§Empty states).
+          <Card>
+            <SectionEmpty>The due time and the hours it counts appear here.</SectionEmpty>
+          </Card>
         )}
       </div>
     </div>

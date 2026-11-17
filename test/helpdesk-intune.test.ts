@@ -89,7 +89,7 @@ const EE_REAL = path.join(__dirname, "..", "src", "lib", "ee");
   ee.filename = EE_STUB;
   ee.loaded = true;
   // Directory sync is not licensed here: the stored directory credentials are never read.
-  ee.exports = { ee: () => ({ present: true, features: ["helpdesk"] }), eePresent: () => true, featureEnabled: async (f: string) => f === "helpdesk" };
+  ee.exports = { ee: () => ({ present: true, features: ["helpdesk"] }), eePresent: () => true, featureEnabled: async (f: string) => f === "helpdesk", featureEnforced: async (f: string) => f === "helpdesk" };
   require.cache[EE_STUB] = ee;
   const loader = Module as unknown as { _resolveFilename: (request: string, parent: { filename?: string } | null, ...rest: unknown[]) => string };
   const resolveFilename = loader._resolveFilename;

@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 import { getAllSettings, withAdvisoryLock } from "./db";
 import { openSecret, sealSecret } from "./secretbox";
 import { normalizeDomain } from "./settings";
-import { featureEnabledFrom } from "./ee";
+import { featureEnforcedFrom } from "./ee";
 import {
   DUO_BYPASS_MAX,
   DUO_KEYS,
@@ -58,11 +58,14 @@ export function duoApiBase(host: string): string {
 /**
  * Does this build and licence include the Duo check? It rides the `sso`
  * entitlement, exactly like "SSO only": an Enterprise build, and a licence
- * that is active or in its 14-day grace. Answered from the settings map the
- * caller already has (lib/ee featureEnabledFrom), so it costs no query.
+ * that grants it, current or expired (1.20.27). Answered from the settings
+ * map the caller already has (lib/ee featureEnforcedFrom), so it costs no
+ * query.
  */
 export function duoLicensedFrom(map: Record<string, string>): boolean {
-  return featureEnabledFrom("sso", map);
+  // 1.20.27 (security review M4): enforcement outlives the licence; only
+  // changing the Duo settings needs it current (lib/license-enforcement).
+  return featureEnforcedFrom("sso", map);
 }
 
 /**

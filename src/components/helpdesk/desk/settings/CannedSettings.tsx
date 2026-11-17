@@ -45,7 +45,12 @@ type Row = HdCanned & { can_edit?: boolean };
 type ShareOption = { value: string; label: string };
 type InactiveOwner = { owner_id: number; name: string; count: number };
 
-const SUBTITLE = "Text you reuse in replies and notes. Type ; in the reply box to insert one at the cursor. They never change the ticket.";
+// 1.20.27: the key as a keycap.
+const SUBTITLE = (
+  <>
+    Text you reuse in replies and notes. Type <kbd className="cmd-kbd">;</kbd> in the reply box to insert one at the cursor. They never change the ticket.
+  </>
+);
 
 export function CannedSettings() {
   const [rows, setRows] = useState<Row[] | null>(null);
@@ -390,7 +395,7 @@ function CannedEditor({
             <Button variant="secondary" onClick={onClose}>
               Cancel
             </Button>
-            {dirty && <span className="text-xs text-amber-600">Unsaved changes</span>}
+            {dirty && <span className="text-xs ink-warn">Unsaved changes</span>}
             {row && (
               <Button variant="ghost" icon={<Trash2 />} className="ml-auto hover-danger" onClick={() => onDelete(row)}>
                 Delete

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { v1Auth, v1Error, v1Requires, v1Holds, type V1User } from "@/lib/v1-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { v1Doc } from "@/lib/v1-serialize";
 import {
   getDocument,
@@ -17,7 +18,6 @@ import { type DocType, type DocumentWithSpace, type AckOutcomeInfo } from "@/lib
 import { audit, auditAckDecision, actorFrom, ipFrom } from "@/lib/audit";
 import { notifySpaceSubscribers } from "@/lib/subscriptions";
 import { notifyCrSubmitted } from "@/lib/notifications";
-import { requestOrigin } from "@/lib/oauth";
 
 export const dynamic = "force-dynamic";
 
@@ -172,7 +172,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       title: next.title,
       actorId: user.id,
       actorName: user.name || user.username,
-      origin: requestOrigin(req),
+      origin: await mailOrigin(),
     });
     return NextResponse.json(
       { pending: true, change_request_id: crId, note: "Queued for approval." },
@@ -202,7 +202,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       ackKeepReasonRequired: keepReasonRequired,
       ackSource: "api",
       ackActor: { id: user.id, name: user.name || user.username },
-      ackOrigin: requestOrigin(req),
+      ackOrigin: await mailOrigin(),
     });
   } catch (e) {
     // The pre-flight already checked the reason; this is the race where the
@@ -242,7 +242,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       kind: doc.status === "draft" ? "published" : "updated",
       actorUserId: user.id,
       actorName: user.name || user.username,
-      origin: requestOrigin(req),
+      origin: await mailOrigin(),
     });
   }
   // The confirmation decision an API edit of a confirmed, published document

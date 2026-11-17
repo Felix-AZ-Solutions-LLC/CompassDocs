@@ -139,7 +139,7 @@ export function SkillsActionPanel({
         </Select>
       </div>
       {!empty && (preview || previewError) && (
-        <div className="rounded-lg border border-compass-200 bg-compass-50 px-3 py-2 text-sm text-compass-800" aria-live="polite">
+        <div className="notice-info rounded-lg border px-3 py-2 text-sm" aria-live="polite">
           {previewError ? (
             <p>{previewError}</p>
           ) : (

@@ -77,7 +77,7 @@ export function NewIntegration({ initialKind = null }: { initialKind?: HdIntegra
     <PageContainer>
       <PageHeader
         icon={<Plug />}
-        title="New integration"
+        title="New alert source"
         subtitle="Connect a monitoring tool, a bot or automated mail."
         back={{ href: "/desk/settings/integrations/alerts", label: "Alert sources" }}
       />
@@ -95,7 +95,7 @@ export function NewIntegration({ initialKind = null }: { initialKind?: HdIntegra
                 <label
                   key={k}
                   className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3.5 py-3 transition has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-compass-500 ${
-                    on ? "border-compass-300 bg-compass-50/60" : "border-slate-200 bg-surface hover:bg-slate-50"
+                    on ? "border-compass-300 dark:border-compass-500 bg-compass-50/60" : "border-slate-200 bg-surface hover:bg-slate-50"
                   }`}
                 >
                   <input type="radio" name="kind" value={k} checked={on} onChange={() => pick(k)} className="sr-only" />

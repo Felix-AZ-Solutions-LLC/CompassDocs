@@ -125,3 +125,23 @@ export function duoStartRateLimited(userId: number, sid: string): boolean {
 export function duoCallbackRateLimited(sid: string): boolean {
   return limited(`duo-callback:${sid}`, 20, 5 * 60_000);
 }
+
+/**
+ * Connector client registrations (1.20.27, security review M1): 10 an hour
+ * per address. /api/oauth/register is open by design, so this and a total
+ * per hour (the route) keep it from being used to fill the table.
+ */
+export function oauthRegisterRateLimited(ip: string): boolean {
+  return limited(`oauth-reg:${ip}`, 10, 3_600_000);
+}
+
+/**
+ * The MCP endpoint (1.20.27, security review app M5): 120 requests a minute
+ * per credential, as the helpdesk and v1 APIs allow, counting each call in a
+ * JSON-RPC batch as one request. Answers the seconds to wait, or 0.
+ */
+export function mcpRateLimited(key: string, calls = 1): number {
+  let wait = 0;
+  for (let i = 0; i < Math.max(1, calls); i++) wait = Math.max(wait, limitedFor(`mcp:${key}`, 120, 60_000));
+  return wait;
+}

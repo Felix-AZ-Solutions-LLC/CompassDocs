@@ -36,6 +36,15 @@ services:
       COMPASSDOCS_ADMIN_USER: ${COMPASSDOCS_ADMIN_USER:-}
       COMPASSDOCS_ADMIN_PASSWORD: ${COMPASSDOCS_ADMIN_PASSWORD:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # 1.20.27: the workspace's address for links in mail when no custom
+      # domain is set (e.g. https://docs.example.com); proxies in front of the
+      # app (default 1); a fixed first-run setup token (default: derived from
+      # the secret key and printed in `docker compose logs app`).
+      COMPASSDOCS_BASE_URL: ${COMPASSDOCS_BASE_URL:-}
+      COMPASSDOCS_TRUSTED_PROXY_HOPS: ${COMPASSDOCS_TRUSTED_PROXY_HOPS:-}
+      COMPASSDOCS_SETUP_TOKEN: ${COMPASSDOCS_SETUP_TOKEN:-}
+      # 1.20.27: the emergency switch for SSO only (set to 1 and restart if single sign-on breaks).
+      COMPASSDOCS_SSO_ONLY_DISABLED: ${COMPASSDOCS_SSO_ONLY_DISABLED:-}
       # Lets the app drive the Caddy reverse proxy from the setup wizard and
       # Settings → Domain & HTTPS.
       COMPASSDOCS_CADDY_ADMIN: http://caddy:2019

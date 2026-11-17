@@ -19,6 +19,7 @@ import { Card } from "@/components/Card";
 import { Field, SectionEmpty, TextInput, Toggle } from "@/components/form";
 import { Popover, MenuItem } from "@/components/Popover";
 import { Segmented } from "@/components/Segmented";
+import { TABLE_HEAD_ROW } from "@/components/Table";
 import { toast } from "@/components/Toasts";
 import { useFormatDate } from "@/components/SettingsProvider";
 import {
@@ -227,7 +228,7 @@ function MatrixCard({
       <div className="-mx-1 overflow-x-auto px-1">
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <tr className={TABLE_HEAD_ROW}>
               <th scope="col" className="pb-2 pr-2 font-semibold">
                 Event
               </th>
@@ -374,7 +375,7 @@ function QuietHoursCard({
                   <label
                     key={d}
                     className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-sm transition ${
-                      on ? "border-compass-300 bg-compass-50 text-compass-700" : "border-slate-200 text-slate-700 hover:bg-slate-50"
+                      on ? "border-compass-300 dark:border-compass-500 bg-compass-50 text-compass-700" : "border-slate-200 text-slate-700 hover:bg-slate-50"
                     }`}
                   >
                     <input

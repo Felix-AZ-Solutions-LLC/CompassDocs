@@ -124,7 +124,7 @@ async function checkTarget(rawUrl: string): Promise<{ url: URL; resolved: { addr
   }
   const blockPrivate = blockPrivateRanges();
   if (isIP(host)) {
-    if (ipBlocked(host, blockPrivate)) throw new Error(`Blocked address: ${host}`);
+    if (ipBlocked(host, blockPrivate)) throw new SafeFetchBlocked(`Blocked address: ${host}`);
     return { url, resolved: null };
   }
   // A proxied request never touches an address this server resolves — the
@@ -139,12 +139,18 @@ async function checkTarget(rawUrl: string): Promise<{ url: URL; resolved: { addr
   }
   for (const a of addrs) {
     if (ipBlocked(a.address, blockPrivate)) {
-      throw new Error(`Blocked address for ${host}: ${a.address}`);
+      // 1.20.27 (security review app L1): the address the name resolved to
+      // is never in the message. It would map internal names to internal
+      // addresses for whoever supplied the URL (an MCP caller, an editor).
+      throw new SafeFetchBlocked(`Blocked address for ${host}`);
     }
   }
   if (!addrs.length) throw new Error(`Could not resolve host: ${host}`);
   return { url, resolved: { address: addrs[0].address, family: addrs[0].family } };
 }
+
+/** The target is not one server-side fetches may reach (private, loopback, link-local, metadata). */
+export class SafeFetchBlocked extends Error {}
 
 /**
  * A net/tls `lookup` that always answers with one address: the connection
@@ -188,24 +194,50 @@ export async function safeFetchOnce(rawUrl: string, init: RequestInit = {}): Pro
  * dispatcher must come from the same undici build as the fetch that uses it).
  */
 export async function safeFetch(rawUrl: string, init: RequestInit = {}): Promise<Response> {
-  let url = await assertPublicTarget(rawUrl);
-  const agent = proxyAgent();
+  // 1.20.27 (security review app L1): every hop goes through safeFetchOnce,
+  // which connects to the address its check resolved (pinnedLookup). Before,
+  // fetch() resolved the name a second time, so a name that answered with a
+  // public address for the check and a private one a moment later (DNS
+  // rebinding) reached the private one.
+  let url = rawUrl;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const res = agent
-      ? ((await undiciFetch(url.toString(), {
-          ...(init as any),
-          redirect: "manual",
-          dispatcher: agent,
-        })) as unknown as Response)
-      : await fetch(url, { ...init, redirect: "manual" });
+    const res = await safeFetchOnce(url, init);
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get("location");
       if (!loc) return res;
       if (hop === MAX_REDIRECTS) throw new Error("Too many redirects");
-      url = await assertPublicTarget(new URL(loc, url).toString());
+      url = new URL(loc, url).toString();
       continue;
     }
     return res;
   }
   throw new Error("Too many redirects");
+}
+
+/**
+ * A response body read up to `maxBytes` and no further (1.20.27, security
+ * review app L1): a lying or missing Content-Length cannot make the server
+ * buffer more. Null when the body is larger.
+ */
+export async function readResponseCapped(res: Response, maxBytes: number): Promise<Buffer | null> {
+  const declared = Number(res.headers.get("content-length") || 0);
+  if (declared > maxBytes) {
+    await res.body?.cancel().catch(() => {});
+    return null;
+  }
+  if (!res.body) return Buffer.alloc(0);
+  const reader = res.body.getReader();
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+  }
+  return Buffer.concat(chunks);
 }

@@ -8,7 +8,9 @@
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import QRCode from "qrcode";
-import { apiGuard } from "@/lib/api-auth";
+import { apiGuardAllowing } from "@/lib/api-auth";
+import { pairRetryAfter, recordLoginSuccess, recordPairFailure } from "@/lib/login-guard";
+import { twoStepRequiredFor } from "@/lib/sign-in-security";
 import {
   setPendingTotpSecret,
   getTotpState,
@@ -28,18 +30,26 @@ import type { SessionUser } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
+// 1.20.27: a session that owes two-step set-up ("Require two-step sign-in")
+// reaches these routes and nothing else (lib/api-auth apiGuardAllowing).
 export async function GET() {
-  const gate = await apiGuard("viewer", "account.twofa_manage");
+  const gate = await apiGuardAllowing("two_step", "viewer", "account.twofa_manage");
   if (gate instanceof NextResponse) return gate;
   const state = await getTotpState((gate as SessionUser).id);
   return NextResponse.json({
     enabled: Boolean(state?.enabled),
     recovery_left: state?.enabled ? state.recovery_left : 0,
+    required: await requiredFor(gate as SessionUser),
   });
 }
 
+/** Does "Require two-step sign-in" cover this person (so they may not turn it off)? */
+async function requiredFor(user: SessionUser): Promise<boolean> {
+  return twoStepRequiredFor(user).catch(() => true);
+}
+
 export async function POST(req: Request) {
-  const gate = await apiGuard("viewer", "account.twofa_manage");
+  const gate = await apiGuardAllowing("two_step", "viewer", "account.twofa_manage");
   if (gate instanceof NextResponse) return gate;
   const user = gate as SessionUser;
 
@@ -91,6 +101,25 @@ export async function POST(req: Request) {
     if (!state?.enabled || !state.secret) {
       return NextResponse.json({ error: "Two-factor auth isn't enabled." }, { status: 400 });
     }
+    // 1.20.27 (security review H3): the workspace requires it of this person.
+    if (await requiredFor(user)) {
+      return NextResponse.json(
+        { error: "Your workspace requires two-step sign-in for your account, so it can't be turned off. An administrator can reset it if you lose your authenticator." },
+        { status: 403 }
+      );
+    }
+    // 1.20.27 (security review, Low): the code is an oracle like a password,
+    // so it is throttled the same way (5 tries per account and address).
+    const ip = ipFrom(req) || "unknown";
+    const wait = pairRetryAfter(user.username, ip);
+    if (wait > 0) {
+      const minutes = Math.ceil(wait / 60);
+      return NextResponse.json(
+        { error: `Too many failed attempts. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.` },
+        { status: 429, headers: { "Retry-After": String(wait) } }
+      );
+    }
+    recordPairFailure(user.username, ip);
     const code = String(body?.code ?? "").trim();
     let ok = verifyTotp(state.secret, code);
     if (!ok) {
@@ -103,6 +132,7 @@ export async function POST(req: Request) {
     if (!ok) {
       return NextResponse.json({ error: "Enter a valid code to turn 2FA off." }, { status: 400 });
     }
+    recordLoginSuccess(user.username, ip);
     await disableTotp(user.id);
     await audit({ actor: actorFrom(user), action: "auth.2fa_disabled", ip: ipFrom(req) });
     return NextResponse.json({ ok: true });

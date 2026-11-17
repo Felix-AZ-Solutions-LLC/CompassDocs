@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { getDocument, getSpaceById, updateDocument, ackSummary } from "@/lib/db";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { apiGuard } from "@/lib/api-auth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { notifyWebhooks } from "@/lib/webhooks";
 import { notifySpaceSubscribers } from "@/lib/subscriptions";
-import { requestOrigin } from "@/lib/oauth";
 import { canPublishDirectly, spaceScopeFor, scopeAllows, canEditSpace } from "@/lib/access";
 import type { DocType, DocStatus, SessionUser } from "@/lib/types";
 
@@ -176,7 +176,7 @@ export async function POST(req: Request) {
       versionNote: "Bulk edit",
       ackSource: "bulk",
       ackActor: { id: user.id, name: actorName },
-      ackOrigin: requestOrigin(req),
+      ackOrigin: await mailOrigin(),
     });
     updated++;
 
@@ -186,7 +186,7 @@ export async function POST(req: Request) {
       void notifyWebhooks("document.published", {
         title: updatedDoc.title,
         actor: actorName,
-        url: `${requestOrigin(req)}/doc/${updatedDoc.id}`,
+        url: `${await mailOrigin()}/doc/${updatedDoc.id}`,
         spaceId: updatedDoc.space_id,
         spaceName: updatedDoc.space_name,
       });
@@ -198,7 +198,7 @@ export async function POST(req: Request) {
         kind: "published",
         actorUserId: user.id,
         actorName,
-        origin: requestOrigin(req),
+        origin: await mailOrigin(),
       });
     }
   }

@@ -77,7 +77,7 @@ const edition = { present: true, features: ["helpdesk"] as string[] };
   ee.exports = {
     ee: () => edition,
     eePresent: () => true,
-    featureEnabled: async (feature: string) => edition.features.includes(feature),
+    featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature),
   };
   require.cache[EE_STUB] = ee;
   const loader = Module as unknown as {
@@ -232,7 +232,7 @@ before(async () => {
   await integrations.ensureIntakeSchema();
   uploadDirectory = await mkdtemp(path.join(tmpdir(), "compass-hds2-"));
   process.env.COMPASSDOCS_UPLOAD_DIR = uploadDirectory;
-  const creds = hashPassword(PASSWORD);
+  const creds = await hashPassword(PASSWORD);
   const names = { req: "Matthew Felix", agent: "Priya Shah", mgr: "Dana Whitfield", admin: "Ada Admin", other: "Ben Lo" };
   const expires = new Date(Date.now() + 3_600_000).toISOString();
   for (const [k, name] of Object.entries(names) as [keyof typeof U, string][]) {

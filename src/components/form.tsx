@@ -116,8 +116,10 @@ export function rangeError(value: number | string, min: number, max: number): st
 // Keyboard focus is the global :focus-visible outline (globals.css, STYLEGUIDE
 // §Focus) — one indicator, not outline + a 1.3:1 ring that nobody could see.
 // The border still tints on focus so a mouse click reads as "active" too.
-const control = "w-full rounded-lg border bg-surface px-3 py-2 text-sm placeholder:text-slate-400 disabled:opacity-50";
-const controlDense = "w-full rounded-lg border bg-surface px-2.5 py-1.5 text-sm placeholder:text-slate-400 disabled:opacity-50";
+// 1.20.27: 16px text under sm (text-base sm:text-sm): iOS Safari zooms the page in on focus of any
+// field under 16px, which in the installed desk left the reply box and the searches zoomed.
+const control = "w-full rounded-lg border bg-surface px-3 py-2 text-base sm:text-sm placeholder:text-slate-400 disabled:opacity-50";
+const controlDense = "w-full rounded-lg border bg-surface px-2.5 py-1.5 text-base sm:text-sm placeholder:text-slate-400 disabled:opacity-50";
 const controlOk = "border-slate-200 focus:border-compass-500";
 const controlErr = "border-red-300 focus:border-red-400";
 
@@ -130,7 +132,7 @@ const FAMILIES: [RegExp, RegExp][] = [
   [/(^|\s)(?:p|px|pl|pr)-\S+/, /\bpx-[\d.]+\b/],
   [/(^|\s)(?:p|py|pt|pb)-\S+/, /\bpy-[\d.]+\b/],
   [/(^|\s)rounded(?:-\S+)?(?=\s|$)/, /\brounded-lg\b/],
-  [/(^|\s)text-(?:2xs|3xs|xs|sm|base|lg|xl|\[[^\]]+\])\b/, /\btext-sm\b/],
+  [/(^|\s)text-(?:2xs|3xs|xs|sm|base|lg|xl|\[[^\]]+\])\b/, /\btext-base sm:text-sm\b/],
   [/(^|\s)bg-\S+/, /\bbg-surface\b/],
 ];
 
@@ -139,6 +141,10 @@ export function controlClass(hasError?: boolean, extra = "", dense = false): str
   for (const [inExtra, inBase] of FAMILIES) if (inExtra.test(extra)) base = base.replace(inBase, "");
   return `${base} ${hasError ? controlErr : controlOk} ${extra}`.replace(/\s+/g, " ").trim();
 }
+
+/** 1.20.27: what a <select> adds to the control recipe: lucide's chevron (globals.css
+ *  .select-chevron) in place of the browser's own, and room for it. */
+export const SELECT_EXTRA = "select-chevron pr-8";
 
 /** The description and invalid state a wrapping Field hands its control. */
 function useFieldA11y<P extends { hasError?: boolean; "aria-describedby"?: string; "aria-invalid"?: React.AriaAttributes["aria-invalid"] }>(
@@ -178,10 +184,12 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
   ref
 ) {
   const a = useFieldA11y({ hasError, ...props });
+  // A list box (multiple, or a size over 1) keeps the browser's look: it has no chevron to replace.
+  const listBox = props.multiple || (props.size ?? 1) > 1;
   return (
     <select
       ref={ref}
-      className={controlClass(a.hasError, className, dense)}
+      className={`${controlClass(a.hasError, className, dense)}${listBox ? "" : ` ${SELECT_EXTRA}`}`}
       {...props}
       aria-describedby={a.describedBy}
       aria-invalid={a.invalid}

@@ -62,7 +62,7 @@ const EE_REAL = path.join(__dirname, "..", "src", "lib", "ee");
   const ee = new Module(EE_STUB);
   ee.filename = EE_STUB;
   ee.loaded = true;
-  ee.exports = { ee: () => ({ present: true, features: ["helpdesk"] }), eePresent: () => true, featureEnabled: async (f: string) => f === "helpdesk" };
+  ee.exports = { ee: () => ({ present: true, features: ["helpdesk"] }), eePresent: () => true, featureEnabled: async (f: string) => f === "helpdesk", featureEnforced: async (f: string) => f === "helpdesk" };
   require.cache[EE_STUB] = ee;
   const loader = Module as unknown as { _resolveFilename: (request: string, parent: { filename?: string } | null, ...rest: unknown[]) => string };
   const resolveFilename = loader._resolveFilename;
@@ -156,7 +156,7 @@ before(async () => {
   await getSetting("__schema_bootstrap__");
   uploadDirectory = await mkdtemp(path.join(tmpdir(), "compass-hdimport-"));
   process.env.COMPASSDOCS_UPLOAD_DIR = uploadDirectory;
-  const creds = hashPassword("Helpdesk!Import123");
+  const creds = await hashPassword("Helpdesk!Import123");
   const expires = new Date(Date.now() + 3_600_000).toISOString();
   const emails: Record<string, string> = {
     admin: `${STAMP}-admin@example.test`,

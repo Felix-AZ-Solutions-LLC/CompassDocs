@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { complianceGuard } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { featureEnabled } from "@/lib/ee";
 import { actorFrom, ipFrom } from "@/lib/audit";
-import { requestOrigin } from "@/lib/oauth";
 import { parseAssignmentRequest } from "@/lib/ack-assignments";
 import { runAssignmentAction } from "@/lib/ack-assignment-actions";
 
@@ -49,7 +49,7 @@ export async function POST(req: Request) {
     doc: null,
     actor: { id: user.id, name: user.name || user.username },
     audit: { actor: actorFrom(user), ip: ipFrom(req) },
-    origin: requestOrigin(req),
+    origin: await mailOrigin(),
   });
   return NextResponse.json(outcome.body, { status: outcome.status });
 }

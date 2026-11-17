@@ -173,7 +173,7 @@ export function WidgetCard({
       aria-busy={loading || undefined}
       data-widget={widget.id}
       {...dragProps}
-      className={`${CARD_CLASS} flex min-w-0 flex-col p-3 break-inside-avoid sm:p-4 ${SPAN[widget.size]} ${edit ? "ring-1 ring-compass-200" : ""} ${className}`.trim()}
+      className={`${CARD_CLASS} flex min-w-0 flex-col p-3 break-inside-avoid sm:p-4 ${SPAN[widget.size]} ${edit ? "ring-1 ring-compass-200 dark:ring-compass-500/40" : ""} ${className}`.trim()}
     >
       {edit && (
         <div className="-mx-1 -mt-1 mb-2 flex flex-wrap items-center gap-0.5 border-b border-slate-100 pb-1.5 print:hidden">

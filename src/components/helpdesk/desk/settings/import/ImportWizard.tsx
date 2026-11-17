@@ -39,6 +39,7 @@ import { RelativeTime } from "@/components/RelativeTime";
 import { confirmDialog } from "@/components/Dialog";
 import { toast } from "@/components/Toasts";
 import { EYEBROW_TEXT } from "@/components/Heading";
+import { TABLE_HEAD_ROW } from "@/components/Table";
 import { HD_PRIORITIES, HD_PRIORITY_LABEL, HD_STATUSES, HD_STATUS_LABEL } from "@/lib/helpdesk/types";
 import type { HdPriority, HdStatus } from "@/lib/helpdesk/types";
 import {
@@ -184,9 +185,10 @@ export function ImportWizard() {
 
 // --- The stepper ---------------------------------------------------------------------------
 
+// 1.20.27: a 2×2 grid on a phone, never "4 Import" alone on a second row.
 function Stepper({ step }: { step: Step }) {
   return (
-    <ol aria-label="Import steps" className="mb-4 flex flex-wrap items-center gap-x-5 gap-y-2 print:hidden">
+    <ol aria-label="Import steps" className="mb-4 grid grid-cols-2 gap-x-5 gap-y-2 sm:flex sm:flex-wrap sm:items-center print:hidden">
       {STEPS.map((s) => {
         const done = s.n < step;
         const current = s.n === step;
@@ -321,7 +323,7 @@ function UploadStep({
             </Field>
           )}
           {err && <p role="alert" className="notice-error rounded-lg border px-3 py-2 text-sm">{err}</p>}
-          <div className="flex justify-end">
+          <div className="flex">
             <Button icon={<Upload />} busy={busy} disabled={!file || busy} onClick={send}>
               {busy ? "Uploading and reading…" : "Upload and continue"}
             </Button>
@@ -767,7 +769,7 @@ function DryRunStep({ job, data, onBack, onStarted }: { job: ImportJobView; data
       <div className="overflow-x-auto rounded-lg border border-slate-200">
         <table className="w-full text-sm">
           <thead className="bg-slate-50">
-            <tr className={`text-left ${EYEBROW_TEXT}`}>
+            <tr className={TABLE_HEAD_ROW}>
               <th scope="col" className="px-4 py-2.5">{sourceName}</th>
               <th scope="col" className="px-4 py-2.5">CompassDocs</th>
             </tr>
@@ -795,7 +797,7 @@ function DryRunStep({ job, data, onBack, onStarted }: { job: ImportJobView; data
         </table>
       </div>
 
-      <div className="mt-4 flex items-start gap-2 rounded-lg border border-compass-200 bg-compass-50 px-3 py-2.5 text-sm text-slate-800">
+      <div className="notice-info mt-4 flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm">
         <Repeat className="mt-0.5 h-4 w-4 shrink-0 text-compass-600" aria-hidden />
         <p>Safe to run again: tickets already imported are updated, not duplicated. No emails are sent to anyone during the import.</p>
       </div>
@@ -895,7 +897,7 @@ function CheckStep({ job, onChanged }: { job: ImportJobView; onChanged: (j: Impo
           <CheckTile label="Skipped so far" value={c?.skipped ?? 0} />
         </div>
       )}
-      <div className="mt-4 flex items-start gap-2 rounded-lg border border-compass-200 bg-compass-50 px-3 py-2.5 text-sm text-slate-800">
+      <div className="notice-info mt-4 flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm">
         <Bell className="mt-0.5 h-4 w-4 shrink-0 text-compass-600" aria-hidden />
         <p>
           You can leave this page. We&apos;ll tell you in the bell when {dry ? "the dry run is ready" : "the export has been read"}.

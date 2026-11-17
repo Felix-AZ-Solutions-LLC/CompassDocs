@@ -142,7 +142,7 @@ export function BulkBar({ selection, shown, onDone }: { selection: RowSelection;
     <div
       role="region"
       aria-label="Bulk actions"
-      className="flex flex-wrap items-center gap-1.5 border-b border-compass-200 bg-compass-50/70 px-3 py-2 print:hidden"
+      className="flex flex-wrap items-center gap-1.5 border-b border-compass-200 bg-compass-50/70 px-3 py-2 dark:border-compass-500/40 print:hidden"
     >
       <input
         ref={all}
@@ -152,7 +152,7 @@ export function BulkBar({ selection, shown, onDone }: { selection: RowSelection;
         aria-label={allShown ? "Clear the selection" : `Select all ${shown} shown tickets`}
         className="h-4 w-4 accent-compass-600"
       />
-      <span className="mr-1 text-sm font-semibold text-compass-800" aria-live="polite">
+      <span className="mr-1 text-sm font-semibold text-compass-ink-strong" aria-live="polite">
         {n} selected
       </span>
       {bulk && can("tickets.change_status") && (

@@ -7,6 +7,7 @@ import edition from "@ee";
 import type { EnterpriseEdition } from "@/ee-contract";
 import { effectiveFeatures, evaluate, licenseGrants } from "./license";
 import type { EntitlementFeature } from "./license";
+import { licenceEnforces, licenceEnforcesFrom } from "./license-enforcement";
 
 export function ee(): EnterpriseEdition {
   return edition as EnterpriseEdition;
@@ -48,4 +49,22 @@ export function featureEnabledFrom(feature: EntitlementFeature, settings: Record
     fromMemo = { key, until: now + 60_000, features };
   }
   return fromMemo.features.includes(feature);
+}
+
+/**
+ * Is the SECURITY ENFORCEMENT of `feature` on? (1.20.27, security review
+ * M4; lib/license-enforcement.) The code is in this build and a verified
+ * licence, current or EXPIRED, grants it. "SSO only", the Duo rules and
+ * SCIM deprovisioning read this, so a lapsed renewal never switches them
+ * off; changing their settings still needs featureEnabled.
+ */
+export async function featureEnforced(feature: EntitlementFeature): Promise<boolean> {
+  if (!ee().features.includes(feature)) return false;
+  return licenceEnforces(feature);
+}
+
+/** featureEnforced from a settings map already in hand (no query). */
+export function featureEnforcedFrom(feature: EntitlementFeature, settings: Record<string, string>): boolean {
+  if (!ee().features.includes(feature)) return false;
+  return licenceEnforcesFrom(feature, settings);
 }

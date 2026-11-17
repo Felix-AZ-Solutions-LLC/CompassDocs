@@ -99,7 +99,7 @@ const EE_REAL = path.join(__dirname, "..", "src", "lib", "ee");
   ee.exports = {
     ee: () => ({ present: true, features: ["policy_ack"] }),
     eePresent: () => true,
-    featureEnabled: async (feature: string) => feature === "policy_ack",
+    featureEnabled: async (feature: string) => feature === "policy_ack", featureEnforced: async (feature: string) => feature === "policy_ack",
   };
   require.cache[EE_STUB] = ee;
 
@@ -286,7 +286,7 @@ before(async () => {
   // S2: private spaces that own space handbooks.
   for (const k of ["A", "B", "P", "S", "S2"]) await space(k);
 
-  const creds = hashPassword(PASSWORD);
+  const creds = await hashPassword(PASSWORD);
   const names = ["mgrA", "wsMgr", "glob", "alice", "carol", "dave", "erin", "frank", "ivan", "gina", "hank", "looker", "deleter"];
   for (const who of names) {
     const r = await fixtureQuery(

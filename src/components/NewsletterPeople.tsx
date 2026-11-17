@@ -146,7 +146,7 @@ export function NewsletterPeople({
         </p>
       </div>
 
-      <div className="flex items-center justify-between rounded-lg border border-compass-200 bg-compass-50 px-3 py-2 text-sm text-compass-800">
+      <div className="flex items-center justify-between rounded-lg border border-compass-200 bg-compass-50 px-3 py-2 text-sm text-compass-ink-strong">
         <span>
           {approvers} approver{approvers === 1 ? "" : "s"} · {contributors} contributor
           {contributors === 1 ? "" : "s"} (plus all admins)

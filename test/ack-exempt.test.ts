@@ -896,7 +896,7 @@ describe("the space-scoped twin refuses a paused or retired policy", () => {
     ee.exports = {
       ee: () => edition,
       eePresent: () => true,
-      featureEnabled: async (feature: string) => edition.features.includes(feature),
+      featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature),
     };
     require.cache[EE_STUB] = ee;
     const loader = Module as unknown as {

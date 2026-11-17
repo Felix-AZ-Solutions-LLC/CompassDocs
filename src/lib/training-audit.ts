@@ -22,6 +22,7 @@ import { currentVersion } from "@/lib/version";
 // The hash both audit packages use lives in lib/evidence (F2, 1.14.0);
 // re-exported here so every caller of training-audit's sha256Hex still finds it.
 import { sha256Hex } from "@/lib/evidence";
+import { csvCell } from "@/lib/csv";
 
 export { sha256Hex };
 
@@ -73,7 +74,8 @@ export async function buildTrainingMatrix(): Promise<TrainingMatrix> {
   };
 }
 
-const csvEsc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+// 1.20.27 (security review M6 / app M3): lib/csv csvCell, which also defuses spreadsheet formulas.
+const csvEsc = (v: unknown) => csvCell(v);
 
 export function matrixCsv(m: TrainingMatrix): string {
   const lines = [["person", "username", ...m.decks.map((d) => d.title)].map(csvEsc).join(",")];

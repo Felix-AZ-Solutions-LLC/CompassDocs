@@ -81,7 +81,7 @@ const edition = { present: true, features: ["policy_ack"] as string[] };
   ee.exports = {
     ee: () => edition,
     eePresent: () => true,
-    featureEnabled: async (feature: string) => edition.features.includes(feature),
+    featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature),
   };
   require.cache[EE_STUB] = ee;
 
@@ -271,7 +271,7 @@ before(async () => {
     [`Handbook Confirm ${STAMP}`, STAMP]
   );
   spaceId = sp.rows[0].id;
-  const creds = hashPassword(PASSWORD);
+  const creds = await hashPassword(PASSWORD);
   const users = await fixtureQuery(
     `INSERT INTO users (username, name, email, role, status, password_hash, password_salt) VALUES
        ($1, 'Hb Reader', $2, 'viewer', 'active', $5, $6),

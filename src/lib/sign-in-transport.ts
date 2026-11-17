@@ -95,7 +95,11 @@ export function realTransport(router: { push: (href: string) => void; refresh: (
       if (res.ok && data?.ok) return { kind: "ok", mustChange: data.must_change_password === true };
       if (res.status === 401) return { kind: "invalid", error: String(data?.error || "Invalid username or password.") };
       if (res.status === 429) return { kind: "limited", error: String(data?.error || BROKEN) };
+      // 1.20.27 (second review M2): too many password checks at once; the server asks for a retry in a few seconds.
+      if (res.status === 503 && data?.code === "busy") return { kind: "limited", error: String(data.error || BROKEN) };
       if (res.status === 400) return { kind: "invalid", error: String(data?.error || BROKEN) };
+      // 1.20.27: "SSO only" refuses passwords but a break-glass account's (lib/auth login).
+      if (res.status === 403 && data?.code === "sso_only") return { kind: "invalid", error: String(data.error) };
       if (res.status === 403) return { kind: "error", error: RELOAD };
       return { kind: "error", error: BROKEN };
     },

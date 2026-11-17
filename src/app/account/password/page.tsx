@@ -23,7 +23,8 @@ export default async function ChangePasswordPage({
 }: {
   searchParams: Promise<{ next?: string }>;
 }) {
-  const user = await requireUser();
+  // 1.20.27: the step's own page renders while the step is owed (lib/auth requireUser).
+  const user = await requireUser("app", { allowPending: "password_change" });
   if (!user.must_change_password) redirect("/account/security");
   // Where sign-in was headed before the forced change interrupted it.
   const next = safeReturnPath((await searchParams).next);

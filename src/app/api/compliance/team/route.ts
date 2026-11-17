@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiGuard } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { featureEnabled } from "@/lib/ee";
 import { listGroups, teamPolicyRows, leadMayRemind, stampAckReminded } from "@/lib/db";
 import { userHolds } from "@/lib/access";
@@ -7,7 +8,6 @@ import { teamViewAccess, type TeamViewRow } from "@/lib/team-access";
 import { enqueueAckNotice, sweepDefaults, workspaceDueDefaults } from "@/lib/compliance";
 import { teamGroupSummaries, remindedAgoSentence, daysSince } from "@/lib/team-digest";
 import { auditAck, actorFrom, ipFrom } from "@/lib/audit";
-import { requestOrigin } from "@/lib/oauth";
 import type { SessionUser } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -136,7 +136,7 @@ export async function POST(req: Request) {
     source: "manual",
     actor: sender,
     user_ids: [row.user_id],
-    origin: requestOrigin(req),
+    origin: await mailOrigin(),
   });
   await stampAckReminded(row.document_id, [row.user_id]);
   await auditAck(

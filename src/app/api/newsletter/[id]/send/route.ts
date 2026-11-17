@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiGuard } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { join } from "path";
 import {
   getNewsletter,
@@ -14,7 +15,6 @@ import { uploadDir } from "@/lib/uploads";
 import { canSend, canComment } from "@/lib/newsletter-access";
 import { sendNewsletter, archiveNewsletter } from "@/lib/newsletter";
 import { getAppSettings } from "@/lib/settings-store";
-import { requestOrigin } from "@/lib/oauth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import type { SessionUser } from "@/lib/types";
 
@@ -63,7 +63,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     orgName: settings.company_name || "CompassDocs",
     logoUrl: settings.logo_url || "",
     accent: settings.accent_color || "#2e75bd",
-    origin: requestOrigin(req),
+    origin: await mailOrigin(),
     authorName: n.author_name,
     from: n.from_address || undefined,
     attachments,

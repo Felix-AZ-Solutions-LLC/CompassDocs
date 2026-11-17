@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiGuard } from "@/lib/api-auth";
+import { mailOrigin } from "@/lib/workspace-origin";
 import {
   getNewsletter,
   getNewsletterApproverIds,
@@ -7,7 +8,6 @@ import {
   addNewsletterComment,
 } from "@/lib/db";
 import { canSend } from "@/lib/newsletter-access";
-import { requestOrigin } from "@/lib/oauth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import type { SessionUser } from "@/lib/types";
 import { formatDateTime } from "@/lib/format";
@@ -76,7 +76,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return NextResponse.json({ error: "Schedules are limited to one year out." }, { status: 400 });
   }
 
-  const updated = await setNewsletterSchedule(n.id, at.toISOString(), requestOrigin(req));
+  const updated = await setNewsletterSchedule(n.id, at.toISOString(), (await mailOrigin()));
   await addNewsletterComment({
     newsletter_id: n.id,
     user_id: user.id,

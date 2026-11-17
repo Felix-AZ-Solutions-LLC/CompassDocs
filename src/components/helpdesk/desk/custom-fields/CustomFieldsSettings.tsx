@@ -255,7 +255,7 @@ export function CustomFieldsSettings() {
 
 const PILL = (on: boolean) =>
   `inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-sm transition ${
-    on ? "border-compass-300 bg-compass-50 text-compass-800" : "border-slate-200 text-slate-700 hover:border-slate-300"
+    on ? "border-compass-300 dark:border-compass-500 bg-compass-50 text-compass-ink-strong" : "border-slate-200 text-slate-700 hover:border-slate-300"
   }`;
 
 function FieldDialog({

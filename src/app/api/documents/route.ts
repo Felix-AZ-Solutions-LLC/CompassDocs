@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { createDocument, getSpaceBySlug, listSpaces } from "@/lib/db";
+import { mailOrigin } from "@/lib/workspace-origin";
 import { apiGuard } from "@/lib/api-auth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { notifyWebhooks } from "@/lib/webhooks";
 import { notifySpaceSubscribers } from "@/lib/subscriptions";
-import { requestOrigin } from "@/lib/oauth";
 import { canPublishDirectly, spaceScopeFor, scopeAllows, canEditSpace } from "@/lib/access";
 import type { DocType, DocStatus, SessionUser } from "@/lib/types";
 
@@ -89,7 +89,7 @@ export async function POST(req: Request) {
     void notifyWebhooks("document.published", {
       title: doc.title,
       actor: user.name || user.username,
-      url: `${requestOrigin(req)}/doc/${doc.id}`,
+      url: `${await mailOrigin()}/doc/${doc.id}`,
       spaceId: doc.space_id,
       spaceName: doc.space_name,
     });
@@ -101,7 +101,7 @@ export async function POST(req: Request) {
       kind: "published",
       actorUserId: user.id,
       actorName: user.name || user.username,
-      origin: requestOrigin(req),
+      origin: await mailOrigin(),
     });
   }
   await audit({
