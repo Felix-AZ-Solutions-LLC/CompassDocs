@@ -27,11 +27,14 @@ export function DashboardTile({
   className?: string;
 }) {
   const headingId = `dash-${id}-title`;
+  // overflow-x-clip (1.20.27): a resting tooltip is only invisible, so a centred bubble on a control at the
+  // tile's right edge (Quick links' Add, a row's actions) made a phone's page scroll sideways a few pixels.
+  // clip is not a scroll container, and TooltipPlacer slides a showing bubble back inside the tile.
   return (
     <section
       aria-labelledby={headingId}
       data-dashboard-section={id}
-      className={`min-w-0 rounded-xl border border-slate-200 bg-surface shadow-xs ${className}`.trim()}
+      className={`min-w-0 overflow-x-clip rounded-xl border border-slate-200 bg-surface shadow-xs ${className}`.trim()}
     >
       {/* The row wraps rather than squeezing the title: in a narrow tile the
           actions drop under the title (each keeps its natural width), so a

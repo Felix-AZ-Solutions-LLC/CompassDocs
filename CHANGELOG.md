@@ -4,6 +4,91 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.27] - 2026-11-17
+
+A polished, hardened desk: security fixes from a full audit, one-click SCIM
+provisioning, and a look over every desk page.
+
+### Security
+- **SSO only now refuses password sign-in**, except for break-glass
+  administrator accounts you list in Settings, Single sign-on. Each
+  break-glass sign-in is audited, and those accounts must use two-step
+  sign-in. On upgrade, a workspace with SSO only already on gets its local
+  administrators listed so nobody is locked out.
+  COMPASSDOCS_SSO_ONLY_DISABLED=1 is an emergency switch. Remove local
+  passwords clears the passwords of everyone SSO covers; administrators keep
+  theirs.
+- **Require two-step sign-in** (Settings, Sign-in security): off by default;
+  choose administrators, administrators and desk agents, or everyone. People
+  it covers set up an authenticator at their next password sign-in. Duo and
+  SSO sign-ins already count.
+- **Sign-in throttling per account**, whatever the address, so guesses
+  spread over many addresses are slowed. An address the owner has signed in
+  from is slowed, never shut out. Password checks are hashed a few at a time
+  so a flood can't stall the server.
+- **Passwords:** 12 characters minimum for new and changed passwords, and
+  stronger hashing; existing passwords are upgraded at their next sign-in.
+  Temporary passwords expire after 72 hours, and a password change owed
+  blocks the API too.
+- **Sessions** end 30 days after they began (adjustable), whatever their
+  activity.
+- **Tokens and app connections:** a password reset or change revokes the
+  account's API tokens and app connections. New API tokens expire (30, 90 or
+  365 days). Claude connector access lasts 90 days and needs permission to
+  create tokens. Administrators can see and revoke every account's tokens
+  and connections under Sign-in security. The consent page is protected
+  against cross-site approval.
+- **Links in mail come only from your workspace address** (your custom
+  domain, or COMPASSDOCS_BASE_URL), never from the request. Without one,
+  mail links are relative and the customer portal sends no sign-in links;
+  the desk and Setup say so.
+- **Backups include attachments**, encrypted, as a set with the database.
+  The app never deletes off-site copies, and downloads are audited. A
+  restore keeps audit entries newer than the backup.
+- **Security settings keep enforcing after a licence lapses:** SSO only, Duo
+  and SCIM deactivation stay on, new accounts aren't created, and only
+  relaxing changes are allowed.
+- **Also:** a one-time setup token for a new install (printed in the server
+  log), SAML replay protection on the signed assertion, spreadsheet-formula
+  protection in every CSV export, the audit log mirrored to the server log,
+  limits on the Claude connector endpoint, pinned outbound requests, desk
+  attachments not kept in the browser cache, capped request bodies, and HSTS
+  for a year.
+- **Merging tickets from different requesters** now warns, naming both, that
+  each will see the other's conversation.
+- **Next.js 16.4.6** (GHSA-mfr8-8qww-v76h; CompassDocs doesn't use the
+  affected feature).
+
+### Added
+- **Set up provisioning with Microsoft** on the SCIM card: finds or makes
+  the provisioning app in Entra, fills in the Tenant URL and a new token,
+  and checks the connection. One-click sign-on setups now create an app
+  Entra can provision too.
+
+### Changed
+- **Desk polish from a screenshot review of every desk page,** in light,
+  dark and on a phone:
+  - **Phone:** 16 px gutters; the ticket's actions wrap so Solve is always
+    reachable; Request types shows the list or the editor; search folds into
+    an icon; bigger touch targets; no zoom when typing in the reply box;
+    tabs and tables show when there's more to scroll.
+  - **Ticket:** status, priority, team and owner come first in the side
+    column.
+  - **Dark mode:** info strips and accent text read properly, and selected
+    chips match.
+  - **Consistency:** page actions stay top-right; switches sit at the card's
+    edge; tables share one header style; the settings menu follows the page;
+    the bell's count no longer covers the bell.
+  - **Setup** only ticks steps that are really done, and asks for the
+    workspace address.
+  - **Teams and request types** pick their icon from tiles.
+
+### Fixed
+- **Automations:** Review straight after Save draft opened the draft as it
+  was before the save, and Publish was then refused as if Claude had saved a
+  newer one.
+- **The dashboard on a phone** no longer scrolls sideways a few pixels.
+
 ## [1.20.26] - 2026-11-17
 
 Microsoft 365 mail with attachments comes in again.

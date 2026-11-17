@@ -282,8 +282,11 @@ export function AutomationsSettings() {
         ruleMacros={ruleMacros}
         depts={depts}
         onClose={() => setEditing(null)}
-        onSaved={() => {
+        onSaved={(saved) => {
           setEditing(null);
+          // 1.20.27: the saved rule goes into its row at once. Until the reload lands, a Review straight after
+          // Save draft opened the draft as it was before the save, and its Publish was refused as stale.
+          if (saved) setRows((cur) => cur && cur.map((r) => (r.id === saved.id ? { ...r, ...saved } : r)));
           deskDepartmentsChanged();
           void load();
         }}
@@ -313,7 +316,7 @@ function RuleDialog({
   ruleMacros: { id: number; title: string; shared: boolean }[];
   depts: HdDeskDepartmentChoices | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved?: HdAutomation) => void;
 }) {
   const titleId = useId();
   const existing = rule && rule !== "new" ? rule : null;
@@ -394,7 +397,8 @@ function RuleDialog({
       const payload = { name: name.trim(), event, conditions, actions, desk_department_id: deptPayload(dept) };
       // 1.20.16: publishing names the draft this dialog showed (draft_at); a newer one is refused (409), never published unseen.
       const publishing = mode.current === "publish" && claude ? (changesWaiting ? { publish_draft: true, draft_at: claude.draft_at } : { publish: true, draft_at: claude.draft_at }) : {};
-      if (existing) await sendJson(`/api/helpdesk/admin/automations/${existing.id}`, "PATCH", { ...payload, ...publishing }, "Couldn't save the rule.");
+      let saved: HdAutomation | undefined;
+      if (existing) saved = (await sendJson<{ automation?: HdAutomation }>(`/api/helpdesk/admin/automations/${existing.id}`, "PATCH", { ...payload, ...publishing }, "Couldn't save the rule.")).automation;
       else await sendJson("/api/helpdesk/admin/automations", "POST", { ...payload, active: 1 }, "Couldn't create the rule.");
       toast(
         "ok",
@@ -408,7 +412,7 @@ function RuleDialog({
             ? "Rule saved."
             : "Rule created."
       );
-      onSaved();
+      onSaved(saved);
     } catch (err) {
       setError((err as Error).message);
     } finally {
