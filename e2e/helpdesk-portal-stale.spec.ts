@@ -232,6 +232,11 @@ test.describe("customer portal settings: deleted request types, teams and spaces
     expect((await api(page, `/api/helpdesk/admin/teams/${goneTeam}`, { method: "DELETE" })).status).toBe(200);
     expect((await api(page, `/api/helpdesk/admin/request-types/${goneType}`, { method: "DELETE" })).status).toBe(200);
 
+    // A rule whose only team condition was deleted: refused with what to do, not turned into "any team" (checked
+    // first, while the stored rule still names the deleted team; once a save drops it, the id is just unknown).
+    const only = await api(page, `/api/helpdesk/admin/automations/${created.body.automation.id}`, { method: "PATCH", body: { ...rule, conditions: { team_ids: [goneTeam] }, actions: { priority: "high" } } });
+    expect(only.status).toBe(400);
+    expect(only.body.error).toMatch(/The team this rule checks for was deleted/);
     // The editor sends the rule back as it loaded it: the deleted entries drop out, and the save says the move went.
     const saved = await api(page, `/api/helpdesk/admin/automations/${created.body.automation.id}`, { method: "PATCH", body: { ...rule, active: 0 } });
     expect(saved.status, JSON.stringify(saved.body)).toBe(200);
@@ -239,13 +244,9 @@ test.describe("customer portal settings: deleted request types, teams and spaces
     expect(saved.body.automation.actions).toEqual({ priority: "high" });
     expect(saved.body.notices).toEqual(["The team this rule moved tickets to was deleted, so the rule no longer moves them."]);
 
-    // A rule whose only team condition was deleted: refused with what to do, not turned into "any team".
-    const only = await api(page, `/api/helpdesk/admin/automations/${created.body.automation.id}`, { method: "PATCH", body: { ...rule, conditions: { team_ids: [goneTeam] }, actions: { priority: "high" } } });
-    expect(only.status).toBe(400);
-    expect(only.body.error).toMatch(/The team this rule checks for was deleted/);
 
     // The checklist: renamed without sending its lists; the deleted owner team and request type drop out.
-    const renamed = await api(page, `/api/helpdesk/admin/checklists/${cl.body.template.id}`, { method: "PATCH", body: { name: `Stale checklist ${stamp} renamed` } });
+    const renamed = await api(page, `/api/helpdesk/admin/checklists/${cl.body.template.id}`, { method: "PUT", body: { name: `Stale checklist ${stamp} renamed` } });
     expect(renamed.status, JSON.stringify(renamed.body)).toBe(200);
     expect(renamed.body.template.request_type_ids).toEqual([keepType]);
     expect(renamed.body.template.items[0].team_id ?? null).toBeNull();

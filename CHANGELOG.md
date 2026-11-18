@@ -4,6 +4,38 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.30] - 2026-11-18
+
+Settings that name something deleted save again.
+
+### Fixed
+- **Customer portal:** after a request type offered in the portal was
+  deleted, every "Save portal settings" failed with "One of the request
+  types no longer exists. Reload the page." and reloading did not help.
+  Deleting a request type now removes it from the portal's settings, and the
+  settings save again.
+- **Customer portal:** deleting a team chosen for a request type no longer
+  breaks saving. The type stays offered and its requests go to its own team.
+- **Help centre:** deleting a space chosen for the help centre no longer
+  breaks saving ("One of the spaces no longer exists"). The space and its
+  categories leave the help centre's settings.
+- **Checklists:** a checklist that named a request type or owner team that
+  was later deleted no longer refuses every save, including publishing
+  changes Claude drafted. The deleted entry is dropped.
+- **Automations:** a rule that named a team or request type that was later
+  deleted no longer refuses every save ("Unknown team."). A deleted entry
+  next to others is dropped. If it was the only team or request type the
+  rule checks for, the save explains how to fix it instead of turning the
+  rule into "any team". If the rule moved tickets to a deleted team, the
+  move is dropped and the save says so. The rules editor shows deleted
+  entries so they can be removed.
+- Deleting a request type, team or space records in the audit log what it
+  removed from these settings.
+
+### Upgrading
+Stale portal entries are cleaned up automatically on the next read or save
+of the portal settings. Nothing to run.
+
 ## [1.20.29] - 2026-11-18
 
 A custom domain that can't lock you out, and Azure VMs that come back after
