@@ -24,7 +24,10 @@ path as every other deployment.
    (`http://<dns-label>.<region>.cloudapp.azure.com`) and run the setup wizard.
 3. With HTTPS enabled: point your own domain at the public IP, enter it in the
    setup wizard (or Settings → Domain & HTTPS), and a certificate is issued
-   automatically.
+   automatically. CompassDocs first checks that the domain reaches this VM;
+   until it does, the domain waits and the Azure address keeps working. The
+   Azure address stays reachable after the domain is live too: the template
+   writes it to `COMPASSDOCS_FALLBACK_HOSTS` in `/opt/compassdocs/.env`.
 
 ## Notes
 
@@ -37,3 +40,11 @@ path as every other deployment.
 - Passwords passed through the wizard must not contain single quotes (they're
   embedded in the bootstrap script).
 - Deleting the resource group removes everything, including data disks.
+- **After a reboot nothing starts?** Deployments made before 1.20.29 wrote the
+  data disk's `/etc/fstab` line without `UUID=`, so the disk never mounted at
+  boot and Docker started on an empty `/var/lib/docker`. Re-run the installer
+  as root, which repairs it (`cd /opt && curl -fsSL
+  https://raw.githubusercontent.com/mattny20/CompassDocs/main/install.sh |
+  sudo COMPASSDOCS_TLS=1 bash`, adding `COMPASSDOCS_EDITION=enterprise` for
+  Enterprise), or follow the manual repair in the docs (Self-hosting →
+  Azure). Your data is on the disk and comes back once it is mounted.

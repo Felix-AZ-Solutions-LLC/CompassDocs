@@ -1582,6 +1582,29 @@ like this, and nothing else in the app invents its own way:
   `COMPASSDOCS_BASE_URL` and links **Settings → Domain & HTTPS** only for
   someone who can open it; anyone else reads "A CompassDocs administrator
   sets it…".
+- **A change that waits for a check** (1.20.29, Settings → Domain &
+  HTTPS: a custom domain whose DNS doesn't reach the server yet). The save
+  succeeds but nothing switches, so the field keeps what the admin typed
+  and, under it, one `notice-warn` card (`rounded-lg border p-3 text-sm`,
+  `data-testid="domain-pending"`) says so: a bold first line with a
+  `Clock` icon ("docs.example.com isn't switched on yet"), the server's
+  plain reason with the specifics as a `role="status"` line, then one
+  `text-xs` line with what still serves, the evidence (the DNS answer),
+  "Last checked" as a `RelativeTime`, and what happens next on its own
+  (re-checked every 5 minutes until a time, or that automatic checks
+  stopped). Three `sm` buttons: **Check again** (`secondary`, `RefreshCw`,
+  `busy` while it runs), **Use it anyway** (`secondary`, behind a `danger`
+  `confirmDialog` that names what stops working and when the override is
+  right, and says it is audited), and **Keep {current address}** (`ghost`;
+  reversible, so it tells and does not ask). The save's toast is an
+  `error` pointing at the card ("…isn't switched on yet. The reason is
+  under the domain."); when it goes live later, a bell notice says so.
+- **Also reachable at** (1.20.29): addresses that keep working beside the
+  canonical one are a short list under the field, each a `link font-mono
+  text-xs` with a `text-xs text-slate-500` note of where it comes from;
+  one an admin can remove has a quiet icon button (`X`, `data-tt="Remove"`,
+  `aria-label` naming the address) and the server-set ones have none. A
+  closing `text-xs` line says which address links in email use.
 - **Prerequisite states** ("SMTP is not set up", "this role is built in")
   are `notice-warn` banners with the action that clears them — never a
   bare amber sentence (it reads as a validation error and fails AA in
