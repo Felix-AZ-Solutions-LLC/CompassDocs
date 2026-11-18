@@ -177,7 +177,9 @@ export function m365FromFor(mailbox: string, fromName: string, override?: string
   const addr = bareAddress(o);
   const name = displayName(o) || cleanFromName(fromName);
   if (addr === mailbox.toLowerCase()) return { from: quote(name) };
-  return /^[^\s@<>"]+@[^\s@<>"]+$/.test(addr) ? { from: quote(name), replyTo: o } : { from: quote(cleanFromName(fromName)) };
+  if (!/^[^\s@<>",;]+@[^\s@<>",;]+$/.test(addr)) return { from: quote(cleanFromName(fromName)) };
+  const own = displayName(o);
+  return { from: quote(name), replyTo: own ? `"${own}" <${addr}>` : addr };
 }
 
 /** The sentence for a message over MAIL_M365_MAX_MIME. */

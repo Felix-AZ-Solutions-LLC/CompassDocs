@@ -50,6 +50,8 @@ interface MailboxData {
   teams: { id: number; name: string }[];
   mail_ready: boolean;
   transport_from: string;
+  /** 1.20.31: how the workspace's email is sent (Settings → Notifications → Email). */
+  transport_method?: "smtp" | "m365";
   /** 1.20.5: the send-from addresses (the second list, and the dialog's "Send replies from"). */
   send_addresses: HdSendAddressView[];
   send_address_limit: number;
@@ -373,9 +375,19 @@ export function EmailSettings() {
             </ul>
           )}
           <p className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
-            Mail goes out through your workspace mail server (<SettingsLink href="/admin/notifications/email">Settings → Notifications → Email</SettingsLink>). Your mail provider, such as SMTP2GO, must allow each address: verify the sender or its
-            domain there first. Send test goes to your own email and shows the provider&apos;s answer. Answers to a reply always come back to the help address, whatever address the
-            reply was sent from.
+            {boxes.transport_method === "m365" ? (
+              <>
+                Mail goes out through Microsoft 365 as {workspaceFrom} (<SettingsLink href="/admin/notifications/email">Settings → Notifications → Email</SettingsLink>). Another
+                address works only when that mailbox may send as it: give it Send As permission on the address in Exchange first.
+              </>
+            ) : (
+              <>
+                Mail goes out through your workspace mail server (<SettingsLink href="/admin/notifications/email">Settings → Notifications → Email</SettingsLink>). Your mail
+                provider, such as SMTP2GO, must allow each address: verify the sender or its domain there first.
+              </>
+            )}{" "}
+            Send test goes to your own email and shows the provider&apos;s answer. Answers to a reply always come back to the help address, whatever address the reply was sent
+            from.
           </p>
         </Card>
 

@@ -86,7 +86,7 @@ async function checkUploads(): Promise<DiagnosticCheck> {
  * (lib/mail-m365 probeM365Send). A client secret that ends within 30 days
  * is a warning; one that has ended, a failure.
  */
-async function checkMail(): Promise<DiagnosticCheck> {
+export async function checkMail(): Promise<DiagnosticCheck> {
   let method: "smtp" | "m365" = "smtp";
   try {
     method = await getMailMethod();
