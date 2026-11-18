@@ -425,7 +425,7 @@ function MessageCard({
       )}
       <div className={`${rule ? "mt-1" : "mt-1.5"} min-w-0`}>{email.body}</div>
       {/* On paper the email is its text, so its pictures are listed there too (hidden on screen while it is formatted). */}
-      {all.length > 0 && <FileList files={all} shown={files} />}
+      {all.length > 0 && <FileList files={all} shown={files} formatted={email.formatted} />}
     </li>
   );
 }
@@ -435,7 +435,7 @@ function MessageCard({
  * row per file with its type square, name, size and Download. A picture's name opens it in a new tab; anything else
  * downloads (the route serves it as a download).
  */
-function FileList({ files, shown }: { files: HdAttachment[]; shown: HdAttachment[] }) {
+function FileList({ files, shown, formatted }: { files: HdAttachment[]; shown: HdAttachment[]; formatted: boolean }) {
   const onScreen = new Set(shown.map((f) => f.id));
   const head = (list: HdAttachment[]) => {
     const total = list.reduce((n, f) => n + (Number(f.size) || 0), 0);
@@ -446,9 +446,11 @@ function FileList({ files, shown }: { files: HdAttachment[]; shown: HdAttachment
     );
   };
   const same = shown.length === files.length;
+  // The list takes the width of the email above it: the formatted email spans the card, so the list does too; a text
+  // message is indented under its author, so the list is as well (and on paper, where the email prints as text).
   return (
     <div
-      className={`mt-3 overflow-hidden rounded-lg border border-slate-200 bg-surface break-inside-avoid sm:ml-9 ${shown.length ? "" : "hidden print:block"}`}
+      className={`mt-3 overflow-hidden rounded-lg border border-slate-200 bg-surface break-inside-avoid ${formatted ? "print:ml-9" : "sm:ml-9"} ${shown.length ? "" : "hidden print:block"}`}
       data-testid="message-files"
     >
       <p className="flex items-center gap-1.5 border-b border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-500">

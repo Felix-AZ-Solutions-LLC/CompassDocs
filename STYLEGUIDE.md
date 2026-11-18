@@ -3188,7 +3188,10 @@ open in its own tab beside CompassDocs. Components live in
   reply area and Order are `print:hidden`. The pop-out, the recycle bin, a
   request's view, Get help and the portal keep oldest first.
 - **Files under a message** (1.20.28): a `rounded-lg border
-  border-slate-200 bg-surface` list, `sm:ml-9` (full width on a phone),
+  border-slate-200 bg-surface` list as wide as the email above it: under
+  a formatted email (which spans the card) it spans the card too
+  (`print:ml-9`, where the email prints as text); under a text message
+  it is `sm:ml-9`, indented with the text (full width on a phone).
   `break-inside-avoid`. Its head row is `bg-slate-50 text-xs
   text-slate-500` with `Paperclip`: "4 attachments · 2.1 MB"
   (`tabular-nums`). Each file is a row, `grid-cols-[1.75rem_minmax(0,1fr)
