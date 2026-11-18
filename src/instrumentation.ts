@@ -117,6 +117,14 @@ export async function register() {
     } catch (e) {
       console.error("[newsletter] scheduler error:", e);
     }
+    // 1.20.31: newsletters going out through Microsoft 365, about 25 a minute
+    // (lib/newsletter-delivery; one claimed job at a time, so every instance may run this).
+    try {
+      const { newsletterDeliveryTick } = await import("./lib/newsletter-delivery");
+      await newsletterDeliveryTick();
+    } catch (e) {
+      console.error("[newsletter] delivery error:", e);
+    }
     // Scheduled document publishes / auto-unpublishes (atomic claims too).
     try {
       const { runDueDocSchedules } = await import("./lib/doc-schedule");

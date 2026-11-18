@@ -36,9 +36,9 @@
 import "server-only";
 import nodemailer from "nodemailer";
 import { M365Error, graph, m365Token, userPath, type M365Credentials } from "./helpdesk/m365/graph";
-import { entraGrantsSend, getM365SendConfig, m365SendConfigured, recordM365Check, type M365SendConfig } from "./mail-config";
+import { SECRET_UNREADABLE, entraGrantsSend, getM365SendConfig, graphUserOf, m365SendConfigured, recordM365Check, type M365SendConfig } from "./mail-config";
 import { m365SendSentence } from "./mail-m365-errors";
-import { MAIL_M365_MAX_MIME, MAIL_NOT_SET_UP, m365FromFor, mailTooLarge, type MailM365Check } from "./mail-m365-shared";
+import { MAIL_M365_MAX_MIME, MAIL_NOT_SET_UP, cleanSendingMailbox, m365FromFor, mailTooLarge, type MailM365Check } from "./mail-m365-shared";
 
 /** A message as the transports take it (the helpdesk's carries threading headers; the rest a subset). */
 export interface OutgoingMail {
@@ -64,7 +64,9 @@ export class MailSendError extends Error {
     message: string,
     public status: number,
     public code = "",
-    public kind = ""
+    public kind = "",
+    /** A 429's Retry-After, when Microsoft gave one. */
+    public retryAfterMs: number | null = null
   ) {
     super(message);
     this.name = "MailSendError";
@@ -113,17 +115,18 @@ export function setM365RetryWaitForTests(fn: ((ms: number) => Promise<unknown>) 
   waitFor429 = (fn as typeof sleep) ?? sleep;
 }
 
-const asSendError = (e: M365Error, mailbox: string) => new MailSendError(m365SendSentence(e, mailbox), e.status, e.code, e.kind);
+const asSendError = (e: M365Error, mailbox: string) => new MailSendError(m365SendSentence(e, mailbox), e.status, e.code, e.kind, e.retryAfterMs);
 
 /** Hand one built message to Graph as the configured mailbox. Throws MailSendError (or MailTooLargeError) with a sentence. */
 export async function sendMimeM365(mime: Buffer, cfg?: M365SendConfig): Promise<void> {
   const c = cfg ?? (await getM365SendConfig());
   if (!m365SendConfigured(c)) throw new MailSendError(MAIL_NOT_SET_UP, 0, "not_set_up");
+  if (c.secretUnreadable) throw new MailSendError(SECRET_UNREADABLE, 0, "secret_unreadable", "auth");
   if (mime.length > MAIL_M365_MAX_MIME) throw new MailTooLargeError(mime.length);
   const value = mime.toString("base64");
   for (let attempt = 0; ; attempt++) {
     try {
-      await graph(creds(c), { method: "POST", path: `${userPath(c.mailbox)}/sendMail`, text: { value, type: "text/plain" }, what: "send mail as this mailbox", timeoutMs: 60_000 });
+      await graph(creds(c), { method: "POST", path: `${userPath(graphUserOf(c))}/sendMail`, text: { value, type: "text/plain" }, what: "send mail as this mailbox", timeoutMs: 60_000 });
       return;
     } catch (e) {
       if (!(e instanceof M365Error)) throw e;
@@ -144,25 +147,53 @@ export async function sendViaM365(
 ): Promise<void> {
   const c = cfg ?? (await getM365SendConfig());
   if (!m365SendConfigured(c)) throw new MailSendError(MAIL_NOT_SET_UP, 0, "not_set_up");
+  if (c.secretUnreadable) throw new MailSendError(SECRET_UNREADABLE, 0, "secret_unreadable", "auth");
   const who = m365FromFor(c.mailbox, c.fromName, m.fromOverride);
   const mime = await buildMime({ from: who.from, replyTo: who.replyTo, to: m.to, subject: m.subject, text: m.text, html: m.html, attachments: m.attachments });
   await sendMimeM365(mime, c);
 }
 
+/** One send with no recipients as `user`: the answer says whether the app may send as it. Sends nothing. */
+async function maySendAs(c: M365SendConfig, user: string): Promise<{ allowed: true } | { allowed: false; error: M365Error }> {
+  try {
+    await graph(creds(c), {
+      method: "POST",
+      path: `${userPath(user)}/sendMail`,
+      body: {
+        message: { subject: "CompassDocs connection check", body: { contentType: "Text", content: "This message has no recipients and is never delivered." }, toRecipients: [] },
+        saveToSentItems: false,
+      },
+      what: "send mail as this mailbox",
+    });
+    return { allowed: true };
+  } catch (e) {
+    if (!(e instanceof M365Error)) throw e;
+    const lc = e.code.toLowerCase();
+    const mailboxProblem = lc === "mailboxnotenabledforrestapi" || lc === "mailboxnotsupportedforrestapi" || lc === "errorinvaliduser" || lc === "resourcenotfound";
+    // Past the access check: Graph only complained about the message, which has no recipients on purpose.
+    if (e.status === 400 && !mailboxProblem) return { allowed: true };
+    return { allowed: false, error: e };
+  }
+}
+
 /**
  * Check the saved configuration without sending: a fresh sign-in, then a
- * send with no recipients (see the top of this file). Kept for the page
- * (recordM365Check) unless `record` is false.
+ * send with no recipients as the mailbox (see the top of this file). With
+ * `other` (the admin's own address), the same as that mailbox too: an app
+ * that may send as it is not limited to the sending mailbox yet (limited:
+ * false, and the page says to run the lock-down commands). Kept for the
+ * page (recordM365Check) unless `record` is false.
  */
-export async function probeM365Send(opts: { record?: boolean; cfg?: M365SendConfig } = {}): Promise<MailM365Check & { entra_send: boolean | null }> {
+export async function probeM365Send(opts: { record?: boolean; cfg?: M365SendConfig; other?: string | null } = {}): Promise<MailM365Check & { entra_send: boolean | null }> {
   const c = opts.cfg ?? (await getM365SendConfig());
   const at = new Date().toISOString();
-  const done = async (ok: boolean, message: string, claims: { tid: string; oid: string; roles: string[] } | null) => {
-    const check = { at, ok, message };
+  const done = async (ok: boolean, message: string, claims: { tid: string; oid: string; roles: string[] } | null, limited: boolean | null = null, other = "") => {
+    const check: MailM365Check = { at, ok, message, limited, other };
     if (opts.record !== false) await recordM365Check(check, claims).catch(() => {});
     return { ...check, entra_send: claims ? entraGrantsSend(claims.roles) : null };
   };
   if (!m365SendConfigured(c)) return done(false, "Microsoft 365 is not set up: enter the tenant, the app, its secret and the sending mailbox.", null);
+  if (c.secretUnreadable) return done(false, SECRET_UNREADABLE, null);
   let claims: { tid: string; oid: string; roles: string[] };
   try {
     claims = (await m365Token(creds(c), true)).claims;
@@ -170,25 +201,17 @@ export async function probeM365Send(opts: { record?: boolean; cfg?: M365SendConf
     if (e instanceof M365Error) return done(false, m365SendSentence(e, c.mailbox), null);
     throw e;
   }
-  try {
-    await graph(creds(c), {
-      method: "POST",
-      path: `${userPath(c.mailbox)}/sendMail`,
-      body: {
-        message: { subject: "CompassDocs connection check", body: { contentType: "Text", content: "This message has no recipients and is never delivered." }, toRecipients: [] },
-        saveToSentItems: false,
-      },
-      what: "send mail as this mailbox",
-    });
-  } catch (e) {
-    if (!(e instanceof M365Error)) throw e;
-    const lc = e.code.toLowerCase();
-    const mailboxProblem = lc === "mailboxnotenabledforrestapi" || lc === "mailboxnotsupportedforrestapi" || lc === "errorinvaliduser" || lc === "resourcenotfound";
-    // Past the access check: Graph only complained about the message, which has no recipients on purpose.
-    if (e.status === 400 && !mailboxProblem) return done(true, `Signed in, and the app may send as ${c.mailbox}. Nothing was sent.`, claims);
-    return done(false, m365SendSentence(e, c.mailbox), claims);
+  const own = await maySendAs(c, graphUserOf(c));
+  if (!own.allowed) return done(false, m365SendSentence(own.error, c.mailbox), claims);
+  const okLine = `Signed in, and the app may send as ${c.mailbox}. Nothing was sent.`;
+  const other = cleanSendingMailbox(opts.other ?? "");
+  if (!other || other === c.mailbox.toLowerCase() || other === c.graphUser.toLowerCase()) return done(true, okLine, claims, null, "");
+  const probe = await maySendAs(c, other);
+  if (probe.allowed) {
+    return done(true, `${okLine} The app can also send as ${other}: it is not limited to ${c.mailbox} yet. Run the lock-down commands below.`, claims, false, other);
   }
-  return done(true, `Signed in, and the app may send as ${c.mailbox}. Nothing was sent.`, claims);
+  if (probe.error.status === 403) return done(true, `${okLine} It can't send as ${other}, as it should.`, claims, true, other);
+  return done(true, `${okLine} Whether it is limited to ${c.mailbox} is not known: ${other} is not a mailbox it could be tried with.`, claims, null, other);
 }
 
 /**

@@ -1722,6 +1722,36 @@ const SCHEMA_SQL = `
     created_at timestamptz NOT NULL DEFAULT now()
   );
 
+  -- 1.20.31: a newsletter sent through Microsoft 365 goes out in the
+  -- background, paced under Exchange's sending limits (lib/newsletter-delivery):
+  -- one job per newsletter (the rendered mail, who asked, where it stands)
+  -- and one row per recipient (queued, sent or failed, with the reason).
+  CREATE TABLE IF NOT EXISTS newsletter_send_jobs (
+    newsletter_id integer PRIMARY KEY REFERENCES newsletters(id) ON DELETE CASCADE,
+    payload text NOT NULL,
+    audience text NOT NULL DEFAULT '',
+    actor_id integer,
+    actor_name text NOT NULL DEFAULT '',
+    scheduled boolean NOT NULL DEFAULT false,
+    state text NOT NULL DEFAULT 'sending',
+    paused_until timestamptz,
+    stop_reason text NOT NULL DEFAULT '',
+    finished_once boolean NOT NULL DEFAULT false,
+    claimed_until timestamptz,
+    last_batch_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    finished_at timestamptz
+  );
+  CREATE TABLE IF NOT EXISTS newsletter_deliveries (
+    newsletter_id integer NOT NULL REFERENCES newsletters(id) ON DELETE CASCADE,
+    email text NOT NULL,
+    state text NOT NULL DEFAULT 'queued',
+    error text NOT NULL DEFAULT '',
+    attempts integer NOT NULL DEFAULT 0,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (newsletter_id, email)
+  );
+
   -- Document comments (0.38): a flat discussion under each document, with
   -- @mentions. Admin-deleted comments stay as rows (deleted_at set) so the
   -- thread keeps its shape; their body is never returned to clients.

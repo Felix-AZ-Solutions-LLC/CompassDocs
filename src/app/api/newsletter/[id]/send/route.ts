@@ -14,6 +14,8 @@ import {
 import { uploadDir } from "@/lib/uploads";
 import { canSend, canComment } from "@/lib/newsletter-access";
 import { sendNewsletter, archiveNewsletter } from "@/lib/newsletter";
+import { queueM365Send } from "@/lib/newsletter-delivery-start";
+import { getMailMethod } from "@/lib/mail-config";
 import { getAppSettings } from "@/lib/settings-store";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import type { SessionUser } from "@/lib/types";
@@ -83,9 +85,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (n.mode === "groups" && groupIds.length === 0) {
     return NextResponse.json({ error: "Pick at least one group, or send to everyone." }, { status: 400 });
   }
-  const r = await sendNewsletter({ ...base, to: n.mode === "groups" ? groupIds : "all" });
-  if (r.error) return NextResponse.json({ error: r.error }, { status: 422 });
-
   let audience = "Everyone";
   if (n.mode === "groups") {
     const names = (await listGroups())
@@ -93,6 +92,25 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       .map((g) => g.name);
     audience = `Groups: ${names.join(", ") || groupIds.join(", ")}`;
   }
+
+  // 1.20.31: through Microsoft 365 the send is queued and paced in the background (lib/newsletter-delivery).
+  if ((await getMailMethod()) === "m365") {
+    const queued = await queueM365Send(n.id, { ...base, to: n.mode === "groups" ? groupIds : "all" }, audience, { id: user.id, name: user.name || user.username });
+    if ("error" in queued) return NextResponse.json({ error: queued.error }, { status: queued.status });
+    await audit({
+      actor: actorFrom(user),
+      action: "newsletter.send_started",
+      targetType: "newsletter",
+      targetId: n.id,
+      targetLabel: n.subject,
+      details: { audience, recipients: queued.delivery.total, via: "m365" },
+      ip: ipFrom(req),
+    });
+    return NextResponse.json({ newsletter: await getNewsletter(n.id), queued: queued.delivery.total, delivery: queued.delivery });
+  }
+
+  const r = await sendNewsletter({ ...base, to: n.mode === "groups" ? groupIds : "all" });
+  if (r.error) return NextResponse.json({ error: r.error }, { status: 422 });
   await markNewsletterSent(n.id, audience, r.sent);
   await addNewsletterComment({
     newsletter_id: n.id,

@@ -8,9 +8,9 @@ import { join } from "path";
 import { pool } from "./db";
 import { uploadDir } from "./uploads";
 import { getSmtpConfig, smtpConfigured } from "./smtp-config";
-import { getM365SendConfig, getMailMethod, m365SendConfigured } from "./mail-config";
+import { SECRET_UNREADABLE, getM365SendConfig, getMailMethod, m365SendConfigured } from "./mail-config";
 import { probeM365Send } from "./mail-m365";
-import { secretExpiry, secretExpirySentence } from "./mail-m365-shared";
+import { MAIL_CHECK_FRESH_MS, secretExpiry, secretExpirySentence, type MailM365Check } from "./mail-m365-shared";
 import { aiAvailable, getAiProvider } from "./ai-config";
 import { getEmbeddingsConfig, vectorAvailable } from "./embeddings";
 import { licenseState } from "./license";
@@ -81,16 +81,20 @@ async function checkUploads(): Promise<DiagnosticCheck> {
 
 /**
  * Email, by the chosen method (1.20.31): "Email (SMTP)" as before, or
- * "Email (Microsoft 365)", which is checked for real: the app signs in and
- * Graph is asked whether it may send as the mailbox, sending nothing
- * (lib/mail-m365 probeM365Send). A client secret that ends within 30 days
- * is a warning; one that has ended, a failure.
+ * "Email (Microsoft 365)": the last Check connection (lib/mail-m365
+ * probeM365Send: the app signs in and Graph is asked whether it may send as
+ * the mailbox, sending nothing). A page render never calls Microsoft: it
+ * shows the last check. `live` (the Diagnostics card's Run checks) checks
+ * again when the last one is older than MAIL_CHECK_FRESH_MS, within 15
+ * seconds. A client secret that ends within 30 days is a warning; one that
+ * has ended, a failure; an app that can send as other mailboxes too, a
+ * warning.
  */
-export async function checkMail(): Promise<DiagnosticCheck> {
+export async function checkMail(opts: { live?: boolean } = {}): Promise<DiagnosticCheck> {
   let method: "smtp" | "m365" = "smtp";
   try {
     method = await getMailMethod();
-    if (method === "m365") return await checkM365Mail();
+    if (method === "m365") return await checkM365Mail(opts.live === true);
     const cfg = await getSmtpConfig();
     if (!smtpConfigured(cfg)) {
       return {
@@ -118,19 +122,33 @@ export async function checkMail(): Promise<DiagnosticCheck> {
   }
 }
 
-async function checkM365Mail(): Promise<DiagnosticCheck> {
+const PROBE_BUDGET_MS = 15_000;
+
+async function checkM365Mail(live: boolean): Promise<DiagnosticCheck> {
   const label = "Email (Microsoft 365)";
   const cfg = await getM365SendConfig();
   if (!m365SendConfigured(cfg)) {
     return { key: "smtp", label, status: "warn", detail: "Not set up — subscriptions, reminders, and newsletters can't send.", fix: FIX.m365 };
   }
+  if (cfg.secretUnreadable) return { key: "smtp", label, status: "fail", detail: SECRET_UNREADABLE, fix: FIX.m365 };
+  let check: MailM365Check | null = cfg.lastCheck;
+  const age = check ? Date.now() - Date.parse(check.at) : Infinity;
+  if (live && !(age < MAIL_CHECK_FRESH_MS)) {
+    const timeout = new Promise<null>((r) => setTimeout(() => r(null), PROBE_BUDGET_MS).unref?.());
+    // The other mailbox the last check tried, so the lock-down state stays known.
+    check = (await Promise.race([probeM365Send({ cfg, other: cfg.lastCheck?.other || null }), timeout])) ?? check;
+  }
   const expiry = secretExpiry(cfg.secretExpires);
-  const probe = await probeM365Send({ cfg });
-  if (!probe.ok) return { key: "smtp", label, status: "fail", detail: probe.message, fix: FIX.m365 };
+  if (!check) return { key: "smtp", label, status: "warn", detail: "Not checked yet. Press Run checks, or Check connection on the Email settings page.", fix: FIX.m365 };
+  const when = ` Checked ${new Date(check.at).toISOString().slice(0, 16).replace("T", " ")} UTC.`;
+  if (!check.ok) return { key: "smtp", label, status: "fail", detail: `${check.message}${when}`, fix: FIX.m365 };
   if (expiry.state === "expired" || expiry.state === "soon") {
     return { key: "smtp", label, status: expiry.state === "expired" ? "fail" : "warn", detail: secretExpirySentence(cfg.secretExpires), fix: FIX.m365 };
   }
-  return { key: "smtp", label, status: "pass", detail: `Signed in and allowed to send as ${cfg.mailbox}. Nothing was sent to check it.` };
+  if (check.limited === false) {
+    return { key: "smtp", label, status: "warn", detail: `The app can send as other mailboxes too, not only ${cfg.mailbox}. Run the lock-down commands on the Email settings page.${when}`, fix: FIX.m365 };
+  }
+  return { key: "smtp", label, status: "pass", detail: `Signed in and allowed to send as ${cfg.mailbox}. Nothing was sent to check it.${when}` };
 }
 
 async function checkAi(): Promise<DiagnosticCheck> {
@@ -405,11 +423,12 @@ async function checkOutboundHttps(): Promise<DiagnosticCheck> {
   }
 }
 
-export async function runDiagnostics(req?: Request): Promise<DiagnosticCheck[]> {
+/** `live`: the Diagnostics card's Run checks (the API), which may call out; a page render passes nothing and never waits on Microsoft. */
+export async function runDiagnostics(req?: Request, opts: { live?: boolean } = {}): Promise<DiagnosticCheck[]> {
   const checks = await Promise.all([
     checkDatabase(),
     checkUploads(),
-    checkMail(),
+    checkMail({ live: opts.live === true }),
     checkAi(),
     checkSemantic(),
     checkLicense(),

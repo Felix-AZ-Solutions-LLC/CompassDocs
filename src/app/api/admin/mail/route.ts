@@ -4,9 +4,13 @@
 //
 //   GET    → MailView (lib/mail-m365-shared): the chosen method, both
 //            configurations (secrets only as has_secret / has_pass)
-//   PATCH  { action: "method", method: "smtp" | "m365" }
-//            → choose; 409 while that method is not set up
-//          { action: "m365", tenant, client_id, secret?, mailbox, from_name?, use? }
+//   PATCH  { action: "method", method: "smtp" | "m365", confirm? }
+//            → choose; 409 while that method is not set up; 409 code
+//              "confirm" with `warnings` when the switch changes something
+//              people notice (lib/mail-config methodSwitchWarnings), until
+//              confirm is true
+//          { action: "warnings", method, mailbox? } → { warnings }
+//          { action: "m365", tenant, client_id, secret?, mailbox, graph_user?, from_name?, use?, confirm? }
 //            → save the Microsoft 365 configuration after signing in with it
 //              (409 with Microsoft's reason in plain words when refused);
 //              `use`: choose Microsoft 365 afterwards
@@ -14,17 +18,18 @@
 //            → a test email by that method (default: the chosen one)
 //          { action: "check" }
 //            → sign in and ask Graph whether the app may send as the
-//              mailbox, sending nothing; kept for the page
+//              mailbox, and as the admin's own address (it should not),
+//              sending nothing; kept for the page, audited
 //
 // Same permissions as the SMTP settings: integration.smtp_read to look,
 // integration.smtp_manage to change or test. Audited in lib/mail-config
 // (settings.mail_method, settings.mail_m365, settings.mail_m365_secret) and
-// here (settings.mail_test).
+// here (settings.mail_test, settings.mail_check).
 
 import { NextResponse } from "next/server";
 import { apiGuard, credentialSaveError } from "@/lib/api-auth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
-import { MailConfigError, getMailMethod, mailView, methodConfigured, saveM365SendConfig, setMailMethod } from "@/lib/mail-config";
+import { MailConfigError, getMailMethod, mailView, methodConfigured, methodSwitchWarnings, saveM365SendConfig, setMailMethod } from "@/lib/mail-config";
 import { sendMailWith } from "@/lib/mailer";
 import { probeM365Send } from "@/lib/mail-m365";
 import { methodLabel, type MailMethod } from "@/lib/mail-m365-shared";
@@ -60,17 +65,23 @@ export async function PATCH(req: Request) {
     if (action === "method") {
       const method = asMethod(body?.method);
       if (!method) return NextResponse.json({ error: "Choose SMTP or Microsoft 365." }, { status: 400 });
-      const changed = await setMailMethod(method, by);
+      const changed = await setMailMethod(method, by, { confirm: body?.confirm === true });
       return NextResponse.json({ ok: true, changed, view: await mailView() });
+    }
+
+    if (action === "warnings") {
+      const method = asMethod(body?.method);
+      if (!method) return NextResponse.json({ error: "Choose SMTP or Microsoft 365." }, { status: 400 });
+      return NextResponse.json({ warnings: await methodSwitchWarnings(method, typeof body?.mailbox === "string" ? body.mailbox : undefined) });
     }
 
     if (action === "m365") {
       let result: Awaited<ReturnType<typeof saveM365SendConfig>> | null = null;
       const keyErr = await credentialSaveError(async () => {
         result = await saveM365SendConfig(
-          { tenant: body?.tenant, client_id: body?.client_id, secret: body?.secret, mailbox: body?.mailbox, from_name: body?.from_name },
+          { tenant: body?.tenant, client_id: body?.client_id, secret: body?.secret, mailbox: body?.mailbox, graph_user: body?.graph_user, from_name: body?.from_name },
           by,
-          { setup: "manual", use: body?.use === true }
+          { setup: "manual", use: body?.use === true, confirm: body?.confirm === true }
         );
       });
       if (keyErr) return keyErr;
@@ -101,11 +112,12 @@ export async function PATCH(req: Request) {
     }
 
     if (action === "check") {
-      const check = await probeM365Send();
+      const check = await probeM365Send({ other: user.email || null });
+      await audit({ ...auditBase(by), action: "settings.mail_check", details: { ok: check.ok, limited: check.limited ?? null, other: check.other || null, error: check.ok ? null : check.message.slice(0, 300) } });
       return NextResponse.json({ ok: check.ok, check, view: await mailView() });
     }
   } catch (e) {
-    if (e instanceof MailConfigError) return NextResponse.json({ error: e.message, code: e.code || undefined }, { status: e.status });
+    if (e instanceof MailConfigError) return NextResponse.json({ error: e.message, code: e.code || undefined, ...(e.warnings.length ? { warnings: e.warnings } : {}) }, { status: e.status });
     throw e;
   }
   return NextResponse.json({ error: "Unknown action." }, { status: 400 });

@@ -31,7 +31,7 @@
 // claim lists what Entra granted), each time the connection is saved,
 // tested or checked.
 
-import { cleanM365Address, isGuid, m365AddressProblem, m365CredentialsProblem, psLiteral, scopeFilter } from "./helpdesk/m365-mail-shared";
+import { cleanM365Address, cleanM365GraphId, isGuid, m365AddressProblem, m365CredentialsProblem, psLiteral, scopeFilter } from "./helpdesk/m365-mail-shared";
 
 export type MailMethod = "smtp" | "m365";
 
@@ -45,10 +45,13 @@ export const methodLabel = (m: MailMethod) => (m === "m365" ? "Microsoft 365" : 
 
 /** The app registration the one-click setup makes, or finds by this name and reuses. */
 export const MAIL_M365_APP_NAME = "CompassDocs Workspace Mail";
-/** The mail-enabled security group (access policy) and the management scope (RBAC) the commands make. */
-export const MAIL_M365_GROUP_NAME = "CompassDocs sending mailbox";
-export const MAIL_M365_GROUP_ALIAS = "compassdocs-sending-mailbox";
-export const MAIL_M365_POLICY_DESCRIPTION = "CompassDocs sending mailbox";
+/**
+ * The mail-enabled security group (access policy) and the management scope
+ * (RBAC) the commands make, named after the app (the first 8 characters of
+ * its client ID), so a second CompassDocs in the same tenant makes its own.
+ */
+export const mailGroupName = (clientId: string) => `CompassDocs sending mailbox ${clientId.trim().toLowerCase().slice(0, 8)}`;
+export const mailGroupAlias = (clientId: string) => `compassdocs-mail-${clientId.trim().toLowerCase().slice(0, 8)}`;
 
 /**
  * The largest message (MIME, attachments included) sent in one Graph call.
@@ -69,15 +72,34 @@ export interface MailM365Check {
   ok: boolean;
   /** One sentence: what was checked, or what is wrong. */
   message: string;
+  /**
+   * Whether the app is limited to the sending mailbox, from a second probe
+   * as another mailbox (the admin's own, sending nothing): true (refused
+   * there, as it should be), false (it could send as that one too: not
+   * locked down yet), null (not known: no other mailbox to try).
+   */
+  limited?: boolean | null;
+  /** The other mailbox tried ('' = none). */
+  other?: string;
+  /** Diagnostics: the check is older than MAIL_CHECK_FRESH_MS. */
+  stale?: boolean;
 }
+
+/** A Check connection result is reused this long (System diagnostics never probes on a page render). */
+export const MAIL_CHECK_FRESH_MS = 10 * 60_000;
 
 export interface MailM365View {
   tenant: string;
   client_id: string;
   has_secret: boolean;
+  /** The mailbox's primary email address: the From of every message. */
   mailbox: string;
+  /** Its sign-in name or object ID when that is not the address ('' = the address); what Graph is asked by. */
+  graph_user: string;
   from_name: string;
   setup: "manual" | "one_click" | "";
+  /** A secret is stored but can't be opened (the server's secret key changed). */
+  secret_unreadable: boolean;
   /** YYYY-MM-DD, '' when not known (a secret pasted by hand). */
   secret_expires: string;
   /** The app's enterprise application (service principal) object ID, for the RBAC commands ('' until it signed in once). */
@@ -116,6 +138,7 @@ export interface MailM365Input {
   client_id?: unknown;
   secret?: unknown;
   mailbox?: unknown;
+  graph_user?: unknown;
   from_name?: unknown;
 }
 
@@ -138,15 +161,27 @@ export function cleanSendingMailbox(raw: unknown): string | null {
 export function mailM365Problem(raw: MailM365Input, secretOptional = false): string {
   const creds = m365CredentialsProblem({ tenant: raw.tenant, client_id: raw.client_id, secret: raw.secret }, secretOptional);
   if (creds) return creds;
-  return sendingMailboxProblem(raw.mailbox);
+  return sendingMailboxProblem(raw.mailbox) || graphUserProblem(raw.graph_user);
 }
 
 /** Why the sending mailbox typed is refused ('' = fine). */
 export function sendingMailboxProblem(raw: unknown): string {
   const mb = s(raw);
-  if (!mb) return "Enter the sending mailbox: the address mail goes out from, such as compassdocs@yourcompany.com.";
+  if (!mb) return "Enter the sending mailbox's email address: the address mail goes out from, such as compassdocs@yourcompany.com.";
   const why = m365AddressProblem(mb);
-  return why ? why.replace("Enter the mailbox's main address", "Enter the sending mailbox's sign-in name or main address") : "";
+  return why ? why.replace("Enter the mailbox's main address", "Enter the sending mailbox's email address") : "";
+}
+
+/** Why the optional sign-in name or object ID is refused ('' = fine or empty). */
+export function graphUserProblem(raw: unknown): string {
+  const v = s(raw);
+  if (!v) return "";
+  return cleanM365GraphId(v) ? "" : "Enter the mailbox's sign-in name (such as compassdocs@yourcompany.onmicrosoft.com) or its object ID, or leave it empty.";
+}
+
+/** The stored form of the optional sign-in name or object ID ('' when empty or not one). */
+export function cleanGraphUser(raw: unknown): string {
+  return cleanM365GraphId(raw) || "";
 }
 
 /** Bare address of a From such as `"Name" <a@b>` or `a@b`, lower-cased. */
@@ -201,21 +236,21 @@ export function accessPolicyCommands(opts: { clientId: string; mailbox: string }
   const mailbox = cleanM365Address(opts.mailbox);
   const app = opts.clientId.trim().toLowerCase();
   if (!mailbox || !isGuid(app)) return null;
-  const group = psLiteral(MAIL_M365_GROUP_NAME);
+  const group = psLiteral(mailGroupName(app));
   return [
     "Connect-ExchangeOnline",
-    `New-DistributionGroup -Name ${group} -Alias ${psLiteral(MAIL_M365_GROUP_ALIAS)} -Type Security -Members ${psLiteral(mailbox)}`,
+    `New-DistributionGroup -Name ${group} -Alias ${psLiteral(mailGroupAlias(app))} -Type Security -Members ${psLiteral(mailbox)}`,
     `Set-DistributionGroup -Identity ${group} -HiddenFromAddressListsEnabled $true`,
-    `New-ApplicationAccessPolicy -AppId ${psLiteral(app)} -PolicyScopeGroupId ${group} -AccessRight RestrictAccess -Description ${psLiteral(MAIL_M365_POLICY_DESCRIPTION)}`,
+    `New-ApplicationAccessPolicy -AppId ${psLiteral(app)} -PolicyScopeGroupId ${group} -AccessRight RestrictAccess -Description ${group}`,
     `Test-ApplicationAccessPolicy -Identity ${psLiteral(mailbox)} -AppId ${psLiteral(app)}`,
   ].join("\n");
 }
 
 /** When the sending mailbox changes later: the group's one member is replaced. */
-export function accessPolicyUpdateCommands(mailbox: string): string | null {
-  const mb = cleanM365Address(mailbox);
-  if (!mb) return null;
-  return ["Connect-ExchangeOnline", `Update-DistributionGroupMember -Identity ${psLiteral(MAIL_M365_GROUP_NAME)} -Members ${psLiteral(mb)} -Confirm:$false`].join("\n");
+export function accessPolicyUpdateCommands(opts: { clientId: string; mailbox: string }): string | null {
+  const mb = cleanM365Address(opts.mailbox);
+  if (!mb || !isGuid(opts.clientId)) return null;
+  return ["Connect-ExchangeOnline", `Update-DistributionGroupMember -Identity ${psLiteral(mailGroupName(opts.clientId))} -Members ${psLiteral(mb)} -Confirm:$false`].join("\n");
 }
 
 /**
@@ -229,12 +264,12 @@ export function rbacCommands(opts: { clientId: string; spObjectId: string; mailb
   const mailbox = cleanM365Address(opts.mailbox);
   if (!mailbox || !isGuid(opts.clientId) || !isGuid(opts.spObjectId)) return null;
   const sp = psLiteral(opts.spObjectId.trim().toLowerCase());
-  const scope = psLiteral(MAIL_M365_GROUP_NAME);
+  const scope = psLiteral(mailGroupName(opts.clientId));
   return [
     "Connect-ExchangeOnline",
     `New-ServicePrincipal -AppId ${psLiteral(opts.clientId.trim().toLowerCase())} -ObjectId ${sp} -DisplayName ${psLiteral(MAIL_M365_APP_NAME)}`,
     `New-ManagementScope -Name ${scope} -RecipientRestrictionFilter ${psLiteral(scopeFilter([mailbox]))}`,
-    `New-ManagementRoleAssignment -Name ${psLiteral("CompassDocs workspace Mail.Send")} -App ${sp} -Role ${psLiteral("Application Mail.Send")} -CustomResourceScope ${scope}`,
+    `New-ManagementRoleAssignment -Name ${psLiteral(`CompassDocs workspace Mail.Send ${opts.clientId.trim().toLowerCase().slice(0, 8)}`)} -App ${sp} -Role ${psLiteral("Application Mail.Send")} -CustomResourceScope ${scope}`,
     `Test-ServicePrincipalAuthorization -Identity ${sp} -Resource ${psLiteral(mailbox)} | Format-Table RoleName, GrantedPermissions, AllowedResourceScope, InScope`,
   ].join("\n");
 }

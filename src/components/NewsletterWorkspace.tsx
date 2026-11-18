@@ -11,6 +11,7 @@ import { SettingsLink } from "@/components/SettingsLink";
 import { confirmDialog } from "@/components/Dialog";
 import { useRouter } from "next/navigation";
 import { BackLink } from "@/components/BackLink";
+import { NewsletterDeliveryPanel, useNewsletterDelivery } from "@/components/NewsletterDelivery";
 import {
   Send,
   FlaskConical,
@@ -107,6 +108,7 @@ export function NewsletterWorkspace({
   spaces = [],
   approverPool,
   smtpReady,
+  mailVia = "smtp",
   fromAddresses = [],
   hasModuleAccess = true,
 }: {
@@ -116,6 +118,8 @@ export function NewsletterWorkspace({
   spaces?: SpaceLite[];
   approverPool: ApproverLite[];
   smtpReady: boolean;
+  /** 1.20.31: how the workspace's email goes out; through Microsoft 365 a send is paced in the background. */
+  mailVia?: "smtp" | "m365";
   /** Admin-curated sender list; empty hides the From picker. */
   fromAddresses?: string[];
   /** False for readers who only see sent pieces (no editorial thread). */
@@ -129,6 +133,8 @@ export function NewsletterWorkspace({
   const [approverIds, setApproverIds] = useState(initial.approver_ids);
   const [can, setCan] = useState(initial.can);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { delivery, setDelivery } = useNewsletterDelivery(initial.newsletter.id, true);
+  const sending = !!delivery && delivery.state !== "done";
 
   // Editable copy of the content; `dirty` gates the workflow buttons so a
   // submit/approve always acts on what's saved, never on unsaved edits.
@@ -276,7 +282,10 @@ export function NewsletterWorkspace({
       if (
         !(await confirmDialog({
           title: `Send this newsletter to ${who}?`,
-          body: "This cannot be undone.",
+          body:
+            mailVia === "m365"
+              ? "This cannot be undone. It goes out in the background through Microsoft 365, about 25 a minute (Microsoft allows one mailbox about 10,000 a day)."
+              : "This cannot be undone.",
           confirmLabel: "Send",
           danger: true,
         }))
@@ -295,6 +304,10 @@ export function NewsletterWorkspace({
     if (!data) return;
     if (test) {
       setNotice("Test sent to your inbox — check how it looks.");
+    } else if (data.delivery) {
+      setDelivery(data.delivery);
+      setNotice(`Sending to ${data.queued} ${data.queued === 1 ? "person" : "people"} in the background.`);
+      await refresh();
     } else {
       setNotice(`Newsletter sent to ${data.sent} ${data.sent === 1 ? "person" : "people"}.`);
       await refresh();
@@ -606,6 +619,8 @@ export function NewsletterWorkspace({
         </div>
       )}
 
+      {delivery && <NewsletterDeliveryPanel id={n.id} delivery={delivery} canAct={can.send || isSent || sending} onChange={setDelivery} />}
+
       {/* Email attachments: sent WITH the newsletter as real files. */}
       {(can.edit || files.length > 0) && (
         <div className="rounded-xl border border-slate-200 bg-surface p-4 shadow-xs">
@@ -638,6 +653,7 @@ export function NewsletterWorkspace({
           {files.length === 0 ? (
             <p className="mt-2 text-xs text-slate-500">
               Files attached here go out with the email itself (up to 5 files, 5 MB each).
+              {mailVia === "m365" ? " Through Microsoft 365, one email can be at most about 2.9 MB with all its files: a larger newsletter is refused before it is sent." : ""}
             </p>
           ) : (
             <ul className="mt-2 divide-y divide-slate-100">
@@ -734,7 +750,7 @@ export function NewsletterWorkspace({
           {can.send && (
             <button
               onClick={() => sendIt(false)}
-              disabled={!!busy || dirty || !smtpReady}
+              disabled={!!busy || dirty || !smtpReady || sending}
               data-tt={dirty ? "Save your changes first" : undefined} aria-label={dirty ? "Save your changes first" : undefined}
               className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50"
             >

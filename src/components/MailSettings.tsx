@@ -40,6 +40,7 @@ import { MsDeviceSetup } from "@/components/MsDeviceSetup";
 import { Segmented } from "@/components/Segmented";
 import { useFormatDate } from "@/components/SettingsProvider";
 import { toast } from "@/components/Toasts";
+import { confirmDialog } from "@/components/Dialog";
 import {
   MAIL_M365_APP_NAME,
   MAIL_METHODS,
@@ -49,7 +50,6 @@ import {
   methodLabel,
   rbacCommands,
   secretExpiry,
-  secretExpirySentence,
   sendingMailboxProblem,
   type MailMethod,
   type MailView,
@@ -70,7 +70,37 @@ const goesOut = (m: MailMethod) => (m === "m365" ? "through Microsoft 365" : "by
 function attention(v: MailView): boolean {
   if (v.method !== "m365" || !v.configured) return false;
   const e = secretExpiry(v.m365.secret_expires);
-  return v.m365.last_check?.ok === false || e.state === "soon" || e.state === "expired";
+  return v.m365.secret_unreadable || v.m365.last_check?.ok === false || v.m365.last_check?.limited === false || e.state === "soon" || e.state === "expired";
+}
+
+/**
+ * A switch that changes something people notice (the From, the desk's
+ * send-from addresses, the size limit) asks first: the server answers 409
+ * code "confirm" with the sentences, and the same request goes again with
+ * confirm: true once the admin agrees. Null: the admin said no.
+ */
+async function withConfirm(body: Record<string, unknown>, url = URL_): Promise<{ ok: boolean; status: number; data: any } | null> {
+  const r = await patch(body, url);
+  if (r.status !== 409 || r.data?.code !== "confirm") return r;
+  const ok = await confirmSwitch(r.data.warnings ?? []);
+  return ok ? patch({ ...body, confirm: true }, url) : null;
+}
+
+export async function confirmSwitch(warnings: string[]): Promise<boolean> {
+  if (!warnings.length) return true;
+  return (
+    (await confirmDialog({
+      title: "Send email through Microsoft 365?",
+      body: (
+        <ul className="list-disc space-y-1 pl-5" data-testid="mail-switch-warnings">
+          {warnings.map((w) => (
+            <li key={w}>{w}</li>
+          ))}
+        </ul>
+      ),
+      confirmLabel: "Switch",
+    })) === true
+  );
 }
 
 export function MailSettings({ initial }: { initial: MailView }) {
@@ -87,8 +117,9 @@ export function MailSettings({ initial }: { initial: MailView }) {
       return;
     }
     setSwitching(true);
-    const r = await patch({ action: "method", method: target });
+    const r = await withConfirm({ action: "method", method: target });
     setSwitching(false);
+    if (!r) return;
     if (!r.ok) {
       toast("error", r.data?.error || "Could not change how email is sent.");
       setShown(target);
@@ -236,7 +267,7 @@ function SmtpForm({ v, use, onSaved }: { v: MailView; use: boolean; onSaved: (v:
             <>
               Password{" "}
               {s.has_pass && !pass ? (
-                <span className="inline-flex items-center gap-1 text-emerald-600">
+                <span className="ink-ok inline-flex items-center gap-1">
                   <Check className="h-3.5 w-3.5" aria-hidden /> (stored)
                 </span>
               ) : (
@@ -265,15 +296,24 @@ function SmtpForm({ v, use, onSaved }: { v: MailView; use: boolean; onSaved: (v:
 function M365Form({ v, use, onSaved }: { v: MailView; use: boolean; onSaved: (v: MailView) => void }) {
   const m = v.m365;
   const fmt = useFormatDate();
-  const [f, setF] = useState({ tenant: m.tenant, client_id: m.client_id, mailbox: m.mailbox, from_name: m.from_name });
+  const [f, setF] = useState({ tenant: m.tenant, client_id: m.client_id, mailbox: m.mailbox, graph_user: m.graph_user, from_name: m.from_name });
   const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
   const [mailboxError, setMailboxError] = useState("");
-  const sameApp = m.has_secret && f.client_id.trim().toLowerCase() === m.client_id && (!f.tenant.trim() || f.tenant.trim().toLowerCase() === m.tenant);
-  const expiry = secretExpirySentence(m.secret_expires);
-  const expiryState = secretExpiry(m.secret_expires).state;
+  const appSame = m.has_secret && !m.secret_unreadable && f.client_id.trim().toLowerCase() === m.client_id && (!f.tenant.trim() || f.tenant.trim().toLowerCase() === m.tenant);
+  // A new sending mailbox takes the secret again (the server refuses it without).
+  const mailboxSame = f.mailbox.trim().toLowerCase() === m.mailbox && f.graph_user.trim().toLowerCase() === m.graph_user;
+  const sameApp = appSame && mailboxSame;
+  const exp = secretExpiry(m.secret_expires);
+  const expiry =
+    exp.state === "expired"
+      ? `The client secret expired on ${fmt.day(exp.date)}. Create a new secret for the app in Entra and paste it here.`
+      : exp.state === "soon"
+        ? `The client secret expires on ${fmt.day(exp.date)} (${exp.days <= 1 ? "within a day" : `in ${exp.days} days`}). Create a new secret for the app in Entra and paste it here before then.`
+        : "";
+  const expiryState = exp.state;
 
   async function save() {
     const problem = mailM365Problem({ ...f, secret }, sameApp);
@@ -283,15 +323,16 @@ function M365Form({ v, use, onSaved }: { v: MailView; use: boolean; onSaved: (v:
     }
     setBusy(true);
     setError("");
-    const r = await patch({ action: "m365", ...f, ...(secret ? { secret } : {}), use });
+    const r = await withConfirm({ action: "m365", ...f, ...(secret ? { secret } : {}), use });
     setBusy(false);
+    if (!r) return;
     if (!r.ok) {
       setError(r.data?.error || "Could not save.");
       return;
     }
     onSaved(r.data.view);
     setSecret("");
-    setF({ tenant: r.data.view.m365.tenant, client_id: r.data.view.m365.client_id, mailbox: r.data.view.m365.mailbox, from_name: r.data.view.m365.from_name });
+    setF({ tenant: r.data.view.m365.tenant, client_id: r.data.view.m365.client_id, mailbox: r.data.view.m365.mailbox, graph_user: r.data.view.m365.graph_user, from_name: r.data.view.m365.from_name });
     toast("ok", r.data.method_changed ? "Saved. Email now goes out through Microsoft 365." : "Microsoft 365 settings saved.");
   }
 
@@ -301,19 +342,27 @@ function M365Form({ v, use, onSaved }: { v: MailView; use: boolean; onSaved: (v:
     const r = await patch({ action: "check" });
     setChecking(false);
     if (r.data?.view) onSaved(r.data.view);
-    else setError(r.data?.error || "The check failed.");
+    if (!r.data?.check?.ok) setError(r.data?.check?.message || r.data?.error || "The check failed.");
   }
 
   return (
     <div id="microsoft-365" className="scroll-mt-6" data-testid="mail-m365">
       <p className="mb-3 text-sm text-slate-500">
-        Mail goes out through Microsoft Graph as one mailbox, such as a shared mailbox, and lands in its Sent Items. No SMTP server, password or SMTP AUTH is needed.
+        Mail goes out through Microsoft Graph as one mailbox and lands in its Sent Items, so a copy of every notification, newsletter and helpdesk reply stays there: use a
+        mailbox kept for this, such as a shared mailbox. No SMTP server, password or SMTP AUTH is needed. One email can be at most about 2.9 MB with its attachments, and
+        Microsoft lets one mailbox send about 30 a minute and 10,000 a day. Helpdesk replies go out from this mailbox too, under the help address&apos;s name, with
+        answers coming back to the help address.
       </p>
+      {m.secret_unreadable && (
+        <p className="notice-error mb-3 rounded-lg border px-3 py-2 text-sm" role="alert" data-testid="mail-secret-unreadable">
+          The stored client secret can&apos;t be read: the server&apos;s secret key changed. Paste the client secret again below, or run Set up with Microsoft.
+        </p>
+      )}
       <div className="grid gap-3 sm:grid-cols-2">
         <Field
-          label="Sending mailbox"
+          label="Sending mailbox's email address"
           error={mailboxError}
-          help="Its sign-in name or main address. A shared mailbox works and needs no licence."
+          help="The address recipients see (its primary SMTP address in Exchange). Microsoft doesn't let an app that may only send look it up, so it is asked for here. A shared mailbox works and needs no licence."
         >
           <TextInput
             type="email"
@@ -331,6 +380,12 @@ function M365Form({ v, use, onSaved }: { v: MailView; use: boolean; onSaved: (v:
         <Field label={<>Display name <span className="text-slate-500">(optional)</span></>} help="Shown as the sender's name. Empty: the mailbox's own name.">
           <TextInput value={f.from_name} onChange={(e) => setF({ ...f, from_name: e.target.value })} placeholder="CompassDocs" maxLength={80} />
         </Field>
+        <Field
+          label={<>Sign-in name or object ID <span className="text-slate-500">(only if different)</span></>}
+          help="Only when the mailbox's sign-in name is not its email address, such as compassdocs@yourcompany.onmicrosoft.com. Microsoft is asked by this; mail still comes from the address above."
+        >
+          <TextInput value={f.graph_user} onChange={(e) => setF({ ...f, graph_user: e.target.value })} spellCheck={false} autoComplete="off" maxLength={200} />
+        </Field>
       </div>
 
       <div className="mt-4">
@@ -343,20 +398,27 @@ function M365Form({ v, use, onSaved }: { v: MailView; use: boolean; onSaved: (v:
             blurb={`Signs you in once as a tenant admin. Creates the "${MAIL_M365_APP_NAME}" app (or finds it) with only the Mail.Send permission, grants admin consent, makes a client secret and fills in the details below.`}
             beforeStart={async () => {
               const why = sendingMailboxProblem(f.mailbox);
-              if (why) setMailboxError(why);
-              return !why;
+              if (why) {
+                setMailboxError(why);
+                return false;
+              }
+              if (!use) return true;
+              const w = await patch({ action: "warnings", method: "m365", mailbox: f.mailbox.trim() });
+              return confirmSwitch(w.data?.warnings ?? []);
             }}
-            startBody={() => ({ mailbox: f.mailbox.trim(), from_name: f.from_name, use })}
+            startBody={() => ({ mailbox: f.mailbox.trim(), graph_user: f.graph_user.trim(), from_name: f.from_name, use })}
             doneMessage={(r) =>
               r?.verified === false
                 ? "The app was set up in Entra and saved here. Microsoft is still activating it: press Check connection in a minute, then limit it to the sending mailbox below."
-                : `Done. The app ${r?.reused ? "was found in Entra and given a new secret" : "was created in Entra"}, Mail.Send was granted and the details were filled in.${r?.secret_expires ? ` The client secret is good until ${r.secret_expires}.` : ""} Next, limit the app to ${r?.mailbox ?? "the sending mailbox"} with the commands below.`
+                : r?.reused
+                  ? `Done. The app you already send with was given a new secret, and nothing else about it changed.${r?.secret_expires ? ` The secret is good until ${fmt.day(r.secret_expires)}.` : ""}${r?.old_secret_removed ? " Its previous secret from this setup was removed." : ""}`
+                  : `Done. The app was created in Entra, Mail.Send was granted and the details were filled in.${r?.secret_expires ? ` The client secret is good until ${fmt.day(r.secret_expires)}.` : ""} Next, limit the app to ${r?.mailbox ?? "the sending mailbox"} with the commands below.`
             }
             doneWarn={(r) => r?.verified === false}
             onDone={(fresh: MailView) => {
               onSaved(fresh);
               setSecret("");
-              setF({ tenant: fresh.m365.tenant, client_id: fresh.m365.client_id, mailbox: fresh.m365.mailbox, from_name: fresh.m365.from_name });
+              setF({ tenant: fresh.m365.tenant, client_id: fresh.m365.client_id, mailbox: fresh.m365.mailbox, graph_user: fresh.m365.graph_user, from_name: fresh.m365.from_name });
             }}
           />
         ) : (
@@ -385,7 +447,7 @@ function M365Form({ v, use, onSaved }: { v: MailView; use: boolean; onSaved: (v:
               <>
                 Client secret{" "}
                 {m.has_secret && !secret && sameApp ? (
-                  <span className="inline-flex items-center gap-1 text-emerald-600">
+                  <span className="ink-ok inline-flex items-center gap-1">
                     <Check className="h-3.5 w-3.5" aria-hidden /> (stored)
                   </span>
                 ) : (
@@ -393,7 +455,13 @@ function M365Form({ v, use, onSaved }: { v: MailView; use: boolean; onSaved: (v:
                 )}
               </>
             }
-            help={m.has_secret && m.secret_expires && !secret ? `Good until ${m.secret_expires}. It is never shown.` : "Its Value, not its Secret ID. It is never shown again."}
+            help={
+              appSame && !mailboxSame && !secret
+                ? "Changing the sending mailbox takes the secret again."
+                : m.has_secret && m.secret_expires && !secret
+                  ? `Good until ${fmt.day(m.secret_expires)}. It is never shown.`
+                  : "Its Value, not its Secret ID. It is never shown again."
+            }
           >
             <TextInput type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={m.has_secret && sameApp ? "••••••••" : ""} autoComplete="off" maxLength={400} />
           </Field>
@@ -405,7 +473,7 @@ function M365Form({ v, use, onSaved }: { v: MailView; use: boolean; onSaved: (v:
           <KeyRound className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
           <span>
             {expiry}
-            {v.one_click === "available" ? " Or run Set up with Microsoft again: it finds the app and makes a new secret." : ""}
+            {v.one_click === "available" ? " Or run Set up with Microsoft again: it gives this app a new secret and changes nothing else about it." : ""}
           </span>
         </p>
       )}
@@ -423,10 +491,10 @@ function M365Form({ v, use, onSaved }: { v: MailView; use: boolean; onSaved: (v:
         )}
       </div>
       {m.configured && (
-        <p className={`mt-2 text-xs ${m.last_check?.ok === false ? "ink-warn" : "text-slate-500"}`} data-testid="mail-check" aria-live="polite">
+        <p className={`mt-2 text-xs ${m.last_check?.ok === false || m.last_check?.limited === false ? "ink-warn" : "text-slate-500"}`} data-testid="mail-check" aria-live="polite">
           {m.last_check
             ? `${m.last_check.message} Checked ${fmt.dateTime(m.last_check.at)}.`
-            : "Check connection signs in and asks Microsoft whether the app may send as the mailbox. It sends nothing."}
+            : "Check connection signs in and asks Microsoft whether the app may send as the mailbox, and as your own address (it should not). It sends nothing."}
         </p>
       )}
 
@@ -439,7 +507,7 @@ function LockDown({ v }: { v: MailView }) {
   const m = v.m365;
   const policy = accessPolicyCommands({ clientId: m.client_id, mailbox: m.mailbox });
   const rbac = rbacCommands({ clientId: m.client_id, spObjectId: m.sp_object_id, mailbox: m.mailbox });
-  const later = accessPolicyUpdateCommands(m.mailbox);
+  const later = accessPolicyUpdateCommands({ clientId: m.client_id, mailbox: m.mailbox });
   return (
     <section className="mt-6 border-t border-slate-100 pt-4" data-testid="mail-lockdown" aria-labelledby="mail-lockdown-title">
       <h4 id="mail-lockdown-title" className="text-sm font-semibold text-slate-900">
@@ -450,6 +518,17 @@ function LockDown({ v }: { v: MailView }) {
         its secret, can send as {m.mailbox} and nobody else. Microsoft offers no way to do this from here: an Exchange administrator runs these commands once, in PowerShell
         with the ExchangeOnlineManagement module.
       </p>
+      {m.last_check?.limited === false && (
+        <p className="notice-warn mt-2 rounded-lg border px-3 py-2 text-sm" data-testid="mail-not-limited">
+          Needs attention: the app can also send as {m.last_check.other}, so it can send as other mailboxes in your organisation. Run the commands below, then press Check
+          connection again.
+        </p>
+      )}
+      {m.last_check?.limited === true && (
+        <p className="ink-ok mt-2 text-sm" data-testid="mail-limited">
+          The app can&apos;t send as {m.last_check.other}: it is limited, as it should be.
+        </p>
+      )}
       {m.entra_send === null ? (
         <p className="mt-2 text-xs text-slate-500" data-testid="mail-commands-empty">
           Press Check connection once, so CompassDocs learns how the app was given Mail.Send. The commands that fit it appear here.
@@ -464,7 +543,8 @@ function LockDown({ v }: { v: MailView }) {
             <CopyButton text={policy ?? ""} label="Copy commands" />
           </div>
           <p className="mt-2 text-xs text-slate-500">
-            The first lines make a mail-enabled security group holding only {m.mailbox}, hidden from the address book; the policy lets the app reach that group&apos;s members
+            The first lines make a mail-enabled security group holding only {m.mailbox}, hidden from the address book and named after this app, so another CompassDocs in your
+            organisation makes its own; the policy lets the app reach that group&apos;s members
             and nobody else. Microsoft can take 30 minutes or more to apply it. The last command should then read Granted; run it with any other mailbox and it should read
             Denied.
           </p>
@@ -500,7 +580,9 @@ function LockDown({ v }: { v: MailView }) {
         </>
       ) : (
         <>
-          <p className="mb-1 mt-3 text-xs font-medium text-slate-500">The app has no mail permission in Entra, so Exchange gives it Mail.Send for this mailbox only (RBAC for Applications)</p>
+          <p className="mb-1 mt-3 text-xs font-medium text-slate-500">
+            The app has no mail permission in Entra, so it can send as nobody yet. These commands give it Mail.Send for this mailbox only (RBAC for Applications)
+          </p>
           {rbac ? (
             <>
               <pre className={PRE} data-testid="mail-commands">

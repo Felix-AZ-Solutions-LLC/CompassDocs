@@ -148,8 +148,8 @@ export function WebhooksPanel({
       <h2 className="text-lg font-semibold text-slate-900">Webhooks</h2>
       <p className="mb-4 text-sm text-slate-500">
         Send approval-workflow events to your chat tools or by email. Create an incoming webhook
-        in Webex, Teams (via Workflows), or Slack — or configure SMTP below and add an email
-        channel.
+        in Webex, Teams (via Workflows), or Slack — or set up email under the Email tab and add an
+        email channel.
       </p>
 
       <form onSubmit={add} className="rounded-xl border border-slate-200 bg-surface p-4 shadow-xs">

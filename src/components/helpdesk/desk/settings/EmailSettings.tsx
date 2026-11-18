@@ -313,8 +313,11 @@ export function EmailSettings() {
             </ul>
           )}
           <p className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
-            Replies about a ticket go out under the name of the address it came in on, and answers come back to that address. Each address sends its replies from {workspaceFrom},
-            or from a send-from address you pick when you edit it. Send test goes to your own email and shows how a reply leaves.
+            Replies about a ticket go out under the name of the address it came in on, and answers come back to that address. Each address sends its replies from {workspaceFrom}
+            {boxes.transport_method === "m365"
+              ? " (while email goes out through Microsoft 365, a send-from address is not used; connect the address's own mailbox under Microsoft 365 for that)."
+              : ", or from a send-from address you pick when you edit it."}{" "}
+            Send test goes to your own email and shows how a reply leaves.
             {!boxes.mail_ready && " Outgoing mail isn't set up yet, so nothing is sent."}
           </p>
         </Card>
@@ -377,8 +380,9 @@ export function EmailSettings() {
           <p className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
             {boxes.transport_method === "m365" ? (
               <>
-                Mail goes out through Microsoft 365 as {workspaceFrom} (<SettingsLink href="/admin/notifications/email">Settings → Notifications → Email</SettingsLink>). Another
-                address works only when that mailbox may send as it: give it Send As permission on the address in Exchange first.
+                Email goes out through Microsoft 365 as {workspaceFrom} (<SettingsLink href="/admin/notifications/email">Settings → Notifications → Email</SettingsLink>), so
+                send-from addresses are not used: replies leave from {workspaceFrom} under the help address&apos;s name, and answers still come back to the help address. For
+                replies that leave as the help address itself, connect its mailbox under <a href="#microsoft-365" className="link font-medium">Microsoft 365</a> below.
               </>
             ) : (
               <>

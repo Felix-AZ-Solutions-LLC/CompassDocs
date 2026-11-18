@@ -196,9 +196,9 @@ describe("pure: commands, From, the secret's end, words", () => {
       c,
       [
         "Connect-ExchangeOnline",
-        "New-DistributionGroup -Name 'CompassDocs sending mailbox' -Alias 'compassdocs-sending-mailbox' -Type Security -Members 'compassdocs@firm.com'",
-        "Set-DistributionGroup -Identity 'CompassDocs sending mailbox' -HiddenFromAddressListsEnabled $true",
-        "New-ApplicationAccessPolicy -AppId 'aaaaaaaa-1111-2222-3333-444444444444' -PolicyScopeGroupId 'CompassDocs sending mailbox' -AccessRight RestrictAccess -Description 'CompassDocs sending mailbox'",
+        "New-DistributionGroup -Name 'CompassDocs sending mailbox aaaaaaaa' -Alias 'compassdocs-mail-aaaaaaaa' -Type Security -Members 'compassdocs@firm.com'",
+        "Set-DistributionGroup -Identity 'CompassDocs sending mailbox aaaaaaaa' -HiddenFromAddressListsEnabled $true",
+        "New-ApplicationAccessPolicy -AppId 'aaaaaaaa-1111-2222-3333-444444444444' -PolicyScopeGroupId 'CompassDocs sending mailbox aaaaaaaa' -AccessRight RestrictAccess -Description 'CompassDocs sending mailbox aaaaaaaa'",
         "Test-ApplicationAccessPolicy -Identity 'compassdocs@firm.com' -AppId 'aaaaaaaa-1111-2222-3333-444444444444'",
       ].join("\n")
     );
@@ -208,14 +208,17 @@ describe("pure: commands, From, the secret's end, words", () => {
       assert.equal(shared.accessPolicyCommands({ clientId: "aaaaaaaa-1111-2222-3333-444444444444", mailbox: bad }), null, bad);
     }
     assert.equal(shared.accessPolicyCommands({ clientId: "not-a-guid", mailbox: "a@firm.com" }), null);
-    assert.equal(shared.accessPolicyUpdateCommands("new@firm.com"), "Connect-ExchangeOnline\nUpdate-DistributionGroupMember -Identity 'CompassDocs sending mailbox' -Members 'new@firm.com' -Confirm:$false");
+    assert.equal(
+      shared.accessPolicyUpdateCommands({ clientId: "aaaaaaaa-1111-2222-3333-444444444444", mailbox: "new@firm.com" }),
+      "Connect-ExchangeOnline\nUpdate-DistributionGroupMember -Identity 'CompassDocs sending mailbox aaaaaaaa' -Members 'new@firm.com' -Confirm:$false"
+    );
   });
 
   test("RBAC for Applications: the service principal, a scope naming the one mailbox, the Application Mail.Send role, the check", () => {
     const c = shared.rbacCommands({ clientId: "aaaaaaaa-1111-2222-3333-444444444444", spObjectId: "bbbbbbbb-1111-2222-3333-444444444444", mailbox: "compassdocs@firm.com" })!;
     assert.match(c, /^Connect-ExchangeOnline\nNew-ServicePrincipal -AppId 'aaaaaaaa-1111-2222-3333-444444444444' -ObjectId 'bbbbbbbb-1111-2222-3333-444444444444' -DisplayName 'CompassDocs Workspace Mail'\n/);
-    assert.match(c, /New-ManagementScope -Name 'CompassDocs sending mailbox' -RecipientRestrictionFilter 'EmailAddresses -eq ''compassdocs@firm\.com'''/);
-    assert.match(c, /New-ManagementRoleAssignment -Name 'CompassDocs workspace Mail\.Send' -App 'bbbbbbbb-1111-2222-3333-444444444444' -Role 'Application Mail\.Send' -CustomResourceScope 'CompassDocs sending mailbox'/);
+    assert.match(c, /New-ManagementScope -Name 'CompassDocs sending mailbox aaaaaaaa' -RecipientRestrictionFilter 'EmailAddresses -eq ''compassdocs@firm\.com'''/);
+    assert.match(c, /New-ManagementRoleAssignment -Name 'CompassDocs workspace Mail\.Send aaaaaaaa' -App 'bbbbbbbb-1111-2222-3333-444444444444' -Role 'Application Mail\.Send' -CustomResourceScope 'CompassDocs sending mailbox aaaaaaaa'/);
     assert.match(c, /Test-ServicePrincipalAuthorization -Identity 'bbbbbbbb-[^']+' -Resource 'compassdocs@firm\.com'/);
     assert.equal(shared.rbacCommands({ clientId: "aaaaaaaa-1111-2222-3333-444444444444", spObjectId: "", mailbox: "compassdocs@firm.com" }), null, "not before the object ID is known");
   });
