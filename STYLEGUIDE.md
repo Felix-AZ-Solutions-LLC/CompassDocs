@@ -763,6 +763,31 @@ focus):
   above it listing the only changes that save; every other control is
   `disabled` (a toggle that may only be turned off is disabled while
   off), and the one-click setup is hidden.
+- **A choice of how something works, with a configuration per choice**
+  (1.20.31, Settings → Notifications → Email: SMTP or Microsoft 365,
+  `components/MailSettings`) is one `Card` whose status chip is the
+  chosen option's (**Not set up** `neutral`, **Set up** `ok`, **Needs
+  attention** `warn`), a `Segmented` ("Send email with") and, under it,
+  the settings of the option on screen. Picking an option that is set up
+  switches at once (toast "Email now goes out …"); picking one that is not
+  only shows its settings, with a `notice-info` saying the old way keeps
+  working until they are saved, and that card's primary button says so
+  ("Save and send through Microsoft 365"). Both configurations are kept.
+  A test action ("Send test email") tests the option on screen, not the
+  chosen one, so a new option can be tried before switching. A refusal
+  from an outside service is a `FormError` in its plain sentence, never a
+  toast: the admin has to act on it.
+- **Commands an administrator runs elsewhere** (the Exchange Online
+  PowerShell that limits an app to one mailbox; the desk's Limit access)
+  are an `h4` naming what they do ("Limit the app to …"), one paragraph on
+  why in plain words, a `text-xs font-medium text-slate-500` line naming
+  the case they fit, the block in a `pre` (`font-mono text-xs`,
+  `whitespace-pre-wrap`, `[overflow-wrap:anywhere]`, `bg-canvas`) with
+  every value a single-quoted literal, a `CopyButton` "Copy commands"
+  under it, and one `text-xs` sentence on how long it takes and how to see
+  that it worked. An alternative way, or the commands for a later change,
+  go in a closed `<details>` under it. When which commands apply depends on
+  what the service reports, only the fitting block is shown.
 - **Revoking someone else's credential** shows the icon-only Revoke only
   on rows the viewer may act on (their own, any as an administrator,
   else accounts with a lower role); the column stays for alignment.
