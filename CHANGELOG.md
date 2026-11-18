@@ -50,6 +50,11 @@ Send the workspace's email through Microsoft 365.
   Microsoft 365 settings, replacing its secret, a one-click setup that did
   not finish, and test emails.
 
+### Fixed
+- A backup restores again when it was made by a newer pg_dump (17 or
+  later) than the database server: the newer client's session settings,
+  such as transaction_timeout, no longer stop the restore.
+
 ### Upgrading
 Nothing changes until an administrator chooses Microsoft 365: existing
 workspaces keep sending through SMTP. Two new tables for newsletter delivery
