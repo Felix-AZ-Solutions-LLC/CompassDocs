@@ -42,6 +42,13 @@ const KEYS = ["custom_domain", "tls_mode", "tls_email", PENDING_KEY, "fallback_h
 const STAMP = `domflow-${Date.now()}`;
 const actor = { id: null, name: STAMP, role: "admin" };
 const saved = new Map<string, string>();
+/**
+ * test/domain-routes.test.ts writes the same settings rows, and node:test
+ * runs files in parallel: one advisory lock, held on its own connection for
+ * the whole file, keeps the two apart.
+ */
+const DOMAIN_SETTINGS_LOCK = 1202901;
+let lockClient: import("pg").PoolClient | null = null;
 const PEM = (n: string) => ({ cert: `-----BEGIN CERTIFICATE-----\n${n}\n-----END CERTIFICATE-----`, key: `-----BEGIN PRIVATE KEY-----\n${n}\n-----END PRIVATE KEY-----` });
 
 function result(domain: string, ok: boolean, code: DomainCheckResult["code"] = ok ? "ok" : "nxdomain"): DomainCheckResult {
@@ -123,6 +130,8 @@ describe("custom domain flow", () => {
   before(async () => {
     process.env.COMPASSDOCS_SECRET_KEY ||= "cd".repeat(32); // the pending private key is sealed
     await getSetting("__schema_bootstrap__");
+    lockClient = await pool().connect();
+    await lockClient.query("SELECT pg_advisory_lock($1)", [DOMAIN_SETTINGS_LOCK]);
     for (const k of KEYS) {
       const v = await getSetting(k);
       if (v !== undefined) saved.set(k, v);
@@ -132,6 +141,8 @@ describe("custom domain flow", () => {
   after(async () => {
     await pool().query("DELETE FROM settings WHERE key = ANY($1)", [KEYS]);
     for (const [k, v] of saved) await setSetting(k, v);
+    await lockClient?.query("SELECT pg_advisory_unlock($1)", [DOMAIN_SETTINGS_LOCK]);
+    lockClient?.release();
     await pool().end();
   });
   beforeEach(() => reset());

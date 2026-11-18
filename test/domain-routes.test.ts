@@ -57,6 +57,9 @@ const { newToken } = require("../src/lib/password") as typeof import("../src/lib
 const STAMP = `domroutes${Date.now()}`;
 const KEYS = ["custom_domain", "tls_mode", "tls_email", "secure_cookies", "custom_domain_pending", "fallback_hosts"];
 const saved = new Map<string, string>();
+// Shared with test/domain-flow.test.ts, which writes the same settings rows.
+const DOMAIN_SETTINGS_LOCK = 1202901;
+let lockClient: import("pg").PoolClient | null = null;
 let adminId = 0;
 let session = "";
 type Handler = (req: Request) => Promise<Response>;
@@ -80,6 +83,8 @@ async function call(handler: Handler, url: string, body: unknown, method: string
 before(async () => {
   delete process.env.COMPASSDOCS_CADDY_ADMIN;
   await db.getSetting("__schema_bootstrap__");
+  lockClient = await db.pool().connect();
+  await lockClient.query("SELECT pg_advisory_lock($1)", [DOMAIN_SETTINGS_LOCK]);
   for (const k of KEYS) {
     const v = await db.getSetting(k);
     if (v !== undefined) saved.set(k, v);
@@ -101,6 +106,8 @@ after(async () => {
   await db.pool().query("DELETE FROM sessions WHERE user_id = $1", [adminId]);
   await db.pool().query("DELETE FROM audit_log WHERE actor_id = $1", [adminId]);
   await db.pool().query("DELETE FROM users WHERE id = $1", [adminId]);
+  await lockClient?.query("SELECT pg_advisory_unlock($1)", [DOMAIN_SETTINGS_LOCK]);
+  lockClient?.release();
   await db.pool().end();
 });
 

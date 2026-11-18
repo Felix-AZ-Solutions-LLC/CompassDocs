@@ -103,6 +103,21 @@ test.describe("Domain & HTTPS: a domain waiting for its check", () => {
     expect(r.rowCount).toBe(1);
   });
 
+  test("a switch being verified shows a status card without buttons", async ({ page }) => {
+    const now = Date.now();
+    const row = JSON.parse(pendingRow(now));
+    row.phase = "verifying";
+    row.verify = { address: "203.0.113.10", until: new Date(now + 120_000).toISOString(), origin: "settings" };
+    await db.query("UPDATE settings SET value = $2 WHERE key = $1", [PENDING_KEY, JSON.stringify(row)]);
+    await login(page, ADMIN);
+    await page.goto("/admin/domain");
+    const card = page.getByTestId("domain-verifying");
+    await expect(card.getByRole("status")).toContainText(`Switching to ${DOMAIN}: checking HTTPS`);
+    await expect(card).toContainText("keeps working");
+    await expect(card.getByRole("button")).toHaveCount(0);
+    await expect(page.getByTestId("domain-pending")).toHaveCount(0);
+  });
+
   test("Keep the current address discards it, and the audit log says so", async ({ page }) => {
     await login(page, ADMIN);
     await page.goto("/admin/domain");

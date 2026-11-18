@@ -26,8 +26,10 @@ path as every other deployment.
    setup wizard (or Settings → Domain & HTTPS), and a certificate is issued
    automatically. CompassDocs first checks that the domain reaches this VM;
    until it does, the domain waits and the Azure address keeps working. The
-   Azure address stays reachable after the domain is live too: the template
-   writes it to `COMPASSDOCS_FALLBACK_HOSTS` in `/opt/compassdocs/.env`.
+   Azure address stays reachable after the domain is live too: when the
+   template creates the public IP with its DNS label, it writes the address
+   to `COMPASSDOCS_FALLBACK_HOSTS` in `/opt/compassdocs/.env` (with an
+   existing public IP, add your own line there).
 
 ## Notes
 
@@ -47,4 +49,6 @@ path as every other deployment.
   https://raw.githubusercontent.com/mattny20/CompassDocs/main/install.sh |
   sudo COMPASSDOCS_TLS=1 bash`, adding `COMPASSDOCS_EDITION=enterprise` for
   Enterprise), or follow the manual repair in the docs (Self-hosting →
-  Azure). Your data is on the disk and comes back once it is mounted.
+  Azure). Your data is on the disk and comes back once it is mounted. The
+  one-liner re-runs the whole installer, so it also pulls the newest images
+  and restarts on them; follow the manual steps to repair without updating.

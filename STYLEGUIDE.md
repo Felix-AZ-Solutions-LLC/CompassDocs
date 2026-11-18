@@ -1599,12 +1599,25 @@ like this, and nothing else in the app invents its own way:
   reversible, so it tells and does not ask). The save's toast is an
   `error` pointing at the card ("…isn't switched on yet. The reason is
   under the domain."); when it goes live later, a bell notice says so.
+  **While the switch is verified** (the check passed, HTTPS on the new
+  name is being asked for up to two minutes) the same place holds a
+  `notice-info` card instead (`data-testid="domain-verifying"`): a
+  `role="status"` first line with a `sm` `Spinner` ("Switching to
+  docs.example.com: checking HTTPS"), one `text-xs` line saying the
+  current address keeps working and that a failure goes back to it, and
+  no buttons. The page polls every five seconds and toasts the result
+  (live, or the reason it went back); the setup wizard waits on the same
+  state with its submit reading "Switching to docs.example.com…".
 - **Also reachable at** (1.20.29): addresses that keep working beside the
   canonical one are a short list under the field, each a `link font-mono
   text-xs` with a `text-xs text-slate-500` note of where it comes from;
   one an admin can remove has a quiet icon button (`X`, `data-tt="Remove"`,
-  `aria-label` naming the address) and the server-set ones have none. A
-  closing `text-xs` line says which address links in email use.
+  `aria-label` naming the address) behind a `danger` `confirmDialog`
+  ("Remove host?", **Remove address**: it stops being a way back in), and
+  the server-set ones have none. The server refuses (409, a plain
+  sentence) to remove the address the request came in on. A closing
+  `text-xs` line says which address links in email use; links follow the
+  live TLS mode, never the form's.
 - **Prerequisite states** ("SMTP is not set up", "this role is built in")
   are `notice-warn` banners with the action that clears them — never a
   bare amber sentence (it reads as a validation error and fails AA in

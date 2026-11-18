@@ -573,6 +573,7 @@ export const AUDIT_LABELS: Record<string, string> = {
   "domain.check_failed": "Custom domain didn't pass its check",
   "domain.applied": "Switched to a custom domain",
   "domain.forced": "Switched to a custom domain without its check",
+  "domain.rolled_back": "Went back from a custom domain whose HTTPS didn't answer",
   "domain.pending_discarded": "Discarded a waiting custom domain",
   "domain.fallback_removed": "Removed a fallback address",
   "settings.smtp": "Updated email delivery settings",
