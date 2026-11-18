@@ -108,6 +108,37 @@ export function cleanHelpCentreSettings(raw: unknown): HelpCentreSettings {
   };
 }
 
+/** The space ids and folder ids the help centre settings name (chosen spaces, and the category keys in order and hidden). */
+export function helpCentreRefIds(settings: HelpCentreSettings): { spaces: number[]; categories: number[] } {
+  const spaces = new Set(settings.spaces);
+  const categories = new Set<number>();
+  for (const k of [...settings.order, ...settings.hidden]) (k[0] === "s" ? spaces : categories).add(Number(k.slice(1)));
+  return { spaces: [...spaces], categories: [...categories] };
+}
+
+/**
+ * 1.20.30: the help centre settings against the spaces (and folders) that
+ * exist. A space that is gone leaves `spaces`, and its "s<id>" category
+ * key leaves `order` and `hidden`; with `categories` given, a folder's
+ * "c<id>" key that is gone leaves them too (a deleted space takes its
+ * folders with it). Pure: the space delete, the settings route's read and
+ * save, and the tests share it.
+ */
+export function pruneHelpCentreRefs(
+  settings: HelpCentreSettings,
+  live: { spaces: Iterable<number>; categories?: Iterable<number> }
+): { settings: HelpCentreSettings; dropped: number[]; changed: boolean } {
+  const spaces = new Set(live.spaces);
+  const categories = live.categories === undefined ? null : new Set(live.categories);
+  const keepKey = (k: string) => (k[0] === "s" ? spaces.has(Number(k.slice(1))) : !categories || categories.has(Number(k.slice(1))));
+  const dropped = settings.spaces.filter((id) => !spaces.has(id));
+  const order = settings.order.filter(keepKey);
+  const hidden = settings.hidden.filter(keepKey);
+  const changed = dropped.length > 0 || order.length !== settings.order.length || hidden.length !== settings.hidden.length;
+  if (!changed) return { settings, dropped, changed };
+  return { settings: { ...settings, spaces: settings.spaces.filter((id) => spaces.has(id)), order, hidden }, dropped, changed };
+}
+
 /** A search as typed: search operators a customer did not mean dropped, quotes gone, spaces collapsed, clamped. */
 export function cleanHelpQuery(raw: unknown): string {
   if (typeof raw !== "string") return "";

@@ -88,12 +88,14 @@ import {
   type PortalSettings,
 } from "./portal-shared";
 import { cleanJourneyId } from "./help-centre-shared";
+import { HD_PORTAL_SETTINGS_KEY } from "./portal-refs";
 
 export * from "./portal-shared";
 
 // --- Settings ------------------------------------------------------------------------
 
-export const HD_PORTAL_SETTINGS_KEY = "helpdesk_portal";
+// 1.20.30: defined in portal-refs (the delete paths prune it without loading the portal).
+export { HD_PORTAL_SETTINGS_KEY };
 
 export async function getPortalSettings(): Promise<PortalSettings> {
   try {

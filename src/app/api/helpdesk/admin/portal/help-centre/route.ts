@@ -13,6 +13,13 @@
 // choices. Desk capability settings.manage. Audited as
 // helpdesk.portal.help_centre_updated with { changed } (and the new value
 // of enabled, the space ids, tagged and indexing when they changed).
+//
+// 1.20.30: a space that no longer exists is never a refusal. The read
+// cleans the stored value (lib/helpdesk/portal-refs healHelpCentreSettings:
+// the space, and its category keys, leave the settings and the cleaned
+// value is written back), and a save drops a space id it can't name, as a
+// deleted space or a private space this person was never shown: both read
+// alike, so the answer says nothing about which private spaces exist.
 
 import { NextResponse } from "next/server";
 import type { SessionUser } from "@/lib/types";
@@ -21,9 +28,9 @@ import { readJson } from "@/lib/helpdesk/access";
 import { hdCapGate } from "@/lib/helpdesk/roles";
 import { badRequest } from "@/lib/helpdesk/routes";
 import { getPortalSettings } from "@/lib/helpdesk/portal";
+import { healHelpCentreSettings } from "@/lib/helpdesk/portal-refs";
 import {
   cleanHelpCentreSettings,
-  getHelpCentreSettings,
   helpCentreAdminCategories,
   helpCentreSpaceOptions,
   helpCentreStats,
@@ -48,7 +55,7 @@ async function view(user: SessionUser, settings: HelpCentreSettings) {
 export async function GET() {
   const gate = await hdCapGate("settings.manage");
   if (gate instanceof NextResponse) return gate;
-  return NextResponse.json(await view(gate, await getHelpCentreSettings()));
+  return NextResponse.json(await view(gate, (await healHelpCentreSettings()).settings));
 }
 
 export async function POST(req: Request) {
@@ -64,12 +71,13 @@ export async function PUT(req: Request) {
   if (gate instanceof NextResponse) return gate;
   const b = await readJson(req, 64 * 1024);
   if (!b) return badRequest("Send the settings as JSON.");
-  const next = cleanHelpCentreSettings(b);
-  const stored = await getHelpCentreSettings();
-  // A private space nobody showed this person reads as one that does not exist.
+  const sent = cleanHelpCentreSettings(b);
+  const stored = (await healHelpCentreSettings()).settings;
+  // A private space nobody showed this person reads as one that does not exist:
+  // both drop out of the save (1.20.30; they were a refusal that no reload could clear).
   const spaces = await helpCentreSpaceOptions(gate, stored.spaces);
   const known = new Map(spaces.map((s) => [s.id, s]));
-  if (next.spaces.some((id) => !known.has(id))) return badRequest("One of the spaces no longer exists. Reload the page.");
+  const next = { ...sent, spaces: sent.spaces.filter((id) => known.has(id)) };
   const priv = next.spaces.map((id) => known.get(id)!).find((s) => s.private);
   if (priv) return badRequest(`“${priv.name}” is a private space. Private spaces are never public: remove it from the help centre.`);
   if (next.enabled && !next.tagged && !(next.from_spaces && next.spaces.length)) {

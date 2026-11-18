@@ -9,6 +9,13 @@
 // A request type that needs the directory (lib/helpdesk/portal
 // portalBlockers) can't be exposed: 400 naming why. Desk capability
 // settings.manage. Audited as helpdesk.portal.updated with { changed }.
+//
+// 1.20.30: a request type or team that no longer exists is never a refusal.
+// The read cleans the stored value (lib/helpdesk/portal-refs
+// healPortalSettings: a deleted type leaves the portal, a deleted portal
+// team falls back to the type's own team, and the cleaned value is written
+// back), and a save drops such entries from what was sent the same way, so
+// a page opened before the delete still saves.
 
 import { NextResponse } from "next/server";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
@@ -21,10 +28,11 @@ import {
   PORTAL_BLOCKER_TEXT,
   PORTAL_PATH,
   cleanPortalSettings,
-  getPortalSettings,
   portalTypeOptions,
+  prunePortalRefs,
   savePortalSettings,
 } from "@/lib/helpdesk/portal";
+import { healPortalSettings } from "@/lib/helpdesk/portal-refs";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +49,7 @@ async function extras() {
 export async function GET() {
   const gate = await hdCapGate("settings.manage");
   if (gate instanceof NextResponse) return gate;
-  const settings = await getPortalSettings();
+  const { settings } = await healPortalSettings();
   return NextResponse.json({ settings, types: await portalTypeOptions(settings), ...(await extras()) });
 }
 
@@ -50,17 +58,16 @@ export async function PUT(req: Request) {
   if (gate instanceof NextResponse) return gate;
   const b = await readJson(req, 64 * 1024);
   if (!b) return badRequest("Send the settings as JSON.");
-  const before = await getPortalSettings();
-  // The logo is the logo route's: whatever the body says, keep the stored one.
-  const next = cleanPortalSettings({ ...b, brand_logo: before.brand_logo });
+  const { settings: before } = await healPortalSettings();
   const options = await portalTypeOptions(before);
+  const teamIds = (await hq<{ id: number }>("SELECT id FROM hd_teams")).map((r) => r.id);
+  // The logo is the logo route's: whatever the body says, keep the stored one.
+  // A request type or team deleted since the page loaded drops out (1.20.30).
+  const { settings: next } = prunePortalRefs(cleanPortalSettings({ ...b, brand_logo: before.brand_logo }), { types: options.map((o) => o.id), teams: teamIds });
   for (const t of next.types) {
-    const o = options.find((x) => x.id === t.id);
-    if (!o) return badRequest("One of the request types no longer exists. Reload the page.");
+    const o = options.find((x) => x.id === t.id)!;
     if (o.blockers.length) return badRequest(`“${o.title}” can't be offered to outside customers: ${PORTAL_BLOCKER_TEXT[o.blockers[0]].toLowerCase()}`);
   }
-  const teamIds = new Set((await hq<{ id: number }>("SELECT id FROM hd_teams")).map((r) => r.id));
-  if (next.types.some((t) => t.team_id !== null && !teamIds.has(t.team_id))) return badRequest("One of the teams no longer exists. Reload the page.");
   if (next.access === "domains" && next.domains.length === 0) return badRequest("Add at least one approved domain, or let anyone with an email use the portal.");
   if (next.enabled && next.types.length === 0) return badRequest("Choose at least one thing customers can ask for before turning the portal on.");
   const { settings, changed } = await savePortalSettings(next);

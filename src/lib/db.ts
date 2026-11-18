@@ -3823,6 +3823,8 @@ export interface CascadedHandbook {
  * they are answered in `handbooks` for the caller's handbook.deleted audit
  * rows, and the policies the published ones held are reconciled here, since
  * their readers were within those policies' ceiling (ACK_DOC_VISIBILITY).
+ * 1.20.30: the customer portal's help centre settings stop naming the space
+ * in the delete's transaction.
  */
 export async function deleteSpace(id: number): Promise<{ ok: boolean; docCount: number; handbooks: CascadedHandbook[] }> {
   const docCount = (
@@ -3836,7 +3838,22 @@ export async function deleteSpace(id: number): Promise<{ ok: boolean; docCount: 
        FROM handbooks h WHERE h.space_id = $1 ORDER BY h.id`,
     [id]
   );
-  await q("DELETE FROM spaces WHERE id = $1", [id]);
+  // 1.20.30: the customer portal's help centre stops naming the space (and
+  // its folders) in the same transaction (lib/helpdesk/portal-refs).
+  const { pruneHelpCentreSettingsTx } = await import("./helpdesk/portal-refs");
+  await ready();
+  const client = await pool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM spaces WHERE id = $1", [id]);
+    await pruneHelpCentreSettingsTx(client);
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
   const affected = [...new Set(handbooks.filter((h) => h.status === "published").flatMap((h) => h.doc_ids))];
   if (affected.length > 0) {
     await reconcilePoliciesForDocuments(affected).catch((e) =>

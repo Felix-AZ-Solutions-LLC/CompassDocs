@@ -4,6 +4,7 @@
 
 import "server-only";
 import { hq, hqOne, normalizeRow, withTx } from "./db-core";
+import { prunePortalSettingsTx } from "./portal-refs";
 import type { HdAvailability, HdTeam, HdTeamMember, HdTeamRole, HdTeamWithMembers } from "./types";
 
 export const TEAM_LIMITS = { name: 60, description: 300, icon: 40, email_alias: 200, teams: 100, members: 500 } as const;
@@ -105,7 +106,12 @@ export async function updateTeam(id: number, patch: Partial<TeamInput>): Promise
   }
 }
 
-/** Delete a team: its members go, its tickets keep their history (team_id NULL). */
+/**
+ * Delete a team: its members go, its tickets keep their history (team_id NULL).
+ * 1.20.30: a request type the customer portal sent to it goes to the type's
+ * own team from now on (its portal team_id is cleared in the same
+ * transaction, lib/helpdesk/portal-refs).
+ */
 export async function deleteTeam(id: number): Promise<HdTeam | undefined> {
   return withTx(async (client) => {
     const r = await client.query(
@@ -115,6 +121,7 @@ export async function deleteTeam(id: number): Promise<HdTeam | undefined> {
     if (!r.rows[0]) return undefined;
     // The team's own email compositions (lib/email-parts, scope 'hd_team:<id>') go with it.
     await client.query("DELETE FROM email_template_compositions WHERE scope = 'hd_team:' || $1::text", [id]);
+    await prunePortalSettingsTx(client);
     return normalizeRow<HdTeam>(r.rows[0]);
   });
 }

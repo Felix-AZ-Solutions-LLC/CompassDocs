@@ -60,6 +60,7 @@ import type { Role } from "../types";
 import { hq, hqOne } from "./db-core";
 import { hdRateLimited } from "./access";
 import { getPortalSettings, portalOpen, type PortalSettings } from "./portal";
+import { HD_HELP_CENTRE_SETTINGS_KEY } from "./portal-refs";
 import {
   DEFAULT_HELP_CENTRE_SETTINGS,
   HC_ANSWERED_AFTER_MS,
@@ -82,7 +83,8 @@ export * from "./help-centre-shared";
 
 // --- Settings ------------------------------------------------------------------------
 
-export const HD_HELP_CENTRE_SETTINGS_KEY = "helpdesk_portal_hc";
+// 1.20.30: defined in portal-refs (a space delete prunes it without loading the help centre).
+export { HD_HELP_CENTRE_SETTINGS_KEY };
 
 export async function getHelpCentreSettings(): Promise<HelpCentreSettings> {
   try {

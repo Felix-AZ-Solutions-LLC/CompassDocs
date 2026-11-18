@@ -209,6 +209,47 @@ export function cleanPortalSettings(raw: unknown): PortalSettings {
   };
 }
 
+/** What pruning the portal's request types against what exists took out. */
+export interface PortalRefsPruned {
+  settings: PortalSettings;
+  /** Request type ids no longer offered: the type was deleted. */
+  dropped_types: number[];
+  /** Request type ids whose portal team was deleted: they now go to the type's own team. */
+  cleared_teams: number[];
+}
+
+/**
+ * 1.20.30: the portal's offered request types against the request types
+ * and teams that exist. A deleted request type leaves the portal; a type
+ * whose portal team was deleted stays offered and goes to the type's own
+ * team (team_id null, what offeredTypes already did at request time).
+ * Leave `types` or `teams` out to keep that side as it is. Pure: the
+ * delete paths, the settings route's read and save, and the tests share it.
+ */
+export function prunePortalRefs(
+  settings: PortalSettings,
+  live: { types?: Iterable<number>; teams?: Iterable<number> }
+): PortalRefsPruned {
+  const types = live.types === undefined ? null : new Set(live.types);
+  const teams = live.teams === undefined ? null : new Set(live.teams);
+  const dropped_types: number[] = [];
+  const cleared_teams: number[] = [];
+  const next: PortalExposedType[] = [];
+  for (const t of settings.types) {
+    if (types && !types.has(t.id)) {
+      dropped_types.push(t.id);
+      continue;
+    }
+    if (teams && t.team_id !== null && !teams.has(t.team_id)) {
+      cleared_teams.push(t.id);
+      next.push({ id: t.id, team_id: null });
+      continue;
+    }
+    next.push(t);
+  }
+  return { settings: dropped_types.length || cleared_teams.length ? { ...settings, types: next } : settings, dropped_types, cleared_teams };
+}
+
 /** "Acme Support" → "AS"; the header's tile when there is no logo. */
 export function brandInitials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean);

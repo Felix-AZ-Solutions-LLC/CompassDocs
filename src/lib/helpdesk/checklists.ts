@@ -166,12 +166,19 @@ export async function listTemplateRows(): Promise<HdChecklistTemplateRow[]> {
  * added to are in the checklist's desk department `dept` (unless it is in All departments: null),
  * so another department's required items never block solving. Only types not already on it
  * (`had`) are checked, so a save that keeps an older list always works.
+ *
+ * 1.20.30: an item whose owner team was deleted since the checklist named it (`had`'s
+ * `teams`, the stored items' owner teams) loses the owner team here, as adding the
+ * checklist to a ticket already treated it, instead of refusing every later save of the
+ * checklist: the editor's picker can't show the deleted team, so it couldn't be unpicked.
+ * A team the checklist did not name before must exist.
  */
-async function checkTemplateRefs(input: HdChecklistTemplateInput, dept: number | null, had: readonly number[] = []): Promise<void> {
+async function checkTemplateRefs(input: HdChecklistTemplateInput, dept: number | null, had: readonly number[] = [], hadTeams: readonly number[] = []): Promise<void> {
   const teamIds = [...new Set(input.items.map((i) => i.team_id).filter((x): x is number => !!x))];
   if (teamIds.length) {
-    const found = await hq<{ id: number }>("SELECT id FROM hd_teams WHERE id = ANY($1::int[])", [teamIds]);
-    if (found.length !== teamIds.length) throw new ChecklistError("One of the owner teams no longer exists. Pick another.");
+    const found = new Set((await hq<{ id: number }>("SELECT id FROM hd_teams WHERE id = ANY($1::int[])", [teamIds])).map((r) => r.id));
+    if (teamIds.some((t) => !found.has(t) && !hadTeams.includes(t))) throw new ChecklistError("One of the owner teams no longer exists. Pick another.");
+    for (const i of input.items) if (i.team_id && !found.has(i.team_id)) delete i.team_id;
   }
   if (input.request_type_ids.length) {
     const found = await hq<{ id: number }>("SELECT id FROM hd_request_types WHERE id = ANY($1::int[])", [input.request_type_ids]);
@@ -180,6 +187,11 @@ async function checkTemplateRefs(input: HdChecklistTemplateInput, dept: number |
     const refusal = await (await import("./desk-departments")).checklistRefsRefusal(dept, added);
     if (refusal) throw new ChecklistError(refusal);
   }
+}
+
+/** 1.20.30: the owner teams a stored checklist names, live and in a waiting draft. */
+function ownerTeamsOf(t: Pick<HdChecklistTemplate, "items" | "draft">): number[] {
+  return [...(t.items ?? []), ...(t.draft?.items ?? [])].map((i) => i.team_id).filter((x): x is number => !!x);
 }
 
 /** A new checklist's department: the caller's choice, or the default one when left out. */
@@ -251,7 +263,7 @@ export async function updateTemplate(
       items: r.items ?? base.items,
       request_type_ids: r.request_type_ids ?? base.request_type_ids,
     });
-    await checkTemplateRefs(input, opts.dept !== undefined ? opts.dept : (before.desk_department_id ?? null), before.request_type_ids ?? []);
+    await checkTemplateRefs(input, opts.dept !== undefined ? opts.dept : (before.desk_department_id ?? null), before.request_type_ids ?? [], ownerTeamsOf(before));
     const after = await hqOne<HdChecklistTemplate>(
       `UPDATE hd_checklist_templates SET name = $2, items = $3, request_type_ids = $4, updated_at = now()${publish ? ", published = 1" : ""}${
         publish || publishDraft ? `, ${CLEAR_DRAFT}` : ""
@@ -307,7 +319,7 @@ export async function saveTemplateDraft(
     if (!before) throw new ChecklistError(`No checklist with id ${id}.`, 404);
     const base = before.draft ?? before;
     const input = checked({ name: r.name ?? base.name, items: r.items ?? base.items, request_type_ids: r.request_type_ids ?? base.request_type_ids });
-    await checkTemplateRefs(input, before.desk_department_id ?? null, before.request_type_ids ?? []);
+    await checkTemplateRefs(input, before.desk_department_id ?? null, before.request_type_ids ?? [], ownerTeamsOf(before));
     if (!before.published) {
       const t = await hqOne<HdChecklistTemplate>(
         `UPDATE hd_checklist_templates SET name = $2, items = $3, request_type_ids = $4, updated_at = now(), draft_by = $5, draft_by_name = $6, draft_at = now(), draft_via = $7
