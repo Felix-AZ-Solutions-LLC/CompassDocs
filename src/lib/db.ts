@@ -42,6 +42,7 @@ import { HD_CATEGORIES_SCHEMA } from "./helpdesk/categories-schema";
 import { HD_DESK_CALENDAR_SCHEMA } from "./helpdesk/desk-calendar-schema";
 import { HD_CUSTOM_FIELDS_SCHEMA } from "./helpdesk/custom-fields-schema";
 import { HD_EMAIL_HTML_SCHEMA } from "./helpdesk/email-html-schema";
+import { HD_AUTOMATION_BODY_SCHEMA } from "./helpdesk/automation-body-schema";
 import { HD_LIVE_SCHEMA } from "./helpdesk/live-schema";
 import { HD_REPLY_LOCK_SCHEMA } from "./helpdesk/reply-lock-schema";
 import { HD_WORKFLOW_START_SCHEMA } from "./helpdesk/workflow-start-schema";
@@ -2555,6 +2556,8 @@ const SCHEMA_SQL = `
   -- lib/helpdesk/desk-departments-schema; after hd_teams, hd_macros, hd_automations, hd_workflows,
   -- hd_request_types, hd_canned_responses and hd_checklist_templates).
   ${HD_DESK_DEPARTMENTS_SCHEMA}
+  -- Automations that read the body and change the requester: the sender check, the manual-change lock, the held acknowledgement (1.20.33, lib/helpdesk/automation-body-schema; after hd_messages, hd_tickets).
+  ${HD_AUTOMATION_BODY_SCHEMA}
   --- end Helpdesk 1.19.0 ---------------------------------------------------
   ${EMAIL_PARTS_SCHEMA}
   ${NOTIFY_POLICY_SCHEMA}

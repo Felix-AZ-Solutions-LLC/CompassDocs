@@ -261,6 +261,8 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.ticket.cc_removed": "Removed someone from a ticket's CC",
   "helpdesk.ticket.follower_added": "Followed a ticket",
   "helpdesk.ticket.follower_removed": "Unfollowed a ticket",
+  // 1.20.33 (lib/helpdesk/requester-change): by hand on the requester strip, or by an automation (details.automation).
+  "helpdesk.ticket.requester_changed": "Changed a ticket's requester",
   "helpdesk.ticket.merged": "Merged tickets",
   "helpdesk.ticket.bulk_updated": "Bulk edited tickets",
   // 1.19.4 (area C6, lib/helpdesk/share): details carry the recipients, or the printed parts.

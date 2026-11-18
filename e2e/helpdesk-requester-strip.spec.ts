@@ -356,7 +356,7 @@ test.describe("Helpdesk requester strip", () => {
     await strip.getByRole("button", { name: "Hide requester details", exact: true }).click();
   });
 
-  test("a ticket with no requester has no strip, and no Requester card comes back in the side panel", async ({ page }) => {
+  test("a ticket with no requester has only the Add requester line, and no Requester card comes back in the side panel", async ({ page }) => {
     test.setTimeout(180_000);
     await page.setViewportSize({ width: 1440, height: 900 });
     const cards = page.waitForResponse((r) => r.url().includes(`/api/helpdesk/contacts?ticket=${bare}`), { timeout: 120_000 });
@@ -366,7 +366,10 @@ test.describe("Helpdesk requester strip", () => {
     expect(((await res.json()).contacts as { relation: string }[]).some((c) => c.relation === "requester")).toBe(false);
     await slow(page.getByRole("region", { name: "Properties" })).toBeVisible();
     await expect(page.getByTestId("requester-strip")).toHaveCount(0);
-    await expect(page.getByRole("region", { name: "Requester" })).toHaveCount(0);
+    // 1.20.33: an agent who works the ticket gets a one-line strip to add a requester, and nothing else.
+    const empty = page.getByTestId("requester-strip-empty");
+    await expect(empty).toContainText("This ticket has no requester.");
+    await expect(empty.getByRole("button", { name: /add requester/i })).toBeVisible();
     await expect(page.locator('section[aria-labelledby="hd-contact-requester"]')).toHaveCount(0);
   });
 });

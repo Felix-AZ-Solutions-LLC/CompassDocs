@@ -373,7 +373,9 @@ export const notifyRequestReceived = guarded("request_received", async (ticketId
   const t = await loadTicket(ticketId);
   if (!t) return;
   ctx = { ...ctx, origin: await helpdeskOrigin(ctx.origin) };
-  if (t.source !== "workflow" && !t.parent_ticket_id) {
+  // 1.20.33: an acknowledgement held for the rate limit on requesters a rule took from the message (lib/helpdesk/automations).
+  const ackHeld = !!(await hqOne("SELECT 1 FROM hd_tickets WHERE id = $1 AND requester_ack_held_at IS NOT NULL", [ticketId]));
+  if (t.source !== "workflow" && !t.parent_ticket_id && !ackHeld) {
     await toRequester(
       t,
       `Request #${t.number} received`,

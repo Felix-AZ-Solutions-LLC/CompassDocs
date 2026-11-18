@@ -460,7 +460,7 @@ export const HELPDESK_TOOL_DEFS: HdToolDef[] = [
     name: "hd_list_automations",
     side: "automations",
     description:
-      "Helpdesk admin: the automations (When / If / Then rules, Desk settings → Automations) in run order, each in plain words with whether it is on, off, a draft from Claude, or has changes waiting. Pass id for one rule in the shape hd_draft_automation takes, and any draft waiting on it.",
+      "Helpdesk admin: the automations (When / If / Then rules, Desk settings → Automations) in run order, each in plain words with whether it is on, off, a draft from Claude, or has changes waiting: every condition and action, the subject and body phrases and patterns, who a rule makes the requester (from the message: with the senders it is limited to) and the values it copies into fields included. Pass id for one rule in the shape hd_draft_automation takes, and any draft waiting on it.",
     inputSchema: obj({ id: { type: "number", description: "One rule's id." } }),
   },
   {
@@ -468,13 +468,88 @@ export const HELPDESK_TOOL_DEFS: HdToolDef[] = [
     side: "automations",
     write: "notes",
     description:
-      "Helpdesk admin: draft an automation rule, or propose changes to an existing one with id. Nothing runs: a new rule is saved switched OFF and marked Draft from Claude; changes wait beside the rule, which keeps running unchanged, until a person reviews and publishes them in Desk settings → Automations (edit_url). Tell the person that; only a person can switch a rule on. event: ticket_created | ticket_updated | requester_message | sla_nearing | sla_breached. conditions (all optional, every list must match): {team_ids, categories (names from hd_list_categories), subcategories:[{category, subcategory}], priorities, request_type_ids, sources, keywords}. actions (at least one): {team_id, assignee_id, priority, status, category, subcategory, tags_add, internal_note, macro_id (a shared macro), notify: \"assignee\"|\"team\"|{user_id}}. With id, fields not sent are kept.",
+      "Helpdesk admin: draft an automation rule, or propose changes to an existing one with id. Nothing runs: a new rule is saved switched OFF and marked Draft from Claude; changes wait beside the rule, which keeps running unchanged, until a person reviews and publishes them in Desk settings → Automations (edit_url). Tell the person that; only a person can switch a rule on. event: ticket_created | ticket_updated | requester_message | sla_nearing | sla_breached. The body a rule reads is the triggering requester message for requester_message, otherwise the opening message, as agents see it. " +
+      "conditions (all optional, every one must match): {team_ids, categories (names from hd_list_categories), subcategories:[{category, subcategory}], priorities, request_type_ids, sources, keywords (whole words in subject or body), " +
+      "subject_contains / subject_not_contains / body_contains / body_not_contains (lists of phrases: exact text, any case, not whole words; contains = any phrase appears, not_contains = none does), " +
+      "subject_pattern / body_pattern ({pattern, match_case}: a regular expression on a linear-time RE2 engine, up to 200 characters, matched on the first 100 KB, any case unless match_case; no lookarounds or backreferences)}. " +
+      "actions (at least one): {team_id, assignee_id, priority, status, category, subcategory, tags_add, internal_note, macro_id (a shared macro), notify: \"assignee\"|\"team\"|{user_id}, " +
+      "requester_set: {user_id} or {email, name?}, keep_cc? (make that person the requester; keep_cc keeps the previous requester as a CC), " +
+      "requester_from_message: {find: \"label\"|\"first\", labels (default [\"From:\", \"Email:\"]), senders (REQUIRED), domains?, keep_cc?, allow_agents?} (make the address found in the body the requester; creates them as an outside contact if nobody has it), " +
+      "copy_values: up to 10 of {from: \"body\"|\"subject\", label (the rest of the line after it) or pattern (exactly one capture group), match_case?, field_key (a custom field of the rule's teams) or tag: true, only_if_empty? (default true)}}. " +
+      "The requester can change only on ticket_created or requester_message (other events are refused), and a rule never changes the requester of a ticket an agent set it on by hand. " +
+      "requester_from_message REQUIRES senders (exact addresses, or @domain except free-mail domains such as @gmail.com): the forwarder, alert system or web-form mailbox addresses (or @domain) whose messages it may act on; it does nothing for anyone else's message or an email whose sender didn't pass an aligned SPF/DKIM/DMARC check, reads only the topmost line that starts with a label (and only the bracketed address in \"Name <address>\"), never picks the desk's own addresses, the sender's own or a desk agent (unless allow_agents), and the draft is refused without senders, since otherwise anyone could write \"From: ceo@…\" and take over a ticket and its replies. " +
+      "Examples: {conditions:{body_contains:[\"Submitted via web form\"]}, actions:{requester_from_message:{find:\"label\", labels:[\"Email:\"], senders:[\"forms@acme.example\"]}, copy_values:[{from:\"body\", label:\"Asset tag:\", field_key:\"asset_tag\"}]}}; " +
+      "{conditions:{subject_pattern:{pattern:\"^\\\\[ALERT\\\\]\"}}, actions:{copy_values:[{from:\"subject\", pattern:\"host=(\\\\S+)\", tag:true}]}}. With id, fields not sent are kept.",
     inputSchema: obj({
       id: { type: "number", description: "An existing rule to propose changes to. Omit to draft a new one." },
       name: { type: "string", description: "Up to 120 characters. Needed for a new rule." },
       event: { type: "string", enum: ["ticket_created", "ticket_updated", "requester_message", "sla_nearing", "sla_breached"] },
-      conditions: { type: "object", description: "When it applies (see above). {} = every ticket." },
-      actions: { type: "object", description: "What it does (see above)." },
+      conditions: obj({
+        team_ids: { type: "array", items: { type: "number" } },
+        categories: { type: "array", items: { type: "string" }, description: "Category names from hd_list_categories." },
+        subcategories: { type: "array", items: obj({ category: { type: "string" }, subcategory: { type: "string" } }, ["category", "subcategory"]) },
+        priorities: { type: "array", items: { type: "string", enum: ["low", "normal", "high", "urgent"] } },
+        request_type_ids: { type: "array", items: { type: "number" } },
+        sources: { type: "array", items: { type: "string" } },
+        keywords: { type: "array", items: { type: "string" }, description: "Whole words in the subject or body." },
+        subject_contains: { type: "array", items: { type: "string" }, description: "Any of these phrases in the subject (exact text, any case)." },
+        subject_not_contains: { type: "array", items: { type: "string" }, description: "None of these phrases in the subject." },
+        body_contains: { type: "array", items: { type: "string" }, description: "Any of these phrases in the body (exact text, any case)." },
+        body_not_contains: { type: "array", items: { type: "string" }, description: "None of these phrases in the body." },
+        subject_pattern: obj({ pattern: { type: "string", description: "A regular expression (RE2), up to 200 characters." }, match_case: { type: "boolean" } }, ["pattern"]),
+        body_pattern: obj({ pattern: { type: "string", description: "A regular expression (RE2), up to 200 characters, on the first 100 KB of the body." }, match_case: { type: "boolean" } }, ["pattern"]),
+      }),
+      actions: obj({
+        team_id: { type: "number" },
+        assignee_id: { type: "number" },
+        priority: { type: "string", enum: ["low", "normal", "high", "urgent"] },
+        status: { type: "string", enum: ["open", "pending", "on_hold", "solved", "closed"] },
+        category: { type: "string" },
+        subcategory: { type: "string" },
+        tags_add: { type: "array", items: { type: "string" } },
+        internal_note: { type: "string" },
+        macro_id: { type: "number", description: "A shared macro's id." },
+        notify: { description: '"assignee", "team" or {user_id}.' },
+        requester_set: obj(
+          {
+            user_id: { type: "number", description: "An account that can use Get help." },
+            email: { type: "string", description: "Or an address (an account's, else someone outside the workspace)." },
+            name: { type: "string", description: "The name to show for an outside address." },
+            keep_cc: { type: "boolean", description: "Keep the previous requester as a CC (default false)." },
+          }
+        ),
+        requester_from_message: obj(
+          {
+            find: { type: "string", enum: ["label", "first"], description: "label: the address on the same line after a label; first: the first usable address in the body." },
+            labels: { type: "array", items: { type: "string" }, description: 'find "label": the labels tried in order. Default ["From:", "Email:"].' },
+            senders: {
+              type: "array",
+              items: { type: "string" },
+              description: "REQUIRED, at least one: the addresses or @domains of the forwarder, alert system or web-form mailbox. The action does nothing for a message from anyone else.",
+            },
+            domains: { type: "array", items: { type: "string" }, description: "Optional: only accept addresses at these domains (@example.com)." },
+            keep_cc: { type: "boolean", description: "Keep the original sender as a CC (default false)." },
+            allow_agents: { type: "boolean", description: "Allow an address that belongs to a desk agent (default false)." },
+          },
+          ["senders"]
+        ),
+        copy_values: {
+          type: "array",
+          description: "Up to 10. Each copies one value into a custom field (hd_read_ticket lists their keys) or adds it as a tag.",
+          items: obj(
+            {
+              from: { type: "string", enum: ["body", "subject"] },
+              label: { type: "string", description: 'Text after a label: the rest of that line, trimmed (e.g. "Asset tag:").' },
+              pattern: { type: "string", description: "Or a regular expression with exactly one capture group." },
+              match_case: { type: "boolean" },
+              field_key: { type: "string", description: "The custom field to write (its kind must fit: an option, a number, a date)." },
+              tag: { type: "boolean", description: "Add the value as a tag instead." },
+              only_if_empty: { type: "boolean", description: "Only while the field is empty (default true)." },
+            },
+            ["from"]
+          ),
+        },
+      }),
     }),
   },
   {

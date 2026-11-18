@@ -4,6 +4,126 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.33] - 2026-11-18
+
+Helpdesk automations can read what a ticket says and change who asked.
+
+### Added
+- **Subject and body conditions.** Under If, a rule can check whether the
+  subject or the body contains any of a list of phrases, or none of them.
+  A phrase matches its exact text in any case, part of a word included.
+  The body is the message the rule already reads (the requester's message
+  for "The requester sends a message", the opening message otherwise), as
+  agents see it on the ticket. The keyword condition is unchanged.
+- **Pattern conditions.** Under Advanced: patterns, "Subject matches
+  pattern" and "Body matches pattern" take a regular expression, any case
+  unless Match case is ticked. Patterns run on a linear-time engine (RE2),
+  so no pattern or email can stall the desk. A pattern is at most 200
+  characters and is matched against the first 100 KB of the body. A
+  pattern that isn't valid is refused when the rule is saved, with a
+  sentence saying what is wrong.
+- **Try it.** Under each pattern, paste sample text to see whether it
+  matches and what each group caught. It runs in the browser with the same
+  engine the rules use, and sends nothing.
+- **Change the requester, to a person.** A rule can make someone else the
+  requester: a person in the workspace who can use Get help, or an email
+  address (with an optional name). Keep the previous requester as a CC if
+  you want them on the ticket.
+- **Change the requester, from the message.** For mail a web form, an
+  alert system or a shared mailbox sends on someone's behalf: the rule
+  reads the topmost line that starts with a label ("From:", "Email:" by
+  default, your choice), or the first address in the body, and makes that
+  person the requester. In "Jane Doe <jane@…>" only the address in angle
+  brackets counts, whatever the name says. Someone with no account becomes
+  an outside requester, as an email from them would. It acts only on
+  messages from the senders listed under "Only for messages from", which a
+  rule must have. It never picks one of the desk's own addresses, the
+  sender's own address or, unless allowed, any address a desk agent has.
+  Options: only addresses at certain domains, and keep the original sender
+  as a CC.
+- **Copy a value into a field.** A rule can copy up to ten values from the
+  subject or the body into the ticket's custom fields, or add them as
+  tags: the text after a label at the start of a line ("Asset tag:"), or
+  what a pattern's group catches. The value must fit the field: one of a
+  choice's options (in any case), a number, a date. By default a field
+  that already has a value is left alone.
+- **Change requester on the ticket.** Agents who work a ticket can change
+  its requester from the requester strip, to fix one a rule got wrong. A
+  ticket with no requester gets an **Add requester** button in its place.
+- When a rule can't do something (no usable address, a value that doesn't
+  fit its field), the ticket shows one line saying why, for agents only.
+- Claude can draft rules with all of these, through the Claude connector
+  (hd_draft_automation) and Claude in the desk. Drafts are saved switched
+  off and unpublished, as before, and are checked as Desk settings checks a
+  rule. hd_list_automations describes the new conditions and actions in
+  plain words.
+
+### Changed
+- **The requester changes only when a ticket is created or the requester
+  writes.** A rule that changes the requester can't be saved for "A ticket
+  is updated" or the SLA events: those would read the opening message
+  again after every change and undo an agent's correction.
+- **An agent's change wins.** Once an agent changes or adds a ticket's
+  requester by hand, no automation changes that ticket's requester again;
+  the ticket notes it once if a rule tries.
+- **Free email domains can't be a whole-domain sender.** "Only for messages
+  from" refuses entries such as @gmail.com, @outlook.com or @yahoo.com,
+  where anyone can have an address. An exact address there is fine.
+- **Acknowledgements are limited.** When a rule takes the requester from
+  the message, the "request received" email to that address is sent at
+  most 5 times a day per address and 60 times an hour per rule. Past
+  that the requester still changes, the acknowledgement is held and the
+  ticket says so.
+- Every requester change, by a rule or by hand, is one agents-only line on
+  the ticket ("changed the requester from A to B") and is recorded in the
+  audit log (Changed a ticket's requester). The previous requester is
+  dropped from the ticket unless kept as a CC. The new requester is no
+  longer a CC, and a customer-portal contact who is no longer the requester
+  stops seeing the ticket. Values a rule copies are audited too.
+- Closed tickets and tickets on legal hold take a requester change like
+  any other field edit.
+- A rule that would set a requester or a field value the ticket already
+  has does nothing, so "A ticket is updated" rules still settle. Every rule
+  in a run reads the same triggering message, with its real sender, even
+  after an earlier rule changed the requester.
+- A rule naming a person who can no longer be a requester (their account
+  is gone or can't use Get help, or outside senders were switched off), or
+  a custom field that was deleted, follows the 1.20.30 rules: the save
+  drops it and says so, or is refused when it was all the rule did.
+- A rule, or a draft from Claude, copies only into custom fields of its
+  desk department's teams, or fields of all teams. Publishing a draft is
+  checked the same way.
+
+### Security
+- **The display name never picks an address.** Inbound email now reads
+  From, To and Cc the way mail clients do: in `"ceo@company.com"
+  <attacker@example.com>` the address is the one in angle brackets. Before,
+  the first address in the value won, so a display name could pose as
+  another sender.
+- **A DMARC pass must be for the From domain.** A DMARC pass in a
+  forwarding server's Authentication-Results header now counts only when
+  it names header.from and that aligns with the From address's domain.
+  This tightens the sender check behind trusted senders (1.20.25) and
+  behind "Change the requester from the message". Mail whose provider
+  reports its own verdict (SendGrid, Postmark, Mailgun, the generic JSON's
+  fields, Microsoft 365 mailboxes) is unchanged. If a trusted sender's mail
+  stops being treated as trusted after the upgrade, check that its
+  forwarding server writes header.from in Authentication-Results.
+- "Change the requester from the message" acts only on an email whose
+  sender passed that check. An address trusted without SPF or DKIM results
+  ("Trust sender addresses without SPF or DKIM results") still opens
+  tickets as before, but doesn't count. Neither do imported messages.
+
+### Upgrading
+Nothing to run. On start, new columns record whether each incoming email's
+sender passed the sender check, when an agent last set a ticket's requester
+by hand, and when an acknowledgement was held. Email from before the
+upgrade has no record of its check, so "Change the requester from the
+message" never acts on it; every other condition and action does. The new
+regular-expression engine, re2js (MIT), is a JavaScript package with no
+native code, so every image architecture builds as before. Existing rules
+work unchanged.
+
 ## [1.20.32] - 2026-11-18
 
 No workspace email sent through Microsoft 365 is dropped for going too fast.

@@ -243,6 +243,21 @@ async function liveRule(name: string, actions: Record<string, unknown>, extra: R
   return (await automations.createAutomation(v.value as import("../src/lib/helpdesk/automations").AutomationInput)).id;
 }
 
+/** 1.20.33: the subject-and-body conditions and the requester and copy actions as a strict tool input leaves them unused. */
+const BODY_UNUSED = {
+  subject_contains: [],
+  subject_not_contains: [],
+  body_contains: [],
+  body_not_contains: [],
+  subject_pattern: { pattern: "", match_case: false },
+  body_pattern: { pattern: "", match_case: false },
+};
+const ACTIONS_UNUSED = {
+  requester_set: { user_id: 0, email: "", name: "", keep_cc: false },
+  requester_from_message: { find: "", labels: [], senders: [], domains: [], keep_cc: false, allow_agents: false },
+  copy_values: [],
+};
+
 const MONTHLY = { kind: "monthly", mode: "nth_weekday", nth: 1, weekday: 1, months: [], time: "09:00" };
 async function liveSchedule(subject: string): Promise<number> {
   const v = await recurring.validateRecurringInput({ team_id: T.A, subject: `${subject} ${STAMP}`, pattern: MONTHLY, timezone: "UTC" });
@@ -834,8 +849,8 @@ describe("Claude in the desk: draft cards and Save as draft", () => {
       id: 0,
       name: `Desk rule ${STAMP}`,
       event: "ticket_created",
-      conditions: { team_ids: [], categories: [], subcategories: [], priorities: [], request_type_ids: [], sources: [], keywords: [WORD] },
-      actions: { team_id: T.B, assignee_id: 0, priority: "", status: "", category: "", subcategory: "", tags_add: ["desk"], internal_note: "", macro_id: 0, notify: "" },
+      conditions: { team_ids: [], categories: [], subcategories: [], priorities: [], request_type_ids: [], sources: [], keywords: [WORD], ...BODY_UNUSED },
+      actions: { team_id: T.B, assignee_id: 0, priority: "", status: "", category: "", subcategory: "", tags_add: ["desk"], internal_note: "", macro_id: 0, notify: "", ...ACTIONS_UNUSED },
     };
     const agentOut = await deskTools.runDeskTool("draft_automation", input, toolCtx(await user("agent")));
     assert.equal(agentOut.isError, true);
@@ -945,8 +960,8 @@ describe("Claude in the desk: draft cards and Save as draft", () => {
               id: 0,
               name: `Turn rule ${STAMP}`,
               event: "ticket_created",
-              conditions: { team_ids: [], categories: [], subcategories: [], priorities: [], request_type_ids: [], sources: [], keywords: [WORD] },
-              actions: { team_id: 0, assignee_id: 0, priority: "urgent", status: "", category: "", subcategory: "", tags_add: [], internal_note: "", macro_id: 0, notify: "" },
+              conditions: { team_ids: [], categories: [], subcategories: [], priorities: [], request_type_ids: [], sources: [], keywords: [WORD], ...BODY_UNUSED },
+              actions: { team_id: 0, assignee_id: 0, priority: "urgent", status: "", category: "", subcategory: "", tags_add: [], internal_note: "", macro_id: 0, notify: "", ...ACTIONS_UNUSED },
             },
           },
         ],

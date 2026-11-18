@@ -202,7 +202,7 @@ test.describe("Workspace email outbox through Microsoft 365 (fake Microsoft)", (
     await refused.getByRole("button", { name: "Discard" }).click();
     await expect(page.getByRole("dialog")).toContainText("is never sent, and its content is deleted");
     await page.getByRole("dialog").getByRole("button", { name: "Discard" }).click();
-    await expect(page.getByText("Discarded.")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("Discarded.", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("outbox-problem").filter({ hasText: `Outbox refused ${stamp}` })).toHaveCount(0);
     const discarded = (await db.query("SELECT status, mime FROM mail_outbox WHERE subject LIKE $1", [`%Outbox refused ${stamp}%`])).rows[0];
     expect([discarded.status, discarded.mime]).toEqual(["discarded", null]);

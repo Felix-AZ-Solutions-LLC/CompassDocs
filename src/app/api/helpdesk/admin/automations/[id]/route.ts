@@ -29,6 +29,7 @@ import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { readJson } from "@/lib/helpdesk/access";
 import { AutomationDraftError, automationStoredRefs, deleteAutomation, discardAutomationDraft, getAutomation, updateAutomation, validateAutomationInput } from "@/lib/helpdesk/automations";
 import {
+  automationFieldsRefusal,
   automationMacroRefusal,
   deskDepartmentFieldOr,
   deskDepartmentGate,
@@ -107,6 +108,14 @@ async function patchHandler(req: Request, ctx: Ctx) {
     const moved = (dept.value ?? null) !== (cur.desk_department_id ?? null);
     if (moved || (macroId ?? null) !== (cur.actions?.macro_id ?? null)) {
       const mismatch = await automationMacroRefusal(dept.value, macroId);
+      if (mismatch) return NextResponse.json({ error: mismatch, code: "desk_department" }, { status: 400 });
+    }
+    // 1.20.33: the custom fields it copies into are its department's teams' (or all teams'); checked when they or the department change.
+    // Review L4: a publish is checked against what goes live (the draft's actions, or the ones sent), whatever changed.
+    const copies = input.value.actions !== undefined ? input.value.actions.copy_values : body.publish_draft === true ? cur.draft?.actions?.copy_values : cur.actions?.copy_values;
+    const publishing = body.publish === true || body.publish_draft === true;
+    if (publishing || moved || JSON.stringify(copies ?? null) !== JSON.stringify(cur.actions?.copy_values ?? null)) {
+      const mismatch = await automationFieldsRefusal(dept.value, copies);
       if (mismatch) return NextResponse.json({ error: mismatch, code: "desk_department" }, { status: 400 });
     }
     const r = await updateAutomation(id, input.value, { publish: body.publish === true, publishDraft: body.publish_draft === true, draftAt: body.draft_at, dept: dept.value });

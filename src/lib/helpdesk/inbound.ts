@@ -657,7 +657,7 @@ export async function processInboundEmail(
           const append = async (what: { kind: "public" | "internal"; body: string }) =>
             addMessage(
               t.id,
-              { ...what, author, via: "email", asRequester: Boolean(isRequester || isCc), email_message_id: messageId },
+              { ...what, author, via: "email", asRequester: Boolean(isRequester || isCc), email_message_id: messageId, sender_verified: verdict.ok },
               {
                 origin: opts.origin,
                 actorId: author.id,
@@ -746,6 +746,7 @@ export async function processInboundEmail(
         emailMessageId: messageId,
         closedNumber: followUpOf,
         mailboxId: mailbox?.id ?? null,
+        senderVerified: verdict.ok,
       },
       { origin: opts.origin }
     );
@@ -802,6 +803,9 @@ export async function processInboundEmail(
       team_id: teamId,
       mailbox_id: mailbox?.id ?? null,
       email_message_id: messageId,
+      // 1.20.33: the sender check, for a rule that trusts the sender (lib/helpdesk/automations, "from the message"):
+      // only a real, aligned pass (verdict.ok); an address trusted without a verdict (trust_unverified_senders) is not.
+      sender_verified: verdict.ok,
     },
     { origin: opts.origin, actorId: author.id, actorName: author.name }
   );

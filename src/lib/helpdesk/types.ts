@@ -249,6 +249,10 @@ export interface HdTicketRow {
   deleted_by_name?: string;
   /** The help address the ticket came in on or is answered from (1.20.2, lib/helpdesk/mailboxes); NULL = its team's, else the default. */
   mailbox_id?: number | null;
+  /** 1.20.33 (lib/helpdesk/requester-change): an agent set the requester by hand; rules never change it again. */
+  requester_set_by_agent_at?: string | null;
+  /** 1.20.33: the acknowledgement to a requester a rule took from the message was held for the rate limit. */
+  requester_ack_held_at?: string | null;
 }
 
 /** A ticket as the desk reads it: the row plus joins and the derived SLA fields. */
@@ -412,6 +416,71 @@ export interface HdAutomationConditions {
   /** Any of these words in the subject or body (case-insensitive). */
   keywords?: string[];
   sources?: HdSource[];
+  /**
+   * 1.20.33 (lib/helpdesk/automation-body-shared): phrases, any case, exact text (not whole words). A "contains" list
+   * matches when any phrase appears; a "doesn't contain" list when none does.
+   */
+  subject_contains?: string[];
+  subject_not_contains?: string[];
+  body_contains?: string[];
+  body_not_contains?: string[];
+  /** 1.20.33: a regular expression (linear-time engine, re2js), any case unless match_case. */
+  subject_pattern?: HdAutomationPattern;
+  body_pattern?: HdAutomationPattern;
+}
+
+/** 1.20.33: a pattern condition (lib/helpdesk/automation-body-shared AUTOMATION_PATTERN_LIMITS). */
+export interface HdAutomationPattern {
+  pattern: string;
+  /** Default false: any case. */
+  match_case?: boolean;
+}
+
+/**
+ * 1.20.33: "Change the requester" to a named person: an account (user_id) or an address (email; an account with that
+ * address becomes that account, anyone else is taken in as an outside requester, as inbound email does).
+ */
+export interface HdAutomationRequesterSet {
+  user_id?: number;
+  email?: string;
+  /** For an outside address: the name to show (default: the address). */
+  name?: string;
+  /** Keep the previous requester as a CC (default false: they are dropped). */
+  keep_cc?: boolean;
+}
+
+/**
+ * 1.20.33: "Change the requester" from the message: an address found in the body. Only for messages whose actual
+ * sender is on `senders` (required): a forwarder, an alert system or a web-form mailbox.
+ */
+export interface HdAutomationRequesterFromMessage {
+  /** "label": the address on the same line after one of `labels`; "first": the first usable address in the body. */
+  find: "label" | "first";
+  /** find "label": the labels, in the order they are tried (default "From:", "Email:"). */
+  labels?: string[];
+  /** Required: addresses and "@domain" entries the message must come from. */
+  senders: string[];
+  /** Optional: only addresses at these domains ("@example.com"). */
+  domains?: string[];
+  /** Keep the original sender (the previous requester) as a CC. Default false. */
+  keep_cc?: boolean;
+  /** Allow an address that belongs to a desk agent. Default false. */
+  allow_agents?: boolean;
+}
+
+/** 1.20.33: "Copy a value into a field": extract from the subject or body, write it to a custom field or add it as a tag. */
+export interface HdAutomationCopy {
+  from: "subject" | "body";
+  /** "Text after a label": the rest of that line, trimmed. */
+  label?: string;
+  /** Or a pattern with one capture group (same engine and limits as the pattern conditions). */
+  pattern?: string;
+  match_case?: boolean;
+  /** The custom field's key, or tag: true to add the value as a tag. */
+  field_key?: string;
+  tag?: boolean;
+  /** Write a field only while it is empty. Default true. */
+  only_if_empty?: boolean;
 }
 
 export interface HdAutomationActions {
@@ -427,6 +496,12 @@ export interface HdAutomationActions {
   macro_id?: number;
   /** "assignee" | "team" | {user_id}. */
   notify?: "assignee" | "team" | { user_id: number };
+  /** 1.20.33: change the requester to a named person (lib/helpdesk/requester-change). */
+  requester_set?: HdAutomationRequesterSet;
+  /** 1.20.33: change the requester to an address found in the message (sender-scoped). */
+  requester_from_message?: HdAutomationRequesterFromMessage;
+  /** 1.20.33: copy values from the subject or body into custom fields or tags (up to AUTOMATION_LIMITS.copies). */
+  copy_values?: HdAutomationCopy[];
 }
 
 export interface HdAutomation {

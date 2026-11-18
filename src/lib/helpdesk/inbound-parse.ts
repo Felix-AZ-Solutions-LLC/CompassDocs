@@ -31,7 +31,7 @@
 
 import { unified } from "unified";
 import rehypeParse from "rehype-parse";
-import { scanAddresses } from "./mailboxes-shared";
+import { bracketedAddress, headerAddress } from "./mailboxes-shared";
 import { linearHtmlText, scanHtml } from "./html-scan";
 
 export const INBOUND_PROVIDERS = ["generic", "postmark", "sendgrid", "mailgun"] as const;
@@ -112,19 +112,22 @@ export const INBOUND_MAX_TEXT = 60_000;
  * the unanchored pattern used before took seconds on a 100 KB value).
  */
 export function normalizeEmail(raw: unknown): string {
-  const m = scanAddresses(String(raw ?? ""), 1)[0];
-  return m ? m.toLowerCase() : "";
+  // 1.20.33: "Name <addr>" is addr, whatever the name says (an address in a display name is never the sender's).
+  return headerAddress(String(raw ?? ""));
 }
 
-/** "Priya Shah <priya@example.com>" -> { email, name }. */
+/**
+ * "Priya Shah <priya@example.com>" -> { email, name }. 1.20.33: the address is the bracketed one when there is one
+ * (`"ceo@company.com" <attacker@evil.example>` is attacker@evil.example, named nothing), and a display name that
+ * holds an address is dropped rather than shown as a name.
+ */
 export function parseAddress(raw: unknown): InboundAddress {
   const s = String(raw ?? "").trim();
   const email = normalizeEmail(s);
-  let name = "";
-  const angle = s.indexOf("<");
-  if (angle > 0) name = s.slice(0, angle).trim();
+  const b = bracketedAddress(s);
+  let name = b && b.start > 0 ? s.slice(0, b.start).trim() : "";
   name = name.replace(/^"(.*)"$/, "$1").replace(/\\"/g, '"').trim();
-  if (name.toLowerCase() === email) name = "";
+  if (name.toLowerCase() === email || name.includes("@")) name = "";
   return { email, name: name.slice(0, 200) };
 }
 

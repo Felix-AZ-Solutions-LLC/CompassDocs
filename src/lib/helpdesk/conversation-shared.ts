@@ -93,6 +93,7 @@ export type HdActivityIcon =
   | "solve"
   | "cc-add"
   | "cc-remove"
+  | "requester"
   | "status"
   | "files"
   | "other";
@@ -113,6 +114,8 @@ export function activityIcon(m: Line): HdActivityIcon {
   if (/^(?:moved the ticket to|took the ticket out of its team)/.test(what)) return "team";
   if (/^unassigned the ticket/.test(what)) return "unassign";
   if (/^(?:assigned the ticket to|took the ticket)/.test(what)) return "assign";
+  // 1.20.33 (lib/helpdesk/requester-change): "changed the requester from A to B", "set the requester to B".
+  if (/^(?:changed|set) the requester\b/.test(what)) return "requester";
   if (/^(?:set|cleared) the (?:sub-)?category/.test(what)) return "category";
   if (/^changed the priority/.test(what)) return "priority";
   if (/^(?:marked the event setup|added an event|changed the event|removed the event)/.test(what)) return "event";
