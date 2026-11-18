@@ -9,7 +9,7 @@ import {
 } from "@/lib/db";
 import { canUseNewsletter, isNewsletterApprover } from "@/lib/newsletter-access";
 import { listNewsletterFromAddresses } from "@/lib/newsletter";
-import { getSmtpConfig, smtpConfigured } from "@/lib/smtp-config";
+import { mailConfigured } from "@/lib/mail-config";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import type { SessionUser } from "@/lib/types";
 
@@ -28,7 +28,7 @@ export async function GET() {
     groups: (await listGroups()).map((g) => ({ id: g.id, name: g.name, member_count: g.member_count })),
     approverPool: await listNewsletterApproverPool(),
     fromAddresses: await listNewsletterFromAddresses(),
-    smtpReady: smtpConfigured(await getSmtpConfig()),
+    smtpReady: await mailConfigured(),
   });
 }
 

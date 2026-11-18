@@ -1,4 +1,4 @@
-// GET  /api/helpdesk/admin/send-addresses   → { send_addresses: HdSendAddressView[], limit, mail_ready, transport_from }
+// GET  /api/helpdesk/admin/send-addresses   → { send_addresses: HdSendAddressView[], limit, mail_ready, transport_from, transport_method }
 //        Each: { id, address, name, last_error, last_error_at, created_at, updated_at, used_by: [{ id, address }] }.
 // POST /api/helpdesk/admin/send-addresses   { address, name?: string } → 201 { send_address }.
 //        400 with the form's sentence, 409 when the address is already on the list.
@@ -18,6 +18,7 @@ import type { HdCap } from "@/lib/helpdesk/roles";
 import { badRequest } from "@/lib/helpdesk/routes";
 import { HdSendAddressError, createSendAddress, sendAddressViews } from "@/lib/helpdesk/send-addresses";
 import { getSmtpConfig } from "@/lib/smtp-config";
+import { getMailMethod, workspaceFrom } from "@/lib/mail-config";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,8 @@ const CAPS: HdCap[] = ["settings.manage", "channels.manage"];
 /** The workspace transport's bare From address ('' when mail isn't set up). */
 async function transportFrom(): Promise<string> {
   try {
-    const from = (await getSmtpConfig()).from ?? "";
+    // 1.20.31: by the chosen mail method (the Microsoft 365 sending mailbox, or the SMTP From).
+    const from = (await workspaceFrom()) || ((await getMailMethod()) === "smtp" ? ((await getSmtpConfig()).from ?? "") : "");
     return (from.match(/<([^>]+)>/)?.[1] ?? from).trim();
   } catch {
     return "";
@@ -36,8 +38,8 @@ async function transportFrom(): Promise<string> {
 export async function GET() {
   const gate = await hdAnyCapGate(CAPS);
   if (gate instanceof NextResponse) return gate;
-  const [send_addresses, mail_ready, transport_from] = await Promise.all([sendAddressViews(), helpdeskMailReady().catch(() => false), transportFrom()]);
-  return NextResponse.json({ send_addresses, limit: SEND_ADDRESS_LIMITS.addresses, mail_ready, transport_from });
+  const [send_addresses, mail_ready, transport_from, transport_method] = await Promise.all([sendAddressViews(), helpdeskMailReady().catch(() => false), transportFrom(), getMailMethod().catch(() => "smtp" as const)]);
+  return NextResponse.json({ send_addresses, limit: SEND_ADDRESS_LIMITS.addresses, mail_ready, transport_from, transport_method });
 }
 
 export async function POST(req: Request) {

@@ -23,7 +23,8 @@ import {
   getSpaceById,
 } from "./db";
 import type { Newsletter } from "./db";
-import { getSmtpConfig, smtpConfigured } from "./smtp-config";
+import { mailConfigured } from "./mail-config";
+import { refusalRepeats } from "./mail-m365";
 import { sendMail } from "./mailer";
 
 const MAX_RECIPIENTS = 1000;
@@ -398,8 +399,8 @@ export async function sendNewsletter(input: {
   /** Files sent WITH the email as real attachments. */
   attachments?: { filename: string; path: string }[];
 }): Promise<{ sent: number; error?: string }> {
-  if (!smtpConfigured(await getSmtpConfig())) {
-    return { sent: 0, error: "SMTP isn't configured (Settings → Notifications)." };
+  if (!(await mailConfigured())) {
+    return { sent: 0, error: "Email isn't set up (Settings → Notifications → Email)." };
   }
   const recipients =
     typeof input.to === "object" && !Array.isArray(input.to)
@@ -423,6 +424,12 @@ export async function sendNewsletter(input: {
       sent++;
     } catch (e) {
       console.error(`Newsletter to ${r.email} failed:`, e);
+      // 1.20.31: Microsoft 365 refusing what it would refuse for everyone (too large with its files, not allowed to send): stop and say why.
+      // Part-way (a secret that ended mid-run): what went out is counted as sent; the log says why the rest did not.
+      if (refusalRepeats(e)) {
+        if (sent === 0) return { sent, error: (e as Error).message };
+        break;
+      }
     }
   }
   return { sent };
@@ -439,7 +446,7 @@ export async function sendWorkflowNotice(
   text: string
 ): Promise<void> {
   if (emails.length === 0) return;
-  if (!smtpConfigured(await getSmtpConfig())) return;
+  if (!(await mailConfigured())) return;
   // 1.19.0: each account's "newsletter_review" choice (lib/notify-policy).
   const { emailAllowedAddresses } = await import("./notify-policy");
   const allowed = await emailAllowedAddresses(emails, "newsletter_review");

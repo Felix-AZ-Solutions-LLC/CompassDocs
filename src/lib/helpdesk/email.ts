@@ -30,17 +30,19 @@
 // number, so knowing #1047 is not enough to write into it; the inbound side
 // still checks the sender may (lib/helpdesk/inbound).
 //
-// The SMTP transport is the one lib/mailer builds from Settings →
-// Notifications; it is built here because helpdesk mail needs headers the
-// shared sendMail does not take (Reply-To, Message-ID, References). Tests
+// The transport is the workspace's (lib/mailer workspaceTransport, by the
+// method chosen under Settings → Notifications → Email: SMTP or, 1.20.31,
+// Microsoft 365); helpdesk mail needs headers the shared sendMail does not
+// take (Reply-To, Message-ID, References). Tests
 // swap the transport with setHelpdeskTransportForTests. Mail is never sent
 // while a database client is held: callers run this after their
 // transaction. Server-only.
 
 import "server-only";
 import { randomBytes } from "node:crypto";
-import nodemailer from "nodemailer";
-import { getSmtpConfig, smtpConfigured } from "../smtp-config";
+import { getSmtpConfig } from "../smtp-config";
+import { mailConfigured, workspaceFrom } from "../mail-config";
+import { workspaceTransport } from "../mailer";
 import { renderEmail } from "../email-templates";
 import { getUserById } from "../db";
 import { logEvent } from "../log";
@@ -198,43 +200,28 @@ export function setHelpdeskTransportForTests(t: HelpdeskTransport | null): void 
   testTransport = t;
 }
 
+/**
+ * The workspace's transport for helpdesk mail (1.20.31: by the method chosen
+ * under Settings → Notifications → Email, lib/mailer workspaceTransport:
+ * SMTP, or Microsoft 365 as the one sending mailbox). A refusal of the From
+ * by Microsoft (ErrorSendAsDenied) reads as an SMTP server's 550, so a
+ * send-from address the mailbox may not send as falls back exactly as one an
+ * SMTP provider refused (isSenderRejection).
+ */
 async function smtpTransport(): Promise<{ send: HelpdeskTransport; from: string } | null> {
-  const cfg = await getSmtpConfig();
-  if (testTransport) return { send: testTransport, from: cfg.from || "helpdesk@example.test" };
-  if (!smtpConfigured(cfg)) return null;
-  const transport = nodemailer.createTransport({
-    host: cfg.host,
-    port: cfg.port,
-    secure: cfg.secure === "tls",
-    ignoreTLS: cfg.secure === "none",
-    requireTLS: cfg.secure === "starttls",
-    auth: cfg.user ? { user: cfg.user, pass: cfg.pass } : undefined,
-    connectionTimeout: 8000,
-    socketTimeout: 10000,
-  });
-  return {
-    from: cfg.from,
-    send: async (m) => {
-      await transport.sendMail({
-        from: m.from,
-        to: m.to,
-        cc: m.cc,
-        replyTo: m.replyTo,
-        subject: m.subject,
-        text: m.text,
-        html: m.html,
-        messageId: m.messageId,
-        references: m.references,
-        headers: m.headers,
-      });
-    },
-  };
+  if (testTransport) {
+    const from = (await workspaceFrom().catch(() => "")) || (await getSmtpConfig()).from;
+    return { send: testTransport, from: from || "helpdesk@example.test" };
+  }
+  const t = await workspaceTransport();
+  if (!t) return null;
+  return { from: t.from, send: (m) => t.send(m) };
 }
 
-/** Whether helpdesk mail can go out at all (SMTP set, or a test transport). */
+/** Whether helpdesk mail can go out at all (the chosen mail method set up, or a test transport). */
 export async function helpdeskMailReady(): Promise<boolean> {
   if (testTransport) return true;
-  return smtpConfigured(await getSmtpConfig());
+  return mailConfigured();
 }
 
 /** A From with the helpdesk's display name over the configured address. */
@@ -346,7 +333,7 @@ async function sendTestMail(
   }
 }
 
-const NO_MAIL = "Outgoing mail isn't set up yet. Add your mail server in Settings, Notifications, Email first.";
+const NO_MAIL = "Outgoing mail isn't set up yet. Set it up in Settings, Notifications, Email first.";
 
 /**
  * The Email settings page's "Send test" for one help address: a short mail

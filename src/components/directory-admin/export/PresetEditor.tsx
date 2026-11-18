@@ -575,7 +575,7 @@ function ScheduleCard({ m }: { m: PresetEditorModel }) {
     >
       {!m.smtpConfigured && (
         <div className="notice-warn mb-3 rounded-lg border px-3 py-2 text-sm">
-          SMTP is not set up (<SettingsLink href="/admin/notifications/email" />); the schedule is kept but nothing is sent until it is.
+          Email is not set up (<SettingsLink href="/admin/notifications/email" />); the schedule is kept but nothing is sent until it is.
         </div>
       )}
       <div className="grid gap-3 @sm:grid-cols-2 @2xl:grid-cols-4">

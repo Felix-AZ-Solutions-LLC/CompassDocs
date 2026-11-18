@@ -8,7 +8,7 @@
 import "server-only";
 import { type DocComment } from "./db";
 import { notify } from "./notifications";
-import { getSmtpConfig, smtpConfigured } from "./smtp-config";
+import { mailConfigured } from "./mail-config";
 import { sendMail } from "./mailer";
 import { renderEmail } from "./email-templates";
 
@@ -65,7 +65,7 @@ export async function notifyMentions(input: {
   const excerpt =
     input.comment.body.length > 500 ? input.comment.body.slice(0, 500) + "…" : input.comment.body;
 
-  const mailReady = smtpConfigured(await getSmtpConfig());
+  const mailReady = await mailConfigured();
 
   // Same message for every target, so render the template once.
   let mail: { subject: string; text: string; html: string } | null = null;

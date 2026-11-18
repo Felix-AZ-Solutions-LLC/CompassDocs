@@ -4,7 +4,7 @@ import { listFields } from "@/lib/directory";
 import { listExportPresets } from "@/lib/directory-export-config";
 import { listMarkers } from "@/lib/directory-markers";
 import { getExportRunLog } from "@/lib/directory-export-schedule";
-import { getSmtpConfig, smtpConfigured } from "@/lib/smtp-config";
+import { mailConfigured } from "@/lib/mail-config";
 import { DirectoryExportPanel } from "@/components/directory-admin/DirectoryExportPanel";
 
 import { settingsMetadata } from "@/lib/settings-sections";
@@ -18,7 +18,7 @@ export default async function DirectoryExportPage() {
   const markers = await listMarkers(fields);
   const [presets, smtp, runLog, domain] = await Promise.all([
     listExportPresets(fields, markers),
-    getSmtpConfig(),
+    mailConfigured(),
     getExportRunLog(),
     getSetting("custom_domain"),
   ]);
@@ -31,7 +31,7 @@ export default async function DirectoryExportPage() {
       fields={fields}
       initialPresets={presets}
       initialMarkers={markers}
-      smtpConfigured={smtpConfigured(smtp)}
+      smtpConfigured={smtp}
       runLog={runLog}
       linkOrigin={linkOrigin}
     />

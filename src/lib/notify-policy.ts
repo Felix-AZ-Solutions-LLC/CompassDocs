@@ -604,9 +604,9 @@ export async function sendNotificationDigests(opts: DigestRunOptions = {}): Prom
     let mailer: DigestMailer | null;
     if (opts.mailer !== undefined) mailer = opts.mailer;
     else {
-      const { getSmtpConfig, smtpConfigured } = await import("./smtp-config");
+      const { mailConfigured } = await import("./mail-config");
       const { sendMail } = await import("./mailer");
-      mailer = smtpConfigured(await getSmtpConfig()) ? sendMail : null;
+      mailer = (await mailConfigured()) ? sendMail : null;
     }
     if (!mailer) return result;
     const scoped = opts.userIds ? "AND user_id = ANY($1)" : "";

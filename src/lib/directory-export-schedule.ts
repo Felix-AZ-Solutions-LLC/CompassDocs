@@ -14,7 +14,7 @@ import { listFields, listPeople } from "./directory";
 import { listExportPresets } from "./directory-export-config";
 import { describeSchedule, isExportDue } from "./directory-export-schedule-rules";
 import { renderExportFile } from "./directory-export-run";
-import { getSmtpConfig, smtpConfigured } from "./smtp-config";
+import { mailConfigured } from "./mail-config";
 import { sendMail } from "./mailer";
 import { getAppSettings } from "./settings-store";
 
@@ -47,7 +47,7 @@ export async function runScheduledDirectoryExports(now: Date = new Date()): Prom
     const got = await client.query("SELECT pg_try_advisory_lock($1) AS ok", [ADVISORY_LOCK]);
     if (!got.rows[0].ok) return sent;
     try {
-      const smtp = await getSmtpConfig();
+      const mailReady = await mailConfigured();
       const [fields, people, settings, domain] = await Promise.all([listFields(), listPeople(), getAppSettings(), getSetting("custom_domain")]);
       const company = settings.company_name || "CompassDocs";
       const origin = domain?.trim() ? `https://${domain.trim()}` : "";
@@ -55,7 +55,7 @@ export async function runScheduledDirectoryExports(now: Date = new Date()): Prom
         let ok = true;
         let detail = "";
         try {
-          if (!smtpConfigured(smtp)) throw new Error("SMTP is not configured (Settings → Notifications).");
+          if (!mailReady) throw new Error("Email is not set up (Settings → Notifications → Email).");
           const file = await renderExportFile({ preset, format: preset.schedule.format, people, fields });
           const tmp = path.join(os.tmpdir(), `compassdocs-export-${preset.id}-${Date.now()}-${file.filename}`);
           await fs.writeFile(tmp, file.body);

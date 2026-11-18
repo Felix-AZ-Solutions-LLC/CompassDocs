@@ -18,7 +18,7 @@ import { notify } from "@/lib/notifications";
 import { mailOrigin } from "./workspace-origin";
 import { renderEmail } from "@/lib/email-templates";
 import { sendMail } from "@/lib/mailer";
-import { getSmtpConfig, smtpConfigured } from "@/lib/smtp-config";
+import { mailConfigured } from "@/lib/mail-config";
 import { getAppSettings } from "@/lib/settings-store";
 import { featureEnabled } from "@/lib/ee";
 import { formatDate } from "@/lib/format";
@@ -227,8 +227,7 @@ export async function notifyTrainingAssigned(input: {
     actorName: input.assignerName,
   });
 
-  const smtp = await getSmtpConfig();
-  if (!smtpConfigured(smtp)) return;
+  if (!(await mailConfigured())) return;
   const users = (await listUsers()).filter(
     (u) => input.userIds.includes(u.id) && u.email && u.status === "active"
   );
@@ -277,8 +276,7 @@ export async function remindDueTraining(): Promise<void> {
     });
   }
 
-  const smtp = await getSmtpConfig();
-  if (!smtpConfigured(smtp)) return;
+  if (!(await mailConfigured())) return;
   const { emailGate } = await import("@/lib/notify-policy");
   const gate = await emailGate(due.map((r) => r.user_id), "training_due");
   for (const r of due) {
@@ -331,8 +329,7 @@ export async function remindAssignmentsNow(
     });
   }
 
-  const smtp = await getSmtpConfig();
-  if (smtpConfigured(smtp)) {
+  if (await mailConfigured()) {
     const { emailGate } = await import("@/lib/notify-policy");
     const gate = await emailGate(rows.map((r) => r.user_id), "training_due");
     const origin = await mailOrigin();
@@ -471,8 +468,7 @@ export async function monthlyTrainingEvidence(): Promise<void> {
 
   const report = await getTrainingReportSettings();
   if (!report.enabled || !report.user_ids.length) return;
-  const smtp = await getSmtpConfig();
-  if (!smtpConfigured(smtp)) return;
+  if (!(await mailConfigured())) return;
 
   const settings = await getAppSettings();
   const origin = await mailOrigin();

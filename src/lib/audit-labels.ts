@@ -577,6 +577,12 @@ export const AUDIT_LABELS: Record<string, string> = {
   "domain.pending_discarded": "Discarded a waiting custom domain",
   "domain.fallback_removed": "Removed a fallback address",
   "settings.smtp": "Updated email delivery settings",
+  // 1.20.31: the workspace's email through Microsoft 365 (lib/mail-config)
+  "settings.mail_method": "Changed how email is sent",
+  "settings.mail_m365": "Updated the Microsoft 365 email settings",
+  "settings.mail_m365_secret": "Replaced the Microsoft 365 email client secret",
+  "settings.mail_m365_auto_setup": "Set up Microsoft 365 email with Microsoft",
+  "settings.mail_test": "Sent a test email",
   "settings.public_site": "Updated public site settings",
   "settings.sso": "Updated SSO settings",
   "settings.sign_in_security": "Updated sign-in security",

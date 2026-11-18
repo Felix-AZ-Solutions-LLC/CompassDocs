@@ -243,8 +243,8 @@ export function AnnouncementsAdmin({
               )}
               {!smtpReady && (
                 <p className="notice-warn rounded-lg border px-3 py-2 text-xs">
-                  Email options need SMTP — the two email deliveries above stay disabled until it is configured.{" "}
-                  <Link href="/admin/notifications" className="font-medium underline">Set up SMTP</Link>
+                  Email isn't set up yet — the two email deliveries above stay disabled until it is.{" "}
+                  <Link href="/admin/notifications/email" className="font-medium underline">Set up email</Link>
                 </p>
               )}
               <label className={`flex items-center gap-2 pt-1 ${webhookCount > 0 ? "cursor-pointer" : "opacity-50"}`}>

@@ -8,6 +8,9 @@ import { join } from "path";
 import { pool } from "./db";
 import { uploadDir } from "./uploads";
 import { getSmtpConfig, smtpConfigured } from "./smtp-config";
+import { getM365SendConfig, getMailMethod, m365SendConfigured } from "./mail-config";
+import { probeM365Send } from "./mail-m365";
+import { secretExpiry, secretExpirySentence } from "./mail-m365-shared";
 import { aiAvailable, getAiProvider } from "./ai-config";
 import { getEmbeddingsConfig, vectorAvailable } from "./embeddings";
 import { licenseState } from "./license";
@@ -30,6 +33,7 @@ export interface DiagnosticCheck {
 
 const FIX = {
   smtp: { href: "/admin/notifications/email", label: "Set up SMTP" },
+  m365: { href: "/admin/notifications/email", label: "Set up Microsoft 365" },
   ai: { href: "/admin/ai", label: "Connect a provider" },
   semantic: { href: "/admin/ai", label: "Semantic search settings" },
   license: { href: "/admin/license", label: "Open License" },
@@ -75,8 +79,18 @@ async function checkUploads(): Promise<DiagnosticCheck> {
   }
 }
 
-async function checkSmtp(): Promise<DiagnosticCheck> {
+/**
+ * Email, by the chosen method (1.20.31): "Email (SMTP)" as before, or
+ * "Email (Microsoft 365)", which is checked for real: the app signs in and
+ * Graph is asked whether it may send as the mailbox, sending nothing
+ * (lib/mail-m365 probeM365Send). A client secret that ends within 30 days
+ * is a warning; one that has ended, a failure.
+ */
+async function checkMail(): Promise<DiagnosticCheck> {
+  let method: "smtp" | "m365" = "smtp";
   try {
+    method = await getMailMethod();
+    if (method === "m365") return await checkM365Mail();
     const cfg = await getSmtpConfig();
     if (!smtpConfigured(cfg)) {
       return {
@@ -96,12 +110,27 @@ async function checkSmtp(): Promise<DiagnosticCheck> {
   } catch (e) {
     return {
       key: "smtp",
-      label: "Email (SMTP)",
+      label: method === "m365" ? "Email (Microsoft 365)" : "Email (SMTP)",
       status: "fail",
       detail: e instanceof Error ? e.message : String(e),
-      fix: FIX.smtp,
+      fix: method === "m365" ? FIX.m365 : FIX.smtp,
     };
   }
+}
+
+async function checkM365Mail(): Promise<DiagnosticCheck> {
+  const label = "Email (Microsoft 365)";
+  const cfg = await getM365SendConfig();
+  if (!m365SendConfigured(cfg)) {
+    return { key: "smtp", label, status: "warn", detail: "Not set up — subscriptions, reminders, and newsletters can't send.", fix: FIX.m365 };
+  }
+  const expiry = secretExpiry(cfg.secretExpires);
+  const probe = await probeM365Send({ cfg });
+  if (!probe.ok) return { key: "smtp", label, status: "fail", detail: probe.message, fix: FIX.m365 };
+  if (expiry.state === "expired" || expiry.state === "soon") {
+    return { key: "smtp", label, status: expiry.state === "expired" ? "fail" : "warn", detail: secretExpirySentence(cfg.secretExpires), fix: FIX.m365 };
+  }
+  return { key: "smtp", label, status: "pass", detail: `Signed in and allowed to send as ${cfg.mailbox}. Nothing was sent to check it.` };
 }
 
 async function checkAi(): Promise<DiagnosticCheck> {
@@ -380,7 +409,7 @@ export async function runDiagnostics(req?: Request): Promise<DiagnosticCheck[]> 
   const checks = await Promise.all([
     checkDatabase(),
     checkUploads(),
-    checkSmtp(),
+    checkMail(),
     checkAi(),
     checkSemantic(),
     checkLicense(),

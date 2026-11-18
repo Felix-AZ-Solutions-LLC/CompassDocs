@@ -20,7 +20,7 @@ import {
   canComment,
   canDelete,
 } from "@/lib/newsletter-access";
-import { getSmtpConfig, smtpConfigured } from "@/lib/smtp-config";
+import { mailConfigured } from "@/lib/mail-config";
 import { listNewsletterFromAddresses } from "@/lib/newsletter";
 import { PageContainer } from "@/components/PageWidth";
 import { NewsletterWorkspace } from "@/components/NewsletterWorkspace";
@@ -56,7 +56,7 @@ export default async function NewsletterDetailPage({
     hasModuleAccess ? listNewsletterComments(n.id) : Promise.resolve([]),
     listGroups(),
     listNewsletterApproverPool(),
-    getSmtpConfig(),
+    mailConfigured(),
     listNewsletterFromAddresses(),
     listNewsletterFiles(n.id),
     spaceScopeFor(user).then((scope) => listSpaces(scope)),
@@ -93,7 +93,7 @@ export default async function NewsletterDetailPage({
         groups={groups.map((g) => ({ id: g.id, name: g.name, member_count: g.member_count }))}
         spaces={spaces.map((s) => ({ id: s.id, name: s.name, icon: s.icon }))}
         approverPool={pool}
-        smtpReady={smtpConfigured(smtp)}
+        smtpReady={smtp}
         fromAddresses={fromAddresses}
         hasModuleAccess={hasModuleAccess}
       />

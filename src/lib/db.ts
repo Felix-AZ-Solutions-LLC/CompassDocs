@@ -5211,6 +5211,10 @@ const SENSITIVE_SETTINGS = new Set([
   // The Duo application's client secret (1.20.5): it signs and verifies every
   // Duo token, so it is sealed like sso_client_secret.
   "duo_client_secret",
+  // 1.20.31: the client secret of the app registration the workspace's
+  // outgoing email signs in with when it goes through Microsoft 365
+  // (lib/mail-config). An Entra client secret, sealed like sso_client_secret.
+  "mail_m365_client_secret",
 ]);
 
 export async function getSetting(key: string): Promise<string | undefined> {

@@ -4,7 +4,7 @@
 
 import "server-only";
 import { listAnnouncementRecipients } from "./db";
-import { getSmtpConfig, smtpConfigured } from "./smtp-config";
+import { mailConfigured } from "./mail-config";
 import { sendMail } from "./mailer";
 import { renderEmail } from "./email-templates";
 
@@ -19,7 +19,7 @@ export async function emailAnnouncement(input: {
   groupIds: number[] | "all";
   origin?: string;
 }): Promise<{ sent: number }> {
-  if (!smtpConfigured(await getSmtpConfig())) return { sent: 0 };
+  if (!(await mailConfigured())) return { sent: 0 };
   // 1.19.0: the workspace policy and each account's choice for
   // "announcement" emails (lib/notify-policy).
   const listed = await listAnnouncementRecipients(input.groupIds);

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { apiGuard, credentialSaveError } from "@/lib/api-auth";
 import { getSmtpConfig, updateSmtpConfig, smtpConfigured } from "@/lib/smtp-config";
-import { sendMail } from "@/lib/mailer";
+import { sendMailWith } from "@/lib/mailer";
+import { MailConfigError, setMailMethod } from "@/lib/mail-config";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import type { SessionUser } from "@/lib/types";
 
@@ -45,14 +46,15 @@ export async function PATCH(req: Request) {
     if (!to.includes("@")) {
       return NextResponse.json({ error: "Enter a recipient address for the test." }, { status: 400 });
     }
+    // 1.20.31: always by SMTP (this is the SMTP settings' test), whichever method is chosen.
     try {
-      await sendMail([to], "CompassDocs test email", "SMTP is configured correctly.");
+      await sendMailWith("smtp", { to: [to], subject: "CompassDocs test email", text: "This test was sent by SMTP. Email from CompassDocs is set up." });
+      await audit({ actor: actorFrom(user), action: "settings.mail_test", targetType: "settings", targetId: "mail", targetLabel: "Email", details: { method: "smtp", ok: true }, ip: ipFrom(req) });
       return NextResponse.json({ ok: true, status: `sent to ${to}` });
     } catch (e) {
-      return NextResponse.json(
-        { ok: false, error: e instanceof Error ? e.message : "Send failed." },
-        { status: 502 }
-      );
+      const error = e instanceof Error ? e.message : "Send failed.";
+      await audit({ actor: actorFrom(user), action: "settings.mail_test", targetType: "settings", targetId: "mail", targetLabel: "Email", details: { method: "smtp", ok: false, error: error.slice(0, 300) }, ip: ipFrom(req) });
+      return NextResponse.json({ ok: false, error }, { status: 502 });
     }
   }
 
@@ -72,5 +74,15 @@ export async function PATCH(req: Request) {
     details: { pass_changed: Boolean(body?.pass) || body?.clear_pass === true },
     ip: ipFrom(req),
   });
-  return NextResponse.json({ ok: true, state: await view() });
+  // 1.20.31: saved from the SMTP panel while Microsoft 365 is chosen: `use` makes SMTP the way mail is sent.
+  let method_changed = false;
+  if (body?.use === true) {
+    try {
+      method_changed = await setMailMethod("smtp", { actor: actorFrom(user), ip: ipFrom(req) });
+    } catch (e) {
+      if (e instanceof MailConfigError) return NextResponse.json({ ok: true, state: await view(), error: e.message, method_changed: false });
+      throw e;
+    }
+  }
+  return NextResponse.json({ ok: true, state: await view(), method_changed });
 }

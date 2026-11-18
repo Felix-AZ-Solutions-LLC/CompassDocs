@@ -4,7 +4,7 @@ import { mailOrigin } from "./workspace-origin";
 import type { TeamPolicyRow, TeamTrainingRow } from "./db";
 import { renderEmail } from "./email-templates";
 import { sendMail } from "./mailer";
-import { getSmtpConfig, smtpConfigured } from "./smtp-config";
+import { mailConfigured } from "./mail-config";
 import { getAppSettings } from "./settings-store";
 import { featureEnabled } from "./ee";
 import { formatDate } from "./format";
@@ -185,7 +185,7 @@ export function policySummaryLines(
 // --- The sweep ---------------------------------------------------------------
 
 async function defaultMailer(): Promise<Mailer | null> {
-  return smtpConfigured(await getSmtpConfig()) ? sendMail : null;
+  return (await mailConfigured()) ? sendMail : null;
 }
 
 /**

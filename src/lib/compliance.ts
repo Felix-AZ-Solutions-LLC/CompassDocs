@@ -1,7 +1,7 @@
 import "server-only";
 import { notify } from "./notifications";
 import { emailGate } from "./notify-policy";
-import { getSmtpConfig, smtpConfigured } from "./smtp-config";
+import { mailConfigured } from "./mail-config";
 import { sendMail } from "./mailer";
 import { renderEmail, HANDBOOK_LINE } from "./email-templates";
 import {
@@ -127,7 +127,7 @@ export const ACK_NOTICE_HEARTBEAT_EVERY = 10;
 const ACK_REQUEST_LOCK_CLASS = 710101;
 
 async function defaultMailer(): Promise<Mailer | null> {
-  return smtpConfigured(await getSmtpConfig()) ? sendMail : null;
+  return (await mailConfigured()) ? sendMail : null;
 }
 
 function errorMessage(e: unknown): string {

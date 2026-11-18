@@ -61,7 +61,7 @@ import type { Mailer } from "@/lib/compliance";
 import { audit } from "@/lib/audit";
 import type { AuditActor } from "@/lib/audit";
 import { featureEnabled } from "@/lib/ee";
-import { getSmtpConfig, smtpConfigured } from "@/lib/smtp-config";
+import { mailConfigured } from "@/lib/mail-config";
 import { sendMail } from "@/lib/mailer";
 import { renderEmail } from "@/lib/email-templates";
 import { formatDate } from "@/lib/format";
@@ -940,7 +940,7 @@ async function activeReportRecipients(ack_report: ComplianceSettings["ack_report
 
 /** The SMTP settings' mailer, or null when SMTP is not configured (nothing can be sent). */
 async function defaultReportMailer(): Promise<Mailer | null> {
-  return smtpConfigured(await getSmtpConfig()) ? sendMail : null;
+  return (await mailConfigured()) ? sendMail : null;
 }
 
 /** What the weekly entry point takes beside `now` (tests inject a mailer; the tick passes nothing). */

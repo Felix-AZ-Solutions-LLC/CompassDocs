@@ -11,7 +11,7 @@ import {
   GOOGLE_DIRECTORY_SCOPES,
 } from "@/lib/directory-google-config";
 import { getSyncSchedule } from "@/lib/directory-schedule";
-import { getSmtpConfig, smtpConfigured } from "@/lib/smtp-config";
+import { mailConfigured } from "@/lib/mail-config";
 import { MicrosoftSyncPanel } from "@/components/directory-admin/MicrosoftSyncPanel";
 import { GoogleDirectoryPanel } from "@/components/GoogleDirectoryPanel";
 import { DirectorySchedulePanel } from "@/components/directory-admin/DirectorySchedulePanel";
@@ -33,7 +33,7 @@ export default async function DirectorySyncPage() {
     getSyncReport("graph"),
     getSyncReport("google"),
     getSyncSchedule(),
-    getSmtpConfig(),
+    mailConfigured(),
   ]);
 
   return (
@@ -78,7 +78,7 @@ export default async function DirectorySyncPage() {
           last_sync: gsync,
         }}
       />
-      {bundled && enabled && <DirectorySchedulePanel initial={schedule} smtpConfigured={smtpConfigured(smtp)} />}
+      {bundled && enabled && <DirectorySchedulePanel initial={schedule} smtpConfigured={smtp} />}
       {googleReport?.unresolved?.length ? (
         <div className="notice-warn rounded-lg border p-3 text-xs">
           <p className="font-medium">Google Workspace: some people references didn&rsquo;t match anyone.</p>

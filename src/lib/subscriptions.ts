@@ -6,7 +6,7 @@
 import "server-only";
 import { listSubscriberIds } from "./db";
 import { notify } from "./notifications";
-import { getSmtpConfig, smtpConfigured } from "./smtp-config";
+import { mailConfigured } from "./mail-config";
 import { sendMail } from "./mailer";
 import { renderEmail } from "./email-templates";
 import { keepWhoFind } from "./handbook-visibility";
@@ -46,7 +46,7 @@ export async function notifySpaceSubscribers(ev: SubscriberEvent): Promise<void>
   }
 
   try {
-    if (!smtpConfigured(await getSmtpConfig())) return;
+    if (!(await mailConfigured())) return;
     // Handbooks 1.18.0 (H6): as above, for the email. 1.19.0: who wants the
     // email is lib/notify-policy's answer (the workspace policy and the
     // person's choice, which before 1.19 was the master switch), so the

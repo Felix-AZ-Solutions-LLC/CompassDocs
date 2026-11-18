@@ -11,7 +11,8 @@ import { previewComposition } from "@/lib/email-parts";
 import { mailOrigin } from "@/lib/workspace-origin";
 import type { PreviewInput } from "@/lib/email-parts";
 import { sendMail } from "@/lib/mailer";
-import { getSmtpConfig, smtpConfigured } from "@/lib/smtp-config";
+import { mailConfigured } from "@/lib/mail-config";
+import { MAIL_NOT_SET_UP } from "@/lib/mail-m365-shared";
 import { logEvent } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
@@ -32,8 +33,8 @@ export async function POST(req: Request) {
   if (!/^[^\s@<>]+@[^\s@<>]+$/.test(to)) {
     return NextResponse.json({ error: "Your account has no email address. Add one under Account → Profile." }, { status: 400 });
   }
-  if (!smtpConfigured(await getSmtpConfig())) {
-    return NextResponse.json({ error: "Email isn't set up yet. Add the SMTP server under Settings → Notifications → Email." }, { status: 409 });
+  if (!(await mailConfigured())) {
+    return NextResponse.json({ error: MAIL_NOT_SET_UP }, { status: 409 });
   }
   const out = await previewComposition(body as PreviewInput, (await mailOrigin()));
   if ("error" in out) return NextResponse.json({ error: out.error }, { status: out.status });
