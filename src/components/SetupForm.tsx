@@ -70,7 +70,9 @@ export function SetupForm({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Setup failed.");
-      router.push("/");
+      // 1.20.29: a domain that didn't pass its check waits; Settings →
+      // Domain & HTTPS says why, with Check again and Use it anyway.
+      router.push(data?.domain?.outcome === "pending" ? "/admin/domain" : "/");
       router.refresh();
     } catch (e: any) {
       setError(e.message);
@@ -202,7 +204,8 @@ export function SetupForm({
           <p className="mb-1 text-sm font-medium text-slate-700">Domain &amp; HTTPS (optional)</p>
           <p className="mb-3 text-xs text-slate-500">
             Point a DNS record at this server, then set it up here. You can also do this later
-            under Settings → Domain &amp; HTTPS.
+            under Settings → Domain &amp; HTTPS. CompassDocs checks that the name reaches this
+            server before switching to it; until then this address keeps working.
           </p>
           <div className="space-y-3">
             <Field label="Domain">

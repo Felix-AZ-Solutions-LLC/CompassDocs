@@ -1,27 +1,61 @@
 "use client";
 
 import { useState } from "react";
-import { buttonClass } from "@/components/Button";
+import { Button, iconButtonClass } from "@/components/Button";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toasts";
 import { SaveRow } from "@/components/SaveRow";
+import { confirmDialog } from "@/components/Dialog";
+import { RelativeTime } from "@/components/RelativeTime";
+import { useFormatDate } from "@/components/SettingsProvider";
 import { useLeaveGuard, useUnsavedChanges } from "@/lib/use-unsaved";
 import type { TlsMode, SecureCookieMode } from "@/lib/settings";
 import { Field, TextInput, Textarea } from "@/components/form";
-import { Check } from "lucide-react";
+import { Check, Clock, RefreshCw, X } from "lucide-react";
 
 interface ProxyStatus {
   managed: boolean;
   reachable: boolean;
 }
 
-interface DomainState {
+/** lib/domain-check DomainCheckResult, as the page reads it. */
+interface DomainCheck {
+  ok: boolean;
+  code: string;
+  domain: string;
+  addresses: string[];
+  cname: string | null;
+  message: string;
+  checked_at: string;
+}
+
+/** lib/domain-flow PendingDomain. */
+interface PendingDomain {
+  domain: string;
+  tls_mode: TlsMode;
+  tls_email: string;
+  requested_at: string;
+  requested_by: { id: number | null; name: string };
+  auto_until: string;
+  next_check_at: string;
+  attempts: number;
+  last_check: DomainCheck;
+}
+
+interface FallbackHost {
+  host: string;
+  source: "env" | "remembered";
+}
+
+export interface DomainState {
   custom_domain: string;
   tls_mode: TlsMode;
   tls_email: string;
   secure_cookies: SecureCookieMode;
   has_custom_cert: boolean;
   proxy: ProxyStatus;
+  pending: PendingDomain | null;
+  fallbacks: FallbackHost[];
 }
 
 const TLS_OPTIONS: { value: TlsMode; label: string; hint: string }[] = [
@@ -67,9 +101,17 @@ const COOKIE_OPTIONS: { value: SecureCookieMode; label: string; hint: string }[]
 
 export function DomainSettings({ initial }: { initial: DomainState }) {
   const router = useRouter();
-  const [domain, setDomainRaw] = useState(initial.custom_domain);
-  const [mode, setModeRaw] = useState<TlsMode>(initial.tls_mode);
-  const [email, setEmailRaw] = useState(initial.tls_email);
+  const fmt = useFormatDate();
+  // A domain waiting for its check is what the admin asked for: the form
+  // shows it, and the card under the field says why it isn't live yet.
+  const [domain, setDomainRaw] = useState(initial.pending?.domain ?? initial.custom_domain);
+  const [mode, setModeRaw] = useState<TlsMode>(initial.pending?.tls_mode ?? initial.tls_mode);
+  const [email, setEmailRaw] = useState(initial.pending?.tls_email ?? initial.tls_email);
+  const [live, setLive] = useState(initial.custom_domain);
+  const [pending, setPending] = useState<PendingDomain | null>(initial.pending);
+  const [fallbacks, setFallbacks] = useState<FallbackHost[]>(initial.fallbacks);
+  const [checking, setChecking] = useState(false);
+  const [forcing, setForcing] = useState(false);
   const [cert, setCertRaw] = useState("");
   const [key, setKeyRaw] = useState("");
   const [hasCert, setHasCert] = useState(initial.has_custom_cert);
@@ -91,7 +133,20 @@ export function DomainSettings({ initial }: { initial: DomainState }) {
 
   const { managed, reachable } = initial.proxy;
 
-  async function save() {
+  /** Take the server's state: what is live, what waits, the fallbacks. */
+  function takeState(state: DomainState | undefined) {
+    if (!state) return;
+    setLive(state.custom_domain);
+    setPending(state.pending);
+    setFallbacks(state.fallbacks ?? []);
+    setDomainRaw(state.pending?.domain ?? state.custom_domain);
+    setModeRaw(state.pending?.tls_mode ?? state.tls_mode);
+    setEmailRaw(state.pending?.tls_email ?? state.tls_email);
+    setHasCert(state.has_custom_cert);
+    if (state.secure_cookies) setSecureCookiesRaw(state.secure_cookies);
+  }
+
+  async function save(force = false) {
     setSaving(true);
     setWarning("");
     const res = await fetch("/api/admin/domain", {
@@ -103,6 +158,7 @@ export function DomainSettings({ initial }: { initial: DomainState }) {
         tls_email: email,
         secure_cookies: secureCookies,
         ...(cert || key ? { tls_cert: cert, tls_key: key } : {}),
+        ...(force ? { force: true } : {}),
       }),
     });
     setSaving(false);
@@ -118,17 +174,120 @@ export function DomainSettings({ initial }: { initial: DomainState }) {
       setKeyRaw("");
       setHasCert(true);
     }
-    if (data?.state) {
-      setDomainRaw(data.state.custom_domain);
-      setModeRaw(data.state.tls_mode);
-      setEmailRaw(data.state.tls_email);
-      setHasCert(data.state.has_custom_cert);
-      if (data.state.secure_cookies) setSecureCookiesRaw(data.state.secure_cookies);
+    takeState(data?.state);
+    if (data?.outcome === "pending") {
+      toast("error", `${data.state?.pending?.domain ?? "The domain"} isn't switched on yet. The reason is under the domain.`);
+    } else if (!data.applied && data.proxyError) {
+      setWarning(data.proxyError);
+    } else if (data?.outcome === "applied") {
+      toast("ok", `${data.state?.custom_domain} reaches this server. Domain settings saved and applied.`);
+    } else if (data?.outcome === "forced") {
+      toast("ok", `Switched to ${data.state?.custom_domain} without the check.`);
+    } else {
+      toast("ok", "Domain settings saved.");
     }
-    if (!data.applied && data.proxyError) setWarning(data.proxyError);
-    else toast("ok", "Domain settings saved.");
     router.refresh();
   }
+
+  async function checkAgain() {
+    setChecking(true);
+    const res = await fetch("/api/admin/domain/pending", { method: "POST" });
+    setChecking(false);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast("error", data?.error || "Couldn't check the domain again.");
+      return;
+    }
+    takeState(data?.state);
+    if (data.status === "applied") {
+      if (data.proxyError) setWarning(data.proxyError);
+      toast("ok", `${data.check?.domain} reaches this server and is live now.`);
+    } else {
+      toast("error", data.check?.message || "The domain still doesn't reach this server.");
+    }
+    router.refresh();
+  }
+
+  async function useAnyway() {
+    if (!pending) return;
+    const current = live || "the address you're using now";
+    const ok = await confirmDialog({
+      title: `Use ${pending.domain} without the check?`,
+      body: (
+        <>
+          <p>
+            The check couldn&rsquo;t confirm that {pending.domain} reaches this server. If it
+            doesn&rsquo;t, {pending.domain} won&rsquo;t work and the proxy stops answering on{" "}
+            {current}
+            {fallbacks.length ? <> (it keeps answering on {fallbacks.map((f) => f.host).join(", ")})</> : null}.
+          </p>
+          <p className="mt-2">
+            Use it only when something the check can&rsquo;t see is in front of this server, such as
+            a load balancer or another proxy, or your DNS answers differently inside your network.
+            The switch is recorded in the audit log.
+          </p>
+        </>
+      ),
+      confirmLabel: "Use it anyway",
+      danger: true,
+    });
+    if (ok !== true) return;
+    setForcing(true);
+    const res = await fetch("/api/admin/domain", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        custom_domain: pending.domain,
+        tls_mode: pending.tls_mode,
+        tls_email: pending.tls_email,
+        force: true,
+      }),
+    });
+    setForcing(false);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast("error", data?.error || "Couldn't switch to the domain.");
+      return;
+    }
+    markClean();
+    takeState(data?.state);
+    if (!data.applied && data.proxyError) setWarning(data.proxyError);
+    else toast("ok", `Switched to ${data.state?.custom_domain} without the check.`);
+    router.refresh();
+  }
+
+  async function keepCurrent() {
+    if (!pending) return;
+    const res = await fetch("/api/admin/domain/pending", { method: "DELETE" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast("error", data?.error || "Couldn't discard the waiting domain.");
+      return;
+    }
+    markClean();
+    takeState(data?.state);
+    toast("ok", `Kept ${data.state?.custom_domain || "the current address"}. ${pending.domain} was discarded.`);
+    router.refresh();
+  }
+
+  async function removeFallback(host: string) {
+    const res = await fetch("/api/admin/domain/fallback", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ host }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast("error", data?.error || `Couldn't remove ${host}.`);
+      return;
+    }
+    setFallbacks(data?.state?.fallbacks ?? []);
+    if (data.proxyError) setWarning(data.proxyError);
+    else toast("ok", `${host} no longer reaches CompassDocs.`);
+    router.refresh();
+  }
+
+  const autoChecking = pending ? Date.parse(pending.auto_until) > Date.now() : false;
 
   return (
     <div className="space-y-6">
@@ -166,6 +325,13 @@ export function DomainSettings({ initial }: { initial: DomainState }) {
         <p className="mb-3 text-sm text-slate-500">
           Point an A/AAAA DNS record for this hostname at your server, then enter it here. Leave
           blank to serve on any hostname over plain HTTP.
+          {managed && (
+            <>
+              {" "}
+              Before switching, CompassDocs checks that the name reaches this server; until it
+              does, it keeps serving the current address.
+            </>
+          )}
         </p>
         <div>
           <Field label="Domain" size="md">
@@ -179,6 +345,82 @@ export function DomainSettings({ initial }: { initial: DomainState }) {
             />
           </Field>
         </div>
+
+        {/* 1.20.29: the domain waiting for its check, with why and the ways on. */}
+        {pending && (
+          <div className="notice-warn mt-4 rounded-lg border p-3 text-sm" data-testid="domain-pending">
+            <p className="flex items-center gap-1.5 font-semibold">
+              <Clock className="h-4 w-4 shrink-0" aria-hidden />
+              {pending.domain} isn&rsquo;t switched on yet
+            </p>
+            <p className="mt-1" role="status">
+              {pending.last_check.message}
+            </p>
+            <p className="mt-2 text-xs">
+              Still serving {live || "every address this server is reached on"}. DNS answer:{" "}
+              {pending.last_check.addresses.length ? pending.last_check.addresses.join(", ") : "none"}
+              {pending.last_check.cname ? ` (CNAME ${pending.last_check.cname})` : ""}. Last checked{" "}
+              <RelativeTime value={pending.last_check.checked_at} />.{" "}
+              {autoChecking ? (
+                <>
+                  Checking again every 5 minutes until {fmt.dateTime(pending.auto_until)}; it
+                  switches on by itself when it passes, and administrators get a notice.
+                </>
+              ) : (
+                <>Automatic checks stopped after 24 hours. Check again to start them for another 24 hours.</>
+              )}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button variant="secondary" size="sm" busy={checking} icon={<RefreshCw />} onClick={checkAgain}>
+                Check again
+              </Button>
+              <Button variant="secondary" size="sm" busy={forcing} onClick={useAnyway}>
+                Use it anyway
+              </Button>
+              <Button variant="ghost" size="sm" onClick={keepCurrent}>
+                Keep {live || "the current address"}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* 1.20.29: the way back in once a custom domain is live. */}
+        {managed && live && fallbacks.length > 0 && (
+          <div className="mt-4 text-sm" data-testid="domain-fallbacks">
+            <p className="text-slate-700">Also reachable at</p>
+            <ul className="mt-1 space-y-1">
+              {fallbacks.map((f) => (
+                <li key={f.host} className="flex min-w-0 items-center gap-2">
+                  <a
+                    className="link truncate font-mono text-xs"
+                    href={`${mode === "off" ? "http" : "https"}://${f.host}/`}
+                  >
+                    {f.host}
+                  </a>
+                  {f.source === "env" ? (
+                    <span className="shrink-0 text-xs text-slate-500">from COMPASSDOCS_FALLBACK_HOSTS</span>
+                  ) : (
+                    <>
+                      <span className="shrink-0 text-xs text-slate-500">the address a domain was saved from</span>
+                      <button
+                        type="button"
+                        className={iconButtonClass("quiet", "sm")}
+                        data-tt="Remove"
+                        aria-label={`Remove ${f.host} as a fallback address`}
+                        onClick={() => removeFallback(f.host)}
+                      >
+                        <X />
+                      </button>
+                    </>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-1 text-xs text-slate-500">
+              A way back in if the domain stops working. Links in email always use {live}.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* TLS mode */}
@@ -297,7 +539,7 @@ export function DomainSettings({ initial }: { initial: DomainState }) {
       </div>
 
       {/* Re-apply is a real use (the proxy lost its config), so pristine stays enabled. */}
-      <SaveRow dirty={dirty} busy={saving} onSave={save} label="Save & apply" allowPristine />
+      <SaveRow dirty={dirty} busy={saving} onSave={() => save()} label="Save & apply" allowPristine />
       {warning && (
         <div className="notice-warn rounded-lg border px-3 py-2 text-sm">
           Settings saved, but the proxy didn&rsquo;t apply them: {warning}
