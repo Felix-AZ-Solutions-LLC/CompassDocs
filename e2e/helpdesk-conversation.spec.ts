@@ -244,7 +244,8 @@ test.describe("ticket conversation 1.20.28 (licensed)", () => {
     await see(item(page, "n1")).toContainText("Internal note");
     await shot(page, "conversation-newest-open-1440");
 
-    // A link to a folded message opens the history and shows it.
+    // A link to a folded message opens the history and shows it (a fresh load: a hash change alone reloads nothing).
+    await page.goto("about:blank");
     await page.goto(`/desk/tickets/${number}#message-${ids.r1}`);
     await see(item(page, "r1")).toBeVisible({ timeout: 120_000 });
     await see(item(page, "r1")).toBeInViewport();

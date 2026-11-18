@@ -175,6 +175,10 @@ describe("activity lines (pure)", () => {
     assert.equal(plainChangeText(`renamed the ticket from "${mdInline(weird)}"`), `renamed the ticket from "${weird}"`);
     // A body that doesn't start with its author (an old "Someone" line) is shown whole.
     assert.equal(splitChangeLine(change("", "x")), null);
+    // An automation's status line (kind system) carries the rule's name as typed.
+    const st = msg({ kind: "system", author_name: "Automation: Rule: one", via: "system", body: "Automation: Rule: one changed the status from New to Open" });
+    assert.deepEqual(splitChangeLine(st), { actor: "Rule: one", automation: true, rest: "changed the status from New to Open" });
+    assert.equal(activityIcon(st), "bot");
   });
 
   test("each kind of change has its icon; an automation's is the bot", () => {

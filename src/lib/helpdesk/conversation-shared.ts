@@ -63,7 +63,8 @@ export function automationRule(authorName: string | null | undefined): string | 
  */
 export function splitChangeLine(m: Line): { actor: string; automation: boolean; rest: string } | null {
   const name = String(m.author_name ?? "");
-  const prefix = mdInline(name);
+  // A status line (kind system) carries the name as typed, as the requester's views show it; a change line escapes it.
+  const prefix = m.kind === "system" ? name : mdInline(name);
   if (!prefix || !m.body.startsWith(`${prefix} `)) return null;
   const rule = automationRule(name);
   return { actor: rule ?? name, automation: rule !== null, rest: m.body.slice(prefix.length + 1) };

@@ -20,7 +20,7 @@
 // newest first with older history folded behind "Show N earlier messages".
 // Every other caller keeps oldest first, unfolded.
 
-import { Component, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Component, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   Bot,
   CalendarCheck,
@@ -161,9 +161,11 @@ export function Conversation({
   // fold revealed (the button itself goes away).
   useEffect(() => {
     if (linked.current !== null) {
-      const id = linked.current;
+      // Not on screen yet (the fold opens in the next render): this runs again then.
+      const el = document.getElementById(messageAnchor(linked.current));
+      if (!el || !el.getClientRects().length) return;
       linked.current = null;
-      requestAnimationFrame(() => document.getElementById(messageAnchor(id))?.scrollIntoView({ block: "start" }));
+      requestAnimationFrame(() => el.scrollIntoView({ block: "start" }));
       return;
     }
     if (!expanded || firstRevealed.current === null) return;
@@ -174,8 +176,8 @@ export function Conversation({
 
   const item = (m: HdMessage, offscreen = false) => {
     // Folded rows are in the page for print (which is full and oldest first) but not on screen.
-    const extra = offscreen ? "hidden print:flex" : "";
-    if (isActivityLine(m) && !isShareLine(m)) return <ActivityLine key={m.id} m={m} origin={origins?.[m.id]} className={extra} />;
+    const display = offscreen ? "hidden print:flex" : "flex";
+    if (isActivityLine(m) && !isShareLine(m)) return <ActivityLine key={m.id} m={m} origin={origins?.[m.id]} display={display} />;
     // 1.19.4 (area C6): "Ana shared this with Sam", an internal line agents alone see.
     if (isShareLine(m)) {
       return (
@@ -183,7 +185,7 @@ export function Conversation({
           key={m.id}
           id={messageAnchor(m.id)}
           tabIndex={-1}
-          className={`flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-slate-200 bg-surface px-3 py-2 text-xs text-slate-600 outline-none ${extra}`}
+          className={`${display} flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-slate-200 bg-surface px-3 py-2 text-xs text-slate-600 outline-none`}
           data-testid="share-line"
         >
           <Forward className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden />
@@ -290,16 +292,17 @@ function scrollParent(el: HTMLElement): HTMLElement | null {
  * 1.20.28: one muted line (STYLEGUIDE §Helpdesk: the desk, "Activity lines"): a status or CC line, or a field change
  * someone or an automation made. An automation's names its rule in bold after a bot, without "Automation:".
  */
-function ActivityLine({ m, origin, className = "" }: { m: HdMessage; origin?: number; className?: string }) {
+function ActivityLine({ m, origin, display = "flex" }: { m: HdMessage; origin?: number; display?: string }) {
   const kind = activityIcon(m);
   const Icon = ACTIVITY_ICON[kind];
   const change = isChangeLine(m);
-  const split = change ? splitChangeLine(m) : null;
+  // A status line an automation wrote ("Automation: Triage changed the status…") names its rule like a change line.
+  const split = change ? splitChangeLine(m) : automationRule(m.author_name) ? splitChangeLine(m) : null;
   return (
     <li
       id={messageAnchor(m.id)}
       tabIndex={-1}
-      className={`flex items-start gap-2 px-1 text-xs text-slate-500 outline-none ${className}`}
+      className={`${display} items-start gap-2 px-1 text-xs text-slate-500 outline-none`}
       data-testid="activity-line"
       data-activity={kind}
     >
@@ -311,7 +314,7 @@ function ActivityLine({ m, origin, className = "" }: { m: HdMessage; origin?: nu
             <span className={split.automation ? "font-semibold text-slate-700" : "font-medium text-slate-700"} data-testid="activity-actor">
               {split.actor}
             </span>{" "}
-            {plainChangeText(split.rest)}
+            {change ? plainChangeText(split.rest) : split.rest}
           </>
         ) : change ? (
           plainChangeText(m.body)
