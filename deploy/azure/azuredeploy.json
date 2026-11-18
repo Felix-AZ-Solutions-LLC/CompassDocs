@@ -191,6 +191,7 @@
         "managedDisk": { "storageAccountType": "[parameters('dataDiskType')]" }
       }
     ],
+    "fallbackHost": "[if(and(variables('usePublicIp'), not(empty(parameters('publicIpDns')))), toLower(concat(parameters('publicIpDns'), '.', parameters('location'), '.cloudapp.azure.com')), '')]",
     "webPorts": "[if(parameters('enableTls'), createArray('80', '443'), createArray('80'))]",
     "installScriptLines": [
       "#!/bin/bash",
@@ -205,8 +206,20 @@
       "    parted -s \"$DISK\" mklabel gpt mkpart primary ext4 0% 100%",
       "    sleep 2 && mkfs.ext4 -q \"${DISK}-part1\"",
       "  fi",
-      "  mkdir -p /var/lib/docker && mount \"${DISK}-part1\" /var/lib/docker",
-      "  echo \"$(blkid -s UUID -o value ${DISK}-part1) /var/lib/docker ext4 defaults,nofail 0 2\" >> /etc/fstab",
+      "  mkdir -p /var/lib/docker",
+      "  # fstab needs UUID=<uuid>: a bare UUID never mounts at boot (nofail hides",
+      "  # the error) and Docker starts on an empty /var/lib/docker. Fix a bare one,",
+      "  # add the line only when there is none, then mount through fstab itself.",
+      "  DISK_UUID=\"$(blkid -s UUID -o value \"${DISK}-part1\")\"",
+      "  sed -i -E 's#^([0-9A-Fa-f-]{36})([[:space:]]+/var/lib/docker[[:space:]])#UUID=\\1\\2#' /etc/fstab",
+      "  if ! awk '$2 == \"/var/lib/docker\" { found = 1 } END { exit !found }' /etc/fstab; then",
+      "    echo \"UUID=${DISK_UUID} /var/lib/docker ext4 defaults,nofail 0 2\" >> /etc/fstab",
+      "  fi",
+      "  findmnt /var/lib/docker >/dev/null || mount /var/lib/docker",
+      "  # Docker waits for the disk, so it never starts on the directory underneath.",
+      "  mkdir -p /etc/systemd/system/docker.service.d",
+      "  printf '[Unit]\\nRequiresMountsFor=/var/lib/docker\\n' > /etc/systemd/system/docker.service.d/wait-for-disk.conf",
+      "  systemctl daemon-reload",
       "fi",
       "command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh",
       "# Write .env BEFORE running install.sh — the installer keeps an existing",
@@ -216,6 +229,8 @@
       "if [ -n '{LICENSE}' ]; then printf 'COMPASSDOCS_LICENSE_KEY=%s\\n' '{LICENSE}' >> .env; fi",
       "if [ -n '{APPADMIN}' ]; then printf 'COMPASSDOCS_ADMIN_USER=%s\\nCOMPASSDOCS_ADMIN_PASSWORD=%s\\n' '{APPADMIN}' '{APPADMINPW}' >> .env; fi",
       "if [ -n '{ANTHROPIC}' ]; then printf 'ANTHROPIC_API_KEY=%s\\n' '{ANTHROPIC}' >> .env; fi",
+      "# The Azure address keeps working after a custom domain is applied (a way back in).",
+      "if [ -n '{FALLBACK}' ]; then printf 'COMPASSDOCS_FALLBACK_HOSTS=%s\\n' '{FALLBACK}' >> .env; fi",
       "chmod 600 .env",
       "cd /opt",
       "export COMPASSDOCS_EDITION='{EDITION}' COMPASSDOCS_TLS='{TLS}'",
@@ -223,7 +238,7 @@
       "bash /tmp/compassdocs-install.sh",
       "echo '--- CompassDocs bootstrap complete ---'"
     ],
-    "installScript": "[replace(replace(replace(replace(replace(replace(replace(join(variables('installScriptLines'), '\n'), '{EDITION}', parameters('edition')), '{TLS}', if(parameters('enableTls'), '1', '0')), '{LICENSE}', parameters('licenseKey')), '{PGPASS}', parameters('postgresPassword')), '{APPADMIN}', parameters('appAdminUsername')), '{APPADMINPW}', parameters('appAdminPassword')), '{ANTHROPIC}', parameters('anthropicApiKey'))]"
+    "installScript": "[replace(replace(replace(replace(replace(replace(replace(replace(join(variables('installScriptLines'), '\n'), '{EDITION}', parameters('edition')), '{TLS}', if(parameters('enableTls'), '1', '0')), '{LICENSE}', parameters('licenseKey')), '{PGPASS}', parameters('postgresPassword')), '{APPADMIN}', parameters('appAdminUsername')), '{APPADMINPW}', parameters('appAdminPassword')), '{ANTHROPIC}', parameters('anthropicApiKey')), '{FALLBACK}', variables('fallbackHost'))]"
   },
   "resources": [
     {

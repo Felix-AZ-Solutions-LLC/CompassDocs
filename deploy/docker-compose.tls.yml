@@ -47,6 +47,10 @@ services:
       COMPASSDOCS_SETUP_TOKEN: ${COMPASSDOCS_SETUP_TOKEN:-}
       # 1.20.27: the emergency switch for SSO only (set to 1 and restart if single sign-on breaks).
       COMPASSDOCS_SSO_ONLY_DISABLED: ${COMPASSDOCS_SSO_ONLY_DISABLED:-}
+      # 1.20.29: extra DNS names the proxy keeps serving after a custom domain
+      # is applied (comma-separated), a way back in if the domain breaks. The
+      # Azure template writes the VM's <label>.<region>.cloudapp.azure.com here.
+      COMPASSDOCS_FALLBACK_HOSTS: ${COMPASSDOCS_FALLBACK_HOSTS:-}
       # Lets the app drive the Caddy reverse proxy from Settings → Domain & HTTPS.
       COMPASSDOCS_CADDY_ADMIN: http://caddy:2019
       COMPASSDOCS_CADDY_CERT_DIR: /caddy-certs
