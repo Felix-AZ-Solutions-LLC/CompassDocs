@@ -102,13 +102,20 @@ export async function saveNotifyPrefs(userId: number, patch: unknown, now = new 
   if (p.ticket_order !== undefined) next.ticket_order = p.ticket_order; // 1.20.28
   if (p.pause) next.pause = pauseFor(p.pause, now, await userTimeZone(userId));
   const resolved = resolvePrefs(next);
-  const toStore = { ...resolved, matrix: sparse };
-  await hq(
+  const toStore: Record<string, unknown> = { ...resolved, matrix: sparse };
+  // 1.20.28 review: only the keys this change sent are written over the stored row, in the statement itself, so two
+  // changes at once (the Order of the ticket pane and an email's Plain text, from two tabs) both stick.
+  const sent: Record<string, unknown> = {};
+  for (const k of Object.keys(p)) if (k in toStore) sent[k] = toStore[k];
+  const row = await hqOne<{ prefs: unknown }>(
     `INSERT INTO hd_notify_prefs (user_id, prefs, updated_at) VALUES ($1, $2::jsonb, now())
-     ON CONFLICT (user_id) DO UPDATE SET prefs = EXCLUDED.prefs, updated_at = now()`,
-    [userId, JSON.stringify(toStore)]
+     ON CONFLICT (user_id) DO UPDATE
+       SET prefs = (CASE WHEN jsonb_typeof(hd_notify_prefs.prefs) = 'object' THEN hd_notify_prefs.prefs ELSE '{}'::jsonb END) || $3::jsonb,
+           updated_at = now()
+     RETURNING prefs`,
+    [userId, JSON.stringify(toStore), JSON.stringify(sent)]
   );
-  return resolved;
+  return resolvePrefs(row?.prefs ?? toStore);
 }
 
 /** One cell of the matrix as it applies now: on or off, and whether the workspace decides it. */

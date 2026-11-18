@@ -67,7 +67,8 @@ async function blankAtEnd(page: Page) {
         const k = getComputedStyle(c);
         return k.position !== "absolute" && k.position !== "fixed" && k.display !== "none";
       });
-      const last = kids[kids.length - 1];
+      // 1.20.28: the lowest child, not the last in the page: oldest first moves the reply box to the end with CSS order.
+      const last = kids.reduce<Element | undefined>((low, k) => (!low || k.getBoundingClientRect().bottom > low.getBoundingClientRect().bottom ? k : low), undefined);
       if (last) {
         const lastBottom = last.getBoundingClientRect().bottom + parseFloat(getComputedStyle(last).marginBottom);
         const inner = el.getBoundingClientRect().top + el.clientTop + el.clientHeight;

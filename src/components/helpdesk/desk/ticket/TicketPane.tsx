@@ -304,7 +304,7 @@ export function TicketPane({ number }: { number: number }) {
 
   // The reply area: Claude's draft, then the composer (or what stands in its place). On paper it is left out.
   const reply = (
-    <div className="flex min-w-0 flex-col gap-3 print:hidden" data-testid="ticket-reply-area">
+    <div className={`flex min-w-0 flex-col gap-3 print:hidden ${newest ? "" : "order-last"}`} data-testid="ticket-reply-area">
       {can && !merged && !elsewhere.away && <ClaudeDraftCard number={t.number} onUse={(body) => composer.current?.fill(body)} />}
       {can && merged ? (
         <MergedComposerLock d={d} />
@@ -498,18 +498,21 @@ export function TicketPane({ number }: { number: number }) {
             {/* 1.20.28: each agent's order (lib/helpdesk/conversation-shared): newest first with the reply box on top
                 (the default), or oldest first with it at the bottom. The reply box is the same element either way. */}
             <ConversationOrder order={order} />
-            {newest && reply}
+            {/* One reply area in one place in the page, whichever the order: switching never remounts the composer (its
+                text, files, macro, note mode, reply lock and Claude's draft stay). Oldest first moves it to the end
+                with CSS order alone; the page order is the default's (newest first). */}
+            {reply}
             <Conversation
               key={t.number}
               order={order}
               messages={d.messages}
               requesterId={t.requester_id}
+              requesterEmail={t.requester_email}
               meId={me.id}
               ticketNumber={t.number}
               origins={d.merge?.message_origins}
               originals={can}
             />
-            {!newest && reply}
           </div>
           <div
             data-testid="ticket-side-pane"

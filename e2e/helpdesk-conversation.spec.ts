@@ -307,6 +307,13 @@ test.describe("ticket conversation 1.20.28 (licensed)", () => {
     await setTicketOrder(page, "newest");
     await page.goto(`/desk/tickets/${number}`);
     await see(item(page, "r3")).toBeVisible({ timeout: 120_000 });
+    // A note being written, with a file: switching the order never resets the reply box (1.20.28 review).
+    await page.getByRole("radio", { name: "Internal note" }).click();
+    const draft = `Half-written note ${stamp}`;
+    await page.getByRole("textbox", { name: "Internal note" }).fill(draft);
+    await page.locator('section[aria-label="Reply"] input[type="file"]').setInputFiles({ name: "room-plan.txt", mimeType: "text/plain", buffer: Buffer.from("4B: screen on the east wall\n") });
+    const composerFiles = page.locator('section[aria-label="Reply"]').getByRole("list", { name: "Attachments" });
+    await see(composerFiles).toContainText("room-plan.txt", { timeout: 120_000 });
     await page.getByTestId("conversation-order").click();
     const menu = page.getByRole("menu", { name: "Order" });
     await see(menu.getByRole("menuitemradio", { name: /Newest first/ })).toHaveAttribute("aria-checked", "true");
@@ -319,6 +326,10 @@ test.describe("ticket conversation 1.20.28 (licensed)", () => {
     expect(await top(page, "r1")).toBeLessThan(await top(page, "r3"));
     const reply = page.locator('section[aria-label="Reply"]');
     expect((await reply.boundingBox())!.y).toBeGreaterThan(await top(page, "r3"));
+    // The same reply box, moved: the note, its mode and its file are all still there.
+    await see(page.getByRole("radio", { name: "Internal note" })).toBeChecked();
+    await see(page.getByRole("textbox", { name: "Internal note" })).toHaveValue(draft);
+    await see(composerFiles).toContainText("room-plan.txt");
     await see.poll(async () => (await api(page, "/api/helpdesk/me/notification-prefs")).body.prefs.ticket_order).toBe("oldest");
     await shot(page, "conversation-oldest-1440");
 
@@ -336,10 +347,12 @@ test.describe("ticket conversation 1.20.28 (licensed)", () => {
       await other.close();
     }
 
-    // And back.
+    // And back (the reload above kept the draft's text; the box is cleared before the next test).
     await page.getByTestId("conversation-order").click();
     await page.getByRole("menu", { name: "Order" }).getByRole("menuitemradio", { name: /Newest first/ }).click();
     await see(conversation(page)).toHaveAttribute("data-order", "newest");
+    await page.getByRole("radio", { name: "Internal note" }).click();
+    await page.getByRole("textbox", { name: "Internal note" }).fill("");
     await see.poll(async () => (await api(page, "/api/helpdesk/me/notification-prefs")).body.prefs.ticket_order).toBe("newest");
 
     // On paper: the whole conversation, oldest first, without the reply box or the Order control.
@@ -402,10 +415,17 @@ test.describe("ticket conversation 1.20.28 (licensed)", () => {
     const card = page.locator(`#message-${opening.id}`);
     await see(card.getByTestId("inline-email")).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
     const files = card.getByTestId("message-files");
-    await see(files).toContainText("3 attachments");
+    const count = files.locator("p > span").first();
+    await see(count).toContainText("3 attachments");
     const rows = files.getByRole("list", { name: "Files" }).getByRole("listitem");
     await see(rows).toHaveCount(3);
-    await see(files).not.toContainText("logo.png");
+    await see(rows.filter({ hasText: "logo.png" })).toHaveCount(0);
+    // On paper the email is its text, so its picture is listed there (1.20.28 review).
+    await page.emulateMedia({ media: "print" });
+    await see(rows).toHaveCount(4);
+    await see(files.getByText("4 attachments")).toBeVisible();
+    await page.emulateMedia({ media: "screen" });
+    await see(rows).toHaveCount(3);
     await see(rows.filter({ hasText: "Meeting agreement signed.pdf" })).toContainText("PDF");
     await see(rows.filter({ hasText: "Room booking confirmation.eml" })).toContainText("EML");
     await see(rows.filter({ hasText: "Outlook item.msg" })).toContainText("EML");
@@ -419,10 +439,10 @@ test.describe("ticket conversation 1.20.28 (licensed)", () => {
     // Shown as text, the email's picture is a file like the others again.
     await card.getByTestId("email-view-toggle").click();
     await see(card.getByTestId("inline-email")).toHaveAttribute("data-state", "plain");
-    await see(files).toContainText("4 attachments");
-    await see(files).toContainText("logo.png");
+    await see(count).toContainText("4 attachments");
+    await see(rows.filter({ hasText: "logo.png" })).toHaveCount(1);
     await card.getByTestId("email-view-toggle").click();
-    await see(files).toContainText("3 attachments");
+    await see(count).toContainText("3 attachments");
 
     // A phone: the list fits, no sideways scroll.
     await page.setViewportSize({ width: 390, height: 844 });

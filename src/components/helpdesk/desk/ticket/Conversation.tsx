@@ -30,6 +30,7 @@ import {
   FolderTree,
   Forward,
   History,
+  Languages,
   Lock,
   Paperclip,
   PencilLine,
@@ -48,7 +49,7 @@ import {
   automationRule,
   fileKind,
   foldLabel,
-  foldPlan,
+  foldedIds,
   isActivityLine,
   isChangeLine,
   isPicture,
@@ -83,6 +84,7 @@ const ACTIVITY_ICON: Record<HdActivityIcon, LucideIcon> = {
   priority: Flag,
   field: SlidersHorizontal,
   event: CalendarCheck,
+  language: Languages,
   solve: ClipboardCheck,
   "cc-add": UserPlus,
   "cc-remove": UserMinus,
@@ -108,12 +110,15 @@ export const messageAnchor = (id: number) => `message-${id}`;
 export function Conversation({
   messages,
   requesterId,
+  requesterEmail = null,
   meId,
   ticketNumber,
   origins,
   originals = false,
   order = "oldest",
 }: {
+  /** The requester's address: an email with no account behind it is theirs when it comes from it (the fold's sides). */
+  requesterEmail?: string | null;
   /** With it, authors' names open their contact card on hover (agent O). */
   ticketNumber?: number;
   messages: HdMessage[];
@@ -128,21 +133,19 @@ export function Conversation({
 }) {
   const [original, setOriginal] = useState<HdMessage | null>(null);
   const newest = order === "newest";
-  // The fold is decided once, from the conversation as it opened: a message arriving later never folds what the
-  // agent is reading (it only adds to the top), and an expanded history stays expanded.
-  const [foldAt, setFoldAt] = useState<number | null>(() => {
-    const plan = foldPlan(messages, requesterId);
-    return plan.folded ? messages[plan.from].id : null;
-  });
+  // The fold is decided once, as the conversation opens, as the set of messages it hides: anything not in it stays in
+  // view, whatever its time (a message that arrives, a newbie's reply approved later, which moves to the end, or one
+  // merged in), and an expanded history stays expanded.
+  const [folds] = useState<Set<number>>(() => foldedIds(messages, { requesterId, requesterEmail }));
   const [expanded, setExpanded] = useState(false);
   const list = useRef<HTMLOListElement>(null);
   const firstRevealed = useRef<number | null>(null);
 
-  const at = foldAt === null ? -1 : messages.findIndex((m) => m.id === foldAt);
-  const folding = newest && !expanded && at > 0;
-  const shown = folding ? messages.slice(at) : messages;
-  const hidden = folding ? messages.slice(0, at) : [];
-  const hiddenCount = hidden.filter((m) => !isActivityLine(m)).length;
+  const hiddenAll = newest && !expanded ? messages.filter((m) => folds.has(m.id)) : [];
+  const hiddenCount = hiddenAll.filter((m) => !isActivityLine(m)).length;
+  const folding = hiddenCount > 0;
+  const shown = folding ? messages.filter((m) => !folds.has(m.id)) : messages;
+  const hidden = folding ? hiddenAll : [];
 
   // A link to a message (#message-88) that is folded opens the history; either way it is scrolled to once shown.
   const linked = useRef<number | null>(null);
@@ -222,7 +225,7 @@ export function Conversation({
       <KeepPlace list={list} watch={newest ? `${messages.length}:${messages[messages.length - 1]?.id ?? 0}` : ""}>
         <ol ref={list} className={listClass} aria-label="Conversation" data-order={order}>
           {rows.map((m) => item(m))}
-          {folding && hiddenCount > 0 && (
+          {folding && (
             <li className="print:hidden" data-testid="conversation-fold">
               <button
                 type="button"
@@ -230,7 +233,6 @@ export function Conversation({
                 onClick={() => {
                   firstRevealed.current = folded[0]?.id ?? null;
                   setExpanded(true);
-                  setFoldAt(null);
                 }}
                 className="group flex w-full items-center gap-3 rounded-md py-1 text-xs font-medium text-compass-700 before:h-px before:flex-1 before:bg-slate-200 after:h-px after:flex-1 after:bg-slate-200"
               >
@@ -367,7 +369,8 @@ function MessageCard({
     </div>
   );
   const email = useInlineEmail({ id: m.id, enabled: original, author: m.author_name || m.author_email || "the sender", tinted: internal, text, onOpenWindow: onOpenOriginal });
-  const files = listedFiles(m.attachments ?? [], email.formatted);
+  const all = m.attachments ?? [];
+  const files = listedFiles(all, email.formatted);
   return (
     <li
       id={messageAnchor(m.id)}
@@ -421,7 +424,8 @@ function MessageCard({
         <p className="mt-1 pl-9 text-xs text-slate-600">Reviewer&apos;s note: {review.review_note}</p>
       )}
       <div className={`${rule ? "mt-1" : "mt-1.5"} min-w-0`}>{email.body}</div>
-      {files.length > 0 && <FileList files={files} />}
+      {/* On paper the email is its text, so its pictures are listed there too (hidden on screen while it is formatted). */}
+      {all.length > 0 && <FileList files={all} shown={files} />}
     </li>
   );
 }
@@ -431,15 +435,26 @@ function MessageCard({
  * row per file with its type square, name, size and Download. A picture's name opens it in a new tab; anything else
  * downloads (the route serves it as a download).
  */
-function FileList({ files }: { files: HdAttachment[] }) {
-  const total = files.reduce((n, f) => n + (Number(f.size) || 0), 0);
+function FileList({ files, shown }: { files: HdAttachment[]; shown: HdAttachment[] }) {
+  const onScreen = new Set(shown.map((f) => f.id));
+  const head = (list: HdAttachment[]) => {
+    const total = list.reduce((n, f) => n + (Number(f.size) || 0), 0);
+    return (
+      <>
+        {list.length} {list.length === 1 ? "attachment" : "attachments"} · <span className="tabular-nums">{bytesLabel(total)}</span>
+      </>
+    );
+  };
+  const same = shown.length === files.length;
   return (
-    <div className="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-surface break-inside-avoid sm:ml-9" data-testid="message-files">
+    <div
+      className={`mt-3 overflow-hidden rounded-lg border border-slate-200 bg-surface break-inside-avoid sm:ml-9 ${shown.length ? "" : "hidden print:block"}`}
+      data-testid="message-files"
+    >
       <p className="flex items-center gap-1.5 border-b border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-500">
         <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden />
-        <span>
-          {files.length} {files.length === 1 ? "attachment" : "attachments"} · <span className="tabular-nums">{bytesLabel(total)}</span>
-        </span>
+        <span className={same ? "" : "print:hidden"}>{head(shown)}</span>
+        {!same && <span className="hidden print:inline">{head(files)}</span>}
       </p>
       <ul aria-label="Files" className="divide-y divide-slate-100">
         {files.map((a) => {
@@ -447,7 +462,10 @@ function FileList({ files }: { files: HdAttachment[] }) {
           const kind = fileKind(a);
           const picture = isPicture(a);
           return (
-            <li key={a.id} className="grid grid-cols-[1.75rem_minmax(0,1fr)_auto_auto] items-center gap-x-3 px-3 py-1.5 text-[0.8125rem]">
+            <li
+              key={a.id}
+              className={`${onScreen.has(a.id) ? "grid" : "hidden print:grid"} grid-cols-[1.75rem_minmax(0,1fr)_auto_auto] items-center gap-x-3 px-3 py-1.5 text-[0.8125rem]`}
+            >
               <span className={`grid h-7 w-7 place-items-center rounded-md text-[0.5625rem] font-bold tracking-wide text-white ${FILE_TONE[kind.tone]}`} aria-hidden>
                 {kind.label}
               </span>

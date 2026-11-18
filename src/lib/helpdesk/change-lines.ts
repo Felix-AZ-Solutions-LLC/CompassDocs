@@ -7,7 +7,9 @@
 // internal, via 'system', unmarked line whose body is exactly the author's
 // escaped name, a space and one of updateTicket's own sentences, on one line.
 // A note someone wrote, an automation's "add an internal note" text and every
-// other feature's line keep their card. Never run again after the upgrade.
+// other feature's line keep their card. The language and event lines (their
+// own writers mark theirs since 1.20.28 too) are change lines as well. It
+// runs after boot, outside the boot lock, in batches; done once it finishes.
 
 import { mdInline } from "./md-inline";
 import { HD_CHANGE_EVENT } from "./conversation-shared";
@@ -23,7 +25,11 @@ const VERBS = [
   /^set the (?:sub-)?category to /,
   /^cleared the (?:sub-)?category(?: via |$)/,
   /^changed the priority from \S+ to \S+/,
-  /^marked the event setup complete(?: via |$)/,
+  /^marked the event setup (?:as not )?complete(?: via |$)/,
+  // 1.20.28 review: the other writers of change lines (lib/helpdesk/skills/store, lib/helpdesk/desk-calendar).
+  /^changed the language from /,
+  /^(?:added an event|changed the event): /,
+  /^removed the event \(/,
   /^filled in the solve details: /,
   // A custom field: "set Asset tag to LT-0042", "cleared Asset tag".
   /^set .+ to /,
@@ -39,16 +45,16 @@ export function looksLikeChangeLine(authorName: string | null | undefined, body:
   return VERBS.some((re) => re.test(rest));
 }
 
-/** The upgrade's backfill (in initialize's client, after the schema). Answers how many lines it marked. */
-export async function migrateChangeLines(client: import("pg").PoolClient): Promise<number> {
-  const mark = await client.query(
-    "INSERT INTO settings (key, value) VALUES ('migration_hd_change_lines', '1') ON CONFLICT (key) DO NOTHING RETURNING 1"
-  );
-  if (!mark.rowCount) return 0;
+/** The upgrade's backfill, after boot and outside its lock (lib/db initialize). Answers how many lines it marked. */
+export async function migrateChangeLines(db: { query: import("pg").Pool["query"] } | import("pg").PoolClient): Promise<number> {
+  // The flag is written when the work is done, so a scan cut short (a restart, an error) runs again at the next boot;
+  // each batch only marks lines still unmarked, so running twice, or in two processes at once, changes nothing more.
+  const done = await db.query("SELECT 1 FROM settings WHERE key = 'migration_hd_change_lines'");
+  if (done.rowCount) return 0;
   let after = 0;
   let marked = 0;
   for (;;) {
-    const { rows } = await client.query<{ id: string; author_name: string; body: string }>(
+    const { rows } = await db.query<{ id: string; author_name: string; body: string }>(
       `SELECT id, author_name, body FROM hd_messages
         WHERE id > $1 AND kind = 'internal' AND via = 'system' AND event IS NULL AND length(body) <= 2000
         ORDER BY id LIMIT 2000`,
@@ -58,10 +64,16 @@ export async function migrateChangeLines(client: import("pg").PoolClient): Promi
     after = Number(rows[rows.length - 1].id);
     const ids = rows.filter((r) => looksLikeChangeLine(r.author_name, r.body)).map((r) => Number(r.id));
     if (ids.length) {
-      const r = await client.query("UPDATE hd_messages SET event = $2 WHERE id = ANY($1::bigint[]) AND event IS NULL", [ids, HD_CHANGE_EVENT]);
+      const r = await db.query("UPDATE hd_messages SET event = $2 WHERE id = ANY($1::bigint[]) AND event IS NULL", [ids, HD_CHANGE_EVENT]);
       marked += r.rowCount ?? 0;
     }
   }
+  await db.query("INSERT INTO settings (key, value) VALUES ('migration_hd_change_lines', '1') ON CONFLICT (key) DO NOTHING");
   if (marked) console.log(`[helpdesk] marked ${marked} earlier field-change line(s) as activity lines`);
   return marked;
+}
+
+/** Boot's call: never in the way of start-up. A failure is logged and the work is tried again at the next boot. */
+export function migrateChangeLinesInBackground(db: { query: import("pg").Pool["query"] }): void {
+  void migrateChangeLines(db).catch((e) => console.error("[helpdesk] marking earlier change lines failed; it is tried again at the next start:", e instanceof Error ? e.message : e));
 }

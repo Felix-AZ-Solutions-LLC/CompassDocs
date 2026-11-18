@@ -3143,9 +3143,11 @@ open in its own tab beside CompassDocs. Components live in
   the CC lines (`UserPlus` / `UserMinus`) are system lines; a field change
   (owner `UserRoundCheck` / `UserRoundX`, team `Users`, priority `Flag`,
   category `FolderTree`, a custom field `SlidersHorizontal`, a rename
-  `PencilLine`, event setup `CalendarCheck`, solve details
+  `PencilLine`, the event and its setup `CalendarCheck`, the language
+  `Languages`, solve details
   `ClipboardCheck`, anything else `History`) is an internal line marked
-  `hd_messages.event = 'change'` by `updateTicket`, so it stays agents-only.
+  `hd_messages.event = 'change'` by its writer (`updateTicket`, the
+  language and the event's own lines), so it stays agents-only.
   The actor is `font-medium text-slate-700`; an **automation's** line carries
   `Bot` and its rule's name in `font-semibold text-slate-700` without the
   "Automation: " prefix (an `sr-only` "Automation" says what it is). The
@@ -3158,18 +3160,26 @@ open in its own tab beside CompassDocs. Components live in
 - **Order and fold** (1.20.28, `ticket/ticket-order`): the ticket pane shows
   the conversation **newest first with the reply box on top** by default.
   Shown: the newest requester message and the newest agent reply, and
-  everything newer than the older of the two; older history folds behind one
+  everything newer than the older of the two (`messageSide`: the requester's
+  own messages, by account or from their address; the desk's are a system
+  send such as an automation's acknowledgement, a team member's or one
+  written in the desk; a CC's or a merged-in requester's anchor nothing);
+  older history folds behind one
   full-width control, a hairline either side of "**Show N earlier
   messages**" (`ChevronDown`, `text-xs font-medium text-compass-700`; N
   counts messages, never lines). It opens everything, focus moving to the
   first message it revealed, and the fold is decided once as the ticket
-  opens (a message arriving later never folds what the agent is reading).
+  opens, as the set of messages it hides: anything else stays in view
+  (a message arriving later, a newbie's reply approved later, one merged
+  in).
   **Order** sits at the column's top right, the queue Sort's quiet trigger
   (`ArrowDownUp`, "Order: Newest first", `ChevronDown`) on a `PickMenu`
   (Newest first, "Reply box on top" | Oldest first, "Reply box at the
   bottom"); the choice is the agent's desk preference (`ticket_order`, with
   the notification preferences), so it follows them across devices. Oldest
-  first is the pre-1.20.28 layout, nothing folded. A new message never moves
+  first is the pre-1.20.28 layout, nothing folded. The reply area is one
+  element in one place in the page (newest first's), moved to the end for
+  oldest first with `order-last`: switching never remounts the composer. A new message never moves
   what the agent is reading: scrolled into the list, the list keeps its place
   (`KeepPlace`); with its top in view, the message simply appears there.
   Each message row is `id="message-{id}"` and a link to a folded one opens
@@ -3194,7 +3204,8 @@ open in its own tab beside CompassDocs. Components live in
   `aria-label="Files"`. A picture the formatted email draws itself (its
   attachment is `inline` on the desk's ticket read: the stored HTML names it
   by cid, within the inline view's picture budget) is left out while that
-  email shows formatted, and listed again when it shows as text. No
+  email shows formatted (its row `hidden print:grid`, so paper, where the
+  email is text, lists it), and listed again when it shows as text. No
   "Download all".
 - **View original** (1.20.8, `ticket/OriginalEmail`): a message whose email
   had an HTML part carries one quiet icon button at the right of its

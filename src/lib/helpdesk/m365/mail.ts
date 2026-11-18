@@ -1250,8 +1250,15 @@ async function fetchFiles(c: M365Config, mb: MbRow, id: string, tolerant: boolea
           what: "read an attached email",
         });
       } catch (e) {
+        const accessProblem = e instanceof M365Error && (e.status === 401 || e.status === 403);
+        // 1.20.28 review: an item with no type might be an event or a contact, never worth holding the email for: any
+        // refusal but the mailbox's own (401/403) leaves it out as before ("not added").
+        if (!type && !accessProblem) {
+          files.push({ name: `${name}.item`, type, data: Buffer.from("x") });
+          continue;
+        }
         if (e instanceof M365Error && e.kind === "too_large") mime = oversizeStub(INBOUND_LIMITS.fileBytes);
-        else if (tolerant && e instanceof M365Error && e.status !== 401 && e.status !== 403) {
+        else if (tolerant && e instanceof M365Error && !accessProblem) {
           missing.push(fileName);
           continue;
         } else throw e;

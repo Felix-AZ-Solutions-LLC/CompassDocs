@@ -200,33 +200,44 @@ export async function markInlineAttachments<M extends Pick<HdMessage, "id" | "at
   const isPicture = (type: string) => /^image\/(png|jpeg|gif|webp)$/.test(type);
   const ids = messages.filter((m) => m.has_original_html === true && (m.attachments ?? []).some((a) => isPicture(a.type))).map((m) => m.id);
   if (!ids.length) return messages;
-  const rows = await hq<{ message_id: number; ids: (number | string)[] | null }>(
-    `SELECT h.message_id, array_agg(DISTINCT (e.value->>'attachment_id')::bigint) AS ids
+  // Per message: every attachment the cids map names (cidPictures spends its budget on each of them), and those the
+  // HTML really names: "cid:<key>" followed by the end of the value (a quote, a bracket, a space, the end), so
+  // cid:image1 is never found inside cid:image10.
+  const rows = await hq<{ message_id: number; mapped: (number | string)[] | null; named: (number | string)[] | null }>(
+    `SELECT h.message_id,
+            array_agg(DISTINCT (e.value->>'attachment_id')::bigint) AS mapped,
+            array_agg(DISTINCT (e.value->>'attachment_id')::bigint) FILTER (
+              WHERE e.key <> '' AND (
+                EXISTS (SELECT 1 FROM unnest($2::text[]) d WHERE strpos(l.html, 'cid:' || e.key || d) > 0)
+                OR right(l.html, length(e.key) + 4) = 'cid:' || e.key)) AS named
        FROM hd_message_html h
             CROSS JOIN LATERAL (SELECT lower(h.html) AS html) l
             CROSS JOIN LATERAL jsonb_each(CASE WHEN jsonb_typeof(h.cids) = 'object' THEN h.cids ELSE '{}'::jsonb END) e
       WHERE h.message_id = ANY($1::int[])
         AND jsonb_typeof(e.value->'attachment_id') = 'number'
-        AND e.key <> '' AND strpos(l.html, 'cid:' || e.key) > 0
       GROUP BY h.message_id`,
-    [ids]
+    [ids, CID_ENDS]
   );
-  const named = new Map(rows.map((r) => [Number(r.message_id), new Set((r.ids ?? []).map(Number))]));
+  const byMessage = new Map(rows.map((r) => [Number(r.message_id), { mapped: new Set((r.mapped ?? []).map(Number)), named: new Set((r.named ?? []).map(Number)) }]));
   return messages.map((m) => {
-    const refs = named.get(m.id);
-    if (!refs?.size) return m;
-    // cidPictures' budget, spent in attachment id order: a picture past it is not drawn, so it stays listed.
+    const cids = byMessage.get(m.id);
+    if (!cids?.named.size) return m;
+    // cidPictures' budget, spent as it spends it: on each mapped picture of this message, in attachment id order, a
+    // picture past what is left being skipped. One it would skip is not drawn, so it stays listed.
     let budget: number = EMAIL_HTML_LIMITS.inlineBytes;
     const inline = new Set<number>();
     for (const a of [...m.attachments].sort((x, y) => x.id - y.id)) {
-      if (!refs.has(a.id) || !isPicture(a.type) || a.size > budget) continue;
+      if (!cids.mapped.has(a.id) || !isPicture(a.type) || a.size > budget) continue;
       budget -= a.size;
-      inline.add(a.id);
+      if (cids.named.has(a.id)) inline.add(a.id);
     }
     if (!inline.size) return m;
     return { ...m, attachments: m.attachments.map((a) => (inline.has(a.id) ? { ...a, inline: true } : a)) };
   });
 }
+
+/** What may follow a cid reference in HTML: a quote, a bracket, white space, an entity or a backslash (CSS). */
+const CID_ENDS = ['"', "'", ")", ">", " ", "\t", "\n", "\r", "&", ";", "\\"];
 
 export type OriginalView =
   | { ok: true; html: string; info: HdOriginalInfo }

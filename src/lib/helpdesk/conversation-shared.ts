@@ -89,6 +89,7 @@ export type HdActivityIcon =
   | "priority"
   | "field"
   | "event"
+  | "language"
   | "solve"
   | "cc-add"
   | "cc-remove"
@@ -114,15 +115,41 @@ export function activityIcon(m: Line): HdActivityIcon {
   if (/^(?:assigned the ticket to|took the ticket)/.test(what)) return "assign";
   if (/^(?:set|cleared) the (?:sub-)?category/.test(what)) return "category";
   if (/^changed the priority/.test(what)) return "priority";
-  if (/^marked the event setup complete/.test(what)) return "event";
+  if (/^(?:marked the event setup|added an event|changed the event|removed the event)/.test(what)) return "event";
+  if (/^(?:changed|set|cleared) the language/.test(what)) return "language";
   if (/^filled in the solve details/.test(what)) return "solve";
   if (/^(?:set|cleared) /.test(what)) return "field";
   return "other";
 }
 
-/** An agent's public message (as the conversation's card edge decides it), else the requester's side. */
-function agentReply(m: HdMessage, requesterId: number | null): boolean {
-  return m.kind === "public" && m.author_id !== null && m.author_id !== requesterId;
+/** Who a public message is from, for newest first's fold. */
+export type HdMessageSide = "requester" | "agent" | "other";
+
+/** Through these an agent writes in the desk (a person's desk reply, Claude, the API). */
+const AGENT_VIAS = new Set(["desk", "mcp", "api"]);
+
+/**
+ * The side of a public message, for the fold (1.20.28 review):
+ *   - "agent": a system send (an automation's macro reply, an auto-acknowledgement: author null, via 'system'),
+ *     or someone other than the requester writing as an agent (a team member, or through the desk, Claude or the
+ *     API);
+ *   - "requester": the requester's account, or (no account) an email from the requester's own address;
+ *   - "other": anyone else, such as a CC replying by email or Get help, or the requester of a ticket merged in.
+ * Only "requester" and "agent" anchor the fold.
+ */
+export function messageSide(
+  m: Pick<HdMessage, "kind" | "author_id" | "author_email" | "via"> & { author_team_name?: string | null },
+  who: { requesterId: number | null; requesterEmail?: string | null }
+): HdMessageSide {
+  if (m.via === "system") return "agent";
+  if (m.author_id !== null) {
+    if (who.requesterId !== null && m.author_id === who.requesterId) return "requester";
+    return m.author_team_name || AGENT_VIAS.has(m.via) ? "agent" : "other";
+  }
+  const from = String(m.author_email ?? "").trim().toLowerCase();
+  const requester = String(who.requesterEmail ?? "").trim().toLowerCase();
+  // An email with no account behind it: the requester's own address, or (an older row without one) theirs too.
+  return !from || !requester || from === requester ? "requester" : "other";
 }
 
 /**
@@ -130,18 +157,28 @@ function agentReply(m: HdMessage, requesterId: number | null): boolean {
  * the newest requester message and the newest agent reply); everything before it folds. `folded` counts the messages
  * (cards, not lines) folded. Nothing folds when that would hide no message.
  */
-export function foldPlan(messages: HdMessage[], requesterId: number | null): { from: number; folded: number } {
+export function foldPlan(messages: HdMessage[], who: { requesterId: number | null; requesterEmail?: string | null }): { from: number; folded: number } {
   let lastRequester = -1;
   let lastAgent = -1;
   messages.forEach((m, i) => {
     if (m.kind !== "public") return;
-    if (agentReply(m, requesterId)) lastAgent = i;
-    else lastRequester = i;
+    const side = messageSide(m, who);
+    if (side === "agent") lastAgent = i;
+    else if (side === "requester") lastRequester = i;
   });
   const from = lastRequester < 0 ? lastAgent : lastAgent < 0 ? lastRequester : Math.min(lastRequester, lastAgent);
   if (from <= 0) return { from: 0, folded: 0 };
   const folded = messages.slice(0, from).filter((m) => !isActivityLine(m)).length;
   return folded ? { from, folded } : { from: 0, folded: 0 };
+}
+
+/**
+ * The messages newest first folds as the ticket opens (their ids): fixed from then on, so a message that arrives,
+ * is approved after review (it moves to the end) or is merged in later is never folded away.
+ */
+export function foldedIds(messages: HdMessage[], who: { requesterId: number | null; requesterEmail?: string | null }): Set<number> {
+  const plan = foldPlan(messages, who);
+  return new Set(plan.folded ? messages.slice(0, plan.from).map((m) => m.id) : []);
 }
 
 /** "Show 6 earlier messages". */

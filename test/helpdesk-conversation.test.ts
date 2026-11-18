@@ -36,13 +36,15 @@ import {
   fileKind,
   foldLabel,
   foldPlan,
+  foldedIds,
+  messageSide,
   isActivityLine,
   isChangeLine,
   listedFiles,
   plainChangeText,
   splitChangeLine,
 } from "../src/lib/helpdesk/conversation-shared";
-import { looksLikeChangeLine, migrateChangeLines } from "../src/lib/helpdesk/change-lines";
+import { looksLikeChangeLine, migrateChangeLines, migrateChangeLinesInBackground } from "../src/lib/helpdesk/change-lines";
 import { mdInline } from "../src/lib/helpdesk/md-inline";
 import type { HdAttachment, HdMessage } from "../src/lib/helpdesk/types";
 
@@ -207,7 +209,7 @@ describe("newest first's fold (pure)", () => {
   test("the newest requester message and agent reply show, with everything newer; older messages fold and are counted", () => {
     const list = [fromRequester("first"), fromAgent("a1"), note(), fromRequester("second"), change(), fromAgent("a2"), status(), note(), fromRequester("third"), change(), fromAgent("a3"), status()];
     // Newest requester: "third" (8); newest agent reply: "a3" (10). The older of the two is "third".
-    const plan = foldPlan(list, REQ);
+    const plan = foldPlan(list, { requesterId: REQ });
     assert.equal(plan.from, 8);
     assert.equal(plan.folded, 6, "first, a1, note, second, a2, note: lines are not counted");
     assert.equal(foldLabel(plan.folded), "Show 6 earlier messages");
@@ -216,18 +218,76 @@ describe("newest first's fold (pure)", () => {
 
   test("the agent replied before the requester's latest: from the agent's reply", () => {
     const list = [fromRequester(), fromAgent(), fromRequester(), fromAgent("latest reply"), note(), fromRequester("latest")];
-    assert.deepEqual(foldPlan(list, REQ), { from: 3, folded: 3 });
+    assert.deepEqual(foldPlan(list, { requesterId: REQ }), { from: 3, folded: 3 });
   });
 
   test("nothing folds when nothing would hide: a new ticket, only lines before, no public message", () => {
-    assert.deepEqual(foldPlan([fromRequester()], REQ), { from: 0, folded: 0 });
-    assert.deepEqual(foldPlan([fromRequester(), fromAgent()], REQ), { from: 0, folded: 0 });
-    assert.deepEqual(foldPlan([status(), change(), fromRequester(), fromAgent()], REQ), { from: 0, folded: 0 });
-    assert.deepEqual(foldPlan([note(), note()], REQ), { from: 0, folded: 0 });
+    assert.deepEqual(foldPlan([fromRequester()], { requesterId: REQ }), { from: 0, folded: 0 });
+    assert.deepEqual(foldPlan([fromRequester(), fromAgent()], { requesterId: REQ }), { from: 0, folded: 0 });
+    assert.deepEqual(foldPlan([status(), change(), fromRequester(), fromAgent()], { requesterId: REQ }), { from: 0, folded: 0 });
+    assert.deepEqual(foldPlan([note(), note()], { requesterId: REQ }), { from: 0, folded: 0 });
     // No agent reply yet: older requester messages fold behind the newest one.
-    assert.deepEqual(foldPlan([fromRequester(), fromRequester(), fromRequester()], REQ), { from: 2, folded: 2 });
+    assert.deepEqual(foldPlan([fromRequester(), fromRequester(), fromRequester()], { requesterId: REQ }), { from: 2, folded: 2 });
     // An emailed message from an address with no account (author null) is the requester's side.
-    assert.deepEqual(foldPlan([fromAgent(), msg({ kind: "public", author_id: null, via: "email" }), fromAgent(), msg({ kind: "public", author_id: null, via: "email" })], null), { from: 2, folded: 2 });
+    assert.deepEqual(foldPlan([fromAgent(), msg({ kind: "public", author_id: null, via: "email" }), fromAgent(), msg({ kind: "public", author_id: null, via: "email" })], { requesterId: null }), { from: 2, folded: 2 });
+  });
+});
+
+describe("1.20.28 review: who anchors the fold", () => {
+  const who = { requesterId: REQ, requesterEmail: "linda@clientco.example" };
+  const ack = () => msg({ kind: "public", author_id: null, author_name: "Automation: Acknowledge new requests", via: "system", body: "Thanks, we've got your request." });
+  const cc = () => msg({ kind: "public", author_id: 30, author_name: "Theresa CC", author_email: "theresa@clientco.example", via: "email", body: "Adding: it's room 4B." });
+
+  test("sides: the requester, an agent (a system send, a team member, the desk), anyone else", () => {
+    assert.equal(messageSide(ack(), who), "agent", "an automation's macro reply is the desk's");
+    assert.equal(messageSide(fromRequester(), who), "requester");
+    assert.equal(messageSide(fromAgent(), who), "agent");
+    assert.equal(messageSide(msg({ kind: "public", author_id: AGENT, via: "email", author_team_name: "IT" }), who), "agent", "an agent's emailed reply");
+    assert.equal(messageSide(cc(), who), "other", "a CC replying by email");
+    assert.equal(messageSide(msg({ kind: "public", author_id: 31, via: "portal" }), who), "other", "a CC replying in Get help");
+    assert.equal(messageSide(msg({ kind: "public", author_id: null, author_email: "Linda@Clientco.example", via: "email" }), who), "requester", "the requester's own address, no account");
+    assert.equal(messageSide(msg({ kind: "public", author_id: null, author_email: "someone@else.example", via: "email" }), who), "other");
+  });
+
+  test("an auto-acknowledged ticket: the request stays in view, before and after the agent replies", () => {
+    const request = fromRequester("The projector in 4B won't turn on.");
+    // Before: the request and the ack (an agent-side send): nothing older to fold.
+    assert.deepEqual(foldPlan([request, ack()], who), { from: 0, folded: 0 });
+    // After the agent's reply: still from the request.
+    const list = [request, ack(), note(), fromAgent("On my way.")];
+    assert.deepEqual(foldPlan(list, who), { from: 0, folded: 0 });
+    // A second request, acknowledged again, then answered: the first exchange folds, the newest request shows.
+    const two = [request, ack(), fromAgent("Fixed."), fromRequester("It's off again."), ack(), fromAgent("Replaced the bulb.")];
+    assert.deepEqual(foldPlan(two, who), { from: 3, folded: 3 });
+  });
+
+  test("a CC's reply anchors nothing: the requester's message and the agent's reply do", () => {
+    const list = [fromRequester("q1"), fromAgent("a1"), fromRequester("q2"), fromAgent("a2"), cc(), cc()];
+    // Newest requester q2 (2), newest agent a2 (3): the CC replies after are shown, never the fold's anchor.
+    assert.deepEqual(foldPlan(list, who), { from: 2, folded: 2 });
+    // Only CCs since the agent's reply: the same.
+    assert.deepEqual(foldPlan([fromRequester("q1"), fromAgent("a1"), cc()], who), { from: 0, folded: 0 });
+  });
+
+  test("a merged ticket: the other requester's messages anchor nothing; an agent's opening on their behalf is the desk's", () => {
+    const other = (body: string) => msg({ kind: "public", author_id: 40, author_name: "Daniel (merged in)", author_email: "daniel@clientco.example", via: "portal", body });
+    const otherByMail = (body: string) => msg({ kind: "public", author_id: null, author_email: "daniel@clientco.example", via: "email", body });
+    const list = [fromRequester("q1"), other("from #1051"), fromAgent("a1"), otherByMail("from #1052 by email"), fromRequester("q2"), fromAgent("a2")];
+    assert.deepEqual(foldPlan(list, who), { from: 4, folded: 4 });
+    assert.deepEqual([...foldedIds(list, who)], list.slice(0, 4).map((m) => m.id));
+  });
+
+  test("the folded set is fixed: a message later moved to the end (an approved review) or merged in stays in view", () => {
+    const q1 = fromRequester("q1");
+    const a1 = fromAgent("a1");
+    const q2 = fromRequester("q2");
+    const a2 = fromAgent("a2");
+    const folded = foldedIds([q1, a1, q2, a2], who);
+    assert.deepEqual([...folded], [q1.id, a1.id]);
+    // Recomputed later, an approved newbie reply at the end would fold q2: the set the ticket opened with does not.
+    const approved = fromAgent("approved newbie reply");
+    assert.ok(!folded.has(q2.id) && !folded.has(approved.id));
+    assert.deepEqual([...foldedIds([q1, a1, q2, a2, approved, fromRequester("q3")], who)].length, 4, "what a fresh open would fold, for contrast");
   });
 });
 
@@ -294,6 +354,10 @@ describe("change lines are marked", () => {
       await insert("Ana", "Ana changed her mind about the printer"),
       await insert("Ana", "Ana changed the status from New to Open", "system"),
     ];
+    // 1.20.28 review: the language and the event's own lines are change lines too (their writers mark them now).
+    yes.push(await insert("Ana", `Ana changed the language from English to ${mdInline("Français")}`));
+    yes.push(await insert("Ana", "Ana marked the event setup as not complete"));
+    yes.push(await insert("Ana", `Ana changed the event: ${mdInline("Fri 20 Nov 2026, 14:00 to 15:30 (London time)")}`));
     assert.equal(looksLikeChangeLine("Sam *Lee*", `${mdInline("Sam *Lee*")} unassigned the ticket`), true);
     assert.equal(looksLikeChangeLine("Sam", "Sam cleared Asset tag via Claude"), true);
     assert.equal(looksLikeChangeLine("Sam", "Sam: please check"), false);
@@ -302,6 +366,8 @@ describe("change lines are marked", () => {
     const client = await pool().connect();
     try {
       assert.ok((await migrateChangeLines(client)) >= yes.length);
+      // Done only once the scan finished: the flag is there now, and a second run does nothing.
+      assert.equal((await client.query("SELECT 1 FROM settings WHERE key = 'migration_hd_change_lines'")).rowCount, 1);
       assert.equal(await migrateChangeLines(client), 0, "once");
     } finally {
       client.release();
@@ -310,6 +376,47 @@ describe("change lines are marked", () => {
     const ev = new Map((await pool().query("SELECT id, event FROM hd_messages WHERE id = ANY($1)", [[...yes, ...no]])).rows.map((r) => [r.id as number, r.event as string | null]));
     for (const id of yes) assert.equal(ev.get(id), "change", `marked ${id}`);
     for (const id of no) assert.equal(ev.get(id), null, `left ${id}`);
+  });
+});
+
+describe("1.20.28 review: the upgrade's backfill never stands in the way", () => {
+  test("a failed scan leaves no flag (it runs again next start); the background call only logs", async () => {
+    const flag = await pool().query("SELECT value FROM settings WHERE key = 'migration_hd_change_lines'");
+    await pool().query("DELETE FROM settings WHERE key = 'migration_hd_change_lines'");
+    try {
+      let calls = 0;
+      const broken = {
+        query: async (sql: string) => {
+          calls++;
+          if (/FROM hd_messages/.test(sql)) throw new Error("connection lost");
+          return pool().query(sql);
+        },
+      } as unknown as import("pg").PoolClient;
+      await assert.rejects(migrateChangeLines(broken), /connection lost/);
+      assert.equal((await pool().query("SELECT 1 FROM settings WHERE key = 'migration_hd_change_lines'")).rowCount, 0, "not marked done");
+      const errors: unknown[] = [];
+      const was = console.error;
+      console.error = (...a: unknown[]) => void errors.push(a);
+      try {
+        migrateChangeLinesInBackground(broken as never);
+        await new Promise((r) => setTimeout(r, 50));
+      } finally {
+        console.error = was;
+      }
+      assert.equal(errors.length, 1, "logged, not thrown");
+      assert.ok(calls >= 3);
+    } finally {
+      if (flag.rowCount) await pool().query("INSERT INTO settings (key, value) VALUES ('migration_hd_change_lines', $1) ON CONFLICT (key) DO NOTHING", [flag.rows[0].value]);
+    }
+  });
+
+  test("the language line is written as a change line", async () => {
+    const t = await newTicket("Language");
+    const skills = await import("../src/lib/helpdesk/skills/store");
+    await skills.setTicketLanguage(t.id, "fr", { id: U.agent.id, name: U.agent.name });
+    const line = (await messages.listMessages(t.id)).find((m) => /language/.test(m.body))!;
+    assert.ok(line && isChangeLine(line));
+    assert.equal(activityIcon(line), "language");
   });
 });
 
@@ -363,6 +470,31 @@ describe("inline pictures on the desk's ticket read", () => {
     const shown = d.messages.find((m) => m.id === opening.id)!;
     assert.deepEqual(listedFiles(shown.attachments, true).map((a) => a.name), ["photo.png", "agreement.pdf", "huge.png"]);
     assert.equal(listedFiles(shown.attachments, false).length, 5);
+    // 1.20.28 review: cid:img1 is not found inside cid:img10, and the budget is spent as the email's frame spends it
+    // (on every mapped picture, named or not), so a named picture the frame would drop stays listed.
+    const third = await messages.addMessage(t.id, { kind: "public", body: "Prefixes and budget.", author: { id: U.requester.id, name: U.requester.name, email: "" }, via: "email", asRequester: true, attachments: [] }, { silent: true });
+    assert.ok(third);
+    const big = Math.floor(htmlShared.EMAIL_HTML_LIMITS.inlineBytes * 0.6);
+    const b2 = [att(base + 11, "img1.png", "image/png"), att(base + 12, "img10.png", "image/png"), att(base + 13, "unnamed-big.png", "image/png", big), att(base + 14, "named-big.png", "image/png", big)];
+    await pool().query("UPDATE hd_messages SET attachments = $2::jsonb WHERE id = $1", [third.message.id, JSON.stringify(b2)]);
+    const html2 = `<img src="cid:img10"><div style="background:url(cid:named-big)"></div>`;
+    await pool().query("INSERT INTO hd_message_html (message_id, html, size, cids) VALUES ($1, $2, $3, $4)", [
+      third.message.id,
+      html2,
+      html2.length,
+      JSON.stringify({ img1: { attachment_id: base + 11 }, img10: { attachment_id: base + 12 }, "unnamed-big": { attachment_id: base + 13 }, "named-big": { attachment_id: base + 14 } }),
+    ]);
+    const m3 = (await emailHtml.markInlineAttachments(await messages.listMessages(t.id))).find((m) => m.id === third.message.id)!;
+    assert.deepEqual(
+      m3.attachments.map((a) => [a.name, a.inline === true]),
+      [
+        ["img1.png", false],
+        ["img10.png", true],
+        ["unnamed-big.png", false],
+        ["named-big.png", false],
+      ]
+    );
+
     // A requester's read never carries the flag.
     const { requesterMessages } = await import("../src/lib/helpdesk/access");
     assert.ok(requesterMessages(await messages.listMessages(t.id)).every((m) => m.attachments.every((a) => a.inline === undefined)));
@@ -380,6 +512,15 @@ describe("ticket order preference", () => {
     assert.equal((await prefs.getNotifyPrefs(U.agent.id)).ticket_order, "oldest");
     assert.equal((await prefs.getNotifyPrefs(U.requester.id)).ticket_order, "newest", "per agent");
     await assert.rejects(prefs.saveNotifyPrefs(U.agent.id, { ticket_order: "random" }), /newest first or oldest first/);
+    // 1.20.28 review: two changes at once both stick (each writes only its own key).
+    for (let i = 0; i < 5; i++) {
+      const order = i % 2 ? "oldest" : "newest";
+      const view = i % 2 ? "plain" : "formatted";
+      await Promise.all([prefs.saveNotifyPrefs(U.requester.id, { ticket_order: order }), prefs.saveNotifyPrefs(U.requester.id, { email_view: view })]);
+      const both = await prefs.getNotifyPrefs(U.requester.id);
+      assert.deepEqual([both.ticket_order, both.email_view], [order, view], `round ${i}`);
+    }
+    await prefs.saveNotifyPrefs(U.requester.id, { ticket_order: "newest" });
     // Other preferences are kept.
     await prefs.saveNotifyPrefs(U.agent.id, { email_view: "plain" });
     const p = await prefs.getNotifyPrefs(U.agent.id);

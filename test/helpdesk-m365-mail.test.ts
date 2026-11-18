@@ -1438,6 +1438,32 @@ describe("attachments", () => {
     assert.equal(m365.emlName(" ... "), "attached email.eml");
   });
 
+  test("1.20.28 review: an item with no type that Microsoft won't hand over is left out at once, never holding the email", async () => {
+    inbound.setInboundAttachmentStoreForTests({
+      save: async (i) => ({ id: 920001, filename: i.filename, mime: i.mime, size: i.buf.length }) as never,
+      bind: async () => [],
+    });
+    fake.fail.attachmentValue = 500;
+    fake.failAttachmentId = "u1";
+    try {
+      const m = inboxMessage({
+        subject: `${STAMP} untyped item refused`,
+        body: { contentType: "text", content: "See the item." },
+        attachments: [{ id: "u1", name: "Board meeting", contentType: "", data: Buffer.from("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n"), odataType: "#microsoft.graph.itemAttachment" }],
+      });
+      await poll();
+      const [t] = await ticketFor(`${STAMP} untyped item refused`);
+      assert.ok(t, "taken in on the first read, not put off");
+      assert.equal((await seen(m.id)).outcome, "created");
+      const note = (await pool().query("SELECT body FROM hd_messages WHERE ticket_id = $1 AND via = 'system' ORDER BY id", [t.id])).rows.map((r) => r.body).join("\n");
+      assert.match(note, /Board meeting\.item \(file type not allowed\)/);
+    } finally {
+      fake.fail = {};
+      fake.failAttachmentId = "";
+      inbound.setInboundAttachmentStoreForTests(null);
+    }
+  });
+
   test("1.20.8: the HTML body is kept for View original, and an inline picture is mapped by Graph's contentId", async () => {
     let next = 0;
     inbound.setInboundAttachmentStoreForTests({

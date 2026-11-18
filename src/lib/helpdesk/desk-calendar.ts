@@ -87,6 +87,7 @@ import {
 } from "./desk-calendar-shared";
 // 1.20.24: the top bar's upcoming events and the rail's count.
 import { UPCOMING_HORIZON_DAYS, UPCOMING_LIMIT, type HdUpcomingEvents } from "./desk-calendar-upcoming-shared";
+import { HD_CHANGE_EVENT } from "./conversation-shared";
 
 export * from "./desk-calendar-shared";
 
@@ -211,10 +212,11 @@ function describe(e: HdTicketEvent, tz: string): string {
 
 const viaSuffix = (a: EventActor) => (a.via === "mcp" ? " via Claude" : a.via === "api" ? " via API" : a.via === "claude_desk" ? " via Claude in the desk" : "");
 
-async function line(client: HdQueryable, ticketId: number, actor: EventActor, body: string, now: Date): Promise<void> {
+/** An agents-only timeline line. 1.20.28: `change`, a change to the event (added, changed, removed, setup), is an activity line in the desk. */
+async function line(client: HdQueryable, ticketId: number, actor: EventActor, body: string, now: Date, change = false): Promise<void> {
   await client.query(
-    `INSERT INTO hd_messages (ticket_id, author_id, author_name, kind, body, via, created_at) VALUES ($1, $2, $3, 'internal', $4, 'system', $5)`,
-    [ticketId, actor.id, actor.name, `${body}${viaSuffix(actor)}`, now]
+    `INSERT INTO hd_messages (ticket_id, author_id, author_name, kind, body, via, created_at, event) VALUES ($1, $2, $3, 'internal', $4, 'system', $5, $6)`,
+    [ticketId, actor.id, actor.name, `${body}${viaSuffix(actor)}`, now, change ? HD_CHANGE_EVENT : null]
   );
   await client.query("UPDATE hd_tickets SET updated_at = $2 WHERE id = $1", [ticketId, now]);
 }
@@ -294,7 +296,7 @@ export async function setTicketEvent(
          opts.source ?? "agent", opts.ics?.uid ?? "", opts.ics?.sequence ?? 0, opts.ics?.repeats ? 1 : 0, actor.id, now]
       );
       const row = (await eventRow(ticket.id, client))!;
-      await line(client, ticket.id, actor, `${opts.lead?.added ?? `${who} added an event`}: ${describe(toEvent(row), tz)}`, now);
+      await line(client, ticket.id, actor, `${opts.lead?.added ?? `${who} added an event`}: ${describe(toEvent(row), tz)}`, now, true);
       return { row, created: true, changed: true };
     }
     const timeMoved =
@@ -319,7 +321,7 @@ export async function setTicketEvent(
     );
     const row = (await eventRow(ticket.id, client))!;
     if (timeMoved || placeMoved || revived) {
-      await line(client, ticket.id, actor, `${opts.lead?.changed ?? `${who} changed the event`}: ${describe(toEvent(row), tz)}`, now);
+      await line(client, ticket.id, actor, `${opts.lead?.changed ?? `${who} changed the event`}: ${describe(toEvent(row), tz)}`, now, true);
     }
     return { row, created: false, changed: true };
   });
@@ -339,7 +341,7 @@ export async function removeTicketEvent(ticket: TicketRef, actor: EventActor, op
     if (!before) return false;
     await client.query("DELETE FROM hd_ticket_events WHERE ticket_id = $1", [ticket.id]);
     await client.query("DELETE FROM hd_event_reminders WHERE ticket_id = $1", [ticket.id]);
-    await line(client, ticket.id, actor, `${mdInline(actor.name) || "Someone"} removed the event (${mdInline(eventWhen(toEvent(before), tz))})`, now);
+    await line(client, ticket.id, actor, `${mdInline(actor.name) || "Someone"} removed the event (${mdInline(eventWhen(toEvent(before), tz))})`, now, true);
     return true;
   });
   if (removed) await afterEventChange(ticket.id, actor, opts.origin);
@@ -370,11 +372,11 @@ export async function setSetupComplete(
     const who = mdInline(actor.name) || "Someone";
     if (complete) {
       await client.query("UPDATE hd_ticket_events SET setup_done_at = $2, setup_done_by = $3, setup_done_by_name = $4, updated_at = $2 WHERE ticket_id = $1", [ticket.id, now, actor.id, actor.name.slice(0, 200)]);
-      await line(client, ticket.id, actor, `${who} marked the event setup complete`, now);
+      await line(client, ticket.id, actor, `${who} marked the event setup complete`, now, true);
     } else {
       // The reminders start again for this revision: setup is open once more.
       await client.query("UPDATE hd_ticket_events SET setup_done_at = NULL, setup_done_by = NULL, setup_done_by_name = '', time_rev = time_rev + 1, updated_at = $2 WHERE ticket_id = $1", [ticket.id, now]);
-      await line(client, ticket.id, actor, `${who} marked the event setup as not complete`, now);
+      await line(client, ticket.id, actor, `${who} marked the event setup as not complete`, now, true);
     }
     return { row: (await eventRow(ticket.id, client))!, changed: true };
   });
