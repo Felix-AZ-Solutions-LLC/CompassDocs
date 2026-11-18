@@ -34,6 +34,7 @@ import {
   helpCentreAdminCategories,
   helpCentreSpaceOptions,
   helpCentreStats,
+  pruneHelpCentreRefs,
   saveHelpCentreSettings,
   type HelpCentreSettings,
 } from "@/lib/helpdesk/help-centre";
@@ -77,7 +78,7 @@ export async function PUT(req: Request) {
   // both drop out of the save (1.20.30; they were a refusal that no reload could clear).
   const spaces = await helpCentreSpaceOptions(gate, stored.spaces);
   const known = new Map(spaces.map((s) => [s.id, s]));
-  const next = { ...sent, spaces: sent.spaces.filter((id) => known.has(id)) };
+  const next = pruneHelpCentreRefs(sent, { spaces: known.keys() }).settings;
   const priv = next.spaces.map((id) => known.get(id)!).find((s) => s.private);
   if (priv) return badRequest(`“${priv.name}” is a private space. Private spaces are never public: remove it from the help centre.`);
   if (next.enabled && !next.tagged && !(next.from_spaces && next.spaces.length)) {
