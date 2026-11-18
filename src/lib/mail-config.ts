@@ -108,15 +108,13 @@ export async function getMailMethod(): Promise<MailMethod> {
 }
 
 export async function getM365SendConfig(): Promise<M365SendConfig> {
-  let secretUnreadable = false;
-  const [tenant, clientId, secret, mailbox, fromName, setup, secretExpires, spObjectId, entraSend, check, graphUser, secretKeyId, createdApp] = await Promise.all([
+  const [tenant, clientId, secret, sealed, mailbox, fromName, setup, secretExpires, spObjectId, entraSend, check, graphUser, secretKeyId, createdApp] = await Promise.all([
     getSetting(KEYS.tenant),
     getSetting(KEYS.clientId),
-    getSetting(KEYS.secret).catch(() => {
-      // A row is there but it does not open: the master key it was sealed with is gone.
-      secretUnreadable = true;
-      return "";
-    }),
+    getSetting(KEYS.secret).catch(() => ""),
+    pool()
+      .query<{ value: string }>("SELECT value FROM settings WHERE key = $1", [KEYS.secret])
+      .then((r) => r.rows[0]?.value ?? "", () => ""),
     getSetting(KEYS.mailbox),
     getSetting(KEYS.fromName),
     getSetting(KEYS.setup),
@@ -128,6 +126,8 @@ export async function getM365SendConfig(): Promise<M365SendConfig> {
     getSetting(KEYS.secretKeyId),
     getSetting(KEYS.createdApp),
   ]);
+  // A row is there but it does not open (lib/secretbox answers ''): the master key it was sealed with is gone.
+  const secretUnreadable = Boolean(sealed) && !secret;
   let lastCheck: MailM365Check | null = null;
   try {
     const v = check ? JSON.parse(check) : null;

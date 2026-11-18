@@ -21,6 +21,9 @@
 // the error when the setup stopped part-way (its steps, in words);
 // `onError` hears that answer too (the panel refetches its state: a setup
 // can change things before it stops).
+//
+// 1.20.31: a poll cut off by a proxy (no answer, or a 502/503/504 page that
+// is not ours) is asked again instead of ending the setup.
 
 import { useRef, useState, type ReactNode } from "react";
 import { buttonClass } from "@/components/Button";
@@ -108,11 +111,17 @@ export function MsDeviceSetup({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ setup_id: data.setup_id }),
         });
+      } catch {
+        // 1.20.31: the connection dropped while the server worked (a proxy's time limit): ask again.
+        continue;
       } finally {
         clearTimeout(slow);
         setWorking(false);
       }
       const pd = await p.json().catch(() => ({}));
+      // A gateway gave up waiting (its own page, no answer of ours): the setup may still be finishing, so ask again.
+      // A setup that knows its id answers the second poll with how it ended (ee/workspace-mail-setup).
+      if (!p.ok && !pd?.error && (p.status === 502 || p.status === 503 || p.status === 504)) continue;
       if (p.ok && pd.status === "done") {
         setResult(pd);
         setPhase("done");

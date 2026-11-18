@@ -99,6 +99,7 @@ const send = require("../src/lib/mail-m365") as typeof import("../src/lib/mail-m
 const mailer = require("../src/lib/mailer") as typeof import("../src/lib/mailer");
 const graphLib = require("../src/lib/helpdesk/m365/graph") as typeof import("../src/lib/helpdesk/m365/graph");
 const diagnostics = require("../src/lib/diagnostics") as typeof import("../src/lib/diagnostics");
+const delivery = require("../src/lib/newsletter-delivery") as typeof import("../src/lib/newsletter-delivery");
 const email = require("../src/lib/helpdesk/email") as typeof import("../src/lib/helpdesk/email");
 const labels = require("../src/lib/audit-labels") as typeof import("../src/lib/audit-labels");
 const mailRoute = require("../src/app/api/admin/mail/route") as typeof import("../src/app/api/admin/mail/route");
@@ -254,8 +255,10 @@ describe("pure: commands, From, the secret's end, words", () => {
     assert.equal(shared.mailM365Problem({ ...ok, secret: "" }), "Enter the client secret's value.");
     assert.equal(shared.mailM365Problem({ ...ok, secret: "" }, true), "");
     assert.equal(shared.mailM365Problem({ ...ok, client_id: "nope" }), "The application (client) ID is a GUID. Copy it from the app registration's Overview page.");
-    assert.equal(shared.mailM365Problem({ ...ok, mailbox: "" }), "Enter the sending mailbox: the address mail goes out from, such as compassdocs@yourcompany.com.");
-    assert.match(shared.mailM365Problem({ ...ok, mailbox: "a b@firm.com" }), /^Enter the sending mailbox's sign-in name or main address/);
+    assert.equal(shared.mailM365Problem({ ...ok, mailbox: "" }), "Enter the sending mailbox's email address: the address mail goes out from, such as compassdocs@yourcompany.com.");
+    assert.match(shared.mailM365Problem({ ...ok, mailbox: "a b@firm.com" }), /^Enter the sending mailbox's email address/);
+    assert.equal(shared.mailM365Problem({ ...ok, graph_user: "not a name" }), "Enter the mailbox's sign-in name (such as compassdocs@yourcompany.onmicrosoft.com) or its object ID, or leave it empty.");
+    assert.equal(shared.mailM365Problem({ ...ok, graph_user: "mail@contoso.onmicrosoft.com" }), "");
   });
 
   test("Microsoft's refusals in plain words", () => {
@@ -462,14 +465,31 @@ describe("sending through Microsoft 365", () => {
 // --- The check, diagnostics and the test email -----------------------------------------------------
 
 describe("the connection check, diagnostics, the test email", () => {
-  test("Check connection: signs in and asks Graph, sending nothing; kept for the page", async () => {
+  test("Check connection: signs in and asks Graph, sending nothing; tries the admin's own mailbox too; kept and audited", async () => {
     const sentBefore = fake.mailboxes.get(MAILBOX)!.sent.length;
-    const r = await patch({ action: "check" });
+    // The admin's own address is no mailbox in the fake: whether the app is limited is not known.
+    let r = await patch({ action: "check" });
     assert.equal(r.status, 200);
     assert.equal(r.body.check.ok, true);
-    assert.equal(r.body.check.message, `Signed in, and the app may send as ${MAILBOX}. Nothing was sent.`);
+    assert.equal(r.body.check.limited, null);
+    assert.match(r.body.check.message, new RegExp(`^Signed in, and the app may send as ${MAILBOX.replace(/[.]/g, "\\.")}\\. Nothing was sent\\. Whether it is limited`));
     assert.equal(r.body.view.m365.last_check.ok, true);
+    // The admin has a mailbox there: the app (Mail.Send in Entra, no policy) can send as it too.
+    fake.addMailbox(`${STAMP}-admin@example.test`, "user");
+    r = await patch({ action: "check" });
+    assert.equal(r.body.check.limited, false);
+    assert.match(r.body.check.message, /The app can also send as .*-admin@example\.test: it is not limited to .* yet\. Run the lock-down commands below\./);
+    assert.equal(r.body.view.m365.last_check.other, `${STAMP}-admin@example.test`);
+    // "The admin ran the commands": an access policy over the sending mailbox only.
+    app.policy = new Set([MAILBOX]);
+    graphLib.clearM365TokensForTests();
+    r = await patch({ action: "check" });
+    assert.equal(r.body.check.ok, true);
+    assert.equal(r.body.check.limited, true);
+    assert.match(r.body.check.message, /It can't send as .*-admin@example\.test, as it should\./);
+    app.policy = null;
     assert.equal(fake.mailboxes.get(MAILBOX)!.sent.length, sentBefore, "nothing was sent");
+    assert.deepEqual((await audits("settings.mail_check")).map((a) => a.details.limited), [null, false, true]);
     app.roles = [];
     graphLib.clearM365TokensForTests();
     const no = await patch({ action: "check" });
@@ -480,10 +500,31 @@ describe("the connection check, diagnostics, the test email", () => {
     graphLib.clearM365TokensForTests();
   });
 
-  test("diagnostics: Email (Microsoft 365), checked for real; the secret's end warns, then fails", async () => {
+  test("diagnostics: a page render shows the last check and never calls Microsoft; Run checks probes when it is over 10 minutes old", async () => {
+    // Locked down, so the check passes whole (an app that can send as others too warns: the next test).
+    app.policy = new Set([MAILBOX]);
+    graphLib.clearM365TokensForTests();
+    await patch({ action: "check" });
+    const calls = fake.requests.length;
     let row = await diagnostics.checkMail();
+    assert.equal(fake.requests.length, calls, "no call to Microsoft on a render");
     assert.deepEqual([row.label, row.status], ["Email (Microsoft 365)", "pass"]);
-    assert.equal(row.detail, `Signed in and allowed to send as ${MAILBOX}. Nothing was sent to check it.`);
+    assert.match(row.detail, new RegExp(`^Signed in and allowed to send as ${MAILBOX.replace(/[.]/g, "\\.")}\\. Nothing was sent to check it\\. Checked `));
+    row = await diagnostics.checkMail({ live: true });
+    assert.equal(fake.requests.length, calls, "a fresh check is reused by Run checks too");
+    const old = { at: new Date(Date.now() - 11 * 60_000).toISOString(), ok: true, message: "old", limited: null, other: "" };
+    await setSetting("mail_m365_check", JSON.stringify(old));
+    row = await diagnostics.checkMail();
+    assert.equal(fake.requests.length, calls, "a stale check is shown, not redone, on a render");
+    row = await diagnostics.checkMail({ live: true });
+    assert.ok(fake.requests.length > calls, "Run checks probes again once the last check is old");
+    assert.equal(row.status, "pass");
+    app.policy = null;
+    graphLib.clearM365TokensForTests();
+  });
+
+  test("diagnostics: the secret's end warns, then fails; a refusal fails; an app that is not limited warns", async () => {
+    let row = await diagnostics.checkMail({ live: true });
     const soon = new Date(Date.now() + 10 * 86_400_000).toISOString().slice(0, 10);
     await setSetting("mail_m365_secret_expires", soon);
     row = await diagnostics.checkMail();
@@ -495,10 +536,16 @@ describe("the connection check, diagnostics, the test email", () => {
     assert.equal(row.status, "fail");
     await setSetting("mail_m365_secret_expires", "");
     fake.fail.sendMail = 403;
-    row = await diagnostics.checkMail();
+    await setSetting("mail_m365_check", "");
+    row = await diagnostics.checkMail({ live: true });
     delete fake.fail.sendMail;
     assert.equal(row.status, "fail");
     assert.match(row.detail, /refused the From address|isn't allowed to send/);
+    await setSetting("mail_m365_check", JSON.stringify({ at: new Date().toISOString(), ok: true, message: "x", limited: false, other: "someone@x.test" }));
+    row = await diagnostics.checkMail();
+    assert.equal(row.status, "warn");
+    assert.match(row.detail, /^The app can send as other mailboxes too/);
+    await setSetting("mail_m365_check", "");
   });
 
   test("the test email by the method on screen, audited; SMTP not set up says so", async () => {
@@ -528,9 +575,191 @@ describe("the connection check, diagnostics, the test email", () => {
     assert.equal(r.body.view.m365.configured, true, "kept");
     assert.equal(r.body.view.m365.client_id, app.appId);
     assert.equal(await config.workspaceFrom(), "docs@example.test");
+    // Back to Microsoft 365: the From changes, so the switch asks first.
     r = await patch({ action: "method", method: "m365" });
+    assert.equal(r.status, 409);
+    assert.equal(r.body.code, "confirm");
+    assert.deepEqual(r.body.warnings, [`Email now comes from docs@example.test. Through Microsoft 365 it comes from ${MAILBOX} instead.`]);
+    assert.equal(await config.getMailMethod(), "smtp");
+    assert.deepEqual((await patch({ action: "warnings", method: "m365" })).body.warnings, r.body.warnings);
+    r = await patch({ action: "method", method: "m365", confirm: true });
     assert.equal(r.body.view.method, "m365");
     assert.deepEqual((await audits("settings.mail_method")).map((a) => a.details.to), ["m365", "smtp", "m365"]);
+  });
+});
+
+// --- Review fixes: the mailbox, the secret, the desk, newsletters ------------------------------
+
+describe("the sending mailbox, the secret, the desk's From", () => {
+  test("changing the sending mailbox takes the secret again", async () => {
+    const r = await patch(manual({ secret: "", mailbox: OTHER }));
+    assert.deepEqual([r.status, r.body.code], [400, "secret_needed"]);
+    assert.match(r.body.error, /^Enter the client secret again to change the sending mailbox/);
+    assert.equal((await config.getM365SendConfig()).mailbox, MAILBOX);
+  });
+
+  test("a sign-in name that is not the address: Graph is asked by it, mail comes from the address", async () => {
+    const ADDR = `news@${STAMP}.example.test`;
+    const UPN = `news-${STAMP}@contoso.onmicrosoft.com`;
+    fake.addMailbox(ADDR, "shared", { upn: UPN });
+    // By the address alone Graph finds nothing (the fake is strict, as Microsoft documents /users/{id | UPN}).
+    let r = await patch(manual({ mailbox: ADDR }));
+    assert.equal(r.status, 200);
+    let check = await patch({ action: "check" });
+    assert.match(check.body.check.message, /found no mailbox/);
+    r = await patch(manual({ mailbox: ADDR, graph_user: UPN }));
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.view.m365.graph_user, UPN);
+    check = await patch({ action: "check" });
+    assert.equal(check.body.check.ok, true);
+    await mailer.sendMail(["reader@example.test"], "By sign-in name", "Body");
+    const mime = fake.mailboxes.get(ADDR)!.sent.at(-1)!.toString("utf8");
+    assert.match(mime, new RegExp(`^From: .*${ADDR.replace(/[.]/g, "\\.")}`, "m"));
+    // Back to the main mailbox for what follows.
+    r = await patch(manual({ graph_user: "" }));
+    assert.equal(r.status, 200);
+    assert.equal((await config.getM365SendConfig()).mailbox, MAILBOX);
+  });
+
+  test("a secret that can't be opened is a clear failure, not 'not set up'", async () => {
+    const raw = (await pool().query("SELECT value FROM settings WHERE key = 'mail_m365_client_secret'")).rows[0].value as string;
+    await pool().query("UPDATE settings SET value = $1 WHERE key = 'mail_m365_client_secret'", [`${raw.slice(0, raw.length - 6)}AAAAAA`]);
+    try {
+      const v = (await view()).body;
+      assert.deepEqual([v.m365.secret_unreadable, v.m365.configured, v.configured], [true, true, true]);
+      const check = await patch({ action: "check" });
+      assert.equal(check.body.check.message, config.SECRET_UNREADABLE);
+      await assert.rejects(() => mailer.sendMail(["r@example.test"], "x", "y"), (e: Error) => e.message === config.SECRET_UNREADABLE);
+      assert.equal((await diagnostics.checkMail()).detail, config.SECRET_UNREADABLE);
+      const r = await patch(manual({ secret: "" }));
+      assert.deepEqual([r.status, r.body.error], [400, config.SECRET_UNREADABLE]);
+    } finally {
+      await pool().query("UPDATE settings SET value = $1 WHERE key = 'mail_m365_client_secret'", [raw]);
+    }
+  });
+
+  test("the desk through Microsoft 365: never From a send-from address; From the mailbox under the help address's name, answers to the help address", async () => {
+    fake.strictFrom = true;
+    try {
+      const t = await email.sendSendAddressTestMail({ address: "support@firm.example", name: "Support" }, "me@example.test");
+      assert.equal(t.ok, false);
+      assert.equal(t.senderRejected, undefined, "not a refusal: nothing is recorded on the address");
+      assert.match(t.error!, new RegExp(`^Email goes out through Microsoft 365, so replies are sent from ${MAILBOX.replace(/[.]/g, "\\.")} under the help address's name and send-from addresses are not used\\.`));
+      const before = fake.mailboxes.get(MAILBOX)!.sent.length;
+      const r = await email.sendMailboxTestMail({ id: 999_999, address: "help@firm.example", name: "Firm Help", send_address: "support@firm.example", send_address_name: "Support" }, "me@example.test");
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(fake.mailboxes.get(MAILBOX)!.sent.length, before + 1);
+      const mime = sentText();
+      assert.match(mime, new RegExp(`^From: "?Firm Help"? <${MAILBOX.replace(/[.]/g, "\\.")}>`, "m"));
+      assert.match(mime, /^Reply-To: help@firm\.example/m);
+    } finally {
+      fake.strictFrom = false;
+    }
+  });
+});
+
+describe("newsletters through Microsoft 365: in the background, paced", () => {
+  let nid = 0;
+  const sent: string[] = [];
+  let behave: (to: string) => void = () => {};
+  before(async () => {
+    nid = (await pool().query("INSERT INTO newsletters (subject, body, author_name, status) VALUES ($1, 'Body', 'Author', 'approved') RETURNING id", [`${STAMP} issue`])).rows[0].id;
+    delivery.setNewsletterSenderForTests(async (to) => {
+      behave(to[0]);
+      sent.push(to[0]);
+    });
+  });
+  after(async () => {
+    delivery.setNewsletterSenderForTests(null);
+    await pool().query("DELETE FROM newsletters WHERE id = $1", [nid]);
+  });
+  const payload = { subject: "Issue", text: "Body", html: "<p>Body</p>", from: "", attachments: [] };
+  const people = Array.from({ length: 30 }, (_, i) => `p${String(i).padStart(2, "0")}@${STAMP}.example.test`);
+  const tick = async () => {
+    await delivery.resetNewsletterPacingForTests();
+    return delivery.newsletterDeliveryTick();
+  };
+
+  test("queued, then about 25 a minute; one batch a minute whichever instance ticks", async () => {
+    const d = await delivery.startNewsletterSend(nid, payload, people, { audience: "Everyone", actor: { id: U.admin.id, name: U.admin.name } });
+    assert.deepEqual([d.state, d.total, d.queued], ["sending", 30, 30]);
+    await assert.rejects(() => delivery.startNewsletterSend(nid, payload, people, { audience: "Everyone" }), /already being sent/);
+    let t = await tick();
+    assert.equal(t.sent, delivery.NEWSLETTER_PER_TICK);
+    // Straight away again: the minute is not over, nothing goes.
+    t = await delivery.newsletterDeliveryTick();
+    assert.equal(t.newsletter, null);
+    assert.equal((await delivery.newsletterDelivery(nid))!.queued, 5);
+  });
+
+  test("Microsoft asks to slow down: the job pauses, nobody is lost or sent twice", async () => {
+    let once = true;
+    behave = () => {
+      if (once) {
+        once = false;
+        throw new send.MailSendError("Microsoft 365 is limiting how fast this app sends. Try again in 120 seconds.", 429, "TooManyRequests", "http", 120_000);
+      }
+    };
+    await tick();
+    const d = (await delivery.newsletterDelivery(nid))!;
+    assert.equal(d.state, "paused");
+    assert.equal(d.queued, 5);
+    assert.ok(d.paused_until && Date.parse(d.paused_until) > Date.now() + 100_000);
+    behave = () => {};
+  });
+
+  test("a recipient Microsoft refuses fails on its own; done: the count is real and 'everyone' is not claimed", async () => {
+    behave = (to) => {
+      if (to === people[27]) throw new send.MailSendError("Microsoft 365 refused the email (error 400, ErrorInvalidRecipients).", 400, "ErrorInvalidRecipients");
+    };
+    await tick();
+    const d = (await delivery.newsletterDelivery(nid))!;
+    assert.deepEqual([d.state, d.sent, d.failed, d.queued], ["done", 29, 1, 0]);
+    assert.deepEqual(d.failures, [{ email: people[27], error: "Microsoft 365 refused the email (error 400, ErrorInvalidRecipients)." }]);
+    const n = (await pool().query("SELECT status, sent_count FROM newsletters WHERE id = $1", [nid])).rows[0];
+    assert.deepEqual([n.status, n.sent_count], ["sent", 29]);
+    const c = (await pool().query("SELECT body FROM newsletter_comments WHERE newsletter_id = $1 AND kind = 'sent'", [nid])).rows.map((r) => r.body);
+    assert.deepEqual(c, ["Sent to 29 of 30 recipients (everyone); 1 failed. Open the newsletter to see why and retry them."]);
+    assert.equal(new Set(sent).size, sent.length, "nobody was sent it twice");
+    assert.equal(sent.length, 29);
+  });
+
+  test("Retry the 1 that failed: only that one is sent again, and the count grows", async () => {
+    behave = () => {};
+    const d = await delivery.resumeNewsletterSend(nid, "failed");
+    assert.deepEqual([d.state, d.queued], ["sending", 1]);
+    await tick();
+    const after = (await delivery.newsletterDelivery(nid))!;
+    assert.deepEqual([after.state, after.sent, after.failed], ["done", 30, 0]);
+    assert.equal((await pool().query("SELECT sent_count FROM newsletters WHERE id = $1", [nid])).rows[0].sent_count, 30);
+    assert.equal(sent.filter((e) => e === people[27]).length, 1);
+    await assert.rejects(() => delivery.resumeNewsletterSend(nid, "failed"), /nothing to retry/);
+  });
+
+  test("a refusal that would repeat for everyone stops the send, with the reason; Try again goes on", async () => {
+    const id2 = (await pool().query("INSERT INTO newsletters (subject, body, author_name, status) VALUES ($1, 'Body', 'Author', 'approved') RETURNING id", [`${STAMP} issue 2`])).rows[0].id;
+    try {
+      await delivery.startNewsletterSend(id2, payload, people.slice(0, 3), { audience: "Everyone" });
+      behave = () => {
+        throw new send.MailSendError(`The app isn't allowed to send as ${MAILBOX} (Mail.Send not granted or blocked by an application access policy).`, 403, "ErrorAccessDenied");
+      };
+      await tick();
+      let d = (await delivery.newsletterDelivery(id2))!;
+      assert.deepEqual([d.state, d.queued, d.sent], ["stopped", 3, 0]);
+      assert.match(d.stop_reason, /isn't allowed to send as/);
+      behave = () => {};
+      await delivery.resumeNewsletterSend(id2, "stopped");
+      await tick();
+      d = (await delivery.newsletterDelivery(id2))!;
+      assert.deepEqual([d.state, d.sent], ["done", 3]);
+      assert.deepEqual((await pool().query("SELECT body FROM newsletter_comments WHERE newsletter_id = $1 AND kind = 'sent'", [id2])).rows.map((r) => r.body), ["Sent to everyone — 3 recipients."]);
+    } finally {
+      await pool().query("DELETE FROM newsletters WHERE id = $1", [id2]);
+    }
+  });
+
+  test("labels for the new audit actions", () => {
+    for (const a of ["newsletter.send_started", "newsletter.send_retried", "newsletter.send_resumed", "settings.mail_check", "settings.mail_m365_auto_setup_failed"]) assert.ok(labels.hasActionLabel(a), a);
   });
 });
 
@@ -549,7 +778,8 @@ describe("Set up with Microsoft (enterprise overlay)", { skip: !fs.existsSync(EE
     assert.deepEqual((await poll(s.body.setup_id)).body, { status: "pending" });
     return poll(s.body.setup_id);
   };
-  const ours = () => [...fake.apps.values()].filter((a) => a.displayName === "CompassDocs Workspace Mail" && !a.deleted);
+  let squatter: FakeApp | null = null;
+  const ours = () => [...fake.apps.values()].filter((a) => a.displayName === "CompassDocs Workspace Mail" && !a.deleted && a !== squatter);
 
   before(async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -579,7 +809,9 @@ describe("Set up with Microsoft (enterprise overlay)", { skip: !fs.existsSync(EE
     assert.equal((await config.getM365SendConfig()).clientId, "");
   });
 
-  test("the first run: the app with Mail.Send only, admin consent, a secret, saved and chosen", async () => {
+  test("the first run: never an app found by its name; a new app with Mail.Send only, admin consent, a secret, saved and chosen", async () => {
+    // Someone registered an app with the setup's name (and owns it): it must not be picked up and given Mail.Send.
+    squatter = fake.addApp({ displayName: "CompassDocs Workspace Mail" });
     const r = await run({ mailbox: MAILBOX, from_name: "Firm Docs", use: true });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.status, "done");
@@ -597,6 +829,9 @@ describe("Set up with Microsoft (enterprise overlay)", { skip: !fs.existsSync(EE
     assert.deepEqual([c.tenant, c.clientId, c.mailbox, c.fromName, c.setup, c.secretExpires, c.entraSend, c.spObjectId], [a.tenant, a.appId, MAILBOX, "Firm Docs", "one_click", r.body.secret_expires, true, a.spId]);
     assert.equal(c.secret, a.secrets[0]);
     assert.equal(await config.getMailMethod(), "m365");
+    assert.deepEqual([squatter!.roles, squatter!.assignments ?? [], squatter!.secrets.length], [[], [], 1], "the look-alike app was not touched");
+    assert.equal(c.createdApp, a.appId);
+    assert.ok(c.secretKeyId);
     const [auto] = await audits("settings.mail_m365_auto_setup");
     assert.equal(auto.details.client_id, a.appId);
     assert.ok(!JSON.stringify(auto.details).includes(a.secrets[0]));
@@ -604,16 +839,40 @@ describe("Set up with Microsoft (enterprise overlay)", { skip: !fs.existsSync(EE
     assert.match(sentText(), /Subject: After one click/);
   });
 
-  test("a second run finds the same app, consents once, and makes a new secret (the old one stays until it is removed in Entra)", async () => {
+  test("a second run renews the saved app's secret only, removes the one it made before, and a repeated poll makes no third", async () => {
+    const before = ours()[0].secrets[0];
+    const s = await start({ mailbox: MAILBOX });
+    await poll(s.body.setup_id);
+    const r = await poll(s.body.setup_id);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual([r.body.reused, r.body.old_secret_removed], [true, true]);
+    const all = ours();
+    assert.equal(all.length, 1, "no second app");
+    assert.equal(all[0].assignments?.length, 1, "consent left as it was");
+    assert.equal(all[0].secrets.length, 1, "the previous secret this setup made is gone");
+    assert.notEqual(all[0].secrets[0], before);
+    assert.equal((await config.getM365SendConfig()).secret, all[0].secrets[0]);
+    assert.ok((await audits("settings.mail_m365_secret")).length >= 1);
+    // The same poll again (a proxy cut the first one off): the outcome, not a second run.
+    const again = await poll(s.body.setup_id);
+    assert.deepEqual(again.body, r.body);
+    assert.equal(ours()[0].secrets.length, 1);
+  });
+
+  test("an app limited with RBAC (no Mail.Send in Entra): a run renews its secret and never adds the permission or consent back", async () => {
+    const a = ours()[0];
+    a.roles = [];
+    a.assignments = [];
+    a.requiredResourceAccess = [];
+    graphLib.clearM365TokensForTests();
+    await patch({ action: "check" });
+    assert.equal((await config.getM365SendConfig()).entraSend, false);
     const r = await run({ mailbox: MAILBOX });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.reused, true);
-    const all = ours();
-    assert.equal(all.length, 1, "no second app");
-    assert.equal(all[0].assignments?.length, 1, "consent granted once");
-    assert.equal(all[0].secrets.length, 2);
-    assert.equal((await config.getM365SendConfig()).secret, all[0].secrets[1]);
-    assert.ok((await audits("settings.mail_m365_secret")).length >= 1);
+    assert.deepEqual([a.roles, a.assignments, a.requiredResourceAccess], [[], [], []], "the lock-down is left as it is");
+    a.roles = ["Mail.Send"];
+    graphLib.clearM365TokensForTests();
   });
 
   test("a refusal on an app it found leaves the app and the saved configuration as they were", async () => {
@@ -623,10 +882,12 @@ describe("Set up with Microsoft (enterprise overlay)", { skip: !fs.existsSync(EE
     try {
       const r = await run({ mailbox: MAILBOX });
       assert.equal(r.status, 502);
-      assert.equal(r.body.error, 'Insufficient privileges to complete the operation. The app registration "CompassDocs Workspace Mail" was found in Entra and left as it was.');
+      assert.equal(r.body.error, "Insufficient privileges to complete the operation. The app you send with was left as it was.");
     } finally {
       fake.failStep = "";
     }
+    const [failed] = (await audits("settings.mail_m365_auto_setup_failed")).slice(-1);
+    assert.match(String(failed.details.error), /^Insufficient privileges/);
     assert.equal(ours().length, 1);
     assert.equal(ours()[0].secrets.length, before);
     assert.equal((await config.getM365SendConfig()).secret, keep.secret);
