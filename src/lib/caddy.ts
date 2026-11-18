@@ -15,6 +15,8 @@ import path from "path";
 import { getSetting, setSetting } from "./db";
 import { getAppSettings } from "./settings-store";
 import type { TlsMode } from "./settings";
+import { DOMAIN_CHECK_PATH } from "./domain-check";
+import { fallbackHosts } from "./fallback-hosts";
 
 // Base URL of Caddy's admin API. Empty → no managed proxy is attached, so the
 // GUI shows the domain settings as informational only.
@@ -100,17 +102,35 @@ export async function storeCustomCert(cert: string, key: string): Promise<void> 
 // Build a Caddyfile from the saved settings. Every config keeps the admin API
 // listening on the Docker network — WITH our hostname in the allowed origins,
 // or Caddy would 403 the very next /load push and lock us out on reload.
-function buildCaddyfile(domain: string, mode: TlsMode, email: string): string {
+//
+// 1.20.29: a config that serves a custom domain also serves
+//   - each fallback host (lib/fallback-hosts) as its own site, so the
+//     address the install was reached on keeps working: the TLS mode's
+//     certificate (Let's Encrypt for auto and for bring-your-own, whose
+//     certificate names only the custom domain; the internal CA for
+//     internal) plus plain HTTP; plain HTTP only when TLS is off;
+//   - a plain-HTTP route for the domain check's path on ANY host
+//     (lib/domain-check), so a new name can be checked through the current
+//     config before the proxy is switched to it. The custom domain gets an
+//     explicit http:// site for the same reason: its HTTP→HTTPS redirect is
+//     written out instead of left to Caddy, which would redirect the check
+//     too. Every other plain-HTTP request behaves as before: a redirect to
+//     HTTPS on the same host, or (TLS off) Caddy's empty answer.
+export function buildCaddyfile(domain: string, mode: TlsMode, email: string, fallbacks: string[] = []): string {
   const globals =
     "{\n\tadmin 0.0.0.0:2019 {\n\t\torigins caddy:2019 localhost:2019 127.0.0.1:2019 0.0.0.0:2019\n\t}\n}\n\n";
 
   // No custom domain configured — serve the app over plain HTTP on any host so
-  // the site stays reachable (e.g. by IP) until a domain is set.
+  // the site stays reachable (e.g. by IP) until a domain is set. That also
+  // serves the domain check and every fallback host.
   if (!domain) {
     return `${globals}:80 {\n\treverse_proxy app:3000\n}\n`;
   }
 
-  const site = mode === "off" ? `http://${domain}` : domain;
+  const check = `\thandle ${DOMAIN_CHECK_PATH}* {\n\t\treverse_proxy app:3000\n\t}\n`;
+  const redirect = "\thandle {\n\t\tredir https://{host}{uri} 308\n\t}\n";
+  const blocks: string[] = [];
+
   const body = ["\tencode zstd gzip", "\treverse_proxy app:3000"];
   if (mode === "auto") {
     if (email) body.push(`\ttls ${email}`); // else fully automatic
@@ -119,7 +139,28 @@ function buildCaddyfile(domain: string, mode: TlsMode, email: string): string {
   } else if (mode === "custom") {
     body.push(`\ttls ${CADDY_CERT_PATH}/cert.pem ${CADDY_CERT_PATH}/key.pem`);
   }
-  return `${globals}${site} {\n${body.join("\n")}\n}\n`;
+  if (mode === "off") {
+    blocks.push(`http://${domain} {\n${body.join("\n")}\n}\n`);
+  } else {
+    blocks.push(`http://${domain} {\n${check}${redirect}}\n`);
+    blocks.push(`${domain} {\n${body.join("\n")}\n}\n`);
+  }
+
+  for (const host of fallbacks) {
+    if (host === domain) continue;
+    const fb = ["\tencode zstd gzip", "\treverse_proxy app:3000"];
+    if (mode === "off") {
+      blocks.push(`http://${host} {\n${fb.join("\n")}\n}\n`);
+      continue;
+    }
+    if (mode === "internal") fb.push("\ttls internal");
+    else if (email) fb.push(`\ttls ${email}`);
+    blocks.push(`${host}, http://${host} {\n${fb.join("\n")}\n}\n`);
+  }
+
+  // Any other host on plain HTTP: the domain check, then the old behaviour.
+  blocks.push(`http:// {\n${check}${mode === "off" ? "" : redirect}}\n`);
+  return `${globals}${blocks.join("\n")}`;
 }
 
 async function writeCertFiles(cert: string, key: string): Promise<void> {
@@ -157,7 +198,8 @@ export async function applyProxyConfig(): Promise<ApplyResult> {
     }
   }
 
-  const caddyfile = buildCaddyfile(s.custom_domain, s.tls_mode, s.tls_email);
+  const fallbacks = s.custom_domain ? (await fallbackHosts(s.custom_domain)).map((f) => f.host) : [];
+  const caddyfile = buildCaddyfile(s.custom_domain, s.tls_mode, s.tls_email, fallbacks);
   try {
     const res = await adminFetch(
       "/load",

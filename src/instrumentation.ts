@@ -161,6 +161,20 @@ export async function register() {
       console.error("[ack] notice outbox error:", e);
     }
   };
+  // A custom domain waiting for its DNS (1.20.29, lib/domain-flow): checked
+  // again every five minutes for 24 hours and switched on when it passes.
+  // One settings read a minute when nothing is due; the check itself is
+  // claimed with a compare-and-swap, so every instance may run this.
+  const domainTick = async () => {
+    try {
+      const { recheckPendingDomain } = await import("./lib/domain-flow");
+      const r = await recheckPendingDomain();
+      if (r.status === "applied") console.log(`[domain] ${r.check?.domain} passed its check and is live`);
+    } catch (e) {
+      console.error("[domain] re-check error:", e);
+    }
+  };
+  setInterval(domainTick, 60_000);
   setTimeout(newsletterTick, 30_000);
   setInterval(newsletterTick, 60_000);
 

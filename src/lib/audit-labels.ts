@@ -569,6 +569,12 @@ export const AUDIT_LABELS: Record<string, string> = {
   "settings.approval_mode": "Changed approval mode",
   "settings.editors_edit_all": "Changed who can edit spaces",
   "settings.domain": "Updated domain & HTTPS",
+  // The custom-domain check (1.20.29, lib/domain-flow)
+  "domain.check_failed": "Custom domain didn't pass its check",
+  "domain.applied": "Switched to a custom domain",
+  "domain.forced": "Switched to a custom domain without its check",
+  "domain.pending_discarded": "Discarded a waiting custom domain",
+  "domain.fallback_removed": "Removed a fallback address",
   "settings.smtp": "Updated email delivery settings",
   "settings.public_site": "Updated public site settings",
   "settings.sso": "Updated SSO settings",

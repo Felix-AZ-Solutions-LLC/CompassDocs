@@ -2,31 +2,16 @@ import { NextResponse } from "next/server";
 import { getAppSettings, updateAppSettings } from "@/lib/settings-store";
 import { normalizeDomain, TLS_MODES, SECURE_COOKIE_MODES } from "@/lib/settings";
 import type { AppSettings, TlsMode, SecureCookieMode } from "@/lib/settings";
-import {
-  applyProxyConfig,
-  proxyStatus,
-  hasCustomCert,
-  storeCustomCert,
-} from "@/lib/caddy";
+import { hasCustomCert, storeCustomCert } from "@/lib/caddy";
 import { apiGuard, credentialSaveError } from "@/lib/api-auth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
+import { domainState, saveDomainSettings } from "@/lib/domain-flow";
 
 export const dynamic = "force-dynamic";
 
-// Shape returned to the GUI. Note the certificate/key are write-only — we never
-// echo the private key back, only whether one is stored.
-async function currentState() {
-  const s = await getAppSettings();
-  const [status, customCert] = await Promise.all([proxyStatus(), hasCustomCert()]);
-  return {
-    custom_domain: s.custom_domain,
-    tls_mode: s.tls_mode,
-    tls_email: s.tls_email,
-    secure_cookies: s.secure_cookies,
-    has_custom_cert: customCert,
-    proxy: status,
-  };
-}
+// Shape returned to the GUI (lib/domain-flow domainState): the certificate
+// and key are write-only, so only whether one is stored.
+const currentState = domainState;
 
 export async function GET() {
   const gate = await apiGuard("admin", "workspace.domain_manage");
@@ -87,30 +72,49 @@ export async function PATCH(req: Request) {
     );
   }
 
-  if (Object.keys(patch).length) {
-    const keyErr = await credentialSaveError(() => updateAppSettings(patch));
+  // Everything but the domain triple saves as before; the domain, its TLS
+  // mode and email go through the check (1.20.29, lib/domain-flow).
+  const { custom_domain: _d, tls_mode: _m, tls_email: _e, ...rest } = patch;
+  if (Object.keys(rest).length) {
+    const keyErr = await credentialSaveError(() => updateAppSettings(rest));
     if (keyErr) return keyErr;
   }
 
-  // Push to the live proxy. The settings are already saved; a proxy failure is
-  // surfaced as a warning rather than failing the whole save.
-  const applied = await applyProxyConfig();
+  const current = await getAppSettings();
+  const actor = actorFrom(gate);
+  const ip = ipFrom(req);
+  const result = await saveDomainSettings({
+    domain: patch.custom_domain ?? current.custom_domain,
+    tls_mode: patch.tls_mode,
+    tls_email: patch.tls_email,
+    force: body?.force === true,
+    actor,
+    ip,
+    hostHeader: req.headers.get("host"),
+    via: "settings",
+  });
 
   await audit({
-    actor: actorFrom(gate),
+    actor,
     action: "settings.domain",
     details: {
       domain: patch.custom_domain,
       tls_mode: patch.tls_mode,
-      applied: applied.ok,
+      applied: result.applied,
+      outcome: result.outcome,
+      ...(result.remembered_fallback ? { fallback_remembered: result.remembered_fallback } : {}),
     },
-    ip: ipFrom(req),
+    ip,
   });
 
   return NextResponse.json({
     ok: true,
-    applied: applied.ok,
-    proxyError: applied.ok ? undefined : applied.error,
+    // The proxy took the saved config. False for a domain left pending
+    // (nothing was pushed), with `check` saying why.
+    applied: result.applied,
+    outcome: result.outcome,
+    check: result.check,
+    proxyError: result.outcome === "pending" || result.applied ? undefined : result.proxyError,
     state: await currentState(),
   });
 }

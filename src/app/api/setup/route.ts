@@ -2,13 +2,14 @@ import { NextResponse } from "next/server";
 import { passwordProblem } from "@/lib/password-policy";
 import { needsSetup, createUser, createSession, markLogin, setSetting } from "@/lib/db";
 import { hashPassword, newToken } from "@/lib/password";
-import { getSessionTimeoutMinutes, updateAppSettings } from "@/lib/settings-store";
+import { getSessionTimeoutMinutes } from "@/lib/settings-store";
 import { SESSION_COOKIE, cookieOptions, SESSION_MAX_AGE, secureCookie } from "@/lib/auth";
-import { SECURE_COOKIE_MODES, type SecureCookieMode } from "@/lib/settings";
-import type { AppSettings, TlsMode } from "@/lib/settings";
+import { SECURE_COOKIE_MODES, TLS_MODES, type SecureCookieMode } from "@/lib/settings";
+import type { TlsMode } from "@/lib/settings";
 import { parseLicense } from "@/lib/license";
 import { setAnthropicKey } from "@/lib/ai-config";
-import { applyProxyConfig } from "@/lib/caddy";
+import { saveDomainSettings } from "@/lib/domain-flow";
+import { actorFrom, ipFrom } from "@/lib/audit";
 import { credentialSaveError } from "@/lib/api-auth";
 import { printSetupToken, setupTokenMatches } from "@/lib/setup-token";
 
@@ -115,19 +116,27 @@ export async function POST(req: Request) {
     if (keyErr) return keyErr;
   }
 
-  // Optional domain + HTTPS from the wizard. Stored (normalized/validated by
-  // updateAppSettings) and pushed to the reverse proxy if one is attached; a
-  // proxy failure is non-fatal so it never blocks finishing setup.
-  const domainPatch: Partial<AppSettings> = {};
-  if (body?.custom_domain !== undefined) domainPatch.custom_domain = String(body.custom_domain);
-  if (body?.tls_mode !== undefined) domainPatch.tls_mode = body.tls_mode as TlsMode;
-  if (body?.tls_email !== undefined) domainPatch.tls_email = String(body.tls_email);
-  if (Object.keys(domainPatch).length) {
-    await updateAppSettings(domainPatch);
+  // Optional domain + HTTPS from the wizard. 1.20.29: checked before the
+  // proxy is switched to it (lib/domain-flow), so a name whose DNS isn't
+  // visible yet waits as pending instead of taking the address the wizard
+  // was opened on away. Never blocks finishing setup.
+  let domainOutcome: { outcome: string; message?: string } | null = null;
+  if (body?.custom_domain !== undefined || body?.tls_mode !== undefined || body?.tls_email !== undefined) {
+    const mode = TLS_MODES.includes(body?.tls_mode as TlsMode) ? (body.tls_mode as TlsMode) : undefined;
     try {
-      await applyProxyConfig();
-    } catch {
+      const r = await saveDomainSettings({
+        domain: String(body?.custom_domain ?? ""),
+        tls_mode: mode,
+        tls_email: body?.tls_email !== undefined ? String(body.tls_email) : undefined,
+        actor: actorFrom(user),
+        ip: ipFrom(req),
+        hostHeader: req.headers.get("host"),
+        via: "setup",
+      });
+      domainOutcome = { outcome: r.outcome, message: r.outcome === "pending" ? r.check?.message : undefined };
+    } catch (e) {
       /* proxy may be unreachable during first-run; settings are saved regardless */
+      console.error("[setup] domain step:", e);
     }
   }
 
@@ -139,7 +148,8 @@ export async function POST(req: Request) {
   await createSession(token, user.id, expires, null, req.headers.get("user-agent"), "setup");
   await markLogin(user.id);
 
-  const res = NextResponse.json({ ok: true });
+  // A domain left pending: the wizard opens Settings → Domain & HTTPS, which says why.
+  const res = NextResponse.json({ ok: true, ...(domainOutcome ? { domain: domainOutcome } : {}) });
   res.cookies.set(SESSION_COOKIE, token, cookieOptions(SESSION_MAX_AGE, await secureCookie(req)));
   return res;
 }

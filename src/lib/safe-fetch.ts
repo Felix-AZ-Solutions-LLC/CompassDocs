@@ -88,6 +88,17 @@ function ipBlocked(ip: string, blockPrivate: boolean): boolean {
   return true; // not an IP at all — refuse
 }
 
+/**
+ * The address rules above, for the one caller that classifies an address
+ * without fetching through this module: the custom-domain check (1.20.29,
+ * lib/domain-check), which must tell loopback/link-local (never fetched)
+ * from private (fetched only for that check, see there) from public. A
+ * non-IP string counts as blocked.
+ */
+export function addressBlocked(ip: string, blockPrivate: boolean): boolean {
+  return ipBlocked(ip, blockPrivate);
+}
+
 function blockPrivateRanges(): boolean {
   // Secure by default. Opt out on trusted networks that fetch internal hosts.
   if (process.env.COMPASSDOCS_FETCH_ALLOW_PRIVATE === "1") return false;

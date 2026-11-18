@@ -259,6 +259,8 @@ export const NOTIFY_EVENTS: readonly NotifyEventDef[] = [
   { id: "review_due", section: "documents", label: "Review reminders", hint: "A document you steward is due for review", channels: BWE, digest: true, audience: "Approvers", templates: ["review_due"] },
   { id: "weekly_digest", section: "documents", label: "Weekly digest", hint: "A Monday summary of your subscribed spaces, reviews and the most-read documents", channels: { email: false }, digest: false },
   { id: "service_status", section: "documents", label: "Service status", hint: "A tracked SaaS tool goes down or recovers", channels: BW, digest: false },
+  // 1.20.29 (lib/domain-flow): a custom domain that waited for its DNS passed its check and was switched on.
+  { id: "domain_live", section: "documents", label: "Custom domain live", hint: "A custom domain that was waiting for DNS passes its check and goes live", channels: { bell: true }, digest: false, audience: "Administrators" },
   // Helpdesk requests (requester side)
   { id: "hd_request_received", section: "helpdesk", label: "Request received", hint: "The desk has your new request", channels: BWE, digest: true, templates: ["hd_request_received"] },
   { id: "hd_desk_replied", section: "helpdesk", label: "Reply from the desk", hint: "An agent answers on your request", channels: BWE, digest: true, templates: ["hd_reply"] },
