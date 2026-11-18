@@ -5,7 +5,6 @@
 // they embed the channel secret — so the list shows a masked preview.
 
 import { useState } from "react";
-import { Check } from "lucide-react";
 import { chipClass } from "@/components/Chip";
 import { buttonClass } from "@/components/Button";
 import { confirmDialog } from "@/components/Dialog";
@@ -18,7 +17,7 @@ const FORMATS = [
   { value: "webex", label: "Webex (incoming webhook)" },
   { value: "teams", label: "Microsoft Teams (Workflows webhook)" },
   { value: "slack", label: "Slack (incoming webhook)" },
-  { value: "email", label: "Email (via SMTP)" },
+  { value: "email", label: "Email (workspace email)" },
   { value: "generic", label: "Generic JSON" },
 ];
 
@@ -268,128 +267,6 @@ export function WebhooksPanel({
           </li>
         ))}
       </ul>
-    </div>
-  );
-}
-
-// --- SMTP settings (for the Email channel) --------------------------------------
-
-export interface SmtpState {
-  host: string;
-  port: number;
-  secure: string;
-  user: string;
-  has_pass: boolean;
-  from: string;
-  configured: boolean;
-}
-
-export function SmtpPanel({ initial }: { initial: SmtpState }) {
-  const [s, setS] = useState(initial);
-  const [pass, setPass] = useState("");
-  const [testTo, setTestTo] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function save() {
-    setBusy(true);
-    const res = await fetch("/api/admin/smtp", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        host: s.host,
-        port: s.port,
-        secure: s.secure,
-        user: s.user,
-        ...(pass ? { pass } : {}),
-        from: s.from,
-      }),
-    });
-    setBusy(false);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      toast("error", data?.error || "Could not save.");
-      return;
-    }
-    if (data?.state) setS(data.state);
-    setPass("");
-    toast("ok", "SMTP settings saved.");
-  }
-
-  async function test() {
-    setBusy(true);
-    const res = await fetch("/api/admin/smtp", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "test", to: testTo }),
-    });
-    setBusy(false);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      toast("error", data?.error || "Test failed.");
-      return;
-    }
-    toast("ok", `Test email ${data.status}.`);
-  }
-
-  return (
-    <div id="smtp" className="scroll-mt-6 rounded-xl border border-slate-200 bg-surface p-4 shadow-xs">
-      <div className="mb-1 flex items-center gap-2">
-        <h3 className="font-semibold text-slate-900">Email (SMTP)</h3>
-        {s.configured ? (
-          <span className={chipClass("ok")}>
-            configured
-          </span>
-        ) : (
-          <span className={chipClass("neutral")}>
-            not set up
-          </span>
-        )}
-      </div>
-      <p className="mb-3 text-sm text-slate-500">
-        Needed for Email channels. Any SMTP relay works — Microsoft 365, Google Workspace, SES,
-        Postmark, or your own server.
-      </p>
-      <div className="grid gap-3 sm:grid-cols-4">
-        <div className="sm:col-span-2">
-          <Field label="SMTP host">
-            <TextInput value={s.host} onChange={(e) => setS({ ...s, host: e.target.value })} placeholder="smtp.office365.com" spellCheck={false} />
-          </Field>
-        </div>
-        <Field label="Port">
-          <TextInput type="number" value={s.port} onChange={(e) => setS({ ...s, port: Number(e.target.value) })} />
-        </Field>
-        <Field label="Encryption">
-          <Select value={s.secure} onChange={(e) => setS({ ...s, secure: e.target.value })}>
-            <option value="starttls">STARTTLS (587)</option>
-            <option value="tls">TLS (465)</option>
-            <option value="none">None</option>
-          </Select>
-        </Field>
-      </div>
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-        <Field label={<>Username <span className="text-slate-500">(optional)</span></>}>
-          <TextInput value={s.user} onChange={(e) => setS({ ...s, user: e.target.value })} spellCheck={false} />
-        </Field>
-        <Field
-          label={
-            <>Password {s.has_pass && !pass ? <span className="inline-flex items-center gap-1 text-emerald-600"><Check className="h-3.5 w-3.5" aria-hidden /> (stored)</span> : ""}</>
-          }
-        >
-          <TextInput type="password" value={pass} onChange={(e) => setPass(e.target.value)} placeholder={s.has_pass ? "••••••••" : ""} autoComplete="off" />
-        </Field>
-        <Field label="From address">
-          <TextInput value={s.from} onChange={(e) => setS({ ...s, from: e.target.value })} placeholder="compassdocs@acme.com" spellCheck={false} />
-        </Field>
-      </div>
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <button onClick={save} disabled={busy} className={buttonClass("primary")}>
-          {busy ? "Working…" : "Save"}
-        </button>
-        <TextInput className="max-w-55" value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="you@acme.com" spellCheck={false} />
-        <button onClick={test} disabled={busy || !testTo || !s.configured} className={buttonClass("secondary")}>
-          Send test email
-        </button>
-      </div>
     </div>
   );
 }

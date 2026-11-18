@@ -138,7 +138,12 @@ export function cleanSendingMailbox(raw: unknown): string | null {
 export function mailM365Problem(raw: MailM365Input, secretOptional = false): string {
   const creds = m365CredentialsProblem({ tenant: raw.tenant, client_id: raw.client_id, secret: raw.secret }, secretOptional);
   if (creds) return creds;
-  const mb = s(raw.mailbox);
+  return sendingMailboxProblem(raw.mailbox);
+}
+
+/** Why the sending mailbox typed is refused ('' = fine). */
+export function sendingMailboxProblem(raw: unknown): string {
+  const mb = s(raw);
   if (!mb) return "Enter the sending mailbox: the address mail goes out from, such as compassdocs@yourcompany.com.";
   const why = m365AddressProblem(mb);
   return why ? why.replace("Enter the mailbox's main address", "Enter the sending mailbox's sign-in name or main address") : "";
