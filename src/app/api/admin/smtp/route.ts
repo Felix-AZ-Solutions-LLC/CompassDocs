@@ -78,8 +78,10 @@ export async function PATCH(req: Request) {
   let method_changed = false;
   if (body?.use === true) {
     try {
-      method_changed = await setMailMethod("smtp", { actor: actorFrom(user), ip: ipFrom(req) });
+      method_changed = await setMailMethod("smtp", { actor: actorFrom(user), ip: ipFrom(req) }, { confirm: body?.confirm === true });
     } catch (e) {
+      // 1.20.32: mail still waiting in the Microsoft 365 outbox: the page asks first (its warnings), then sends confirm.
+      if (e instanceof MailConfigError && e.code === "confirm") return NextResponse.json({ error: e.message, code: e.code, warnings: e.warnings, state: await view() }, { status: 409 });
       if (e instanceof MailConfigError) return NextResponse.json({ ok: true, state: await view(), error: e.message, method_changed: false });
       throw e;
     }

@@ -85,6 +85,8 @@ export interface NotifyContext {
    * mailed copy of it.
    */
   directRecipients?: string[];
+  /** 1.20.32: the agent's public reply being mailed: its emails carry it, so a failed one shows on that message. */
+  messageId?: number;
 }
 
 
@@ -157,7 +159,8 @@ async function emailUsers(
   if (!ids.length) return false;
   let mailed = false;
   const [emails, prefs] = await Promise.all([userEmails(ids), getNotifyPrefsFor(ids).catch(() => new Map())]);
-  const thread = ticketNumber ? await threadFor(ticketNumber) : null;
+  const found = ticketNumber ? await threadFor(ticketNumber) : null;
+  const thread = found && ctx.messageId && template === "hd_reply" ? { ...found, messageId: ctx.messageId } : found;
   for (const id of ids) {
     const u = emails.get(id);
     if (!u?.email) continue;
@@ -286,7 +289,8 @@ async function toRequester(
   // behind it: no receipt, reply, "waiting on you", CSAT or workflow notice.
   if (t.automated) return;
   const link = hdLinks.request(t.number);
-  const thread = { ticketId: t.id, number: t.number, teamId: t.team_id };
+  const messageId = ctx.messageId && template === "hd_reply" ? ctx.messageId : null;
+  const thread = { ticketId: t.id, number: t.number, teamId: t.team_id, messageId };
   const event = requesterEvent(template, t.status);
   // 1.19.1 (agent V3, lib/helpdesk/ccs): a public reply also reaches the
   // people copied on the request, on Cc of the requester's mail.
@@ -316,7 +320,7 @@ async function toRequester(
     }
   } else if (t.requester_email && onMail.has(t.requester_email.toLowerCase())) {
     // 1.19.2 (agent W5): the outside requester or portal contact was on the email itself.
-  } else if (t.requester_email && (await (await import("./portal-hooks")).portalRequesterNotice(t.id, template, vars, ctx.origin))) {
+  } else if (t.requester_email && (await (await import("./portal-hooks")).portalRequesterNotice(t.id, template, vars, ctx.origin, messageId))) {
     // 1.19.1 (agent V6, lib/helpdesk/portal-hooks): a customer-portal
     // contact's notice went by email from the portal, with a sign-in link.
   } else if (t.requester_email) {
@@ -481,7 +485,8 @@ export const notifyReply = guarded(
       });
       return;
     }
-    await toRequester(t, `${author} replied on #${t.number}`, excerpt(m.body), "hd_reply", vars, ctx);
+    // 1.20.32: the reply's emails carry its id, so one that fails shows on it in the ticket (lib/mail-outbox).
+    await toRequester(t, `${author} replied on #${t.number}`, excerpt(m.body), "hd_reply", vars, { ...ctx, messageId });
     // 1.19.4 (lib/helpdesk/chat): a request raised in Teams or Slack hears the reply there too (never waited on).
     void import("./chat/core").then((c) => c.sendDeskReply(ticketId, messageId)).catch(() => {});
   }

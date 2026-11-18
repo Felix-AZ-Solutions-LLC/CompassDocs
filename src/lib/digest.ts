@@ -259,7 +259,7 @@ export async function maybeSendWeeklyDigests(now = new Date()): Promise<void> {
         `<p style="margin-top:22px;font-size:12px;color:#94a3b8">You get this because the weekly digest is on under Account → Notifications.</p>` +
         `</div>`;
 
-      await sendMail([u.email], subject, text, html);
+      await sendMail([u.email], subject, text, html, undefined, undefined, { kind: "digest" });
       sent++;
     } catch (e) {
       failed++;

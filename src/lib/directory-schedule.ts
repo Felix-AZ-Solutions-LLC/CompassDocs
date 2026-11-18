@@ -138,7 +138,7 @@ export async function runScheduledDirectorySyncs(now: Date = new Date()): Promis
             if (await mailConfigured()) {
               const report = await getSyncReport(provider === "microsoft" ? "graph" : "google");
               const mail = syncReportEmail({ provider, ok, error, summary, unresolved: report?.unresolved, adopted: report?.adopted, origin, at: now });
-              await sendMail(schedule.report_to, mail.subject, ...withAudienceLine(mail, ok ? audiences : null));
+              await sendMail(schedule.report_to, mail.subject, ...withAudienceLine(mail, ok ? audiences : null), undefined, undefined, { kind: "directory_report" });
             }
           } catch (e) {
             console.error(`[directory] sync report email failed:`, e);

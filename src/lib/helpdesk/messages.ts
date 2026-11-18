@@ -27,8 +27,20 @@ export const MESSAGE_LIMITS = { body: TICKET_LIMITS.body, page: 1000 } as const;
 const MSG_COLS =
   "id, ticket_id, author_id, author_name, author_email, kind, body, via, attachments, email_message_id, created_at, review_state, reviewed_by, reviewed_at, review_note";
 
-export async function listMessages(ticketId: number, opts: { includeInternal?: boolean } = {}): Promise<HdMessage[]> {
+export async function listMessages(ticketId: number, opts: { includeInternal?: boolean; /** 1.20.32: the agent's view: where each reply's email stands. */ mailState?: boolean } = {}): Promise<HdMessage[]> {
   const cols = MSG_COLS.split(", ").map((c) => `m.${c}`).join(", ");
+  // 1.20.32 (lib/mail-outbox): an agent's public reply sent through the workspace's Microsoft 365 outbox
+  // whose email failed, may not have gone out, was discarded, or has waited more than two minutes: the
+  // worst of its copies (the requester's, the people copied).
+  const mail = opts.mailState
+    ? `,
+            CASE WHEN m.kind = 'public' THEN (
+              SELECT json_build_object('state', o.status, 'to', o.recipients, 'reason', o.last_error, 'can_resend', o.mime IS NOT NULL AND o.status IN ('failed', 'uncertain'))
+                FROM mail_outbox o
+               WHERE o.ref_type = 'hd_message' AND o.ref_id = m.id
+                 AND (o.status IN ('failed', 'uncertain', 'discarded') OR (o.status = 'queued' AND o.queued_at < now() - interval '2 minutes'))
+               ORDER BY CASE o.status WHEN 'failed' THEN 0 WHEN 'uncertain' THEN 1 WHEN 'discarded' THEN 3 ELSE 2 END, o.id DESC LIMIT 1) END AS mail_delivery`
+    : "";
   return hq<HdMessage>(
     `SELECT ${cols},
             CASE WHEN m.kind = 'system' OR m.author_id IS NULL OR m.author_id IS NOT DISTINCT FROM t.requester_id THEN NULL
@@ -38,7 +50,7 @@ export async function listMessages(ticketId: number, opts: { includeInternal?: b
             -- 1.19.4 (C6, lib/helpdesk/share-schema): a feature's own timeline marker, internal lines only.
             CASE WHEN m.kind = 'internal' THEN m.event END AS event,
             -- 1.20.8 (lib/helpdesk/email-html): the email's HTML part is kept ("View original"); never the HTML itself here.
-            EXISTS (SELECT 1 FROM hd_message_html h WHERE h.message_id = m.id) AS has_original_html
+            EXISTS (SELECT 1 FROM hd_message_html h WHERE h.message_id = m.id) AS has_original_html${mail}
        FROM hd_messages m JOIN hd_tickets t ON t.id = m.ticket_id
       WHERE m.ticket_id = $1 ${opts.includeInternal === false ? "AND m.kind <> 'internal'" : ""}
       ORDER BY m.created_at, m.id LIMIT ${MESSAGE_LIMITS.page}`,

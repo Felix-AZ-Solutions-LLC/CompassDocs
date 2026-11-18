@@ -259,6 +259,10 @@ export interface FakeM365 {
   strictFrom: boolean;
   /** 1.20.31: secrets that have expired (their sign-in answers AADSTS7000222). */
   expiredSecrets: string[];
+  /** 1.20.32: answer the next N sends 429 (with retryAfter's Retry-After), then take them again. */
+  throttleNext: number;
+  /** 1.20.32: when each message sent was taken (ms), for the pacing checks. */
+  sentAt: number[];
   addApp(over?: Partial<FakeApp> & { secret?: string }): FakeApp;
   addMailbox(address: string, kind?: FakeMailbox["kind"], over?: { upn?: string; objectId?: string }): FakeMailbox;
   addMessage(address: string, over?: Partial<FakeMessage>): FakeMessage;
@@ -351,6 +355,8 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
     evilNextLink: false,
     strictFrom: false,
     expiredSecrets: [],
+    throttleNext: 0,
+    sentAt: [],
     addApp(over = {}) {
       const app: FakeApp = {
         appId: randomUUID(),
@@ -923,7 +929,12 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
     const select = url.searchParams.get("$select")?.split(",") ?? null;
 
     if (sending && method === "POST") {
-      if (fake.fail.sendMail) return send(res, fake.fail.sendMail, gerr(fake.fail.sendMail === 403 ? "ErrorSendAsDenied" : "ErrorInternalServerError", "The user account which was used to submit this request does not have the right to send mail on behalf of the specified sending account."));
+      // 1.20.32: Microsoft asks to slow down for the next N sends (the outbox's pause), then takes them again.
+      if (fake.throttleNext > 0) {
+        fake.throttleNext--;
+        return send(res, 429, gerr("ApplicationThrottled", "Application is over its MailboxConcurrency limit."));
+      }
+      if (fake.fail.sendMail && fake.fail.sendMail !== -2) return send(res, fake.fail.sendMail, gerr(fake.fail.sendMail === 403 ? "ErrorSendAsDenied" : "ErrorInternalServerError", "The user account which was used to submit this request does not have the right to send mail on behalf of the specified sending account."));
       if (String(req.headers["content-type"] ?? "").startsWith("application/json")) {
         // 1.20.31: Graph's JSON form. With no recipients Graph refuses the message itself (the access check has passed).
         const b = json() as { message?: { toRecipients?: unknown[]; ccRecipients?: unknown[]; bccRecipients?: unknown[] } };
@@ -941,7 +952,16 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
         if (addr !== mb.address && addr !== mb.upn) return send(res, 403, gerr("ErrorSendAsDenied", "The user account which was used to submit this request does not have the right to send mail on behalf of the specified sending account."));
       }
       mb.sent.push(mime);
+      fake.sentAt.push(Date.now());
+      // 1.20.32: -2 = the message is taken (it lands in Sent Items) but no answer comes back: the request left, the reply was lost.
+      if (fake.fail.sendMail === -2) return send(res, -1);
       return send(res, 202);
+    }
+    if (rest === "/mailFolders/sentitems/messages" && method === "GET") {
+      // 1.20.32: the outbox settles an uncertain send by its Message-ID (an app with only Mail.Send is refused above: 403).
+      const want = (url.searchParams.get("$filter") ?? "").match(/^internetMessageId eq '(.*)'$/)?.[1]?.replace(/''/g, "'");
+      const hit = want ? mb.sent.find((m) => (m.toString("utf8").match(/^Message-ID:\s*(<[^>]+>)/im)?.[1] ?? "") === want) : undefined;
+      return send(res, 200, { value: hit ? [{ id: `sent-${randomBytes(4).toString("hex")}` }] : [] });
     }
     if (rest === "/mailFolders/inbox/messages" && method === "GET") {
       // 1.20.25: the Inbox's messages (the desk's "do this mailbox's messages still read?" probe); refused with the Inbox.
@@ -1136,7 +1156,8 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
       fake.syncJobs.clear();
       fake.syncSecrets.clear();
       fake.deviceScopes.length = 0;
-      Object.assign(fake, { fail: {}, retryAfter: 0, delayMs: 0, maxInflight: 0, failAttachmentId: "", signInDelayMs: 0, failStep: "", replicationLag: 0, scimProbe: null, deleteFails: false, deviceTenant: tenantId, devicePending: 1, evilNextLink: false, strictFrom: false, expiredSecrets: [] });
+      fake.sentAt.length = 0;
+      Object.assign(fake, { throttleNext: 0, fail: {}, retryAfter: 0, delayMs: 0, maxInflight: 0, failAttachmentId: "", signInDelayMs: 0, failStep: "", replicationLag: 0, scimProbe: null, deleteFails: false, deviceTenant: tenantId, devicePending: 1, evilNextLink: false, strictFrom: false, expiredSecrets: [] });
       return send(res, 200, { ok: true });
     }
     if (op === "set") {
@@ -1196,6 +1217,7 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
           folders: [...m.folders.values()],
           messages: [...m.messages.values()].map((x) => ({ id: x.id, subject: x.subject, isRead: x.isRead, folder: x.folder === "inbox" ? "inbox" : (m.folders.get(x.folder) ?? x.folder) })),
           sent: m.sent.map((s) => s.toString("utf8")),
+          sentAt: fake.sentAt,
         })),
         subscriptions: [...subscriptions.values()].map((s) => ({ id: s.id, mailbox: s.mailbox, changeType: s.changeType, resource: s.resource, prefer: s.prefer })),
         log,

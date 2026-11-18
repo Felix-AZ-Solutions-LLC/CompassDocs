@@ -86,7 +86,7 @@ export async function ticketDetail(user: { id: number; role: Role }, t: HdTicket
   const [messages, requester, form, workflow, children, hours, policy, parent] = await Promise.all([
     // 1.20.28: each attachment its formatted email draws itself is marked `inline` (lib/helpdesk/email-html); a failure
     // only leaves every file listed.
-    listMessages(t.id).then((list) =>
+    listMessages(t.id, { mailState: canWork }).then((list) =>
       import("./email-html")
         .then((m) => m.markInlineAttachments(list))
         .catch((e) => {

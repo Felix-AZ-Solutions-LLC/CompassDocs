@@ -185,7 +185,7 @@ export function policySummaryLines(
 // --- The sweep ---------------------------------------------------------------
 
 async function defaultMailer(): Promise<Mailer | null> {
-  return (await mailConfigured()) ? sendMail : null;
+  return (await mailConfigured()) ? (to, subject, text, html) => sendMail(to, subject, text, html, undefined, undefined, { kind: "team_digest" }) : null;
 }
 
 /**

@@ -4,6 +4,78 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.32] - 2026-11-18
+
+No workspace email sent through Microsoft 365 is dropped for going too fast.
+
+### Added
+- **An outbox for email through Microsoft 365.** Every workspace email that
+  goes through Microsoft 365 is now queued first and sent at about 25 a
+  minute, spread over each minute, under Exchange Online's limit of about
+  30 messages a minute per mailbox. That covers notifications, digests,
+  reminders, announcements, subscriptions, directory reports and exports,
+  newsletters and helpdesk mail. Before, only newsletters were paced; other
+  email could be lost when Microsoft asked the mailbox to slow down.
+- **Urgent mail goes first.** Portal sign-in links and helpdesk replies to
+  requesters are sent before ordinary notifications, which are sent before
+  digests, announcements, reminders and newsletters. When there is room,
+  a message goes out within seconds of being queued.
+- **A daily limit that waits instead of bouncing.** The outbox counts
+  recipients over the last 24 hours and stops ordinary mail at 9,500, under
+  Microsoft's 10,000 a day. Mail over that waits in the outbox until there
+  is room. Urgent mail may use the rest.
+- **Outbox under Settings, Notifications, Email** (while Microsoft 365 is
+  chosen): how many messages are waiting, how many went out in the last
+  hour, today's recipients against the daily limit, whether sending is
+  paused, why, and until when. It lists the messages still waiting, each
+  with Discard, and **Discard all waiting**. It also lists the messages that
+  failed or may not have gone out, with Retry and Discard. Retry, Discard,
+  Discard all waiting and Try now are recorded in the audit log.
+- **Helpdesk replies show when their email didn't go out.** A reply is
+  accepted at once. If its email later fails or may not have arrived, the
+  message in the ticket says so, with Send again.
+- Administrators get one notification when sending is paused by a problem
+  every message would hit, and one per burst of failed messages. System
+  diagnostics shows an Email outbox row.
+
+### Changed
+- When Microsoft asks the mailbox to slow down, the message stays queued and
+  all sending pauses for at least a minute, or as long as Microsoft asks.
+  Newsletters share the same limit, so together they stay under it.
+- If Microsoft doesn't answer after a message was sent, the message is
+  marked "May have gone out" and is never sent again on its own. Check the
+  sending mailbox's Sent Items, then Retry or Discard it.
+- A problem every message would hit (the app can't sign in or isn't allowed
+  to send, the mailbox is missing) pauses sending with Microsoft's reason
+  instead of failing each message. Sending resumes when the settings are
+  saved or Check connection passes, or by itself after 10 minutes.
+- A message Microsoft refuses on its own (too large, a bad recipient) is
+  marked failed, with Microsoft's reason. So is a message refused again
+after
+  other mail went out, or one refused five times, so a single message can't
+  hold up the rest.
+- Changing the sending mailbox no longer strands mail already waiting: each
+  message goes out from the mailbox set at the time it is sent, under the
+  same sender name.
+- An email to more than 500 recipients is refused straight away instead of
+  waiting. One with no valid address shows as failed in the Outbox.
+- Messages are stored encrypted until they are sent, because they can hold
+  sign-in links. A sent message's content is deleted straight away; who it
+  went to and when is kept for 30 days. A failed message keeps its content
+  until it is retried or discarded, for up to 30 days.
+- Switching from Microsoft 365 to SMTP while messages are still waiting now
+  asks first and says how many. After the switch they go out by SMTP from
+  the SMTP From address. To drop them instead, discard them under Outbox
+  first.
+- SMTP sending is unchanged: messages go out at once, as before. Send test
+  email, the email template test, a newsletter's test send and the
+  helpdesk's test messages still send at once and show Microsoft's answer
+  straight away.
+
+### Upgrading
+Nothing to run. On start, a migration creates the outbox tables
+automatically. Nothing changes for workspaces that send by SMTP.
+
 ## [1.20.31] - 2026-11-18
 
 Send the workspace's email through Microsoft 365.

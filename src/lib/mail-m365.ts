@@ -19,9 +19,13 @@
 //   size         at most MAIL_M365_MAX_MIME (about 2.9 MB of MIME, under
 //                Graph's 4 MB request limit once base64): a larger message
 //                is refused before anything is sent (MailTooLargeError).
-//   429          Microsoft limits how fast one mailbox sends: a refusal
-//                with Retry-After up to a minute is waited out and tried
-//                again, twice at most. A 429 means nothing was sent.
+//   429          Microsoft limits how fast one mailbox sends: on a direct
+//                send (the test emails, sendMimeM365) a refusal with
+//                Retry-After up to a minute is waited out and tried again,
+//                twice at most. A 429 means nothing was sent. 1.20.32: the
+//                rest of the workspace's mail is queued in the outbox
+//                (lib/mail-outbox), which posts once (postMimeM365) and
+//                paces and pauses itself instead.
 //   no answer    a timeout or a cut connection after the request left
 //                throws, with no second try: the first may have gone out.
 //
@@ -117,25 +121,83 @@ export function setM365RetryWaitForTests(fn: ((ms: number) => Promise<unknown>) 
 
 const asSendError = (e: M365Error, mailbox: string) => new MailSendError(m365SendSentence(e, mailbox), e.status, e.code, e.kind, e.retryAfterMs);
 
-/** Hand one built message to Graph as the configured mailbox. Throws MailSendError (or MailTooLargeError) with a sentence. */
-export async function sendMimeM365(mime: Buffer, cfg?: M365SendConfig): Promise<void> {
-  const c = cfg ?? (await getM365SendConfig());
+/** The checks every send makes before anything leaves: set up, a readable secret, the size. */
+export function assertSendable(c: M365SendConfig, mime: Buffer): void {
   if (!m365SendConfigured(c)) throw new MailSendError(MAIL_NOT_SET_UP, 0, "not_set_up");
   if (c.secretUnreadable) throw new MailSendError(SECRET_UNREADABLE, 0, "secret_unreadable", "auth");
   if (mime.length > MAIL_M365_MAX_MIME) throw new MailTooLargeError(mime.length);
-  const value = mime.toString("base64");
+}
+
+/**
+ * 1.20.32 (lib/mail-outbox): sign in before a send, so a sign-in that gets
+ * no answer is known to have sent nothing. Throws MailSendError.
+ */
+export async function signInForSend(c: M365SendConfig): Promise<void> {
+  try {
+    await m365Token(creds(c));
+  } catch (e) {
+    if (e instanceof M365Error) throw asSendError(e, c.mailbox);
+    throw e;
+  }
+}
+
+/**
+ * 1.20.32: one POST of one built message, no second try. The outbox
+ * (lib/mail-outbox) paces and retries itself, so a 429 comes straight back
+ * as a MailSendError with its Retry-After.
+ */
+export async function postMimeM365(mime: Buffer, c: M365SendConfig): Promise<void> {
+  assertSendable(c, mime);
+  try {
+    await graph(creds(c), { method: "POST", path: `${userPath(graphUserOf(c))}/sendMail`, text: { value: mime.toString("base64"), type: "text/plain" }, what: "send mail as this mailbox", timeoutMs: 60_000 });
+  } catch (e) {
+    if (e instanceof M365Error) throw asSendError(e, c.mailbox);
+    throw e;
+  }
+}
+
+/**
+ * 1.20.32: whether a message with this Message-ID is in the sending
+ * mailbox's Sent Items. Graph allows it only to an app that may read the
+ * mailbox (Mail.Read or wider, which the one-click setup never grants): a
+ * 403 answers "unknown". "found", "not_found" or "unknown"; never throws.
+ */
+export async function findInSentItems(messageId: string, cfg?: M365SendConfig): Promise<"found" | "not_found" | "unknown"> {
+  const id = messageId.trim();
+  if (!/^<[^<>\s']{3,300}>$/.test(id)) return "unknown";
+  try {
+    const c = cfg ?? (await getM365SendConfig());
+    if (!m365SendConfigured(c) || c.secretUnreadable) return "unknown";
+    const filter = encodeURIComponent(`internetMessageId eq '${id}'`);
+    const r = await graph<{ value?: unknown[] }>(creds(c), { path: `${userPath(graphUserOf(c))}/mailFolders/sentitems/messages?$filter=${filter}&$select=id&$top=1`, what: "read the mailbox's Sent Items" });
+    return Array.isArray(r.value) && r.value.length > 0 ? "found" : "not_found";
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * Hand one built message to Graph as the configured mailbox, waiting out a
+ * 429 twice within about a minute (the test email, a newsletter recipient).
+ * The workspace's other mail goes through the outbox instead
+ * (lib/mail-outbox), which never waits inside a send. Throws MailSendError
+ * (or MailTooLargeError) with a sentence.
+ */
+export async function sendMimeM365(mime: Buffer, cfg?: M365SendConfig, opts: { wait429?: boolean } = {}): Promise<void> {
+  const c = cfg ?? (await getM365SendConfig());
+  assertSendable(c, mime);
   for (let attempt = 0; ; attempt++) {
     try {
-      await graph(creds(c), { method: "POST", path: `${userPath(graphUserOf(c))}/sendMail`, text: { value, type: "text/plain" }, what: "send mail as this mailbox", timeoutMs: 60_000 });
+      await postMimeM365(mime, c);
       return;
     } catch (e) {
-      if (!(e instanceof M365Error)) throw e;
+      if (!(e instanceof MailSendError)) throw e;
       const wait = e.retryAfterMs ?? 2_000;
-      if (e.status === 429 && attempt < RETRIES_429 && wait <= RETRY_AFTER_MAX_MS) {
+      if (opts.wait429 !== false && e.status === 429 && attempt < RETRIES_429 && wait <= RETRY_AFTER_MAX_MS) {
         await waitFor429(wait);
         continue;
       }
-      throw asSendError(e, c.mailbox);
+      throw e;
     }
   }
 }
@@ -143,14 +205,22 @@ export async function sendMimeM365(mime: Buffer, cfg?: M365SendConfig): Promise<
 /** sendMail's message through Microsoft 365: From the mailbox (a chosen sender becomes Reply-To), with its attachments. */
 export async function sendViaM365(
   m: { to: string[]; subject: string; text: string; html?: string; fromOverride?: string; attachments?: { filename: string; path: string }[] },
-  cfg?: M365SendConfig
+  cfg?: M365SendConfig,
+  opts: { wait429?: boolean } = {}
 ): Promise<void> {
   const c = cfg ?? (await getM365SendConfig());
   if (!m365SendConfigured(c)) throw new MailSendError(MAIL_NOT_SET_UP, 0, "not_set_up");
   if (c.secretUnreadable) throw new MailSendError(SECRET_UNREADABLE, 0, "secret_unreadable", "auth");
+  await sendMimeM365(await mimeForM365(m, c), c, opts);
+}
+
+/** sendMail's message as MIME for Microsoft 365: From the mailbox (a chosen sender becomes Reply-To), with its attachments. */
+export async function mimeForM365(
+  m: { to: string[]; subject: string; text: string; html?: string; fromOverride?: string; attachments?: { filename: string; path: string }[] },
+  c: M365SendConfig
+): Promise<Buffer> {
   const who = m365FromFor(c.mailbox, c.fromName, m.fromOverride);
-  const mime = await buildMime({ from: who.from, replyTo: who.replyTo, to: m.to, subject: m.subject, text: m.text, html: m.html, attachments: m.attachments });
-  await sendMimeM365(mime, c);
+  return buildMime({ from: who.from, replyTo: who.replyTo, to: m.to, subject: m.subject, text: m.text, html: m.html, attachments: m.attachments });
 }
 
 /** One send with no recipients as `user`: the answer says whether the app may send as it. Sends nothing. */

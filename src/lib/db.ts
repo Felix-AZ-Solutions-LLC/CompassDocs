@@ -1752,6 +1752,75 @@ const SCHEMA_SQL = `
     PRIMARY KEY (newsletter_id, email)
   );
 
+  -- 1.20.32: the outbox for the workspace's email through Microsoft 365
+  -- (lib/mail-outbox). Every message is built to MIME when it is queued and
+  -- kept sealed with the master key (it can hold sign-in links) until it is
+  -- sent, when the body is wiped; the row's metadata is kept 30 days.
+  -- mail_send_ledger is the one sending budget of the mailbox (one row per
+  -- send handed to Microsoft, by the outbox or a newsletter), and
+  -- mail_outbox_control its single row: the pause, and the lock every claim
+  -- takes, so several instances together stay under Exchange's limits.
+  CREATE TABLE IF NOT EXISTS mail_outbox (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    priority smallint NOT NULL DEFAULT 1,
+    kind text NOT NULL DEFAULT '',
+    recipient_count integer NOT NULL DEFAULT 1,
+    recipients text NOT NULL DEFAULT '',
+    subject text NOT NULL DEFAULT '',
+    message_id text NOT NULL DEFAULT '',
+    mime text,
+    size integer NOT NULL DEFAULT 0,
+    status text NOT NULL DEFAULT 'queued',
+    attempts integer NOT NULL DEFAULT 0,
+    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    last_error text NOT NULL DEFAULT '',
+    claimed_at timestamptz,
+    claimed_by text,
+    posted_at timestamptz,
+    sent_at timestamptz,
+    settle_checks integer NOT NULL DEFAULT 0,
+    ref_type text,
+    ref_id bigint,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    -- The envelope recipients as parsed (recipients is the admin's display copy).
+    rcpt text[] NOT NULL DEFAULT '{}',
+    -- When it last went into the queue (enqueue, Retry, Send again): "waiting" counts from here.
+    queued_at timestamptz NOT NULL DEFAULT now(),
+    -- The budget's row for the current claim, given back when nothing reached Microsoft.
+    ledger_id bigint,
+    -- Tries that Microsoft answered 500/502 (429s and refusals are not counted here).
+    transient_attempts integer NOT NULL DEFAULT 0,
+    -- Refusals that would repeat for everyone, and the last one's time.
+    refusals integer NOT NULL DEFAULT 0,
+    refused_at timestamptz,
+    -- Sign-ins that got no answer (nothing left; tried again with a growing wait).
+    signin_failures integer NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_mail_outbox_queue ON mail_outbox (priority, id) WHERE status = 'queued';
+  CREATE INDEX IF NOT EXISTS idx_mail_outbox_status ON mail_outbox (status, updated_at);
+  CREATE INDEX IF NOT EXISTS idx_mail_outbox_ref ON mail_outbox (ref_type, ref_id) WHERE ref_type IS NOT NULL;
+  CREATE TABLE IF NOT EXISTS mail_send_ledger (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    at timestamptz NOT NULL DEFAULT now(),
+    recipients integer NOT NULL DEFAULT 1,
+    source text NOT NULL DEFAULT ''
+  );
+  CREATE INDEX IF NOT EXISTS idx_mail_send_ledger_at ON mail_send_ledger (at);
+  CREATE TABLE IF NOT EXISTS mail_outbox_control (
+    id integer PRIMARY KEY CHECK (id = 1),
+    paused_until timestamptz,
+    pause_reason text NOT NULL DEFAULT '',
+    pause_kind text NOT NULL DEFAULT '',
+    noticed_reason text NOT NULL DEFAULT '',
+    noticed_at timestamptz,
+    failure_notice_at timestamptz,
+    -- The end of Microsoft's own slow-down, kept apart so lifting a refusal never lifts it.
+    rate_until timestamptz,
+    updated_at timestamptz NOT NULL DEFAULT now()
+  );
+  DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM mail_outbox_control WHERE id = 1) THEN INSERT INTO mail_outbox_control (id) VALUES (1) ON CONFLICT (id) DO NOTHING; END IF; END $$;
+
   -- Document comments (0.38): a flat discussion under each document, with
   -- @mentions. Admin-deleted comments stay as rows (deleted_at set) so the
   -- thread keeps its shape; their body is never returned to clients.
@@ -4954,6 +5023,15 @@ export async function runDbMaintenance(): Promise<{ sessions: number; oauthCodes
   );
   // Link clicks (1.17.0) feed 30-day counts; nothing reads past 90 days.
   await pool().query("DELETE FROM link_clicks WHERE clicked_at < now() - interval '90 days'");
+  // 1.20.32 (lib/mail-outbox): outbox rows that are done (sent, discarded,
+  // failed, uncertain) are kept 30 days for the admin's list, then dropped;
+  // the sending budget only ever looks back a day.
+  try {
+    const { pruneOutbox } = await import("./mail-outbox");
+    await pruneOutbox();
+  } catch (e) {
+    console.error("[maintenance] outbox prune failed:", e instanceof Error ? e.message : String(e));
+  }
   // The notice outbox is a queue, not a record (ack_notices is the record):
   // closed rows are kept a month for support and then dropped. A row that
   // gave up (three failed attempts, or an instance that died on the last

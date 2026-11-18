@@ -113,6 +113,8 @@ export async function PATCH(req: Request) {
 
     if (action === "check") {
       const check = await probeM365Send({ other: user.email || null });
+      // 1.20.32: a check that passes lifts a pause for a refusal (lib/mail-outbox): what waited goes now.
+      if (check.ok) await (await import("@/lib/mail-outbox")).resumeOutbox({ onlyRefusal: true }).catch(() => {});
       await audit({ ...auditBase(by), action: "settings.mail_check", details: { ok: check.ok, limited: check.limited ?? null, other: check.other || null, error: check.ok ? null : check.message.slice(0, 300) } });
       return NextResponse.json({ ok: check.ok, check, view: await mailView() });
     }

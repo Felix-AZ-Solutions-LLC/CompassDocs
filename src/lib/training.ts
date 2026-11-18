@@ -248,7 +248,7 @@ export async function notifyTrainingAssigned(input: {
   for (const u of users) {
     await gate
       .route(u.id, { title: `Training assigned: ${input.deckTitle}`, body: input.dueAt ? `Due by ${formatDate(input.dueAt, settings)}.` : "", link: "/training" }, () =>
-        sendMail([u.email], subject, text, html)
+        sendMail([u.email], subject, text, html, undefined, undefined, { kind: "training" })
       )
       .catch(() => {});
   }
@@ -294,7 +294,7 @@ export async function remindDueTraining(): Promise<void> {
     );
     await gate
       .route(r.user_id, { title: `Training due: ${r.title}`, body: `Due by ${formatDate(r.due_at, settings)}.`, link: "/training" }, () =>
-        sendMail([r.email], subject, text, html)
+        sendMail([r.email], subject, text, html, undefined, undefined, { kind: "training" })
       )
       .catch(() => {});
   }
@@ -348,7 +348,7 @@ export async function remindAssignmentsNow(
       );
       await gate
         .route(r.user_id, { title: `Reminder: ${deck.title}`, body: r.due_at ? `Due ${formatDate(r.due_at, settings)}.` : "", link: "/training" }, () =>
-          sendMail([r.email], subject, text, html)
+          sendMail([r.email], subject, text, html, undefined, undefined, { kind: "training" })
         )
         .catch(() => {});
     }
@@ -488,7 +488,7 @@ export async function monthlyTrainingEvidence(): Promise<void> {
       origin,
       { recipientUserId: u.id }
     );
-    await sendMail([u.email], subject, text, html).catch(() => {});
+    await sendMail([u.email], subject, text, html, undefined, undefined, { kind: "training" }).catch(() => {});
   }
 }
 

@@ -233,7 +233,8 @@ export function requesterMessages(messages: HdMessage[]): HdMessage[] {
     })
     .map((m) => {
       // 1.20.8: has_original_html is agent-side too ("View original" is the desk's alone).
-      const { review_state: _s, reviewed_by: _b, reviewed_at: _a, review_note: _n, event: _e, has_original_html: _h, ...rest } = m as HdMessage & {
+      // 1.20.32: mail_delivery (where the reply's email stands) is the desk's too.
+      const { review_state: _s, reviewed_by: _b, reviewed_at: _a, review_note: _n, event: _e, has_original_html: _h, mail_delivery: _d, ...rest } = m as HdMessage & {
         review_state?: unknown;
         reviewed_by?: unknown;
         reviewed_at?: unknown;

@@ -96,7 +96,9 @@ export async function portalRequesterNotice(
   ticketId: number,
   template: string,
   vars: Record<string, string>,
-  origin?: string
+  origin?: string,
+  /** 1.20.32: the agent's reply this notice carries (lib/helpdesk/email HelpdeskThread.messageId). */
+  messageId?: number | null
 ): Promise<boolean> {
   const t = await hqOne<{ id: number; number: number; team_id: number | null; portal_contact_id: number | null; requester_email: string }>(
     "SELECT id, number, team_id, portal_contact_id, requester_email FROM hd_tickets WHERE id = $1",
@@ -126,7 +128,7 @@ export async function portalRequesterNotice(
   if (out.author_name) out.author_name = firstName(out.author_name) || "Support";
   if (out.agent_name) out.agent_name = firstName(out.agent_name) || "Support";
   const { sendHelpdeskTemplate } = await import("./email");
-  await sendHelpdeskTemplate(c.email, template, out, { ticketId: t.id, number: t.number, teamId: t.team_id }, base || undefined);
+  await sendHelpdeskTemplate(c.email, template, out, { ticketId: t.id, number: t.number, teamId: t.team_id, messageId: messageId ?? null }, base || undefined);
   return true;
 }
 

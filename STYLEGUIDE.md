@@ -793,6 +793,40 @@ focus):
   state ("Try again", "Retry the N that failed"). The page reads it again
   every 10 seconds while it runs; the button that started it stays
   disabled meanwhile. "Sent to everyone" is said only when nobody failed.
+- **A queue an outside service paces** (1.20.32, Settings → Notifications
+  → Email → Outbox, `components/MailOutbox`: the workspace's email through
+  Microsoft 365) is its own `Card` under the settings it belongs to (`id`
+  for the bell notice's link, a lucide `Inbox` icon, the status chip
+  **Sending** `ok`, **Needs attention** `warn`, **Paused** `warn` for a
+  slow-down or `error` for a refusal). Inside: a three-cell `dl`
+  (`rounded-lg border bg-canvas px-3 py-2`, a `text-xs` label over a
+  `text-lg font-semibold tabular-nums` number) for what waits, what went
+  in the last hour and the day's count against the outside limit ("1,234
+  of 10,000", `ink-warn` once over the safe cap), with one `text-xs` line
+  on what happens at the cap. A pause the service asked for is a
+  `notice-warn` with `Clock` and when it ends (the time and "in 3
+  minutes"); a refusal that every item would get is a `notice-error` with
+  `TriangleAlert`, the service's reason in its own sentence, when it tries
+  again by itself and one `secondary` `sm` **Try now**. Then a `SubHeading`
+  "Didn't go out (N)" over a bordered `divide-y` list, a row per item: the
+  subject, one `sm` chip (**Failed** `error`, **May have gone out** `warn`
+  with `CircleHelp`), a `text-xs` line of what and to whom with a
+  `RelativeTime`, the reason in `text-red-600` / `ink-warn`, and two `sm`
+  actions with `data-tt`: **Retry** (`secondary`, `RotateCw`; on an item
+  that may have gone out it asks first, saying it may arrive twice) and
+  **Discard** (`danger`, `Trash2`, behind a `danger` `confirmDialog`).
+  Empty: a `SectionEmpty` saying what would appear. While anything waits,
+  a `SubHeading` "Waiting (N)" (`Hourglass`) sits above it with one
+  `danger` `sm` **Discard all waiting** at its right (behind a `danger`
+  `confirmDialog` that says how many and that one being sent this moment
+  still goes), over the same bordered list: the first 50 in the order they
+  go out, each with its priority as an `sm` chip (**Urgent** `accent`,
+  else `neutral`; **Sending** while in flight), what and to whom with a
+  `RelativeTime`, why its last try did not go in `ink-warn`, and a
+  `danger` `sm` **Discard**; "Showing the first 50 of N" under a longer
+  queue. The card reads itself again every 15 seconds (only for someone
+  who may read the settings: a 403 stops it); a closing `text-xs` line says
+  what is kept and for how long.
 - **Commands an administrator runs elsewhere** (the Exchange Online
   PowerShell that limits an app to one mailbox; the desk's Limit access)
   are an `h4` naming what they do ("Limit the app to …"), one paragraph on
@@ -3212,6 +3246,21 @@ open in its own tab beside CompassDocs. Components live in
   newbie's held reply carries J's `ReviewStateChip`. Bodies are
   `MarkdownView` at `text-sm`, `headingOffset={2}`. Files are a list under
   their message (below, "Files under a message"); never thumbnails.
+- **A reply's email that didn't go out** (1.20.32, `MailStateLine`, the
+  workspace's Microsoft 365 outbox): an agent's public reply is accepted at
+  once and its email sent moments later, so a copy that then fails, may not
+  have gone out, was discarded by an admin, or still waits after two
+  minutes is one line under the message's meta, indented with the body
+  (`pl-9`), never a card or a banner: a 14px lucide icon (`TriangleAlert`
+  `text-red-600` for failed, `CircleHelp` `ink-warn` for "may not have
+  reached", `Ban` / `Clock` `text-slate-400` for discarded / waiting) and
+  one `text-xs` sentence naming who it was for and why ("Not sent to
+  casey@…: Microsoft 365 refused the email (error 400…)"), then a
+  `secondary` `sm` **Send again** (`RotateCw`) where the email can still
+  be sent. On one that may have gone out it asks first (it may arrive
+  twice). After it, the line reads "Queued to send again to …"
+  (`role="status"`). Agents only; `print:hidden`; the requester never sees
+  it.
 - **Activity lines** (1.20.28, `lib/helpdesk/conversation-shared`): what
   happened to a ticket, as opposed to what someone wrote, is one line, never
   a card: `flex items-start gap-2 px-1 text-xs text-slate-500`, a

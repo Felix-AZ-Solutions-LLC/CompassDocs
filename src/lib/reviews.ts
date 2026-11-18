@@ -156,7 +156,7 @@ export async function remindDueReviews(): Promise<void> {
       for (const r of recipients) {
         try {
           await gate.route(r.id, { title: `"${doc.title}" is due for content review`, body: `In ${doc.space_name}`, link: `/doc/${doc.id}` }, () =>
-            sendMail([r.email], subject, text, html)
+            sendMail([r.email], subject, text, html, undefined, undefined, { kind: "review" })
           );
         } catch (e) {
           console.error(`[reviews] reminder to ${r.email} failed:`, e);

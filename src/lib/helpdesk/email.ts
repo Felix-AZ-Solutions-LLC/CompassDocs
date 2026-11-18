@@ -33,7 +33,17 @@
 // The transport is the workspace's (lib/mailer workspaceTransport, by the
 // method chosen under Settings → Notifications → Email: SMTP or, 1.20.31,
 // Microsoft 365); helpdesk mail needs headers the shared sendMail does not
-// take (Reply-To, Message-ID, References). Tests
+// take (Reply-To, Message-ID, References).
+//
+// 1.20.32: through Microsoft 365 a mail is accepted into the workspace's
+// outbox (lib/mail-outbox) and sent by its paced worker: a reply to a
+// requester and a portal sign-in link go first (urgent), agents' notices
+// next, report digests last. An agent's public reply carries its message
+// id, so a copy that later fails or may not have gone out shows on that
+// message in the ticket, with Send again (lib/helpdesk/messages
+// mailState). By SMTP everything is as before: sent on the spot, with the
+// send-from address and its fallback on a refused sender (sendAsMailbox).
+// The test mails on the Email settings page are always sent at once. Tests
 // swap the transport with setHelpdeskTransportForTests. Mail is never sent
 // while a database client is held: callers run this after their
 // transaction. Server-only.
@@ -193,6 +203,9 @@ export interface HelpdeskOutgoingMail {
 
 export type HelpdeskTransport = (mail: HelpdeskOutgoingMail) => Promise<void>;
 
+/** 1.20.32: what a mail is, for the workspace's Microsoft 365 outbox (lib/mail-outbox): its kind, and the desk message it belongs to. */
+type MailMeta = import("../mail-outbox").OutboxMeta;
+
 let testTransport: HelpdeskTransport | null = null;
 
 /** Tests: capture mail instead of sending it (null restores SMTP). */
@@ -215,16 +228,24 @@ export function setHelpdeskTransportForTests(t: HelpdeskTransport | null): void 
  * A true From is the desk's own Microsoft 365 mailbox connection (1.20.7,
  * lib/helpdesk/m365/send), which is tried first as before.
  */
-type Transport = { send: HelpdeskTransport; from: string; m365only?: boolean };
+type Transport = {
+  /** Through Microsoft 365: queued in the outbox with `meta`. By SMTP: sent now. */
+  send: (mail: HelpdeskOutgoingMail, meta?: MailMeta) => Promise<void>;
+  /** Sent now whatever the method (the settings page's test mails). */
+  sendNow: HelpdeskTransport;
+  from: string;
+  m365only?: boolean;
+};
 
 async function smtpTransport(): Promise<Transport | null> {
   if (testTransport) {
     const from = (await workspaceFrom().catch(() => "")) || (await getSmtpConfig()).from;
-    return { send: testTransport, from: from || "helpdesk@example.test", m365only: (await getMailMethod().catch(() => "smtp")) === "m365" };
+    const t = testTransport;
+    return { send: (m) => t(m), sendNow: t, from: from || "helpdesk@example.test", m365only: (await getMailMethod().catch(() => "smtp")) === "m365" };
   }
   const t = await workspaceTransport();
   if (!t) return null;
-  return { from: t.from, send: (m) => t.send(m), m365only: t.method === "m365" };
+  return { from: t.from, send: (m, meta) => t.send(m, meta), sendNow: (m) => t.sendNow(m), m365only: t.method === "m365" };
 }
 
 /** Whether helpdesk mail can go out at all (the chosen mail method set up, or a test transport). */
@@ -291,7 +312,8 @@ export function isSenderRejection(e: unknown): boolean {
 async function sendAsMailbox(
   transport: Transport,
   mail: HelpdeskOutgoingMail,
-  who: { name: string; address: string; sendFrom: boolean; sendAddressId?: number; fromAddress?: string; sendFromFailing?: boolean; mailboxId?: number | null; m365?: boolean }
+  who: { name: string; address: string; sendFrom: boolean; sendAddressId?: number; fromAddress?: string; sendFromFailing?: boolean; mailboxId?: number | null; m365?: boolean },
+  meta: MailMeta = {}
 ): Promise<void> {
   // 1.20.7: a help address on a connected Microsoft 365 mailbox may send its tickets' mail through Microsoft Graph
   // (lib/helpdesk/m365/send; never an agent's own notice, never when a send-from address is picked). Refused by
@@ -299,14 +321,14 @@ async function sendAsMailbox(
   if (who.m365 && who.mailboxId && !who.sendFrom && (await (await import("./m365/state")).m365State()).sendVia.has(who.mailboxId)) {
     const via = await (await import("./m365/send")).sendThroughM365(who.mailboxId, who.address, who.name, mail);
     if (via === "sent") return;
-    if (via === "refused") return transport.send(mail);
+    if (via === "refused") return transport.send(mail, meta);
   }
   // The stored address went through cleanMailboxAddress when it was saved; it is checked again before it becomes a header.
   // Through Microsoft 365, never From a send-from address (see smtpTransport).
   const picked = who.sendFrom && who.sendAddressId && !transport.m365only ? cleanMailboxAddress(who.fromAddress) : null;
   const own = picked && picked !== bareAddress(transport.from) ? fromWithName(picked, who.name) : null;
   if (!own) {
-    await transport.send(mail);
+    await transport.send(mail, meta);
     return;
   }
   try {
@@ -328,7 +350,7 @@ async function sendTestMail(
   m: { to: string; from: string; shown: string; replyTo?: string; subject: string; line: string }
 ): Promise<{ ok: boolean; from: string; error?: string; senderRejected?: boolean }> {
   try {
-    await transport.send({
+    await transport.sendNow({
       to: m.to,
       from: m.from,
       ...(m.replyTo ? { replyTo: m.replyTo } : {}),
@@ -403,6 +425,16 @@ export interface HelpdeskThread {
   number: number;
   /** The ticket's team: its mail renders with scope "hd_team:<id>" (a team's own header and signature, agent G). */
   teamId?: number | null;
+  /** 1.20.32: the agent's public reply this mail carries: its email's fate shows on that message (lib/mail-outbox). */
+  messageId?: number | null;
+}
+
+/** 1.20.32: the outbox kind of a desk mail: replies to requesters and sign-in links are urgent, report digests bulk. */
+export function helpdeskMailKind(templateKey: string, toRequester: boolean): string {
+  if (templateKey === "hd_portal_link") return "sign_in_link";
+  if (templateKey === "hd_report_digest") return "helpdesk_report";
+  if (toRequester && (templateKey === "hd_reply" || templateKey === "hd_request_received")) return "helpdesk_reply";
+  return "helpdesk_notice";
 }
 
 /** Sends under way (most are started after a commit and not awaited by their caller). */
@@ -513,7 +545,12 @@ async function sendTemplateNow(
         if (reply) mail.replyTo = reply;
       }
     }
-    await sendAsMailbox(transport, mail, { ...who, m365: Boolean(thread && !note && opts.audience !== "agent") });
+    const toRequester = !note && opts.audience !== "agent";
+    const meta: MailMeta = {
+      kind: helpdeskMailKind(templateKey, toRequester),
+      ref: thread?.messageId && toRequester ? { type: "hd_message", id: thread.messageId } : null,
+    };
+    await sendAsMailbox(transport, mail, { ...who, m365: Boolean(thread && !note && opts.audience !== "agent") }, meta);
     return true;
   } catch (e) {
     logEvent("error", "helpdesk.email_failed", { template: templateKey, error: e instanceof Error ? e.message : String(e) });

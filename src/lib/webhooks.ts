@@ -272,7 +272,7 @@ async function deliver(hook: Webhook, event: WebhookEvent, info: WebhookInfo): P
         { event: label.title, summary: plain, title: info.title, url: info.url ?? "" },
         ""
       );
-      await sendMail(recipients, mail.subject, mail.text, mail.html);
+      await sendMail(recipients, mail.subject, mail.text, mail.html, undefined, undefined, { kind: "webhook_alert" });
       await markWebhookResult(hook.id, `ok (sent to ${recipients.length})`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "send failed";

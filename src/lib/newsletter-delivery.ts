@@ -12,10 +12,15 @@
 //   pace       newsletterDeliveryTick (instrumentation, every minute) takes
 //              one job at a time (claimed, so two instances never send the
 //              same row) and sends up to PER_TICK rows: about 25 a minute,
-//              under Exchange's 30.
-//   429        Microsoft asking to slow down beyond what one send waits out
-//              (lib/mail-m365) pauses the job until Retry-After (at least a
-//              minute); the row stays queued. Nothing is lost or doubled.
+//              under Exchange's 30. 1.20.32: each send first takes a slot
+//              from the mailbox's one budget, shared with the outbox
+//              (lib/mail-outbox takeMailSlot), so newsletters and every
+//              other email together stay under the limit; a newsletter
+//              gives way while urgent or ordinary mail is waiting, and what
+//              gets no slot this minute goes in the next.
+//   429        Microsoft asking to slow down pauses the job until Retry-After
+//              (at least a minute), and the outbox with it (the limit is the
+//              mailbox's); the row stays queued. Nothing is lost or doubled.
 //   stop       a refusal that would repeat for everyone (too large with its
 //              files, the app may not sign in or send) stops the job with
 //              the reason; the rows stay queued and "Try again" resumes it.
@@ -35,6 +40,8 @@ import { pool, getNewsletter, markNewsletterSent, addNewsletterComment } from ".
 import { audit } from "./audit";
 import { sendMail } from "./mailer";
 import { MailSendError, refusalRepeats } from "./mail-m365";
+import { classifySendError } from "./mail-outbox-shared";
+import { pauseOutboxForRate, releaseMailSlot, takeMailSlot } from "./mail-outbox";
 import type { NewsletterDeliveryView } from "./newsletter-delivery-shared";
 
 /** Sends per minute, under Exchange Online's 30 messages a minute per mailbox. */
@@ -142,9 +149,28 @@ export function setNewsletterSenderForTests(fn: typeof sendMail | null): void {
   sendForTests = fn;
 }
 
-/** Tests: forget the one-batch-a-minute pacing. */
+/** Tests: forget the one-batch-a-minute pacing (and the shared budget's last minute and pause). */
 export async function resetNewsletterPacingForTests(): Promise<void> {
   await pool().query("UPDATE newsletter_send_jobs SET last_batch_at = NULL, claimed_until = NULL, paused_until = NULL");
+  await pool().query("DELETE FROM mail_send_ledger WHERE at > now() - interval '24 hours'");
+  await pool().query("UPDATE mail_outbox_control SET paused_until = NULL, rate_until = NULL, pause_reason = '', pause_kind = '' WHERE id = 1");
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 1.20.32: one slot from the mailbox's budget (lib/mail-outbox), waiting
+ * out a short gap so the batch is spread over the minute. False when none
+ * comes soon (paused, the minute or the day is full, other mail first):
+ * the rest of the batch waits for the next tick.
+ */
+async function slotForOne(deadline: number): Promise<number | null> {
+  for (;;) {
+    const d = await takeMailSlot({ recipients: 1, source: "newsletter" });
+    if (d.ok) return d.slotId ?? 0;
+    if (d.why === "paused" || d.why === "daily" || d.waitMs > 5_000 || Date.now() + d.waitMs > deadline) return null;
+    await sleep(d.waitMs);
+  }
 }
 
 /** One minute's sending: one job, up to NEWSLETTER_PER_TICK rows. Never throws. */
@@ -180,16 +206,27 @@ export async function newsletterDeliveryTick(): Promise<{ newsletter: number | n
     const payload = JSON.parse(job.payload) as NewsletterJobPayload;
     const rows = (await pool().query<{ email: string }>("SELECT email FROM newsletter_deliveries WHERE newsletter_id = $1 AND state = 'queued' ORDER BY email LIMIT $2", [id, NEWSLETTER_PER_TICK])).rows;
     const send = sendForTests ?? sendMail;
+    // A batch ends within the minute it was claimed for.
+    const deadline = Date.now() + 55_000;
     for (const r of rows) {
+      const slot = await slotForOne(deadline);
+      if (slot === null) {
+        await release();
+        return out;
+      }
       try {
-        await send([r.email], payload.subject, payload.text, payload.html, payload.from || undefined, payload.attachments);
+        // Direct, not through the outbox: this job is the queue, and it took its slot above.
+        await send([r.email], payload.subject, payload.text, payload.html, payload.from || undefined, payload.attachments, { direct: true, noWait: true, kind: "newsletter" });
         await pool().query("UPDATE newsletter_deliveries SET state = 'sent', error = '', attempts = attempts + 1, updated_at = now() WHERE newsletter_id = $1 AND email = $2", [id, r.email]);
         out.sent++;
       } catch (e) {
         const msg = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, " ").slice(0, 500);
+        // Nothing reached Microsoft unless it may have (no answer after the request left): the slot goes back.
+        if (classifySendError(e as { status?: number; code?: string; kind?: string; name?: string }) !== "uncertain") await releaseMailSlot(slot).catch(() => {});
         if (e instanceof MailSendError && e.status === 429) {
-          // Slow down: this row stays queued; the job waits at least a minute.
+          // Slow down: this row stays queued; the job waits at least a minute, and so does the rest of the mailbox's mail.
           await release(", paused_until = now() + ($2 || ' milliseconds')::interval", [String(Math.max(60_000, Math.min(e.retryAfterMs ?? 60_000, 3_600_000)))]);
+          await pauseOutboxForRate(e.retryAfterMs, msg).catch(() => {});
           return out;
         }
         if (refusalRepeats(e)) {

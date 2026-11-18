@@ -244,7 +244,7 @@ export async function mailView(): Promise<MailView> {
  * switch is to SMTP.
  */
 export async function methodSwitchWarnings(target: MailMethod, mailbox?: string): Promise<string[]> {
-  if (target !== "m365") return [];
+  if (target !== "m365") return smtpSwitchWarnings();
   const mb = (cleanSendingMailbox(mailbox) ?? (await getM365SendConfig()).mailbox).toLowerCase();
   if (!mb) return [];
   const out: string[] = [];
@@ -286,6 +286,26 @@ export async function methodSwitchWarnings(target: MailMethod, mailbox?: string)
 }
 
 /**
+ * 1.20.32: switching to SMTP with mail still waiting in the Microsoft 365
+ * outbox (lib/mail-outbox). The simplest behaviour that loses nothing and
+ * sends nothing twice: the waiting messages go out by SMTP after the switch
+ * (From the SMTP From, to the same people, as they were built), and the
+ * admin can discard them under Outbox first. Failed and uncertain ones stay
+ * in the list for Retry (by the method chosen then) or Discard.
+ */
+async function smtpSwitchWarnings(): Promise<string[]> {
+  if ((await getMailMethod()) !== "m365") return [];
+  const { outboxWaiting } = await import("./mail-outbox");
+  const n = await outboxWaiting();
+  if (!n) return [];
+  const smtp = await getSmtpConfig();
+  const from = smtpConfigured(smtp) ? ` from ${bareAddress(smtp.from)}` : "";
+  return [
+    `${n === 1 ? "1 email is" : `${n} emails are`} still waiting in the Microsoft 365 outbox. After the switch ${n === 1 ? "it goes" : "they go"} out by SMTP${from}. To drop ${n === 1 ? "it" : "them"} instead, discard ${n === 1 ? "it" : "them"} under Outbox first.`,
+  ];
+}
+
+/**
  * Choose how mail is sent. Refused (409) when that method is not set up:
  * nothing would go out; and (409, code "confirm", with the warnings) when
  * switching changes something people notice, until `confirm` is true.
@@ -302,6 +322,8 @@ export async function setMailMethod(method: MailMethod, by: MailActor, opts: { f
   }
   await setSetting(KEYS.method, method);
   await audit({ actor: by.actor, action: "settings.mail_method", targetType: "settings", targetId: "mail", targetLabel: "Email", details: { from, to: method }, ip: by.ip ?? null });
+  // 1.20.32: whatever waits in the outbox goes now, by the method chosen (lib/mail-outbox).
+  await (await import("./mail-outbox")).resumeOutbox().catch(() => {});
   return true;
 }
 
@@ -448,6 +470,8 @@ export async function saveM365SendConfig(raw: MailM365Input, by: MailActor, opts
   }
   let methodChanged = false;
   if (opts.use) methodChanged = await setMailMethod("m365", by, { confirm: true });
+  // 1.20.32: new settings may be what a paused outbox was waiting for: try again now.
+  else await (await import("./mail-outbox")).resumeOutbox({ onlyRefusal: true }).catch(() => {});
   return { view: m365View(await getM365SendConfig()), verified, changed, method_changed: methodChanged };
 }
 
