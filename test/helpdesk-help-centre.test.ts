@@ -845,9 +845,6 @@ describe("routes and stats", () => {
     assert.ok(got.body.spaces.some((s: { id: number; private: boolean }) => s.id === sp.priv && s.private), "a chosen private space is named, to remove it");
     assert.ok(!got.body.spaces.some((s: { id: number }) => s.id === sp.priv2), "a private space nobody chose and this person can't open is never named");
     assert.ok(!JSON.stringify(got.body).includes("Board secret"));
-    const sneaky = await call(adminRoute.PUT, "/api/helpdesk/admin/portal/help-centre", { method: "PUT", origin: ORIGIN, cookie: as(admin), json: settings({ spaces: [sp.guides, sp.priv2] }) });
-    assert.equal(sneaky.status, 400);
-    assert.ok(!JSON.stringify(sneaky.body).includes("Board secret"), "refused without its name");
     assert.deepEqual(Object.keys(got.body.stats).sort(), ["answered_pct", "journeys", "searches", "top_search"]);
 
     const priv = await call(adminRoute.PUT, "/api/helpdesk/admin/portal/help-centre", { method: "PUT", origin: ORIGIN, cookie: as(admin), json: settings() });
@@ -855,6 +852,13 @@ describe("routes and stats", () => {
     assert.match(priv.body.error, /private space/);
     const empty = await call(adminRoute.PUT, "/api/helpdesk/admin/portal/help-centre", { method: "PUT", origin: ORIGIN, cookie: as(admin), json: settings({ spaces: [], tagged: false }) });
     assert.equal(empty.status, 400);
+    // 1.20.30: a space this person was never shown reads as one that no longer exists, and
+    // both drop out of the save (a deleted space was a refusal no reload could clear).
+    const sneaky = await call(adminRoute.PUT, "/api/helpdesk/admin/portal/help-centre", { method: "PUT", origin: ORIGIN, cookie: as(admin), json: settings({ spaces: [sp.guides, sp.priv2] }) });
+    assert.equal(sneaky.status, 200, JSON.stringify(sneaky.body));
+    assert.deepEqual(sneaky.body.settings.spaces, [sp.guides], "the unseen private space is not chosen");
+    assert.ok(!sneaky.body.spaces.some((s: { id: number }) => s.id === sp.priv2), "nor named");
+    assert.ok(!JSON.stringify(sneaky.body).includes("Board secret"), "dropped without its name");
     const agentTry = await call(adminRoute.PUT, "/api/helpdesk/admin/portal/help-centre", { method: "PUT", origin: ORIGIN, cookie: as(agent), json: settings({ spaces: [sp.guides] }) });
     assert.equal(agentTry.status, 403);
 
