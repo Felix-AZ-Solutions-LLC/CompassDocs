@@ -4,6 +4,54 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.29] - 2026-11-18
+
+A custom domain that can't lock you out, and Azure VMs that come back after
+a reboot.
+
+### Added
+- **Saving a custom domain checks it first.** CompassDocs looks the name up
+  and asks itself for a one-time proof through it. If the name doesn't reach
+  this server, nothing switches: the domain waits under the field with a
+  plain reason, such as "docs.example.com doesn't exist in DNS yet (no
+  record found)", "it points at 1.2.3.4", "Couldn't reach it on port 80" or
+  "Cloudflare's proxy is on for this name".
+- **A waiting domain goes live on its own.** It is checked again every 5
+  minutes for 24 hours and switches when it passes, with a bell notice to
+  administrators. **Check again** runs the check now. **Use it anyway**
+  switches without the check after a warning, for setups the check can't
+  see.
+- **HTTPS is confirmed after the switch.** For two minutes CompassDocs waits
+  for the new domain's certificate. If HTTPS never answers (port 443 closed,
+  or Let's Encrypt refused), the previous address is put back and the domain
+  waits again with the reason.
+- **Fallback addresses.** Once a custom domain is live, the address you
+  saved it from and any in COMPASSDOCS_FALLBACK_HOSTS keep working over
+  HTTPS, listed under **Also reachable at**. The Azure template sets its
+  cloudapp.azure.com address there. Links in email always use the custom
+  domain.
+- The audit log records each failed check, each domain applied, rolled back
+  or switched on without its check, and each fallback removed.
+
+### Changed
+- The setup wizard uses the same check and opens the new domain over HTTPS
+  once it is live.
+- Plain HTTP on any other name, an IP address included, now redirects to the
+  custom domain over HTTPS.
+- A certificate pasted for a waiting domain waits with it and replaces the
+  live certificate only when that domain goes live.
+- Removing a fallback address asks first, and the address you are using
+  can't be removed.
+
+### Fixed
+- Saving a domain before its DNS was visible no longer takes away the
+  address you were using.
+- **Azure one-click VMs start again after a reboot.** The data disk's
+  /etc/fstab line now uses UUID=, and Docker waits for the disk. Re-running
+  the installer as root repairs VMs deployed earlier; the Azure docs have
+  the manual steps too.
+- The admin email for certificates accepts a plain email address only.
+
 ## [1.20.28] - 2026-11-18
 
 A tidier ticket: newest first, changes as one line, files with their email.

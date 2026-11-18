@@ -77,7 +77,7 @@ test.describe("Domain & HTTPS: a domain waiting for its check", () => {
     await page.goto("/admin/domain");
     const card = page.getByTestId("domain-pending");
     await expect(card).toBeVisible();
-    await expect(card).toContainText(`${DOMAIN} isn't switched on yet`);
+    await expect(card).toContainText(new RegExp(`${DOMAIN.replace(/\./g, "\\.")} isn[’']t switched on yet`));
     await expect(card.getByRole("status")).toHaveText(REASON);
     await expect(card).toContainText("DNS answer: none");
     await expect(card).toContainText("Checking again every 5 minutes until");
