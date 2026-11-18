@@ -1342,6 +1342,21 @@ describe("who may add to a ticket (every existing rule, unchanged)", () => {
 
 // --- Attachments ------------------------------------------------------------------------
 
+/** 1.20.28: an attached email as Graph hands over an itemAttachment's $value: the message's MIME. */
+const ATTACHED_MIME = Buffer.from(
+  [
+    "Received: from mx.example.com by mail.example.com; Tue, 17 Nov 2026 09:00:00 +0000",
+    "From: Room Bookings <rooms@example.com>",
+    "To: Linda Berger <linda@example.com>",
+    "Subject: Room booking confirmation",
+    "MIME-Version: 1.0",
+    "Content-Type: text/plain; charset=utf-8",
+    "",
+    "Room 4B is booked for 14:00.",
+    "",
+  ].join("\r\n")
+);
+
 describe("attachments", () => {
   test("allowed files are stored; an oversized one is never fetched; other kinds are listed as not added", async () => {
     const saved: { filename: string; mime: string; bytes: number }[] = [];
@@ -1364,24 +1379,63 @@ describe("attachments", () => {
         { id: "a4", name: "huge.pdf", contentType: "application/pdf", data: Buffer.from("%PDF-"), size: 80 * 1024 * 1024 },
         { id: "a5", name: "logo.png", contentType: "image/png", data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), isInline: true },
         { id: "a6", name: "screenshot.png", contentType: "image/png", data: png, isInline: true },
-        { id: "a7", name: "Fwd: the original", contentType: "message/rfc822", data: Buffer.from("x"), odataType: "#microsoft.graph.itemAttachment" },
+        // 1.20.28: an attached email comes in as an .eml (its MIME is the attachment's $value); a meeting or a link to a
+        // cloud file is still not added.
+        { id: "a7", name: "Fwd: the original", contentType: "message/rfc822", data: ATTACHED_MIME, odataType: "#microsoft.graph.itemAttachment" },
+        { id: "a8", name: "Team lunch", contentType: "", data: Buffer.from("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n"), odataType: "#microsoft.graph.itemAttachment" },
+        { id: "a9", name: "Budget on OneDrive", contentType: "", data: Buffer.from("x"), odataType: "#microsoft.graph.referenceAttachment" },
       ],
     });
     await poll();
     inbound.setInboundAttachmentStoreForTests(null);
     const [t] = await ticketFor(`${STAMP} with files`);
     assert.ok(t);
-    assert.deepEqual(saved.map((s) => s.filename).sort(), ["invoice.pdf", "screenshot.png"]);
+    assert.deepEqual(saved.map((s) => s.filename).sort(), ["Fwd the original.eml", "invoice.pdf", "screenshot.png"]);
+    assert.equal(saved.find((s) => s.filename.endsWith(".eml"))?.bytes, ATTACHED_MIME.length, "the attached email's own MIME is stored");
     assert.equal(fake.calls(`/attachments/a4/$value`).length, 0, "an 80 MB file is not downloaded to be refused");
-    assert.equal(fake.calls(`/attachments/a7/$value`).length, 0);
+    assert.equal(fake.calls(`/attachments/a7/$value`).length, 1);
+    assert.equal(fake.calls(`/attachments/a9/$value`).length, 0, "a link to a cloud file is never read");
     const note = (await pool().query("SELECT body FROM hd_messages WHERE ticket_id = $1 AND via = 'system' ORDER BY id", [t.id])).rows.map((r) => r.body).join("\n");
-    assert.match(note, /4 attachments were not added/);
+    assert.match(note, /5 attachments were not added/);
     assert.match(note, /huge\.pdf \(larger than 10 MB\)/);
     assert.match(note, /run\.exe \(file type not allowed\)/);
     assert.match(note, /the content is not a PDF file/);
-    assert.match(note, /the original\.item \(file type not allowed\)/);
+    assert.match(note, /Team lunch\.item \(file type not allowed\)/);
+    assert.match(note, /Budget on OneDrive\.item \(file type not allowed\)/);
+    assert.doesNotMatch(note, /the original/);
     assert.doesNotMatch(note, /\.\.\/|\u0000/);
     assert.equal((await seen(m.id)).outcome, "created");
+  });
+
+  test("1.20.28: an attached email over the size limit is never read and is named as its .eml; its name is cleaned", async () => {
+    const saved: string[] = [];
+    inbound.setInboundAttachmentStoreForTests({
+      save: async (i) => {
+        saved.push(i.filename);
+        return { id: 910000 + saved.length, filename: i.filename, mime: i.mime, size: i.buf.length } as never;
+      },
+      bind: async () => [],
+    });
+    const m = inboxMessage({
+      subject: `${STAMP} big attached email`,
+      body: { contentType: "text", content: "See the email below." },
+      attachments: [
+        { id: "e1", name: "RE: Quarterly numbers", contentType: "message/rfc822", data: ATTACHED_MIME, size: 80 * 1024 * 1024, odataType: "#microsoft.graph.itemAttachment" },
+        { id: "e2", name: "", contentType: "message/rfc822", data: ATTACHED_MIME, odataType: "#microsoft.graph.itemAttachment" },
+      ],
+    });
+    await poll();
+    inbound.setInboundAttachmentStoreForTests(null);
+    const [t] = await ticketFor(`${STAMP} big attached email`);
+    assert.ok(t);
+    assert.equal(fake.calls(`/attachments/e1/$value`).length, 0, "an 80 MB email is not downloaded to be refused");
+    assert.deepEqual(saved, ["attached email.eml"]);
+    const note = (await pool().query("SELECT body FROM hd_messages WHERE ticket_id = $1 AND via = 'system' ORDER BY id", [t.id])).rows.map((r) => r.body).join("\n");
+    assert.match(note, /RE Quarterly numbers\.eml \(larger than 10 MB\)/);
+    assert.equal((await seen(m.id)).outcome, "created");
+    assert.equal(m365.emlName('FW: "Room" <booking>/confirmation?'), "FW Room booking confirmation.eml");
+    assert.equal(m365.emlName("notes.eml"), "notes.eml");
+    assert.equal(m365.emlName(" ... "), "attached email.eml");
   });
 
   test("1.20.8: the HTML body is kept for View original, and an inline picture is mapped by Graph's contentId", async () => {

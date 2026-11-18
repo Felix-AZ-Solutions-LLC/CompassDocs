@@ -227,7 +227,50 @@ function finish(e: Omit<InboundEmail, "subject"> & { subject: string }): Inbound
     ...e,
     subject: e.subject.replace(/[\r\n\t]+/g, " ").trim().slice(0, INBOUND_MAX_SUBJECT),
     references: e.references.slice(0, 50),
+    files: nameAttachedEmails(e.files),
   };
+}
+
+/** RFC 2047 encoded words ("=?UTF-8?B?…?=", "=?iso-8859-1?Q?…?=") as text; anything it can't read stays as written. */
+export function decodeMimeWords(s: string): string {
+  return s.replace(/=\?([^?\s]{1,40})\?([bqBQ])\?([^?\s]*)\?=(?:\s+(?==\?))?/g, (all, charset: string, enc: string, data: string) => {
+    try {
+      const bytes =
+        enc.toLowerCase() === "b"
+          ? Buffer.from(data, "base64")
+          : Buffer.from(data.replace(/_/g, " ").replace(/=([0-9a-fA-F]{2})/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16))), "latin1");
+      return new TextDecoder(charset.toLowerCase().replace(/\*.*$/, ""), { fatal: false }).decode(bytes);
+    } catch {
+      return all;
+    }
+  });
+}
+
+/** An attached email's own subject (its Subject header, decoded), or "". */
+export function attachedEmailSubject(data: Buffer): string {
+  const head = data.subarray(0, 64 * 1024).toString("latin1");
+  const end = head.search(/\r?\n\r?\n/);
+  const subject = parseRawHeaderList(end >= 0 ? head.slice(0, end) : head).find(([k]) => k === "subject")?.[1] ?? "";
+  // Header bytes were read as latin1; an unencoded UTF-8 subject is read again as UTF-8.
+  const raw = /[\u0080-ÿ]/.test(subject) ? Buffer.from(subject, "latin1").toString("utf8") : subject;
+  return decodeMimeWords(raw).replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * 1.20.28: an attached email (a message/rfc822 part) the provider hands over with no file name (or only its own
+ * placeholder, "attachment1") is named for its subject, "<subject>.eml", or "attached email.eml"; one named without
+ * the extension gets it. The intake then takes it as an .eml (lib/helpdesk/inbound) rather than refusing a file with
+ * no type. Every other file is left as it came.
+ */
+export function nameAttachedEmails(files: InboundFile[]): InboundFile[] {
+  return files.map((f) => {
+    if (!/^message\/rfc822\b/i.test(f.type.trim())) return f;
+    const name = f.name.trim();
+    if (/\.eml$/i.test(name)) return f;
+    const placeholder = !name || /^(?:attachment|file)-?\d*$/i.test(name);
+    const base = (placeholder ? attachedEmailSubject(f.data) || "attached email" : name).slice(0, 150).trim() || "attached email";
+    return { ...f, name: `${base}.eml` };
+  });
 }
 
 export function parseGeneric(body: Record<string, unknown>): InboundEmail {

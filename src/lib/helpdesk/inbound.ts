@@ -142,6 +142,9 @@ const ALLOWED: Record<string, string> = {
   ".odt": "application/vnd.oasis.opendocument.text",
   ".ods": "application/vnd.oasis.opendocument.spreadsheet",
   ".odp": "application/vnd.oasis.opendocument.presentation",
+  // 1.20.28: an attached email, as desk uploads allow (lib/helpdesk/attachments). Served as a download, never inline.
+  ".eml": "message/rfc822",
+  ".msg": "application/vnd.ms-outlook",
 };
 
 export const INBOUND_ALLOWED_EXTENSIONS = Object.keys(ALLOWED);
@@ -205,11 +208,16 @@ function contentAgrees(ext: string, mime: string, buf: Buffer): boolean {
   if (mime.startsWith("image/")) return sniffImage(buf) !== null;
   if (ext === ".pdf") return buf.subarray(0, 5).toString("latin1") === "%PDF-";
   if ([".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp"].includes(ext)) return buf.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
-  if ([".doc", ".xls", ".ppt"].includes(ext)) return buf.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]));
+  // 1.20.28: an Outlook .msg is an OLE compound file, as the old Office formats are.
+  if ([".doc", ".xls", ".ppt", ".msg"].includes(ext)) return buf.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]));
   // Text: no NUL bytes in the first 8 KB, and nothing that starts like markup a browser would run.
   const head = buf.subarray(0, 8192);
   if (head.includes(0)) return false;
-  return !/^\s*<(!doctype|html|script|svg)/i.test(head.toString("utf8"));
+  const text = head.toString("utf8");
+  if (/^\s*<(!doctype|html|script|svg)/i.test(text)) return false;
+  // 1.20.28: an .eml starts with its header lines ("Received: …", "From: …"; an mbox copy with "From "), never markup.
+  if (ext === ".eml") return /^(?:\uFEFF)?(?:From |[\x21-\x39\x3b-\x7e]{1,76}:)/.test(text);
+  return true;
 }
 
 // --- Store (lib/helpdesk/attachments) ----------------------------------------------
