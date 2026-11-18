@@ -2,7 +2,8 @@
 
 // The open ticket (the split view's right pane, /desk/tickets/[number]):
 // its meta line and subject, the status menu and Solve, the conversation
-// with the composer under it, and the side column. Loads GET
+// with the composer (1.20.28: on top, newest first, unless the agent chose
+// oldest first) and the side column. Loads GET
 // /api/helpdesk/tickets/[number]; every change is a PATCH or a message
 // POST followed by a reload of the ticket, the list and the counts.
 //
@@ -11,7 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, ChevronDown, CircleCheck, Inbox, MoreHorizontal, ShieldOff, Trash2, TriangleAlert } from "lucide-react";
+import { ArrowDownUp, ArrowLeft, ChevronDown, CircleCheck, Inbox, MoreHorizontal, ShieldOff, Trash2, TriangleAlert } from "lucide-react";
 import { MenuItem, Popover } from "@/components/Popover";
 import { useRouter } from "next/navigation";
 import { Button, iconButtonClass } from "@/components/Button";
@@ -42,6 +43,9 @@ import { latestMessageId } from "../presence/presence";
 import { ClaudeDraftCard } from "./ClaudeDraftCard";
 import { useClaudeTicket } from "../claude/ClaudeDesk";
 import { Conversation } from "./Conversation";
+// 1.20.28: the conversation's order, the agent's desk preference.
+import { chooseTicketOrder, useTicketOrder } from "./ticket-order";
+import { HD_TICKET_ORDERS, HD_TICKET_ORDER_HINT, HD_TICKET_ORDER_LABEL, type HdTicketOrder } from "@/lib/helpdesk/conversation-shared";
 import { FollowButton, TicketCcRow, useTicketPeople } from "./TicketPeople";
 import { SidePanel } from "./SidePanel";
 // 1.20.3: who asked, as a strip under the header (it was the side panel's Requester card).
@@ -86,6 +90,9 @@ const PILL_TONE: Record<string, string> = {
 
 export function TicketPane({ number }: { number: number }) {
   const me = useDeskMe();
+  // 1.20.28: newest first with the reply box on top (the default) or oldest first (./ticket-order).
+  const order = useTicketOrder();
+  const newest = order === "newest";
   const can$ = useCan();
   const router = useRouter();
   const { refresh: refreshQueue, qs, title } = useQueue();
@@ -295,6 +302,49 @@ export function TicketPane({ number }: { number: number }) {
     );
   }
 
+  // The reply area: Claude's draft, then the composer (or what stands in its place). On paper it is left out.
+  const reply = (
+    <div className={`flex min-w-0 flex-col gap-3 print:hidden ${newest ? "" : "order-last"}`} data-testid="ticket-reply-area">
+      {can && !merged && !elsewhere.away && <ClaudeDraftCard number={t.number} onUse={(body) => composer.current?.fill(body)} />}
+      {can && merged ? (
+        <MergedComposerLock d={d} />
+      ) : can && elsewhere.away ? (
+        // 1.20.18: the reply is open in another window: one quiet line here, never a second box to send from.
+        <ReplyElsewhere
+          state={elsewhere.state}
+          onShow={elsewhere.show}
+          onBringBack={elsewhere.bringBack}
+          onTakeBack={elsewhere.takeBackAnyway}
+          onKeepWaiting={elsewhere.keepWaiting}
+        />
+      ) : can ? (
+        <Composer
+          // 1.20.18: one composer per ticket, so a reply handed back from a pop-out is picked up on arrival.
+          key={t.number}
+          ref={composer}
+          number={t.number}
+          subject={t.subject}
+          requesterName={t.requester_name}
+          ccCount={people.people?.ccs.length ?? 0}
+          agentName={me.name}
+          suggestions={d.suggested_articles}
+          onSent={afterSend}
+          forReview={!can$("tickets.reply_public")}
+          allowNotes={can$("tickets.internal_note")}
+          defaultMode={t.automated === 1 ? "internal" : "public"}
+          automated={t.automated === 1}
+          latestMessageId={latestMessageId(d.messages)}
+          onNewer={() => void load(true)}
+          beforeSolve={d.before_solve === true}
+          handoff={elsewhere.pendingAck ? "peek" : "take"}
+          onPopOut={elsewhere.popOut}
+        />
+      ) : (
+        <p className="notice-warn rounded-lg border px-3 py-2 text-sm">You can read this ticket but not work it: it belongs to a team you're not in.</p>
+      )}
+    </div>
+  );
+
   const chip = statusChip(t);
   // Agent O's contact cards: the requester's card says whether they are VIP.
   const vip = (d.requester as typeof d.requester & { card?: { vip?: { vip: boolean; reason: string } } }).card?.vip;
@@ -445,44 +495,24 @@ export function TicketPane({ number }: { number: number }) {
             {can && <IncidentPanel number={t.number} refreshKey={t.updated_at} onChanged={() => void load(true).then(refreshQueue)} />}
             {/* Checklists (1.19.2, agent W3); refreshed as the timeline moves. */}
             {can && <TicketChecklists number={t.number} refreshKey={d.messages.length} />}
-            <Conversation messages={d.messages} requesterId={t.requester_id} meId={me.id} ticketNumber={t.number} origins={d.merge?.message_origins} originals={can} />
-            {can && !merged && !elsewhere.away && <ClaudeDraftCard number={t.number} onUse={(body) => composer.current?.fill(body)} />}
-            {can && merged ? (
-              <MergedComposerLock d={d} />
-            ) : can && elsewhere.away ? (
-              // 1.20.18: the reply is open in another window: one quiet line here, never a second box to send from.
-              <ReplyElsewhere
-                state={elsewhere.state}
-                onShow={elsewhere.show}
-                onBringBack={elsewhere.bringBack}
-                onTakeBack={elsewhere.takeBackAnyway}
-                onKeepWaiting={elsewhere.keepWaiting}
-              />
-            ) : can ? (
-              <Composer
-                // 1.20.18: one composer per ticket, so a reply handed back from a pop-out is picked up on arrival.
-                key={t.number}
-                ref={composer}
-                number={t.number}
-                subject={t.subject}
-                requesterName={t.requester_name}
-                ccCount={people.people?.ccs.length ?? 0}
-                agentName={me.name}
-                suggestions={d.suggested_articles}
-                onSent={afterSend}
-                forReview={!can$("tickets.reply_public")}
-                allowNotes={can$("tickets.internal_note")}
-                defaultMode={t.automated === 1 ? "internal" : "public"}
-                automated={t.automated === 1}
-                latestMessageId={latestMessageId(d.messages)}
-                onNewer={() => void load(true)}
-                beforeSolve={d.before_solve === true}
-                handoff={elsewhere.pendingAck ? "peek" : "take"}
-                onPopOut={elsewhere.popOut}
-              />
-            ) : (
-              <p className="notice-warn rounded-lg border px-3 py-2 text-sm">You can read this ticket but not work it: it belongs to a team you're not in.</p>
-            )}
+            {/* 1.20.28: each agent's order (lib/helpdesk/conversation-shared): newest first with the reply box on top
+                (the default), or oldest first with it at the bottom. The reply box is the same element either way. */}
+            <ConversationOrder order={order} />
+            {/* One reply area in one place in the page, whichever the order: switching never remounts the composer (its
+                text, files, macro, note mode, reply lock and Claude's draft stay). Oldest first moves it to the end
+                with CSS order alone; the page order is the default's (newest first). */}
+            {reply}
+            <Conversation
+              key={t.number}
+              order={order}
+              messages={d.messages}
+              requesterId={t.requester_id}
+              requesterEmail={t.requester_email}
+              meId={me.id}
+              ticketNumber={t.number}
+              origins={d.merge?.message_origins}
+              originals={can}
+            />
           </div>
           <div
             data-testid="ticket-side-pane"
@@ -503,6 +533,37 @@ export function TicketPane({ number }: { number: number }) {
         {/* The solve flow's "Before you solve" dialog (1.20.5, solve/BeforeYouSolve). */}
         <BeforeYouSolveHost onChanged={() => void load(true)} />
       </article>
+    </div>
+  );
+}
+
+/**
+ * 1.20.28: the conversation's Order (STYLEGUIDE §Helpdesk: the desk, "Order and fold"): a quiet picker at the column's
+ * right, like the queue's Sort. The choice is the agent's desk preference, so it follows them across devices.
+ */
+function ConversationOrder({ order }: { order: HdTicketOrder }) {
+  return (
+    <div className="-mb-1 flex justify-end print:hidden">
+      <PickMenu
+        label="Order"
+        value={order}
+        options={HD_TICKET_ORDERS.map((o) => ({ value: o, label: HD_TICKET_ORDER_LABEL[o], hint: HD_TICKET_ORDER_HINT[o] }))}
+        onPick={chooseTicketOrder}
+        trigger={(p) => (
+          <button
+            {...p}
+            type="button"
+            aria-label={`Order: ${HD_TICKET_ORDER_LABEL[order]}`}
+            data-testid="conversation-order"
+            className="inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 pointer-coarse:h-9 pointer-coarse:px-2"
+          >
+            <ArrowDownUp className="h-3.5 w-3.5" aria-hidden />
+            <span>Order:</span>
+            <span className="text-slate-700">{HD_TICKET_ORDER_LABEL[order]}</span>
+            <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        )}
+      />
     </div>
   );
 }

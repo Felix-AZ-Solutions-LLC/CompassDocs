@@ -73,7 +73,11 @@ export interface FakeAttachment {
   isInline?: boolean;
   /** Graph's contentId (an inline picture the HTML names as cid:…). */
   contentId?: string;
-  /** "#microsoft.graph.itemAttachment" for an attached message. */
+  /**
+   * "#microsoft.graph.itemAttachment" for an attached message (or event, contact), "#microsoft.graph.referenceAttachment"
+   * for a link to a cloud file. 1.20.28: as Graph, an itemAttachment has no contentBytes; its $value is the item's raw
+   * content (`data`: a message's MIME, an event's iCalendar, a contact's vCard), and a referenceAttachment has none.
+   */
   odataType?: string;
   /** Claim this size instead of the real one. */
   size?: number;
@@ -945,12 +949,24 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
         const a = m.attachments.find((x) => x.id === decodeURIComponent(one[1]));
         if (a && fake.fail.attachmentValue && (!fake.failAttachmentId || fake.failAttachmentId === a.id)) return send(res, fake.fail.attachmentValue, gerr("ErrorInternalServerError", "Try again."));
         if (!a) return send(res, 404, gerr("ErrorItemNotFound", "No such attachment."));
-        return send(res, 200, { "@odata.type": a.odataType ?? "#microsoft.graph.fileAttachment", id: a.id, name: a.name, contentType: a.contentType, size: a.size ?? a.data.length, isInline: a.isInline === true, ...(a.contentId ? { contentId: a.contentId } : {}), contentBytes: a.data.toString("base64") });
+        const file = !a.odataType || /fileattachment$/i.test(a.odataType);
+        return send(res, 200, {
+          "@odata.type": a.odataType ?? "#microsoft.graph.fileAttachment",
+          id: a.id,
+          name: a.name,
+          contentType: a.contentType,
+          size: a.size ?? a.data.length,
+          isInline: a.isInline === true,
+          ...(a.contentId && file ? { contentId: a.contentId } : {}),
+          ...(file ? { contentBytes: a.data.toString("base64") } : {}),
+        });
       }
       const att = tail.match(/^\/attachments\/([^/]+)\/\$value$/);
       if (att && method === "GET") {
         const a = m.attachments.find((x) => x.id === decodeURIComponent(att[1]));
         if (fake.fail.attachmentValue && (!fake.failAttachmentId || fake.failAttachmentId === a?.id)) return send(res, fake.fail.attachmentValue, gerr("ErrorInternalServerError", "Try again."));
+        // A link to a cloud file has no content of its own here.
+        if (a && /referenceattachment$/i.test(a.odataType ?? "")) return send(res, 400, gerr("ErrorInvalidRequest", "A reference attachment has no raw content."));
         return a ? send(res, 200, a.data) : send(res, 404, gerr("ErrorItemNotFound", "No such attachment."));
       }
     }

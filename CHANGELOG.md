@@ -4,6 +4,45 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.28] - 2026-11-18
+
+A tidier ticket: newest first, changes as one line, files with their email.
+
+### Added
+- **Newest first, reply box on top.** A ticket opens with the reply box at
+  the top, then the newest messages. The newest requester message and the
+  newest reply stay open, with everything since; older history folds into
+  "Show N earlier messages".
+- **Order, per agent.** The Order control above the conversation switches
+  between Newest first and Oldest first (the reply box at the bottom,
+  nothing folded). Your choice follows you to other devices.
+- **Attached emails come in.** An email attached to a client's email (.eml,
+  or Outlook's .msg) is added to the ticket as a file to download. Microsoft
+  365 mailboxes add attached messages as .eml files; an attached email with
+  no name is named after its subject.
+
+### Changed
+- **Changes are one line, not a note.** A change to a ticket's priority,
+  owner, team, category, sub-category, custom fields, subject, language or
+  event reads as one muted line with an icon, like the status and CC lines.
+  An automation's change names the rule, with a robot icon. Earlier changes
+  are shown the same way after the upgrade. Notes people write, and an
+  automation's own notes, stay notes.
+- **Files are a list under their email:** type, name, size and Download for
+  each, with the number of files and their total size, as wide as the email
+  above it.
+- **Pictures that are part of an email** (signature logos, pasted
+  screenshots, pictures from the earlier emails in a reply) show inside the
+  email and are no longer listed as files. Switch the email to Plain text,
+  or print it, to list them.
+- **Printing a ticket** still shows the whole conversation, oldest first.
+
+### Fixed
+- **Settings, Agents on a phone:** no more blank space above each person,
+  and the role is no longer cut off.
+- **Emails with an attached email** no longer say the file type isn't
+  allowed.
+
 ## [1.20.27] - 2026-11-17
 
 A polished, hardened desk: security fixes from a full audit, one-click SCIM

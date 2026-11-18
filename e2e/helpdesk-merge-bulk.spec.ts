@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { ADMIN, api, ensureUser, login } from "./helpers";
+import { ADMIN, api, ensureUser, login, showWholeConversation } from "./helpers";
 
 // Merge tickets and bulk edits (Helpdesk 1.19.1, agent V2), as the
 // workspace administrator (desk Admin). Each test makes its own team and
@@ -115,6 +115,8 @@ test.describe("merge and bulk edit", () => {
       const related = page.getByRole("region", { name: "Related" });
       await expect(related.getByText("Merged in:")).toBeVisible({ timeout: 60_000 });
       await expect(related.getByRole("link", { name: `#${b}` })).toBeVisible();
+      // 1.20.28: newest first folds the older history, merged-in messages included.
+      await showWholeConversation(page);
       await expect(page.getByText(`from #${b}`).first()).toBeVisible();
 
       await page.goto(`/desk/tickets/${b}?team=${f.team}`);

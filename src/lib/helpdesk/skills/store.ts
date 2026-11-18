@@ -10,6 +10,7 @@ import { dbReady } from "../../db";
 import { hq, withTx, type HdQueryable } from "../db-core";
 import { detectLanguage } from "./detect";
 import { mdInline } from "../md-inline";
+import { HD_CHANGE_EVENT } from "../conversation-shared";
 import {
   SKILL_LIMITS,
   isLanguageCode,
@@ -350,8 +351,9 @@ export async function setTicketLanguage(
         : `${who} set the language to ${mdInline(languageName(code))}`
       : `${who} cleared the language (it was ${from})`;
     await client.query(
-      `INSERT INTO hd_messages (ticket_id, author_id, author_name, kind, body, via, created_at) VALUES ($1, $2, $3, 'internal', $4, 'system', now())`,
-      [ticketId, actor.id, actor.name, body]
+      // 1.20.28: a field change, so an activity line in the desk (lib/helpdesk/conversation-shared).
+      `INSERT INTO hd_messages (ticket_id, author_id, author_name, kind, body, via, created_at, event) VALUES ($1, $2, $3, 'internal', $4, 'system', now(), $5)`,
+      [ticketId, actor.id, actor.name, body, HD_CHANGE_EVENT]
     );
     return { before: row.language ?? null, after: code };
   });

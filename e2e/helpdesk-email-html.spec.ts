@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { Client } from "pg";
-import { ADMIN, api, ensureUser, login } from "./helpers";
+import { ADMIN, api, ensureUser, login, showWholeConversation } from "./helpers";
 
 // 1.20.8 "View original": an HTML reply that comes in through the inbound
 // webhook shows "View original" in the desk; the dialog renders it in a
@@ -114,6 +114,8 @@ test.describe("View original (licensed)", () => {
     const control = reply.getByRole("button", { name: "Open in a window" });
     await expect(control).toBeVisible();
     await expect(control).toHaveAttribute("data-tt", "Open in a window");
+    // 1.20.28: newest first folds the opening email behind "Show 1 earlier message"; opened, both carry the control.
+    await showWholeConversation(page);
     await expect(page.getByRole("button", { name: "Open in a window" })).toHaveCount(2);
 
     await control.click();

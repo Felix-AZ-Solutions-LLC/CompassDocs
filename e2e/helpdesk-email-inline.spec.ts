@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import { randomBytes } from "node:crypto";
 import { deflateSync } from "node:zlib";
 import { Client } from "pg";
-import { ADMIN, api, ensureUser, login } from "./helpers";
+import { ADMIN, api, ensureUser, login, setTicketOrder } from "./helpers";
 
 // 1.20.11 "Email shows as sent": an emailed message with an HTML part shows
 // its email formatted in the desk conversation without a click. The frame is
@@ -104,6 +104,8 @@ test.describe("Email shows as sent (licensed)", () => {
     await db.query("UPDATE users SET email = $2 WHERE username = $1", [REQUESTER.username, reqEmail]);
     // Start from the default (formatted), whatever this admin chose before (put back afterwards).
     await db.query("UPDATE hd_notify_prefs SET prefs = prefs - 'email_view' WHERE user_id = $1", [adminId]);
+    // 1.20.28: these checks read the conversation oldest first, nothing folded (the preferences row is put back).
+    await setTicketOrder(page, "oldest");
 
     let s = await api(page, "/api/helpdesk/admin/settings");
     expect(s.status).toBe(200);

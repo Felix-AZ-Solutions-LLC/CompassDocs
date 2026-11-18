@@ -78,6 +78,13 @@ const AVAILABILITY: Record<HdDeskAgent["availability"], { label: string; tone: "
   offline: { label: "Offline", tone: "neutral" },
 };
 
+/**
+ * 1.20.28: a phone stacks each person's row (STYLEGUIDE §Tables, "A table that stacks on a phone"): name and the row's
+ * actions, then role and availability, then teams across the width. From `sm` up it is the table, top-aligned.
+ */
+const STACK_ROW = "max-sm:grid max-sm:grid-cols-[minmax(0,1fr)_auto] max-sm:items-center max-sm:gap-x-3 max-sm:gap-y-2 max-sm:px-4 max-sm:py-3";
+const STACK_CELL = "align-top max-sm:block max-sm:w-auto max-sm:min-w-0 max-sm:p-0";
+
 function plural(n: number, role: HdRole): string {
   const label = HD_ROLE_LABEL[role];
   return `${n} ${n === 1 ? label : `${label}s`}`;
@@ -216,8 +223,10 @@ export function AgentsSettings() {
           {rows.length === 0 ? (
             <SectionEmpty className="px-4 py-6">Nobody matches. Clear the filters to see everyone.</SectionEmpty>
           ) : (
-            <Table scroll minWidth="46rem">
-              <thead className={TABLE_HEAD_ROW}>
+            // 1.20.28: top-aligned, and stacked on a phone (STYLEGUIDE §Tables, "A table that stacks on a phone"): rows
+            // were centred against a tall Teams cell, leaving a gap above each person, and the Role column was cut.
+            <Table scroll minWidth="46rem" className="max-sm:block max-sm:min-w-0">
+              <thead className={`${TABLE_HEAD_ROW} max-sm:hidden`}>
                 <tr>
                   <Th>Person</Th>
                   <Th fit>Role</Th>
@@ -229,14 +238,14 @@ export function AgentsSettings() {
                   </Th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="max-sm:block">
                 {rows.map((a) => {
                   const options = me ? HD_ROLES.filter((r) => me.assignable_roles.includes(r) || r === a.role) : [a.role];
                   const leads = a.lead_team_ids.map((t) => teamName.get(t)).filter(Boolean) as string[];
                   const avail = AVAILABILITY[a.availability] ?? AVAILABILITY.available;
                   return (
-                    <tr key={a.user_id} className={TR}>
-                      <Td>
+                    <tr key={a.user_id} className={`${TR} ${STACK_ROW}`} data-testid="agent-row">
+                      <Td className={`${STACK_CELL} max-sm:col-start-1 max-sm:row-start-1`}>
                         <span className="flex min-w-0 items-center gap-3">
                           <UserAvatar name={a.name} size="sm" />
                           <span className="min-w-0">
@@ -245,7 +254,7 @@ export function AgentsSettings() {
                           </span>
                         </span>
                       </Td>
-                      <Td fit>
+                      <Td fit className={`${STACK_CELL} max-sm:col-start-1 max-sm:row-start-2`}>
                         {a.manageable && !a.locked ? (
                           <Select
                             dense
@@ -265,7 +274,7 @@ export function AgentsSettings() {
                           <RoleChip role={a.role} fromWorkspace={a.locked} />
                         )}
                       </Td>
-                      <Td>
+                      <Td className={`${STACK_CELL} max-sm:col-span-2 max-sm:row-start-3`}>
                         {a.team_ids.length === 0 ? (
                           <span className="text-xs text-slate-500">{a.role === "manager" || a.role === "admin" ? "Every team" : "No team yet"}</span>
                         ) : (
@@ -279,12 +288,12 @@ export function AgentsSettings() {
                         )}
                         {leads.length > 0 && <span className="mt-1 block text-xs text-slate-500">Lead of {leads.join(", ")}</span>}
                       </Td>
-                      <Td fit>
+                      <Td fit className={`${STACK_CELL} max-sm:col-start-2 max-sm:row-start-2 max-sm:justify-self-end`}>
                         <Chip tone={avail.tone} size="sm">
                           {avail.label}
                         </Chip>
                       </Td>
-                      <Td fit>
+                      <Td fit className={`${STACK_CELL} max-sm:col-start-2 max-sm:row-start-1 max-sm:justify-self-end`}>
                         {a.manageable && (
                           <span className="flex items-center gap-1">
                             <button

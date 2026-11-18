@@ -32,6 +32,8 @@ import { HD_API_SCHEMA } from "./helpdesk/api-schema";
 import { HD_CHAT_SCHEMA } from "./helpdesk/chat-schema";
 import { HD_APPEARANCE_SCHEMA } from "./helpdesk/appearance-schema";
 import { HD_SHARE_SCHEMA } from "./helpdesk/share-schema";
+// 1.20.28: earlier field-change lines get their activity-line marker, once (lib/helpdesk/change-lines).
+import { migrateChangeLinesInBackground } from "./helpdesk/change-lines";
 import { HD_CLAUDE_SCHEMA } from "./helpdesk/claude-schema";
 import { HD_MAILBOXES_SCHEMA } from "./helpdesk/mailboxes-schema";
 import { HD_M365_MAIL_SCHEMA } from "./helpdesk/m365-mail-schema";
@@ -259,6 +261,8 @@ async function initialize(): Promise<void> {
     await client.query("SELECT pg_advisory_unlock(728341)").catch(() => {});
     client.release();
   }
+  // 1.20.28: after boot and outside its lock, in batches; a failure only logs (lib/helpdesk/change-lines).
+  migrateChangeLinesInBackground(pool());
 }
 
 /**

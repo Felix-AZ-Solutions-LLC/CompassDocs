@@ -1057,6 +1057,22 @@ async function intakeSlot<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * 1.20.28: an attached email's file name: its name in Graph (the message's subject), with nothing in it a file name
+ * can't carry, plus ".eml"; "attached email.eml" when there's nothing left.
+ */
+export function emlName(name: string): string {
+  const base = name
+    .replace(/[\u0000-\u001f\u007f\\/:*?"<>|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\.eml$/i, "")
+    .replace(/^\.+|\.+$/g, "")
+    .slice(0, 150)
+    .trim();
+  return `${base || "attached email"}.eml`;
+}
+
 let oversize: Buffer | null = null;
 /** Stands in for a file that is too large to fetch: the pipeline refuses it by its length alone, in its own words. */
 function oversizeStub(limit: number): Buffer {
@@ -1209,13 +1225,51 @@ async function fetchFiles(c: M365Config, mb: MbRow, id: string, tolerant: boolea
     const type = str(a.contentType).slice(0, 200);
     const size = Number(a.size) || 0;
     const kind = str(a["@odata.type"]).toLowerCase();
-    if (kind && !kind.endsWith("fileattachment")) {
-      // An attached message or a link to a cloud file: not a file the desk stores. The pipeline lists it as not added.
+    // 1.20.28: an attached email (an itemAttachment holding a message) comes in as an .eml: Graph hands over the
+    // message's MIME as the attachment's $value. A calendar item, a contact or a link to a cloud file is still not a
+    // file the desk stores: the pipeline lists it as not added.
+    const attachedEmail = kind.endsWith("itemattachment") && (/^message\/rfc822\b/i.test(type) || !type);
+    if (kind && !kind.endsWith("fileattachment") && !attachedEmail) {
       files.push({ name: `${name}.item`, type, data: Buffer.from("x") });
       continue;
     }
+    const fileName = attachedEmail ? emlName(str(a.name).slice(0, 300)) : name;
     if (size > INBOUND_LIMITS.fileBytes * 1.4 || total > INBOUND_LIMITS.totalBytes + INBOUND_LIMITS.fileBytes) {
-      files.push({ name, type, data: oversizeStub(INBOUND_LIMITS.fileBytes) });
+      files.push({ name: fileName, type, data: oversizeStub(INBOUND_LIMITS.fileBytes) });
+      continue;
+    }
+    if (attachedEmail) {
+      let mime: Buffer;
+      try {
+        mime = await graph<Buffer>(creds(c), {
+          path: `${base}/${encodeURIComponent(aid)}/$value`,
+          as: "bytes",
+          maxBytes: INBOUND_LIMITS.fileBytes + 1,
+          timeoutMs: 30_000 + Math.ceil(Math.max(0, size) / 50),
+          prefer: [IMMUTABLE],
+          what: "read an attached email",
+        });
+      } catch (e) {
+        const accessProblem = e instanceof M365Error && (e.status === 401 || e.status === 403);
+        // 1.20.28 review: an item with no type might be an event or a contact, never worth holding the email for: any
+        // refusal but the mailbox's own (401/403) leaves it out as before ("not added").
+        if (!type && !accessProblem) {
+          files.push({ name: `${name}.item`, type, data: Buffer.from("x") });
+          continue;
+        }
+        if (e instanceof M365Error && e.kind === "too_large") mime = oversizeStub(INBOUND_LIMITS.fileBytes);
+        else if (tolerant && e instanceof M365Error && !accessProblem) {
+          missing.push(fileName);
+          continue;
+        } else throw e;
+      }
+      // Without a type in the list, what came back decides: an event's or a contact's $value is iCalendar or vCard.
+      if (!type && /^\s*BEGIN:V(?:CALENDAR|CARD)/i.test(mime.subarray(0, 64).toString("latin1"))) {
+        files.push({ name: `${name}.item`, type, data: Buffer.from("x") });
+        continue;
+      }
+      total += mime.length;
+      files.push({ name: fileName, type: "message/rfc822", data: mime });
       continue;
     }
     let data: Buffer;

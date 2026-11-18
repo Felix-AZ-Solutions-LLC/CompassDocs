@@ -84,7 +84,12 @@ export function useInlineEmail({ id, enabled, author, tinted, text, onOpenWindow
   /** The message's text body as the card shows it. */
   text: ReactNode;
   onOpenWindow: () => void;
-}): { controls: ReactNode; body: ReactNode } {
+}): {
+  controls: ReactNode;
+  body: ReactNode;
+  /** 1.20.28: the email is (or is about to be) drawn formatted, so its inline pictures are in it, not in the file list. */
+  formatted: boolean;
+} {
   const preferred = useEmailViewDefault();
   // The default as the message came on screen; switching it is this message's own from then on.
   const [view, setView] = useState<HdEmailView>(preferred);
@@ -97,7 +102,7 @@ export function useInlineEmail({ id, enabled, author, tinted, text, onOpenWindow
     rememberEmailView(next);
   }, [state, view]);
 
-  if (!enabled) return { controls: null, body: text };
+  if (!enabled) return { controls: null, body: text, formatted: false };
 
   const fellBack = view === "formatted" && state === "text";
   const plainShown = view === "plain";
@@ -130,7 +135,7 @@ export function useInlineEmail({ id, enabled, author, tinted, text, onOpenWindow
   const body = (
     <InlineEmailBody id={id} author={author} tinted={tinted} text={text} formatted={view === "formatted"} state={state} setState={setState} />
   );
-  return { controls, body };
+  return { controls, body, formatted: view === "formatted" && state !== "text" };
 }
 
 function InlineEmailBody({ id, author, tinted, text, formatted, state, setState }: {

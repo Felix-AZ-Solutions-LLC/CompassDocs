@@ -17,6 +17,7 @@ import { iconButtonClass } from "@/components/Button";
 import { railIconClass, railRowClass } from "@/components/RailLink";
 import type { HdAvailability, HdCounts } from "@/lib/helpdesk/types";
 import type { HdEmailView } from "@/lib/helpdesk/email-html-shared";
+import type { HdTicketOrder } from "@/lib/helpdesk/conversation-shared";
 import { DeskBell } from "./DeskBell";
 import { DeskSearch } from "./DeskSearch";
 import { WorkspaceAddressBanner } from "./WorkspaceAddressNotice";
@@ -121,6 +122,7 @@ export function DeskShell({
   unread,
   availability,
   emailView = "formatted",
+  ticketOrder = "newest",
   installSlot,
   role,
   roleCaps,
@@ -136,6 +138,8 @@ export function DeskShell({
   availability: HdAvailability;
   /** 1.20.11: how emailed messages read in the conversation (the agent's desk preference). */
   emailView?: HdEmailView;
+  /** 1.20.28: the ticket pane's conversation order (the agent's desk preference, lib/helpdesk/conversation-shared). */
+  ticketOrder?: HdTicketOrder;
   /** The desk app's install prompt (agent F's InstallDesk), shown in the user menu. */
   installSlot?: ReactNode;
   role: { key: string; label: string } | null;
@@ -177,7 +181,7 @@ export function DeskShell({
 
   if (bare) {
     return (
-      <DeskMeContext.Provider value={{ id: user.id, name: user.name, agent: caps.agent, admin: caps.admin, reports: caps.reports, role, caps: roleCaps, email_view: emailView }}>
+      <DeskMeContext.Provider value={{ id: user.id, name: user.name, agent: caps.agent, admin: caps.admin, reports: caps.reports, role, caps: roleCaps, email_view: emailView, ticket_order: ticketOrder }}>
         <DeskCountsContext.Provider value={{ counts, refresh }}>
           <div className="relative flex h-dvh flex-col overflow-clip bg-canvas print:h-auto print:overflow-visible">
             <main id="main" tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 outline-none">
@@ -190,7 +194,7 @@ export function DeskShell({
   }
 
   return (
-    <DeskMeContext.Provider value={{ id: user.id, name: user.name, agent: caps.agent, admin: caps.admin, reports: caps.reports, role, caps: roleCaps, email_view: emailView }}>
+    <DeskMeContext.Provider value={{ id: user.id, name: user.name, agent: caps.agent, admin: caps.admin, reports: caps.reports, role, caps: roleCaps, email_view: emailView, ticket_order: ticketOrder }}>
     <DeskCountsContext.Provider value={{ counts, refresh, live }}>
     <TeamStatusProvider enabled={caps.agent}>
     <ClaudeHost claude={claude}>
