@@ -5164,6 +5164,8 @@ const SENSITIVE_SETTINGS = new Set([
   "backup_s3_secret_access_key",
   "backup_azure_connection_string",
   "tls_key_pem",
+  // 1.20.29: a private key pasted for a custom domain still waiting for its check.
+  "tls_key_pem_pending",
   "chat_slack_signing_secret",
   "chat_teams_hmac_secret",
   "ai_openai_api_key",

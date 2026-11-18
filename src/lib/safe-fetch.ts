@@ -83,9 +83,52 @@ function ipBlocked(ip: string, blockPrivate: boolean): boolean {
       return true; // link-local fe80::/10
     if (low.startsWith("::ffff:")) return ipBlocked(low.slice(7), blockPrivate); // v4-mapped
     if (blockPrivate && (low.startsWith("fc") || low.startsWith("fd"))) return true; // ULA
+    // 1.20.29: IPv4 carried inside IPv6. NAT64 (64:ff9b::/96, the IPv4 in
+    // the last 32 bits) and 6to4 (2002::/16, the IPv4 in bits 16-47) reach
+    // the IPv4 address they carry, so they are judged as that address.
+    const words = expandV6(low);
+    if (!words) return true; // unparseable: refuse
+    if (words[0] === 0x64 && words[1] === 0xff9b && words.slice(2, 6).every((w) => w === 0)) {
+      return ipBlocked(v4FromWords(words[6], words[7]), blockPrivate);
+    }
+    if (words[0] === 0x2002) return ipBlocked(v4FromWords(words[1], words[2]), blockPrivate);
     return false;
   }
   return true; // not an IP at all — refuse
+}
+
+/** An IPv6 address as its eight 16-bit words, or null. Handles "::" and a dotted IPv4 tail. */
+function expandV6(ip: string): number[] | null {
+  let s = ip.split("%")[0];
+  const dotted = /^(.*:)(\d+\.\d+\.\d+\.\d+)$/.exec(s);
+  if (dotted) {
+    const [a, b, c, d] = dotted[2].split(".").map(Number);
+    s = `${dotted[1]}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const halves = s.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const fill = halves.length === 2 ? 8 - head.length - tail.length : 0;
+  if (fill < 0) return null;
+  const parts = [...head, ...Array(fill).fill("0"), ...tail];
+  if (parts.length !== 8 || parts.some((p) => !/^[0-9a-f]{1,4}$/.test(p))) return null;
+  return parts.map((p) => parseInt(p, 16));
+}
+
+function v4FromWords(hi: number, lo: number): string {
+  return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+}
+
+/**
+ * The address rules above, for the one caller that classifies an address
+ * without fetching through this module: the custom-domain check (1.20.29,
+ * lib/domain-check), which must tell loopback/link-local (never fetched)
+ * from private (fetched only for that check, see there) from public. A
+ * non-IP string counts as blocked.
+ */
+export function addressBlocked(ip: string, blockPrivate: boolean): boolean {
+  return ipBlocked(ip, blockPrivate);
 }
 
 function blockPrivateRanges(): boolean {

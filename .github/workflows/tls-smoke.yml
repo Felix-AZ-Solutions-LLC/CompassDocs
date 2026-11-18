@@ -6,12 +6,23 @@ name: TLS smoke test
 # Caddy and HTTPS actually serves the app. This is the test that would have
 # caught both the `command: ["run", …]` startup failure and the admin-API
 # origin 403s before a customer did.
+#
+# 1.20.29: a domain is checked before the proxy switches to it. The smoke's
+# name has no public DNS, so the first save must be REFUSED (left pending,
+# the bootstrap address still serving); "Use it anyway" (`force: true`, what
+# the UI's button sends) then takes the real apply path. A fallback host
+# (COMPASSDOCS_FALLBACK_HOSTS) must keep answering once the domain is live,
+# and the check's own path must reach the app on any host over plain HTTP.
 
 on:
   pull_request:
     paths:
       - "deploy/**"
       - "src/lib/caddy.ts"
+      - "src/lib/domain-*.ts"
+      - "src/lib/fallback-hosts.ts"
+      - "src/app/api/admin/domain/**"
+      - "src/app/.well-known/compassdocs-domain-check/**"
       - "src/instrumentation.ts"
       - "Dockerfile"
       - "install.sh"
@@ -21,6 +32,10 @@ on:
     paths:
       - "deploy/**"
       - "src/lib/caddy.ts"
+      - "src/lib/domain-*.ts"
+      - "src/lib/fallback-hosts.ts"
+      - "src/app/api/admin/domain/**"
+      - "src/app/.well-known/compassdocs-domain-check/**"
       - "src/instrumentation.ts"
       - "Dockerfile"
       - "install.sh"
@@ -52,6 +67,8 @@ jobs:
           echo "POSTGRES_PASSWORD=smoketest123" > /tmp/stack/.env
           # 1.20.27: a fresh install is claimed only with the setup token; preset it for the smoke.
           echo "COMPASSDOCS_SETUP_TOKEN=smoke-setup-token" >> /tmp/stack/.env
+          # 1.20.29: an address that must keep working after the domain is applied.
+          echo "COMPASSDOCS_FALLBACK_HOSTS=fallback.compassdocs.test" >> /tmp/stack/.env
 
       - name: Start the stack
         run: docker compose up -d
@@ -72,13 +89,25 @@ jobs:
           curl -sf -c /tmp/stack/jar -X POST http://localhost/api/auth/login -H 'content-type: application/json' \
             -d '{"username":"admin","password":"Sm0keTest!Sm0keTest!"}'
 
-      - name: Save a domain with the internal CA — the push must APPLY
+      - name: Save a domain without public DNS — the check refuses, nothing switches
         run: |
           RESP=$(curl -sf -b /tmp/stack/jar -X PATCH http://localhost/api/admin/domain \
             -H 'content-type: application/json' \
             -d '{"custom_domain":"smoke.compassdocs.test","tls_mode":"internal"}')
           echo "$RESP"
-          echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('ok') is True, d; assert d.get('applied') is True, ('proxy did NOT apply', d); assert d['state']['proxy']['reachable'] is True, d; print('config push applied OK')"
+          echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('ok') is True, d; assert d.get('outcome') == 'pending', ('the check should have refused a name with no DNS', d); assert d.get('applied') is False, d; assert d['state']['custom_domain'] == '', d; assert d['state']['pending']['domain'] == 'smoke.compassdocs.test', d; assert d['check']['ok'] is False and d['check']['message'], d; print('refused as pending:', d['check']['message'])"
+          # The bootstrap config is still the one serving: plain HTTP on any host.
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/login)
+          echo "bootstrap http -> $CODE"
+          test "$CODE" = "200"
+
+      - name: Use it anyway (force) — the push must APPLY
+        run: |
+          RESP=$(curl -sf -b /tmp/stack/jar -X PATCH http://localhost/api/admin/domain \
+            -H 'content-type: application/json' \
+            -d '{"custom_domain":"smoke.compassdocs.test","tls_mode":"internal","force":true}')
+          echo "$RESP"
+          echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('ok') is True, d; assert d.get('outcome') == 'forced', d; assert d.get('applied') is True, ('proxy did NOT apply', d); assert d['state']['proxy']['reachable'] is True, d; assert d['state']['custom_domain'] == 'smoke.compassdocs.test', d; assert d['state']['pending'] is None, d; assert [f['host'] for f in d['state']['fallbacks']] == ['fallback.compassdocs.test'], d; print('config push applied OK')"
 
       - name: HTTPS serves the app on the configured domain
         run: |
@@ -102,7 +131,38 @@ jobs:
             -H 'content-type: application/json' \
             -d '{"custom_domain":"smoke.compassdocs.test","tls_mode":"internal","tls_email":""}')
           echo "$RESP"
-          echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('applied') is True, d; print('second push applied OK')"
+          # The same domain and mode: a re-apply, no check needed.
+          echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('applied') is True, d; assert d.get('outcome') == 'saved', d; print('second push applied OK')"
+
+      - name: The fallback host still answers after the domain is applied
+        run: |
+          # Plain HTTP redirects to HTTPS on the fallback itself; HTTPS serves the app.
+          LOC=$(curl -s -o /dev/null -w "%{http_code} %{redirect_url}" --resolve fallback.compassdocs.test:80:127.0.0.1 http://fallback.compassdocs.test/login)
+          echo "fallback http -> $LOC"
+          test "$LOC" = "308 https://fallback.compassdocs.test/login"
+          CODE=$(curl -sk -o /dev/null -w "%{http_code}" --resolve fallback.compassdocs.test:443:127.0.0.1 https://fallback.compassdocs.test/login)
+          echo "fallback https -> $CODE"
+          test "$CODE" = "200"
+          curl -sk --resolve fallback.compassdocs.test:443:127.0.0.1 https://fallback.compassdocs.test/login | grep -q "Sign in"
+
+      - name: The domain check reaches the app on any host over plain HTTP
+        run: |
+          # A name the proxy doesn't serve yet: the check's path reaches the
+          # app, whose answer to an unknown token carries a header only that
+          # route sends; everything else redirects to the custom domain.
+          HDRS=$(curl -s -D - -o /dev/null -H 'Host: next.compassdocs.test' http://localhost/.well-known/compassdocs-domain-check/not-a-token)
+          echo "$HDRS"
+          echo "$HDRS" | head -1 | grep -q " 404"
+          echo "$HDRS" | grep -qi '^x-compassdocs-domain-check: unknown-token'
+          LOC=$(curl -s -o /dev/null -w "%{http_code} %{redirect_url}" -H 'Host: next.compassdocs.test' http://localhost/login)
+          echo "other path, unknown host -> $LOC (expect 308 to https://smoke.compassdocs.test/login)"
+          test "$LOC" = "308 https://smoke.compassdocs.test/login"
+          # An IP address goes to the domain too, never to https://<ip> (no certificate there).
+          LOC=$(curl -s -o /dev/null -w "%{http_code} %{redirect_url}" http://127.0.0.1/login)
+          echo "IP -> $LOC"
+          test "$LOC" = "308 https://smoke.compassdocs.test/login"
+          HDRS=$(curl -s -D - -o /dev/null --resolve smoke.compassdocs.test:80:127.0.0.1 http://smoke.compassdocs.test/.well-known/compassdocs-domain-check/not-a-token)
+          echo "$HDRS" | grep -qi '^x-compassdocs-domain-check: unknown-token'
 
       - name: No admin-API rejections in the Caddy log
         run: |

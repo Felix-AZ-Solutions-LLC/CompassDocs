@@ -12,6 +12,7 @@ import {
   isValidTimeZone,
   normalizeDomain,
   normalizeSettings,
+  validTlsEmail,
   TLS_MODES,
   SECURE_COOKIE_MODES,
 } from "./settings";
@@ -77,7 +78,9 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Ap
     await setSetting("tls_mode", patch.tls_mode);
   }
   if (patch.tls_email !== undefined) {
-    await setSetting("tls_email", patch.tls_email.trim().slice(0, 254));
+    // 1.20.29 (review M2): only a plain address reaches the proxy config.
+    const email = validTlsEmail(patch.tls_email);
+    if (email !== null) await setSetting("tls_email", email);
   }
   if (patch.secure_cookies !== undefined && SECURE_COOKIE_MODES.includes(patch.secure_cookies)) {
     await setSetting("secure_cookies", patch.secure_cookies);

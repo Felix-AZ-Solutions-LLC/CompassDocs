@@ -12,9 +12,11 @@
 
 import { promises as fs } from "fs";
 import path from "path";
-import { getSetting, setSetting } from "./db";
+import { getSetting, pool, setSetting } from "./db";
 import { getAppSettings } from "./settings-store";
 import type { TlsMode } from "./settings";
+import { DOMAIN_CHECK_PATH } from "./domain-check";
+import { fallbackHosts } from "./fallback-hosts";
 
 // Base URL of Caddy's admin API. Empty → no managed proxy is attached, so the
 // GUI shows the domain settings as informational only.
@@ -87,39 +89,165 @@ export async function hasCustomCert(): Promise<boolean> {
   return !!(cert && cert.includes("BEGIN") && key && key.includes("BEGIN"));
 }
 
+/** The certificate/key pair after the checks storeCustomCert makes, or an error message. */
+export function validateCustomCert(cert: string, key: string): { cert: string; key: string } | { error: string } {
+  const c = (cert ?? "").trim();
+  const k = (key ?? "").trim();
+  if (!c.includes("BEGIN CERTIFICATE")) return { error: "Certificate is not valid PEM." };
+  if (!k.includes("BEGIN")) return { error: "Private key is not valid PEM." };
+  return { cert: c, key: k };
+}
+
 /** Persist a pasted certificate + private key (PEM). Both must look like PEM. */
 export async function storeCustomCert(cert: string, key: string): Promise<void> {
-  const c = cert.trim();
-  const k = key.trim();
-  if (!c.includes("BEGIN CERTIFICATE")) throw new Error("Certificate is not valid PEM.");
-  if (!k.includes("BEGIN")) throw new Error("Private key is not valid PEM.");
-  await setSetting(CERT_KEY, c);
-  await setSetting(KEY_KEY, k);
+  const v = validateCustomCert(cert, key);
+  if ("error" in v) throw new Error(v.error);
+  await setSetting(CERT_KEY, v.cert);
+  await setSetting(KEY_KEY, v.key);
+}
+
+// A certificate pasted for a domain that is still waiting for its check
+// (1.20.29 review M1) waits beside it, so the live domain keeps its own until
+// the switch. lib/domain-flow promotes it when the new domain goes live and
+// drops it when the request is discarded or replaced.
+const PENDING_CERT_KEY = "tls_cert_pem_pending";
+const PENDING_KEY_KEY = "tls_key_pem_pending"; // sealed (lib/db SENSITIVE_SETTINGS)
+
+/** Keep a pasted pair with the pending domain. */
+export async function storePendingCert(cert: string, key: string): Promise<void> {
+  const v = validateCustomCert(cert, key);
+  if ("error" in v) throw new Error(v.error);
+  await setSetting(PENDING_CERT_KEY, v.cert);
+  await setSetting(PENDING_KEY_KEY, v.key);
+}
+
+/** Whether a pair waits with the pending domain. */
+export async function hasPendingCert(): Promise<boolean> {
+  const [cert, key] = await Promise.all([getSetting(PENDING_CERT_KEY), getSetting(PENDING_KEY_KEY)]);
+  return !!(cert && cert.includes("BEGIN") && key && key.includes("BEGIN"));
+}
+
+/** The pending pair becomes the live one. No-op without one. */
+export async function promotePendingCert(): Promise<void> {
+  const [cert, key] = await Promise.all([getSetting(PENDING_CERT_KEY), getSetting(PENDING_KEY_KEY)]);
+  if (cert && key) {
+    await setSetting(CERT_KEY, cert);
+    await setSetting(KEY_KEY, key);
+  }
+  await clearPendingCert();
+}
+
+export async function clearPendingCert(): Promise<void> {
+  await pool().query("DELETE FROM settings WHERE key = ANY($1)", [[PENDING_CERT_KEY, PENDING_KEY_KEY]]);
+}
+
+/** A fallback site: its name, and whether Caddy may ask Let's Encrypt for it (else the internal CA). */
+export interface FallbackSite {
+  host: string;
+  acme?: boolean;
+}
+
+export interface CaddyfileOptions {
+  /**
+   * While HTTPS on a newly switched domain is being verified (lib/domain-
+   * flow), plain HTTP on any other name still serves the app, as before the
+   * switch, so nobody on the old address is redirected to a domain whose
+   * certificate may not exist yet.
+   */
+  transitional?: boolean;
+}
+
+/** Thrown when a value would not be one plain token in the Caddyfile (review M2). */
+export class UnsafeCaddyValue extends Error {}
+
+// Names and the email are validated where they are saved; this is the last
+// line: never render a value Caddyfile syntax could read as more than one
+// token (whitespace, braces, quotes, comments, placeholders, newlines).
+function token(kind: string, v: string): string {
+  if (!v || /[\s{}"'`#;\\]/.test(v) || v.length > 254) throw new UnsafeCaddyValue(`Refusing to write an unsafe ${kind} into the proxy configuration.`);
+  return v;
 }
 
 // Build a Caddyfile from the saved settings. Every config keeps the admin API
 // listening on the Docker network — WITH our hostname in the allowed origins,
 // or Caddy would 403 the very next /load push and lock us out on reload.
-function buildCaddyfile(domain: string, mode: TlsMode, email: string): string {
+//
+// 1.20.29: a config that serves a custom domain also serves
+//   - each fallback host (lib/fallback-hosts) as its own site, so the
+//     address the install was reached on keeps working. With TLS on, it is
+//     served like the domain: HTTPS with a certificate (Let's Encrypt when
+//     the host may use it, else the internal CA; the internal CA for the
+//     internal mode) and plain HTTP redirecting to it; the plain-HTTP app
+//     only when TLS is off;
+//   - a plain-HTTP route for the domain check's path on ANY host
+//     (lib/domain-check), so a new name can be checked through the current
+//     config before the proxy is switched to it. The custom domain and each
+//     fallback get an explicit http:// site for the same reason: their
+//     HTTP→HTTPS redirect is written out instead of left to Caddy, which
+//     would redirect the check too. Any other plain-HTTP request is sent to
+//     https://<custom domain> (never to the Host it came with: an IP has no
+//     certificate), or, with TLS off, gets Caddy's empty answer.
+export function buildCaddyfile(
+  domain: string,
+  mode: TlsMode,
+  email: string,
+  fallbacks: (string | FallbackSite)[] = [],
+  opts: CaddyfileOptions = {}
+): string {
   const globals =
     "{\n\tadmin 0.0.0.0:2019 {\n\t\torigins caddy:2019 localhost:2019 127.0.0.1:2019 0.0.0.0:2019\n\t}\n}\n\n";
 
   // No custom domain configured — serve the app over plain HTTP on any host so
-  // the site stays reachable (e.g. by IP) until a domain is set.
+  // the site stays reachable (e.g. by IP) until a domain is set. That also
+  // serves the domain check and every fallback host.
   if (!domain) {
     return `${globals}:80 {\n\treverse_proxy app:3000\n}\n`;
   }
 
-  const site = mode === "off" ? `http://${domain}` : domain;
-  const body = ["\tencode zstd gzip", "\treverse_proxy app:3000"];
+  const d = token("domain", domain);
+  const mail = email ? token("email", email) : "";
+  const check = `\thandle ${DOMAIN_CHECK_PATH}* {\n\t\treverse_proxy app:3000\n\t}\n`;
+  const redirectTo = (host: string) => `\thandle {\n\t\tredir https://${host}{uri} 308\n\t}\n`;
+  const app = ["\tencode zstd gzip", "\treverse_proxy app:3000"];
+  const blocks: string[] = [];
+
+  const body = [...app];
   if (mode === "auto") {
-    if (email) body.push(`\ttls ${email}`); // else fully automatic
+    if (mail) body.push(`\ttls ${mail}`); // else fully automatic
   } else if (mode === "internal") {
     body.push("\ttls internal");
   } else if (mode === "custom") {
     body.push(`\ttls ${CADDY_CERT_PATH}/cert.pem ${CADDY_CERT_PATH}/key.pem`);
   }
-  return `${globals}${site} {\n${body.join("\n")}\n}\n`;
+  if (mode === "off") {
+    blocks.push(`http://${d} {\n${body.join("\n")}\n}\n`);
+  } else {
+    blocks.push(`http://${d} {\n${check}${redirectTo(d)}}\n`);
+    blocks.push(`${d} {\n${body.join("\n")}\n}\n`);
+  }
+
+  for (const f of fallbacks) {
+    const host = token("fallback host", typeof f === "string" ? f : f.host);
+    const acme = typeof f === "string" ? true : f.acme !== false;
+    if (host === d) continue;
+    if (mode === "off") {
+      blocks.push(`http://${host} {\n${app.join("\n")}\n}\n`);
+      continue;
+    }
+    const fb = [...app];
+    // The pasted certificate names only the custom domain, so in that mode
+    // a fallback gets its own: Let's Encrypt when it may, else the internal CA.
+    if (mode === "internal" || !acme) fb.push("\ttls internal");
+    else if (mail) fb.push(`\ttls ${mail}`);
+    blocks.push(`http://${host} {\n${check}${redirectTo(host)}}\n`);
+    blocks.push(`${host} {\n${fb.join("\n")}\n}\n`);
+  }
+
+  // Any other host on plain HTTP: the domain check, then the custom domain
+  // (or, while a switch is being verified, the app as before it).
+  if (opts.transitional) blocks.push(`http:// {\n\treverse_proxy app:3000\n}\n`);
+  else blocks.push(`http:// {\n${check}${mode === "off" ? "" : redirectTo(d)}}\n`);
+  return `${globals}${blocks.join("\n")}`;
 }
 
 async function writeCertFiles(cert: string, key: string): Promise<void> {
@@ -133,20 +261,66 @@ export interface ApplyResult {
   error?: string;
 }
 
+/** What to serve, when it isn't the saved settings (a switch being verified). */
+export interface ProxyTarget {
+  domain: string;
+  tls_mode: TlsMode;
+  tls_email: string;
+  /** Which stored certificate the custom mode uses: the live one, or the one waiting with the pending domain. */
+  cert?: "live" | "pending";
+}
+
 /**
- * Render the current settings to a Caddyfile and push it to the live proxy.
- * Returns `{ ok: false, error }` (never throws) so callers can surface a
- * friendly message; a persisted setting is still saved even if the push fails.
+ * The row lib/domain-flow keeps for a domain waiting for (or verifying) its
+ * switch. Read here only to learn whether a switch is being verified, so a
+ * restart re-applies the config being verified rather than the saved one.
  */
-export async function applyProxyConfig(): Promise<ApplyResult> {
+export const PENDING_KEY = "custom_domain_pending";
+
+async function verifyingTarget(): Promise<ProxyTarget | null> {
+  try {
+    const raw = await getSetting(PENDING_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw);
+    if (p?.phase !== "verifying" || typeof p.domain !== "string") return null;
+    return { domain: p.domain, tls_mode: p.tls_mode, tls_email: p.tls_email ?? "", cert: p.has_cert ? "pending" : "live" };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Render a config and push it to the live proxy: the saved settings, or
+ * `target` (a switch being verified: `transitional`). With neither, a
+ * switch being verified (after a restart) is re-applied as it was.
+ * Returns `{ ok: false, error }` (never throws) so callers can surface a
+ * friendly message. Caddy's /load is atomic: a refused config leaves the
+ * running one in place.
+ */
+export async function applyProxyConfig(target?: ProxyTarget, opts: CaddyfileOptions = {}): Promise<ApplyResult> {
   if (!CADDY_ADMIN) {
     return { ok: false, error: "No managed reverse proxy is attached to this deployment." };
   }
 
-  const s = await getAppSettings();
+  let t = target;
+  let transitional = !!opts.transitional;
+  if (!t) {
+    const verifying = await verifyingTarget();
+    if (verifying) {
+      t = verifying;
+      transitional = true;
+    } else {
+      const s = await getAppSettings();
+      t = { domain: s.custom_domain, tls_mode: s.tls_mode, tls_email: s.tls_email, cert: "live" };
+    }
+  }
 
-  if (s.custom_domain && s.tls_mode === "custom") {
-    const [cert, key] = await Promise.all([getSetting(CERT_KEY), getSetting(KEY_KEY)]);
+  if (t.domain && t.tls_mode === "custom") {
+    const pending = t.cert === "pending";
+    const [cert, key] = await Promise.all([
+      getSetting(pending ? PENDING_CERT_KEY : CERT_KEY),
+      getSetting(pending ? PENDING_KEY_KEY : KEY_KEY),
+    ]);
     if (!cert || !key) {
       return { ok: false, error: "Custom TLS mode needs a certificate and key — add them first." };
     }
@@ -157,7 +331,13 @@ export async function applyProxyConfig(): Promise<ApplyResult> {
     }
   }
 
-  const caddyfile = buildCaddyfile(s.custom_domain, s.tls_mode, s.tls_email);
+  let caddyfile: string;
+  try {
+    const fallbacks = t.domain ? await fallbackHosts(t.domain) : [];
+    caddyfile = buildCaddyfile(t.domain, t.tls_mode, t.tls_email, fallbacks, { transitional });
+  } catch (e: any) {
+    return { ok: false, error: e?.message || String(e) };
+  }
   try {
     const res = await adminFetch(
       "/load",

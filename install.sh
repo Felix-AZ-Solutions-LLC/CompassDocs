@@ -42,6 +42,77 @@ command -v docker >/dev/null 2>&1 || die "Docker is required. Install it: https:
 if ! docker compose version >/dev/null 2>&1; then
   die "Docker Compose v2 is required (the 'docker compose' command). Update Docker: https://docs.docker.com/get-docker/"
 fi
+
+# --- data-disk mount repair (1.20.29) -----------------------------------------
+# Azure one-click installs made before 1.20.29 wrote the data disk's fstab line
+# for /var/lib/docker with a bare UUID (no "UUID="). It never mounts at boot
+# (nofail hides the error), so after a reboot Docker starts on the empty
+# directory underneath and no containers exist. Fix that line (fstab is backed
+# up first), make Docker wait for the mount when /var/lib/docker is a separate
+# mount that mounts at boot (not one marked noauto), and mount it now if it
+# isn't. Does nothing on a host without a /var/lib/docker line in /etc/fstab;
+# needs root for the changes.
+DOCKER_FSTAB_BARE='^[0-9A-Fa-f-]{36}[[:space:]]+/var/lib/docker[[:space:]]'
+repair_docker_disk() {
+  [ "$(uname -s 2>/dev/null)" = Linux ] && [ -f /etc/fstab ] || return 0
+  awk '$1 !~ /^#/ && $2 == "/var/lib/docker" { f = 1 } END { exit !f }' /etc/fstab || return 0
+
+  local SUDO=""
+  if [ "$(id -u)" != 0 ]; then
+    if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+      SUDO=sudo
+    else
+      if grep -Eq "$DOCKER_FSTAB_BARE" /etc/fstab || ! { command -v findmnt >/dev/null 2>&1 && findmnt /var/lib/docker >/dev/null 2>&1; }; then
+        printf '\033[1;33m!\033[0m %s\n' "/var/lib/docker's data-disk mount needs a repair. Re-run this installer as root (sudo) to fix it."
+      fi
+      return 0
+    fi
+  fi
+
+  if grep -Eq "$DOCKER_FSTAB_BARE" /etc/fstab; then
+    local backup
+    backup="/etc/fstab.compassdocs-$(date +%Y%m%d%H%M%S).bak"
+    $SUDO cp -p /etc/fstab "$backup"
+    $SUDO sed -i -E 's#^([0-9A-Fa-f-]{36})([[:space:]]+/var/lib/docker[[:space:]])#UUID=\1\2#' /etc/fstab
+    ok "Fixed the /var/lib/docker line in /etc/fstab (it lacked UUID=; backup: $backup)"
+  fi
+
+  # A line marked noauto is the admin's business: no drop-in, no mount.
+  if awk '$1 !~ /^#/ && $2 == "/var/lib/docker" && $4 ~ /(^|,)noauto(,|$)/ { f = 1 } END { exit !f }' /etc/fstab; then
+    return 0
+  fi
+
+  local systemd=0
+  command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] && systemd=1
+  if [ "$systemd" = 1 ]; then
+    local dropin=/etc/systemd/system/docker.service.d/wait-for-disk.conf
+    if [ ! -f "$dropin" ]; then
+      $SUDO mkdir -p /etc/systemd/system/docker.service.d
+      printf '[Unit]\nRequiresMountsFor=/var/lib/docker\n' | $SUDO tee "$dropin" >/dev/null
+      ok "Docker now waits for /var/lib/docker to be mounted ($dropin)"
+    fi
+    $SUDO systemctl daemon-reload
+  fi
+
+  # Not mounted right now: Docker is running on the empty directory underneath.
+  if command -v findmnt >/dev/null 2>&1 && ! findmnt /var/lib/docker >/dev/null 2>&1; then
+    if [ "$systemd" != 1 ]; then
+      # Without systemd this script doesn't stop and start Docker for you.
+      printf '\033[1;33m!\033[0m %s\n' "/var/lib/docker is in /etc/fstab but not mounted. Stop Docker, run: mount /var/lib/docker && findmnt /var/lib/docker, then start Docker."
+      return 0
+    fi
+    say "Mounting the data disk on /var/lib/docker (Docker restarts)…"
+    $SUDO systemctl stop docker.service docker.socket 2>/dev/null || true
+    if $SUDO mount /var/lib/docker && findmnt /var/lib/docker >/dev/null 2>&1; then
+      $SUDO systemctl start docker.service
+      ok "Mounted /var/lib/docker: your containers and data are back"
+    else
+      die "Couldn't mount /var/lib/docker. Check its line in /etc/fstab, then run: sudo mount -a && findmnt /var/lib/docker && sudo systemctl start docker"
+    fi
+  fi
+}
+repair_docker_disk
+
 docker info >/dev/null 2>&1 || die "Docker doesn't appear to be running. Start Docker Desktop (or the docker daemon) and re-run."
 
 gen_secret() {

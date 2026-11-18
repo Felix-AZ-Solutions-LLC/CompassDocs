@@ -134,6 +134,19 @@ export function normalizeDomain(raw: string): string {
   return DOMAIN_RE.test(d) ? d : "";
 }
 
+// The Let's Encrypt contact email (1.20.29, review M2). It is written into
+// the Caddy config as `tls <email>`, so it must be one plain token: no
+// whitespace, braces, quotes, # or anything else Caddyfile syntax reads.
+const TLS_EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
+
+/** A contact email the proxy config can carry: "" for none, the trimmed address, or null when it isn't one. */
+export function validTlsEmail(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const v = raw.trim();
+  if (!v) return "";
+  return v.length <= 254 && TLS_EMAIL_RE.test(v) ? v : null;
+}
+
 /** True if `tz` is an IANA timezone the runtime understands. */
 export function isValidTimeZone(tz: string): boolean {
   if (!tz) return false;
@@ -195,7 +208,8 @@ export function normalizeSettings(raw: Record<string, string>): AppSettings {
     tls_mode: TLS_MODES.includes(raw.tls_mode as TlsMode)
       ? (raw.tls_mode as TlsMode)
       : SETTINGS_DEFAULTS.tls_mode,
-    tls_email: (raw.tls_email ?? "").trim().slice(0, 254),
+    // 1.20.29 (review M2): it lands in the proxy config, so only a plain address.
+    tls_email: validTlsEmail(raw.tls_email ?? "") ?? "",
     secure_cookies: SECURE_COOKIE_MODES.includes(raw.secure_cookies as SecureCookieMode)
       ? (raw.secure_cookies as SecureCookieMode)
       : SETTINGS_DEFAULTS.secure_cookies,
