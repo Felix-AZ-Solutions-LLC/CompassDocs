@@ -679,6 +679,13 @@ describe("what customers can ask for", () => {
       assert.equal(got.status, 200);
       assert.deepEqual(got.body.settings.types, clean);
       assert.deepEqual(JSON.parse((await getSetting("helpdesk_portal"))!).types, clean);
+      // The heal is on the record, by the system, naming what it removed.
+      const row = (await pool().query("SELECT actor_id, actor_name, details FROM audit_log WHERE action = 'helpdesk.portal.updated' ORDER BY id DESC LIMIT 1")).rows[0];
+      assert.equal(row.actor_id, null);
+      assert.equal(row.actor_name, "system");
+      assert.equal(row.details.cleanup, "read");
+      assert.deepEqual(row.details.portal_types_removed, [goneType]);
+      assert.deepEqual(row.details.portal_team_cleared_types, [typeIds.bug]);
     } finally {
       await useSettings(settings());
     }

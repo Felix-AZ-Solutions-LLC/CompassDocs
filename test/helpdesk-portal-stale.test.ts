@@ -29,7 +29,9 @@ import { cleanHelpCentreSettings, helpCentreRefIds, pruneHelpCentreRefs, DEFAULT
 import { HD_HELP_CENTRE_SETTINGS_KEY, HD_PORTAL_SETTINGS_KEY, healHelpCentreSettings, healPortalSettings } from "../src/lib/helpdesk/portal-refs";
 import { deleteRequestType } from "../src/lib/helpdesk/request-types";
 import { deleteTeam } from "../src/lib/helpdesk/teams";
-import { createTemplate, updateTemplate } from "../src/lib/helpdesk/checklists";
+import { createTemplate, listTemplateRows, updateTemplate } from "../src/lib/helpdesk/checklists";
+import { AUTOMATION_GONE, automationStoredRefs, createAutomation, deleteAutomation, getAutomation, updateAutomation, validateAutomationInput } from "../src/lib/helpdesk/automations";
+import type { PortalPruneResult } from "../src/lib/helpdesk/portal-refs";
 
 const LOCK = 728661;
 const STAMP = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
@@ -105,6 +107,7 @@ describe("pruneHelpCentreRefs", () => {
     assert.deepEqual(r.dropped, [12]);
     assert.deepEqual(r.settings.order, ["s10", "c5", "s11", "c6"]);
     assert.deepEqual(r.settings.hidden, ["c6"]);
+    assert.deepEqual(r.dropped_keys, ["s12"]);
     assert.equal(r.changed, true);
     assert.equal(r.settings.tagged, true);
   });
@@ -130,7 +133,7 @@ describe("pruneHelpCentreRefs", () => {
 
 let lockClient: PoolClient;
 const saved = new Map<string, string | null>();
-const made = { teams: [] as number[], types: [] as number[], spaces: [] as number[], templates: [] as number[] };
+const made = { teams: [] as number[], types: [] as number[], spaces: [] as number[], templates: [] as number[], rules: [] as number[] };
 
 async function q<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> {
   return (await pool().query(sql, params)).rows as T[];
@@ -177,6 +180,7 @@ after(async () => {
     else await q("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", [k, v]);
   }
   if (made.templates.length) await q("DELETE FROM hd_checklist_templates WHERE id = ANY($1::int[])", [made.templates]);
+  for (const id of made.rules) await deleteAutomation(id);
   if (made.types.length) await q("DELETE FROM hd_request_types WHERE id = ANY($1::int[])", [made.types]);
   if (made.teams.length) await q("DELETE FROM hd_teams WHERE id = ANY($1::int[])", [made.teams]);
   if (made.spaces.length) await q("DELETE FROM spaces WHERE id = ANY($1::int[])", [made.spaces]);
@@ -191,7 +195,9 @@ describe("deleting prunes the settings in the same transaction", () => {
     const gone = await type("gone");
     const kept = await type("kept");
     await put(HD_PORTAL_SETTINGS_KEY, { enabled: true, types: [{ id: gone, team_id: t }, { id: kept, team_id: t }], brand_name: "Acme" });
-    assert.ok(await deleteRequestType(gone));
+    const out: { portal?: PortalPruneResult | null } = {};
+    assert.ok(await deleteRequestType(gone, out));
+    assert.deepEqual(out.portal?.dropped_types, [gone], "what left the portal, for the delete's audit row");
     const s = await stored(HD_PORTAL_SETTINGS_KEY);
     assert.deepEqual(s.types, [{ id: kept, team_id: t }]);
     assert.equal(s.brand_name, "Acme");
@@ -204,7 +210,9 @@ describe("deleting prunes the settings in the same transaction", () => {
     const a = await type("a", other);
     const b = await type("b");
     await put(HD_PORTAL_SETTINGS_KEY, { enabled: true, types: [{ id: a, team_id: gone }, { id: b, team_id: other }] });
-    assert.ok(await deleteTeam(gone));
+    const out: { portal?: PortalPruneResult | null } = {};
+    assert.ok(await deleteTeam(gone, out));
+    assert.deepEqual(out.portal?.cleared_teams, [a]);
     assert.deepEqual((await stored(HD_PORTAL_SETTINGS_KEY)).types, [
       { id: a, team_id: null },
       { id: b, team_id: other },
@@ -218,11 +226,22 @@ describe("deleting prunes the settings in the same transaction", () => {
     await put(HD_HELP_CENTRE_SETTINGS_KEY, { enabled: true, from_spaces: true, spaces: [gone, kept], order: [`c${folder}`, `s${gone}`, `s${kept}`], hidden: [`s${gone}`], tagged: false });
     const res = await deleteSpace(gone);
     assert.equal(res.ok, true);
+    assert.deepEqual(res.helpCentre?.dropped, [gone]);
+    assert.deepEqual(res.helpCentre?.dropped_keys.sort(), [`c${folder}`, `s${gone}`].sort());
     const s = await stored(HD_HELP_CENTRE_SETTINGS_KEY);
     assert.deepEqual(s.spaces, [kept]);
     assert.deepEqual(s.order, [`s${kept}`]);
     assert.deepEqual(s.hidden, []);
     assert.equal(s.enabled, true);
+  });
+
+  test("a space that holds a document is refused, counted inside the delete's transaction, and stays", async () => {
+    const full = await space("full");
+    await q("INSERT INTO documents (space_id, title, slug, content, status, author) VALUES ($1, 'Kept', $2, '', 'draft', 'test')", [full, `kept-${STAMP}`]);
+    const res = await deleteSpace(full);
+    assert.deepEqual([res.ok, res.docCount], [false, 1]);
+    assert.equal((await q("SELECT 1 FROM spaces WHERE id = $1", [full])).length, 1);
+    await q("DELETE FROM documents WHERE space_id = $1", [full]);
   });
 
   test("a delete with no portal setting stored writes none", async () => {
@@ -272,6 +291,99 @@ describe("a workspace already in the bad state heals on the next read", () => {
     assert.deepEqual(s.order, []);
     assert.equal(s.tagged, true);
     assert.equal((await healHelpCentreSettings()).changed, false);
+  });
+});
+
+describe("checklists: a request type deleted since it was chosen", () => {
+  test("a save that leaves the list out, and publishing a draft that names it, drop it; a new unknown one refuses", async () => {
+    const gone = await type("cl-gone");
+    const kept = await type("cl-kept");
+    const tpl = await createTemplate({ name: `Stale types ${STAMP}`, items: [{ title: "Check" }], request_type_ids: [gone, kept] }, { id: null, name: "Test" }, null);
+    made.templates.push(tpl.id);
+    // A waiting draft (as Claude saves one) that names the type too.
+    await q("UPDATE hd_checklist_templates SET draft = $2::jsonb, draft_at = now() WHERE id = $1", [tpl.id, JSON.stringify({ name: `Stale types ${STAMP} v2`, items: [{ key: "a", title: "Check" }], request_type_ids: [gone] })]);
+    await q("DELETE FROM hd_request_types WHERE id = $1", [gone]); // as 1.20.28 left it
+    const row = (await listTemplateRows()).find((t) => t.id === tpl.id)!;
+    assert.deepEqual(row.request_type_ids, [kept]);
+    assert.deepEqual(row.draft?.request_type_ids, [], "the draft's deleted type is not shown either");
+    const renamed = await updateTemplate(tpl.id, { name: `Stale types ${STAMP} renamed` }, { dept: null });
+    assert.deepEqual(renamed!.after.request_type_ids, [kept]);
+    const draftAt = (await q<{ draft_at: string }>("SELECT draft_at FROM hd_checklist_templates WHERE id = $1", [tpl.id]))[0].draft_at;
+    const published = await updateTemplate(tpl.id, {}, { publishDraft: true, draftAt, dept: null });
+    assert.deepEqual(published!.after.request_type_ids, []);
+    await assert.rejects(updateTemplate(tpl.id, { request_type_ids: [2_000_000_000] }, { dept: null }), /request types no longer exists/);
+  });
+});
+
+describe("automations: a team or request type deleted since the rule was saved", () => {
+  test("automationStoredRefs names live and draft teams and types", () => {
+    const r = automationStoredRefs({ conditions: { team_ids: [1], request_type_ids: [5] }, actions: { team_id: 2 } }, { conditions: { team_ids: [3] }, actions: {} }, null);
+    assert.deepEqual([...r.teams].sort(), [1, 2, 3]);
+    assert.deepEqual([...r.types], [5]);
+  });
+
+  test("validateAutomationInput: dropped beside others, refused with what to do when it was all, a dead move target dropped and said", async () => {
+    const live = await team("au-live");
+    const goneTeam = await team("au-gone");
+    const liveType = await type("au-live");
+    const goneType = await type("au-gone");
+    await q("DELETE FROM hd_teams WHERE id = $1", [goneTeam]);
+    await q("DELETE FROM hd_request_types WHERE id = $1", [goneType]);
+    const stored = { teams: [goneTeam], types: [goneType] };
+    const base = { name: `Rule ${STAMP}`, event: "ticket_created" };
+
+    const both = await validateAutomationInput({ ...base, conditions: { team_ids: [goneTeam, live], request_type_ids: [goneType, liveType] }, actions: { priority: "high" } }, false, stored);
+    assert.ok(both.ok);
+    if (both.ok) {
+      assert.deepEqual(both.value.conditions, { team_ids: [live], request_type_ids: [liveType] });
+      assert.deepEqual(both.notices, []);
+    }
+
+    const onlyTeam = await validateAutomationInput({ ...base, conditions: { team_ids: [goneTeam] }, actions: { priority: "high" } }, false, stored);
+    assert.deepEqual(onlyTeam, { ok: false, error: AUTOMATION_GONE.teamCondition });
+    const onlyType = await validateAutomationInput({ ...base, conditions: { request_type_ids: [goneType] }, actions: { priority: "high" } }, false, stored);
+    assert.deepEqual(onlyType, { ok: false, error: AUTOMATION_GONE.typeCondition });
+
+    const move = await validateAutomationInput({ ...base, actions: { team_id: goneTeam, priority: "high" } }, false, stored);
+    assert.ok(move.ok);
+    if (move.ok) {
+      assert.deepEqual(move.value.actions, { priority: "high" });
+      assert.deepEqual(move.notices, [AUTOMATION_GONE.teamAction]);
+    }
+    const onlyMove = await validateAutomationInput({ ...base, actions: { team_id: goneTeam } }, false, stored);
+    assert.deepEqual(onlyMove, { ok: false, error: AUTOMATION_GONE.teamOnlyAction });
+
+    // Not named before: still unknown.
+    assert.deepEqual(await validateAutomationInput({ ...base, conditions: { team_ids: [goneTeam, live] }, actions: { priority: "high" } }), { ok: false, error: "Unknown team." });
+    assert.deepEqual(await validateAutomationInput({ ...base, conditions: { request_type_ids: [goneType, liveType] }, actions: { priority: "high" } }), { ok: false, error: "Unknown request type." });
+  });
+
+  test("a stored rule moving to a deleted team: the editor's save drops it and says so; publishing a draft naming it works", async () => {
+    const live = await team("au2-live");
+    const gone = await team("au2-gone");
+    const rule = await createAutomation({ name: `Move ${STAMP}`, event: "ticket_created", conditions: { team_ids: [gone, live] }, actions: { team_id: gone, priority: "high" }, active: 0 }, null);
+    made.rules.push(rule.id);
+    await q("DELETE FROM hd_teams WHERE id = $1", [gone]); // as 1.20.28 left it
+    const cur = (await getAutomation(rule.id))!;
+    const v = await validateAutomationInput({ name: cur.name, event: cur.event, conditions: cur.conditions, actions: cur.actions }, true, automationStoredRefs(cur, cur.draft));
+    assert.ok(v.ok);
+    if (!v.ok) return;
+    assert.deepEqual(v.notices, [AUTOMATION_GONE.teamAction]);
+    const r = await updateAutomation(rule.id, v.value);
+    assert.deepEqual(r!.after.conditions, { team_ids: [live] });
+    assert.deepEqual(r!.after.actions, { priority: "high" });
+
+    // A draft (as Claude saves one beside the live rule) naming the deleted team, then published.
+    const gone2 = await team("au2-gone2");
+    await q("UPDATE hd_automations SET draft = $2::jsonb, draft_at = now(), draft_base_at = updated_at WHERE id = $1", [
+      rule.id,
+      JSON.stringify({ name: cur.name, event: cur.event, conditions: { team_ids: [live] }, actions: { team_id: gone2, status: "open" } }),
+    ]);
+    await q("DELETE FROM hd_teams WHERE id = $1", [gone2]);
+    const draftAt = (await q<{ draft_at: string }>("SELECT draft_at FROM hd_automations WHERE id = $1", [rule.id]))[0].draft_at;
+    const pub = await updateAutomation(rule.id, {}, { publishDraft: true, draftAt });
+    assert.deepEqual(pub!.after.actions, { status: "open" });
+    assert.deepEqual(pub!.notices, [AUTOMATION_GONE.teamAction]);
   });
 });
 

@@ -883,6 +883,53 @@ describe("routes and stats", () => {
     assert.ok(!preview.body.categories.some((c: { key: string }) => c.key === `s${sp.priv}`));
   });
 
+  test("1.20.30: category keys are kept only when stored or shown; a heal is audited", async () => {
+    const as = (u: { session: string }) => `compass_session=${u.session}`;
+    const KEY = "helpdesk_portal_hc";
+    const keep = await getSetting(KEY);
+    const privFolder = await category(sp.priv2, `Board minutes ${STAMP}`, 0);
+    try {
+      // Probing: a folder of a private space this person can't open, and a folder id that doesn't exist,
+      // are both left out of the save, so what is stored says nothing about which ids exist.
+      const probe = await call(adminRoute.PUT, "/api/helpdesk/admin/portal/help-centre", {
+        method: "PUT",
+        origin: ORIGIN,
+        cookie: as(admin),
+        json: settings({ spaces: [sp.guides], hidden: [`c${privFolder}`, "c2000000000", `c${cat.billing}`], order: [`s${sp.priv2}`, `s${sp.guides}`] }),
+      });
+      assert.equal(probe.status, 200, JSON.stringify(probe.body));
+      assert.deepEqual(probe.body.settings.hidden, [`c${cat.billing}`]);
+      assert.deepEqual(probe.body.settings.order, [`s${sp.guides}`]);
+
+      // Another admin's stored choice for a private space this person can't open stays through their save.
+      await setSetting(KEY, JSON.stringify(settings({ spaces: [sp.guides], hidden: [`s${sp.priv2}`, `c${privFolder}`] })));
+      const theirs = await call(adminRoute.PUT, "/api/helpdesk/admin/portal/help-centre", {
+        method: "PUT",
+        origin: ORIGIN,
+        cookie: as(admin),
+        json: settings({ spaces: [sp.guides], hidden: [`s${sp.priv2}`, `c${privFolder}`], indexing: true }),
+      });
+      assert.equal(theirs.status, 200, JSON.stringify(theirs.body));
+      assert.deepEqual(theirs.body.settings.hidden, [`s${sp.priv2}`, `c${privFolder}`]);
+
+      // A stored space that no longer exists: the read cleans it and is on the record, by the system.
+      await setSetting(KEY, JSON.stringify(settings({ spaces: [sp.guides, 2_000_000_000], order: ["s2000000000"] })));
+      const got = await call(adminRoute.GET, "/api/helpdesk/admin/portal/help-centre", { cookie: as(admin) });
+      assert.equal(got.status, 200);
+      assert.deepEqual(got.body.settings.spaces, [sp.guides]);
+      const row = (await pool().query("SELECT actor_id, actor_name, details FROM audit_log WHERE action = 'helpdesk.portal.help_centre_updated' ORDER BY id DESC LIMIT 1")).rows[0];
+      assert.equal(row.actor_id, null);
+      assert.equal(row.actor_name, "system");
+      assert.equal(row.details.cleanup, "read");
+      assert.deepEqual(row.details.help_centre_spaces_removed, [2_000_000_000]);
+      assert.deepEqual(row.details.help_centre_keys_removed, ["s2000000000"]);
+    } finally {
+      await pool().query("DELETE FROM space_categories WHERE id = $1", [privFolder]);
+      if (keep === undefined) await pool().query("DELETE FROM settings WHERE key = $1", [KEY]);
+      else await setSetting(KEY, keep);
+    }
+  });
+
   test("the stats: searches and the top search over 30 days", async () => {
     const before = await hc.helpCentreStats();
     for (let i = 0; i < 3; i++) await hc.recordSearch("", `zz top ${WORD}`, 0, "home");

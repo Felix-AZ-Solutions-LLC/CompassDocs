@@ -44,7 +44,7 @@ test.describe("customer portal settings: deleted request types, teams and spaces
   test.describe.configure({ mode: "serial" });
   let db: Client;
   const saved = new Map<string, string | null>();
-  const made = { types: [] as number[], teams: [] as number[], spaces: [] as number[] };
+  const made = { types: [] as number[], teams: [] as number[], spaces: [] as number[], rules: [] as number[], checklists: [] as number[] };
 
   test.beforeAll(async () => {
     db = new Client({ connectionString: process.env.DATABASE_URL || "postgresql://postgres@127.0.0.1:5599/compass_e2e" });
@@ -57,6 +57,8 @@ test.describe("customer portal settings: deleted request types, teams and spaces
       if (v === null) await db.query("DELETE FROM settings WHERE key = $1", [k]);
       else await db.query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", [k, v]);
     }
+    if (made.rules.length) await db.query("DELETE FROM hd_automations WHERE id = ANY($1::int[])", [made.rules]);
+    if (made.checklists.length) await db.query("DELETE FROM hd_checklist_templates WHERE id = ANY($1::int[])", [made.checklists]);
     if (made.types.length) await db.query("DELETE FROM hd_request_types WHERE id = ANY($1::int[])", [made.types]);
     if (made.teams.length) await db.query("DELETE FROM hd_teams WHERE id = ANY($1::int[])", [made.teams]);
     if (made.spaces.length) await db.query("DELETE FROM spaces WHERE id = ANY($1::int[])", [made.spaces]);
@@ -208,6 +210,45 @@ test.describe("customer portal settings: deleted request types, teams and spaces
     expect(healed.status).toBe(200);
     expect(healed.body.settings.types).toEqual([{ id: rt, team_id: null }]);
     expect((await stored(PORTAL)).types).toEqual([{ id: rt, team_id: null }]);
+  });
+
+  test("automations and checklists that name a deleted team or request type still save", async ({ page }) => {
+    test.setTimeout(300_000);
+    await login(page, ADMIN);
+    test.skip(!(await licensed(page)), "helpdesk is not licensed in this build; the EE rig runs the flow");
+
+    const keepTeam = await newTeam(page, "au-keep");
+    const goneTeam = await newTeam(page, "au-gone");
+    const keepType = await newType(page, "au-keep");
+    const goneType = await newType(page, "au-gone");
+    const rule = { name: `Stale rule ${stamp}`, event: "ticket_created", conditions: { team_ids: [goneTeam, keepTeam], request_type_ids: [goneType, keepType] }, actions: { team_id: goneTeam, priority: "high" } };
+    const created = await api(page, "/api/helpdesk/admin/automations", { method: "POST", body: { ...rule, active: 0 } });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    made.rules.push(created.body.automation.id);
+    const cl = await api(page, "/api/helpdesk/admin/checklists", { method: "POST", body: { name: `Stale checklist ${stamp}`, items: [{ title: "Check it", team_id: goneTeam }], request_type_ids: [goneType, keepType] } });
+    expect(cl.status, JSON.stringify(cl.body)).toBe(201);
+    made.checklists.push(cl.body.template.id);
+
+    expect((await api(page, `/api/helpdesk/admin/teams/${goneTeam}`, { method: "DELETE" })).status).toBe(200);
+    expect((await api(page, `/api/helpdesk/admin/request-types/${goneType}`, { method: "DELETE" })).status).toBe(200);
+
+    // The editor sends the rule back as it loaded it: the deleted entries drop out, and the save says the move went.
+    const saved = await api(page, `/api/helpdesk/admin/automations/${created.body.automation.id}`, { method: "PATCH", body: { ...rule, active: 0 } });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    expect(saved.body.automation.conditions).toEqual({ team_ids: [keepTeam], request_type_ids: [keepType] });
+    expect(saved.body.automation.actions).toEqual({ priority: "high" });
+    expect(saved.body.notices).toEqual(["The team this rule moved tickets to was deleted, so the rule no longer moves them."]);
+
+    // A rule whose only team condition was deleted: refused with what to do, not turned into "any team".
+    const only = await api(page, `/api/helpdesk/admin/automations/${created.body.automation.id}`, { method: "PATCH", body: { ...rule, conditions: { team_ids: [goneTeam] }, actions: { priority: "high" } } });
+    expect(only.status).toBe(400);
+    expect(only.body.error).toMatch(/The team this rule checks for was deleted/);
+
+    // The checklist: renamed without sending its lists; the deleted owner team and request type drop out.
+    const renamed = await api(page, `/api/helpdesk/admin/checklists/${cl.body.template.id}`, { method: "PATCH", body: { name: `Stale checklist ${stamp} renamed` } });
+    expect(renamed.status, JSON.stringify(renamed.body)).toBe(200);
+    expect(renamed.body.template.request_type_ids).toEqual([keepType]);
+    expect(renamed.body.template.items[0].team_id ?? null).toBeNull();
   });
 
   test("a deleted help centre space leaves the help centre settings; a stored one heals", async ({ page }) => {
