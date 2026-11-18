@@ -144,24 +144,33 @@ export function Conversation({
   const hidden = folding ? messages.slice(0, at) : [];
   const hiddenCount = hidden.filter((m) => !isActivityLine(m)).length;
 
-  // A link to a message (#message-88) that is folded opens the history and goes to it.
+  // A link to a message (#message-88) that is folded opens the history; either way it is scrolled to once shown.
+  const linked = useRef<number | null>(null);
+  const [linkTick, setLinkTick] = useState(0);
   useEffect(() => {
     const hit = /^#message-(\d+)$/.exec(window.location.hash);
-    if (!hit) return;
-    const id = Number(hit[1]);
-    if (folding && hidden.some((m) => m.id === id)) setExpanded(true);
-    requestAnimationFrame(() => document.getElementById(messageAnchor(id))?.scrollIntoView({ block: "start" }));
+    if (!hit || !messages.some((m) => m.id === Number(hit[1]))) return;
+    linked.current = Number(hit[1]);
+    if (folding && hidden.some((m) => m.id === linked.current)) setExpanded(true);
+    else setLinkTick((n) => n + 1);
     // Once, as the conversation opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Expanded with the button: focus moves to the first message it revealed (the button itself goes away).
+  // After the render that shows them: the linked message is scrolled to, or focus moves to the first message the
+  // fold revealed (the button itself goes away).
   useEffect(() => {
+    if (linked.current !== null) {
+      const id = linked.current;
+      linked.current = null;
+      requestAnimationFrame(() => document.getElementById(messageAnchor(id))?.scrollIntoView({ block: "start" }));
+      return;
+    }
     if (!expanded || firstRevealed.current === null) return;
     const el = document.getElementById(messageAnchor(firstRevealed.current));
     firstRevealed.current = null;
     el?.focus({ preventScroll: true });
-  }, [expanded]);
+  }, [expanded, linkTick]);
 
   const item = (m: HdMessage, offscreen = false) => {
     // Folded rows are in the page for print (which is full and oldest first) but not on screen.

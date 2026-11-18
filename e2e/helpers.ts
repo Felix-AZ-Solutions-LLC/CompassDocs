@@ -79,3 +79,19 @@ export async function api(
     { path, method: init?.method, body: init?.body }
   );
 }
+
+/**
+ * 1.20.28: the signed-in agent's ticket order (newest first with the reply box on top is the default). A spec written
+ * for the oldest-first conversation sets "oldest" and puts "newest" back when it is done. Unlicensed: nothing to set.
+ */
+export async function setTicketOrder(page: Page, order: "newest" | "oldest"): Promise<void> {
+  const r = await api(page, "/api/helpdesk/me/notification-prefs", { method: "PUT", body: { ticket_order: order } });
+  if (r.status !== 200 && r.status !== 402 && r.status !== 403) throw new Error(`setTicketOrder(${order}) unexpected status ${r.status}`);
+}
+
+/** 1.20.28: open a ticket's folded history ("Show N earlier messages"), when there is one. */
+export async function showWholeConversation(page: Page): Promise<void> {
+  const fold = page.getByTestId("conversation-fold").getByRole("button");
+  if (await fold.count()) await fold.click();
+  await expect(page.getByTestId("conversation-fold")).toHaveCount(0);
+}

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { ADMIN, api, login } from "./helpers";
+import { ADMIN, api, login, setTicketOrder } from "./helpers";
 
 // 1.20.12 "Desk panes own their scroll" (STYLEGUIDE §Helpdesk: the desk).
 // On a desktop the ticket's conversation and its side column scroll on
@@ -8,7 +8,10 @@ import { ADMIN, api, login } from "./helpers";
 // its last content into empty space (an escaped sr-only label used to make
 // the document thousands of pixels tall). A phone is one scroll, with no
 // sideways scroll. Licensed rig only; the spec removes the team and the
-// ticket it makes.
+// ticket it makes. 1.20.28: these are the oldest-first layout's checks (the
+// composer last in its column): the spec reads tickets oldest first and puts
+// the admin's default (newest first) back; e2e/helpdesk-conversation checks
+// newest first's own scroll behaviour.
 
 const stamp = `${Date.now()}`;
 
@@ -124,6 +127,7 @@ test.describe("desk scroll areas (licensed)", () => {
   test.afterAll(async ({ browser }) => {
     const page = await browser.newPage();
     await login(page, ADMIN);
+    await setTicketOrder(page, "newest");
     if (ticket) await api(page, `/api/helpdesk/tickets/${ticket}`, { method: "DELETE" });
     if (teamId) await api(page, `/api/helpdesk/admin/teams/${teamId}`, { method: "DELETE" });
     await page.close();
@@ -132,6 +136,7 @@ test.describe("desk scroll areas (licensed)", () => {
   test.beforeEach(async ({ page }) => {
     test.skip(!ticket, "helpdesk is not licensed in this build");
     await login(page, ADMIN);
+    await setTicketOrder(page, "oldest");
   });
 
   async function openTicket(page: Page, width: number, height: number) {
