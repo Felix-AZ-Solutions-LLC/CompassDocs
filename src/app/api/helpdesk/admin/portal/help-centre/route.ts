@@ -20,6 +20,9 @@
 // value is written back), and a save drops a space id it can't name, as a
 // deleted space or a private space this person was never shown: both read
 // alike, so the answer says nothing about which private spaces exist.
+// Category keys are kept only when already stored or of a space (or its
+// folders) this person is shown. A heal that wrote the stored value is
+// audited (lib/helpdesk/portal-refs auditHelpCentreHeal).
 
 import { NextResponse } from "next/server";
 import type { SessionUser } from "@/lib/types";
@@ -28,13 +31,13 @@ import { readJson } from "@/lib/helpdesk/access";
 import { hdCapGate } from "@/lib/helpdesk/roles";
 import { badRequest } from "@/lib/helpdesk/routes";
 import { getPortalSettings } from "@/lib/helpdesk/portal";
-import { healHelpCentreSettings } from "@/lib/helpdesk/portal-refs";
+import { auditHelpCentreHeal, healHelpCentreSettings } from "@/lib/helpdesk/portal-refs";
+import { hq } from "@/lib/helpdesk/db-core";
 import {
   cleanHelpCentreSettings,
   helpCentreAdminCategories,
   helpCentreSpaceOptions,
   helpCentreStats,
-  pruneHelpCentreRefs,
   saveHelpCentreSettings,
   type HelpCentreSettings,
 } from "@/lib/helpdesk/help-centre";
@@ -53,10 +56,12 @@ async function view(user: SessionUser, settings: HelpCentreSettings) {
   return { settings, spaces, categories, stats, portal_on: portal.enabled };
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   const gate = await hdCapGate("settings.manage");
   if (gate instanceof NextResponse) return gate;
-  return NextResponse.json(await view(gate, (await healHelpCentreSettings()).settings));
+  const healed = await healHelpCentreSettings();
+  await auditHelpCentreHeal(healed, "read", ipFrom(req));
+  return NextResponse.json(await view(gate, healed.settings));
 }
 
 export async function POST(req: Request) {
@@ -73,12 +78,25 @@ export async function PUT(req: Request) {
   const b = await readJson(req, 64 * 1024);
   if (!b) return badRequest("Send the settings as JSON.");
   const sent = cleanHelpCentreSettings(b);
-  const stored = (await healHelpCentreSettings()).settings;
+  const healed = await healHelpCentreSettings();
+  await auditHelpCentreHeal(healed, "save", ipFrom(req));
+  const stored = healed.settings;
   // A private space nobody showed this person reads as one that does not exist:
   // both drop out of the save (1.20.30; they were a refusal that no reload could clear).
   const spaces = await helpCentreSpaceOptions(gate, stored.spaces);
   const known = new Map(spaces.map((s) => [s.id, s]));
-  const next = pruneHelpCentreRefs(sent, { spaces: known.keys() }).settings;
+  // Category keys in order and hidden: the ones already stored (another admin's choice for a
+  // space this person can't open stays), and the keys of the spaces this person is shown and
+  // their folders. Nothing else is stored, so a save can't be used to learn which space or
+  // folder ids exist (a stored key of one deleted later is cleaned up by the heal above).
+  const folders = known.size ? await hq<{ id: number }>("SELECT id FROM space_categories WHERE space_id = ANY($1::int[])", [[...known.keys()]]) : [];
+  const allowed = new Set([...stored.order, ...stored.hidden, ...[...known.keys()].map((id) => `s${id}`), ...folders.map((f) => `c${f.id}`)]);
+  const next = {
+    ...sent,
+    spaces: sent.spaces.filter((id) => known.has(id)),
+    order: sent.order.filter((k) => allowed.has(k)),
+    hidden: sent.hidden.filter((k) => allowed.has(k)),
+  };
   const priv = next.spaces.map((id) => known.get(id)!).find((s) => s.private);
   if (priv) return badRequest(`“${priv.name}” is a private space. Private spaces are never public: remove it from the help centre.`);
   if (next.enabled && !next.tagged && !(next.from_spaces && next.spaces.length)) {

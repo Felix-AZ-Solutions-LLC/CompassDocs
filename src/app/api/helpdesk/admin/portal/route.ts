@@ -15,7 +15,8 @@
 // healPortalSettings: a deleted type leaves the portal, a deleted portal
 // team falls back to the type's own team, and the cleaned value is written
 // back), and a save drops such entries from what was sent the same way, so
-// a page opened before the delete still saves.
+// a page opened before the delete still saves. A heal that wrote the stored
+// value is audited by the system (lib/helpdesk/portal-refs auditPortalHeal).
 
 import { NextResponse } from "next/server";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
@@ -32,7 +33,7 @@ import {
   prunePortalRefs,
   savePortalSettings,
 } from "@/lib/helpdesk/portal";
-import { healPortalSettings } from "@/lib/helpdesk/portal-refs";
+import { auditPortalHeal, healPortalSettings } from "@/lib/helpdesk/portal-refs";
 
 export const dynamic = "force-dynamic";
 
@@ -46,10 +47,12 @@ async function extras() {
   return { teams, custom_domain: app.custom_domain || "", workspace_address: await workspaceOrigin(), path: PORTAL_PATH };
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   const gate = await hdCapGate("settings.manage");
   if (gate instanceof NextResponse) return gate;
-  const { settings } = await healPortalSettings();
+  const healed = await healPortalSettings();
+  await auditPortalHeal(healed, "read", ipFrom(req));
+  const { settings } = healed;
   return NextResponse.json({ settings, types: await portalTypeOptions(settings), ...(await extras()) });
 }
 
@@ -58,7 +61,9 @@ export async function PUT(req: Request) {
   if (gate instanceof NextResponse) return gate;
   const b = await readJson(req, 64 * 1024);
   if (!b) return badRequest("Send the settings as JSON.");
-  const { settings: before } = await healPortalSettings();
+  const healed = await healPortalSettings();
+  await auditPortalHeal(healed, "save", ipFrom(req));
+  const before = healed.settings;
   const options = await portalTypeOptions(before);
   const teamIds = (await hq<{ id: number }>("SELECT id FROM hd_teams")).map((r) => r.id);
   // The logo is the logo route's: whatever the body says, keep the stored one.

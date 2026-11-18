@@ -20,6 +20,11 @@
 //     person chose is lost; the write happens only when something was
 //     stale, under the setting row's lock, re-checked inside it.
 //
+// On the record: a delete names what it removed in its own audit row
+// (portalPruneDetails / helpCentrePruneDetails), and a heal that wrote the
+// stored value adds a helpdesk.portal.updated (or .help_centre_updated)
+// row by the system (auditPortalHeal / auditHelpCentreHeal).
+//
 // The rules themselves are pure (portal-shared prunePortalRefs,
 // help-centre-shared pruneHelpCentreRefs). A request type whose portal
 // team is gone stays offered and goes to the type's own team (team_id
@@ -32,6 +37,7 @@
 
 import "server-only";
 import type { PoolClient } from "pg";
+import { audit, actorFrom } from "../audit";
 import { hq, withTx, type HdQueryable } from "./db-core";
 import { DEFAULT_PORTAL_SETTINGS, cleanPortalSettings, prunePortalRefs, type PortalSettings } from "./portal-shared";
 import { DEFAULT_HELP_CENTRE_SETTINGS, cleanHelpCentreSettings, helpCentreRefIds, pruneHelpCentreRefs, type HelpCentreSettings } from "./help-centre-shared";
@@ -71,9 +77,16 @@ async function prunePortal(s: PortalSettings, client?: HdQueryable): Promise<Por
 
 export interface HelpCentrePruneResult {
   settings: HelpCentreSettings;
+  /** Space ids that left the chosen spaces. */
   dropped: number[];
+  /** Category keys ("s<id>", "c<id>") that left order and hidden. */
+  dropped_keys: string[];
   changed: boolean;
 }
+
+/** What a heal answers: the clean settings, what it removed, and whether it wrote the stored value. */
+export type PortalHeal = PortalPruneResult & { healed: boolean };
+export type HelpCentreHeal = HelpCentrePruneResult & { healed: boolean };
 
 async function pruneHelpCentre(s: HelpCentreSettings, client?: HdQueryable): Promise<HelpCentrePruneResult> {
   const refs = helpCentreRefIds(s);
@@ -116,22 +129,75 @@ export async function pruneHelpCentreSettingsTx(client: PoolClient): Promise<Hel
  * only when something is stale, pruned again under the row's lock and
  * written back.
  */
-export async function healPortalSettings(): Promise<PortalPruneResult> {
+export async function healPortalSettings(): Promise<PortalHeal> {
   const raw = await readStored(HD_PORTAL_SETTINGS_KEY);
   const first = await prunePortal(cleanPortalSettings(raw ?? DEFAULT_PORTAL_SETTINGS));
-  if (raw === undefined || !portalChanged(first)) return first;
+  if (raw === undefined || !portalChanged(first)) return { ...first, healed: false };
   const healed = await withTx(prunePortalSettingsTx);
-  if (healed) return healed;
+  if (healed) return { ...healed, healed: true };
   // Someone else cleaned it meanwhile: what is stored now is clean.
-  return prunePortal(cleanPortalSettings((await readStored(HD_PORTAL_SETTINGS_KEY)) ?? DEFAULT_PORTAL_SETTINGS));
+  const now = await prunePortal(cleanPortalSettings((await readStored(HD_PORTAL_SETTINGS_KEY)) ?? DEFAULT_PORTAL_SETTINGS));
+  return { ...now, dropped_types: [], cleared_teams: [], healed: false };
 }
 
 /** As healPortalSettings, for the help centre (helpdesk_portal_hc). */
-export async function healHelpCentreSettings(): Promise<HelpCentrePruneResult> {
+export async function healHelpCentreSettings(): Promise<HelpCentreHeal> {
   const raw = await readStored(HD_HELP_CENTRE_SETTINGS_KEY);
   const first = await pruneHelpCentre(cleanHelpCentreSettings(raw ?? DEFAULT_HELP_CENTRE_SETTINGS));
-  if (raw === undefined || !first.changed) return first;
+  if (raw === undefined || !first.changed) return { ...first, healed: false };
   const healed = await withTx(pruneHelpCentreSettingsTx);
-  if (healed) return healed;
-  return pruneHelpCentre(cleanHelpCentreSettings((await readStored(HD_HELP_CENTRE_SETTINGS_KEY)) ?? DEFAULT_HELP_CENTRE_SETTINGS));
+  if (healed) return { ...healed, healed: true };
+  const now = await pruneHelpCentre(cleanHelpCentreSettings((await readStored(HD_HELP_CENTRE_SETTINGS_KEY)) ?? DEFAULT_HELP_CENTRE_SETTINGS));
+  return { ...now, dropped: [], dropped_keys: [], changed: false, healed: false };
+}
+
+// --- Audit ------------------------------------------------------------------------------
+
+/** What a prune removed from the portal settings, for a delete's audit details (empty when nothing). */
+export function portalPruneDetails(r: PortalPruneResult | null | undefined): Record<string, number[]> {
+  if (!r) return {};
+  return {
+    ...(r.dropped_types.length ? { portal_types_removed: r.dropped_types } : {}),
+    ...(r.cleared_teams.length ? { portal_team_cleared_types: r.cleared_teams } : {}),
+  };
+}
+
+/** As portalPruneDetails, for the help centre settings. */
+export function helpCentrePruneDetails(r: HelpCentrePruneResult | null | undefined): Record<string, unknown> {
+  if (!r) return {};
+  return {
+    ...(r.dropped.length ? { help_centre_spaces_removed: r.dropped } : {}),
+    ...(r.dropped_keys.length ? { help_centre_keys_removed: r.dropped_keys } : {}),
+  };
+}
+
+/**
+ * A heal that wrote the stored value is on the record as the settings'
+ * own change (helpdesk.portal.updated / helpdesk.portal.help_centre_updated),
+ * by the system (nobody chose it), naming what it removed and whether a
+ * read or a save of the settings page found it.
+ */
+export async function auditPortalHeal(h: PortalHeal, on: "read" | "save", ip?: string | null): Promise<void> {
+  if (!h.healed) return;
+  await audit({
+    actor: actorFrom(null),
+    action: "helpdesk.portal.updated",
+    targetType: "helpdesk_portal",
+    targetLabel: "Customer portal",
+    details: { changed: ["types"], cleanup: on, ...portalPruneDetails(h), types: h.settings.types.map((t) => t.id) },
+    ip: ip ?? null,
+  });
+}
+
+export async function auditHelpCentreHeal(h: HelpCentreHeal, on: "read" | "save", ip?: string | null): Promise<void> {
+  if (!h.healed) return;
+  const changed = [...(h.dropped.length ? ["spaces"] : []), ...(h.dropped_keys.length ? ["order", "hidden"] : [])];
+  await audit({
+    actor: actorFrom(null),
+    action: "helpdesk.portal.help_centre_updated",
+    targetType: "helpdesk_portal",
+    targetLabel: "Customer portal help centre",
+    details: { changed, cleanup: on, ...helpCentrePruneDetails(h), spaces: h.settings.spaces },
+    ip: ip ?? null,
+  });
 }

@@ -4,7 +4,7 @@
 
 import "server-only";
 import { hq, hqOne, normalizeRow, withTx } from "./db-core";
-import { prunePortalSettingsTx } from "./portal-refs";
+import { prunePortalSettingsTx, type PortalPruneResult } from "./portal-refs";
 import type { HdAvailability, HdTeam, HdTeamMember, HdTeamRole, HdTeamWithMembers } from "./types";
 
 export const TEAM_LIMITS = { name: 60, description: 300, icon: 40, email_alias: 200, teams: 100, members: 500 } as const;
@@ -112,7 +112,7 @@ export async function updateTeam(id: number, patch: Partial<TeamInput>): Promise
  * own team from now on (its portal team_id is cleared in the same
  * transaction, lib/helpdesk/portal-refs).
  */
-export async function deleteTeam(id: number): Promise<HdTeam | undefined> {
+export async function deleteTeam(id: number, out?: { portal?: PortalPruneResult | null }): Promise<HdTeam | undefined> {
   return withTx(async (client) => {
     const r = await client.query(
       `DELETE FROM hd_teams WHERE id = $1 RETURNING ${RETURNING}`,
@@ -121,7 +121,9 @@ export async function deleteTeam(id: number): Promise<HdTeam | undefined> {
     if (!r.rows[0]) return undefined;
     // The team's own email compositions (lib/email-parts, scope 'hd_team:<id>') go with it.
     await client.query("DELETE FROM email_template_compositions WHERE scope = 'hd_team:' || $1::text", [id]);
-    await prunePortalSettingsTx(client);
+    // `out.portal`: what changed in the portal settings, for the delete's audit row.
+    const pruned = await prunePortalSettingsTx(client);
+    if (out) out.portal = pruned;
     return normalizeRow<HdTeam>(r.rows[0]);
   });
 }

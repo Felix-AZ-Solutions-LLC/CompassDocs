@@ -10,6 +10,7 @@ import { deleteTeam, getTeam, updateTeam, validateTeamInput } from "@/lib/helpde
 import { badRequest, notFound } from "@/lib/helpdesk/routes";
 import { invalidateCalendarCache } from "@/lib/helpdesk/calendars";
 import { cannedCountForTeam } from "@/lib/helpdesk/canned";
+import { portalPruneDetails, type PortalPruneResult } from "@/lib/helpdesk/portal-refs";
 
 export const dynamic = "force-dynamic";
 
@@ -49,7 +50,8 @@ export async function DELETE(req: Request, { params }: Ctx) {
   const id = Number((await params).id);
   // Its canned responses are deleted with it (1.19.2, agent W4): counted for the audit.
   const cannedGone = Number.isInteger(id) ? await cannedCountForTeam(id) : 0;
-  const team = Number.isInteger(id) ? await deleteTeam(id) : undefined;
+  const pruned: { portal?: PortalPruneResult | null } = {};
+  const team = Number.isInteger(id) ? await deleteTeam(id, pruned) : undefined;
   if (!team) return notFound();
   invalidateCalendarCache();
   await audit({
@@ -58,7 +60,8 @@ export async function DELETE(req: Request, { params }: Ctx) {
     targetType: "helpdesk_team",
     targetId: id,
     targetLabel: team.name,
-    details: { canned_responses_deleted: cannedGone },
+    // 1.20.30: and the portal's request types that went to it (now to their own team).
+    details: { canned_responses_deleted: cannedGone, ...portalPruneDetails(pruned.portal) },
     ip: ipFrom(req),
   });
   return NextResponse.json({ ok: true });

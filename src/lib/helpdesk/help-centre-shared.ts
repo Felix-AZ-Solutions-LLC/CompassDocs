@@ -127,16 +127,17 @@ export function helpCentreRefIds(settings: HelpCentreSettings): { spaces: number
 export function pruneHelpCentreRefs(
   settings: HelpCentreSettings,
   live: { spaces: Iterable<number>; categories?: Iterable<number> }
-): { settings: HelpCentreSettings; dropped: number[]; changed: boolean } {
+): { settings: HelpCentreSettings; dropped: number[]; dropped_keys: string[]; changed: boolean } {
   const spaces = new Set(live.spaces);
   const categories = live.categories === undefined ? null : new Set(live.categories);
   const keepKey = (k: string) => (k[0] === "s" ? spaces.has(Number(k.slice(1))) : !categories || categories.has(Number(k.slice(1))));
   const dropped = settings.spaces.filter((id) => !spaces.has(id));
   const order = settings.order.filter(keepKey);
   const hidden = settings.hidden.filter(keepKey);
-  const changed = dropped.length > 0 || order.length !== settings.order.length || hidden.length !== settings.hidden.length;
-  if (!changed) return { settings, dropped, changed };
-  return { settings: { ...settings, spaces: settings.spaces.filter((id) => spaces.has(id)), order, hidden }, dropped, changed };
+  const dropped_keys = [...new Set([...settings.order, ...settings.hidden].filter((k) => !keepKey(k)))];
+  const changed = dropped.length > 0 || dropped_keys.length > 0;
+  if (!changed) return { settings, dropped, dropped_keys, changed };
+  return { settings: { ...settings, spaces: settings.spaces.filter((id) => spaces.has(id)), order, hidden }, dropped, dropped_keys, changed };
 }
 
 /** A search as typed: search operators a customer did not mean dropped, quotes gone, spaces collapsed, clamped. */

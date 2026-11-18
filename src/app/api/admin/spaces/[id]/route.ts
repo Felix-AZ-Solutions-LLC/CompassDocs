@@ -195,12 +195,16 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
       { status: 409 }
     );
   }
+  // 1.20.30: what left the customer portal's help centre settings with it (lib/helpdesk/portal-refs).
+  const { helpCentrePruneDetails } = await import("@/lib/helpdesk/portal-refs");
+  const pruned = helpCentrePruneDetails(res.helpCentre);
   await audit({
     actor: actorFrom(gate),
     action: "space.delete",
     targetType: "space",
     targetId: id,
     targetLabel: existing.name,
+    ...(Object.keys(pruned).length ? { details: pruned } : {}),
     ip: ipFrom(req),
   });
   // Handbooks 1.18.0: the space's handbooks went with it (lib/db deleteSpace,

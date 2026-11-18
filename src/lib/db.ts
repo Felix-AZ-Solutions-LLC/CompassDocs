@@ -3826,27 +3826,42 @@ export interface CascadedHandbook {
  * 1.20.30: the customer portal's help centre settings stop naming the space
  * in the delete's transaction.
  */
-export async function deleteSpace(id: number): Promise<{ ok: boolean; docCount: number; handbooks: CascadedHandbook[] }> {
-  const docCount = (
-    await q<{ n: number }>("SELECT COUNT(*)::int AS n FROM documents WHERE space_id = $1", [id])
-  )[0].n;
-  if (docCount > 0) return { ok: false, docCount, handbooks: [] };
-  const handbooks = await q<CascadedHandbook>(
-    `SELECT h.id, h.title, h.status,
-            COALESCE((SELECT array_agg(hi.document_id ORDER BY hi.document_id) FROM handbook_items hi WHERE hi.handbook_id = h.id),
-                     '{}'::int[]) AS doc_ids
-       FROM handbooks h WHERE h.space_id = $1 ORDER BY h.id`,
-    [id]
-  );
+export async function deleteSpace(
+  id: number
+): Promise<{ ok: boolean; docCount: number; handbooks: CascadedHandbook[]; helpCentre?: import("./helpdesk/portal-refs").HelpCentrePruneResult | null }> {
   // 1.20.30: the customer portal's help centre stops naming the space (and
-  // its folders) in the same transaction (lib/helpdesk/portal-refs).
+  // its folders) in the same transaction (lib/helpdesk/portal-refs), and the
+  // checks run inside it, after the space's row is locked: a document or
+  // handbook added meanwhile (its foreign key waits on that lock) is either
+  // counted here or refused, never cascaded away unseen.
   const { pruneHelpCentreSettingsTx } = await import("./helpdesk/portal-refs");
   await ready();
   const client = await pool().connect();
+  let handbooks: CascadedHandbook[] = [];
+  let helpCentre: import("./helpdesk/portal-refs").HelpCentrePruneResult | null = null;
   try {
     await client.query("BEGIN");
+    const locked = await client.query("SELECT id FROM spaces WHERE id = $1 FOR UPDATE", [id]);
+    if (!locked.rows[0]) {
+      await client.query("ROLLBACK");
+      return { ok: true, docCount: 0, handbooks: [] };
+    }
+    const docCount = (await client.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM documents WHERE space_id = $1", [id])).rows[0].n;
+    if (docCount > 0) {
+      await client.query("ROLLBACK");
+      return { ok: false, docCount, handbooks: [] };
+    }
+    handbooks = (
+      await client.query<CascadedHandbook>(
+        `SELECT h.id, h.title, h.status,
+                COALESCE((SELECT array_agg(hi.document_id ORDER BY hi.document_id) FROM handbook_items hi WHERE hi.handbook_id = h.id),
+                         '{}'::int[]) AS doc_ids
+           FROM handbooks h WHERE h.space_id = $1 ORDER BY h.id`,
+        [id]
+      )
+    ).rows;
     await client.query("DELETE FROM spaces WHERE id = $1", [id]);
-    await pruneHelpCentreSettingsTx(client);
+    helpCentre = await pruneHelpCentreSettingsTx(client);
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
@@ -3860,7 +3875,7 @@ export async function deleteSpace(id: number): Promise<{ ok: boolean; docCount: 
       console.error("[ack] could not reconcile the policies of the deleted space's handbooks:", e)
     );
   }
-  return { ok: true, docCount: 0, handbooks };
+  return { ok: true, docCount: 0, handbooks, helpCentre };
 }
 
 export async function createSpace(input: {

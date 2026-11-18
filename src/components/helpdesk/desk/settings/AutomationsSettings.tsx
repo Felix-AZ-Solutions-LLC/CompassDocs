@@ -398,10 +398,13 @@ function RuleDialog({
       // 1.20.16: publishing names the draft this dialog showed (draft_at); a newer one is refused (409), never published unseen.
       const publishing = mode.current === "publish" && claude ? (changesWaiting ? { publish_draft: true, draft_at: claude.draft_at } : { publish: true, draft_at: claude.draft_at }) : {};
       let saved: HdAutomation | undefined;
-      if (existing) saved = (await sendJson<{ automation?: HdAutomation }>(`/api/helpdesk/admin/automations/${existing.id}`, "PATCH", { ...payload, ...publishing }, "Couldn't save the rule.")).automation;
-      else await sendJson("/api/helpdesk/admin/automations", "POST", { ...payload, active: 1 }, "Couldn't create the rule.");
-      toast(
-        "ok",
+      let notices: string[] = [];
+      if (existing) {
+        const r = await sendJson<{ automation?: HdAutomation; notices?: string[] }>(`/api/helpdesk/admin/automations/${existing.id}`, "PATCH", { ...payload, ...publishing }, "Couldn't save the rule.");
+        saved = r.automation;
+        notices = r.notices ?? [];
+      } else await sendJson("/api/helpdesk/admin/automations", "POST", { ...payload, active: 1 }, "Couldn't create the rule.");
+      const done =
         claude
           ? mode.current === "publish"
             ? changesWaiting
@@ -410,8 +413,9 @@ function RuleDialog({
             : "Draft saved. It stays off."
           : existing
             ? "Rule saved."
-            : "Rule created."
-      );
+            : "Rule created.";
+      // 1.20.30: with what the save changed by itself (a deleted team the rule no longer moves tickets to).
+      toast("ok", [done, ...notices].join(" "));
       onSaved(saved);
     } catch (err) {
       setError((err as Error).message);
@@ -491,11 +495,23 @@ function RuleDialog({
           <fieldset className="rounded-lg border border-slate-200 p-3">
             <legend className="px-1 text-sm font-semibold text-slate-800">If (all optional)</legend>
             <div className="space-y-3">
-              <CheckRow label="Team" items={teams.map((t) => ({ value: t.id, label: t.name }))} chosen={c.team_ids ?? []} onToggle={(v) => setC({ ...c, team_ids: toggleIn(c.team_ids, v) })} />
+              <CheckRow
+                label="Team"
+                items={teams.map((t) => ({ value: t.id, label: t.name }))}
+                chosen={c.team_ids ?? []}
+                onToggle={(v) => setC({ ...c, team_ids: toggleIn(c.team_ids, v) })}
+                gone={{ label: "A deleted team", onRemove: () => setC({ ...c, team_ids: (c.team_ids ?? []).filter((id) => teams.some((t) => t.id === id)) }) }}
+              />
               <CheckRow label="Priority" items={HD_PRIORITIES.map((p) => ({ value: p, label: HD_PRIORITY_LABEL[p] }))} chosen={c.priorities ?? []} onToggle={(v) => setC({ ...c, priorities: toggleIn(c.priorities, v as HdPriority) })} />
               <CheckRow label="Came in through" items={HD_SOURCES.map((s) => ({ value: s, label: HD_SOURCE_LABEL[s] }))} chosen={c.sources ?? []} onToggle={(v) => setC({ ...c, sources: toggleIn(c.sources, v as HdSource) })} />
-              {types.length > 0 && (
-                <CheckRow label="Request type" items={types.map((t) => ({ value: t.id, label: t.name }))} chosen={c.request_type_ids ?? []} onToggle={(v) => setC({ ...c, request_type_ids: toggleIn(c.request_type_ids, v) })} />
+              {(types.length > 0 || (c.request_type_ids?.length ?? 0) > 0) && (
+                <CheckRow
+                  label="Request type"
+                  items={types.map((t) => ({ value: t.id, label: t.name }))}
+                  chosen={c.request_type_ids ?? []}
+                  onToggle={(v) => setC({ ...c, request_type_ids: toggleIn(c.request_type_ids, v) })}
+                  gone={{ label: "A deleted request type", onRemove: () => setC({ ...c, request_type_ids: (c.request_type_ids ?? []).filter((id) => types.some((t) => t.id === id)) }) }}
+                />
               )}
               <Field label="Mentions any of these words" help="In the subject or the first message. Comma-separated.">
                 <TextInput value={keywords} onChange={(e) => setKeywords(e.target.value)} placeholder="vpn, wifi, network" />
@@ -510,6 +526,8 @@ function RuleDialog({
               <Field label="Move to team">
                 <Select value={x.team_id ?? ""} onChange={(e) => setX({ ...x, team_id: e.target.value ? Number(e.target.value) : undefined })}>
                   <option value="">Leave as it is</option>
+                  {/* 1.20.30: a team deleted since is shown, so it can be changed (saving drops it and says so). */}
+                  {x.team_id && !teams.some((t) => t.id === x.team_id) ? <option value={x.team_id}>A deleted team</option> : null}
                   {teams.map((t) => (
                     <option key={t.id} value={t.id}>
                       {t.name}
@@ -668,17 +686,39 @@ function RuleSummary({ words }: { words: RuleWords }) {
   );
 }
 
-function CheckRow<T extends string | number>({ label, items, chosen, onToggle }: { label: string; items: { value: T; label: string }[]; chosen: T[]; onToggle: (v: T) => void }) {
+function CheckRow<T extends string | number>({
+  label,
+  items,
+  chosen,
+  onToggle,
+  gone,
+}: {
+  label: string;
+  items: { value: T; label: string }[];
+  chosen: T[];
+  onToggle: (v: T) => void;
+  /** 1.20.30: chosen entries that were deleted ("A deleted team"), shown so they can be removed. */
+  gone?: { label: string; onRemove: () => void };
+}) {
+  const missing = chosen.filter((v) => !items.some((i) => i.value === v)).length;
   return (
     <fieldset>
       <legend className="mb-1 text-xs font-medium text-slate-500">{label}</legend>
-      <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
         {items.map((i) => (
           <label key={String(i.value)} className="inline-flex items-center gap-1.5 text-sm text-slate-700">
             <input type="checkbox" checked={chosen.includes(i.value)} onChange={() => onToggle(i.value)} />
             {i.label}
           </label>
         ))}
+        {gone && missing > 0 && (
+          <span className={chipClass("warn", "md", "pr-1 text-sm")}>
+            <span>{missing === 1 ? gone.label : `${missing} deleted`}</span>
+            <button type="button" className="ml-0.5 rounded-full p-0.5 hover:bg-slate-200" aria-label={`Remove ${missing === 1 ? gone.label.toLowerCase() : "the deleted ones"}`} data-tt="Remove" onClick={gone.onRemove}>
+              <X className="h-3 w-3" aria-hidden />
+            </button>
+          </span>
+        )}
       </div>
     </fieldset>
   );
