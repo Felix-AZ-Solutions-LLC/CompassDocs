@@ -316,7 +316,11 @@ function M365Form({ v, use, onSaved }: { v: MailView; use: boolean; onSaved: (v:
   const expiryState = exp.state;
 
   async function save() {
-    const problem = mailM365Problem({ ...f, secret }, sameApp);
+    // Same sentence as the server's refusal: say why the secret is asked for again.
+    const problem =
+      appSame && !mailboxSame && !secret.trim()
+        ? "Enter the client secret again to change the sending mailbox (or run Set up with Microsoft). Whoever changes where email comes from must hold the app's secret."
+        : mailM365Problem({ ...f, secret }, sameApp);
     if (problem) {
       setError(problem);
       return;
