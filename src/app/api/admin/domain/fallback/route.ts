@@ -3,7 +3,7 @@ import { apiGuard } from "@/lib/api-auth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { applyProxyConfig, proxyManaged } from "@/lib/caddy";
 import { domainState } from "@/lib/domain-flow";
-import { forgetFallbackHost, validFallbackHost } from "@/lib/fallback-hosts";
+import { fallbackHostFromHostHeader, forgetFallbackHost, validFallbackHost } from "@/lib/fallback-hosts";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +20,13 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });
   }
   const host = validFallbackHost(body?.host);
+  // 1.20.29 (review M5): never the address this very request came in on.
+  if (host && fallbackHostFromHostHeader(req.headers.get("host")) === host) {
+    return NextResponse.json(
+      { error: `You're using ${host} right now, so it can't be removed from here. Open CompassDocs at another address to remove it.` },
+      { status: 409 }
+    );
+  }
   if (!host || !(await forgetFallbackHost(host))) {
     return NextResponse.json({ error: "That address isn't a remembered fallback." }, { status: 404 });
   }

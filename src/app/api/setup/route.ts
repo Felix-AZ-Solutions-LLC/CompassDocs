@@ -4,7 +4,7 @@ import { needsSetup, createUser, createSession, markLogin, setSetting } from "@/
 import { hashPassword, newToken } from "@/lib/password";
 import { getSessionTimeoutMinutes } from "@/lib/settings-store";
 import { SESSION_COOKIE, cookieOptions, SESSION_MAX_AGE, secureCookie } from "@/lib/auth";
-import { SECURE_COOKIE_MODES, TLS_MODES, type SecureCookieMode } from "@/lib/settings";
+import { normalizeDomain, SECURE_COOKIE_MODES, TLS_MODES, validTlsEmail, type SecureCookieMode } from "@/lib/settings";
 import type { TlsMode } from "@/lib/settings";
 import { parseLicense } from "@/lib/license";
 import { setAnthropicKey } from "@/lib/ai-config";
@@ -75,6 +75,20 @@ export async function POST(req: Request) {
     }
   }
 
+  // 1.20.29 (review M2): the renewal email lands in the proxy config, so
+  // only a plain address; refused before the admin is created.
+  let tlsEmail: string | undefined;
+  if (body?.tls_email !== undefined) {
+    const v = validTlsEmail(String(body.tls_email));
+    if (v === null) {
+      return NextResponse.json(
+        { error: "Enter a plain email address like admin@example.com for renewal notices, or leave it blank." },
+        { status: 400 }
+      );
+    }
+    tlsEmail = v;
+  }
+
   // Re-check inside the write to narrow the race window.
   if (!(await needsSetup())) {
     return NextResponse.json({ error: "Setup has already been completed." }, { status: 409 });
@@ -120,20 +134,24 @@ export async function POST(req: Request) {
   // proxy is switched to it (lib/domain-flow), so a name whose DNS isn't
   // visible yet waits as pending instead of taking the address the wizard
   // was opened on away. Never blocks finishing setup.
-  let domainOutcome: { outcome: string; message?: string } | null = null;
+  let domainOutcome: { outcome: string; domain: string; message?: string } | null = null;
   if (body?.custom_domain !== undefined || body?.tls_mode !== undefined || body?.tls_email !== undefined) {
     const mode = TLS_MODES.includes(body?.tls_mode as TlsMode) ? (body.tls_mode as TlsMode) : undefined;
     try {
       const r = await saveDomainSettings({
         domain: String(body?.custom_domain ?? ""),
         tls_mode: mode,
-        tls_email: body?.tls_email !== undefined ? String(body.tls_email) : undefined,
+        tls_email: tlsEmail,
         actor: actorFrom(user),
         ip: ipFrom(req),
         hostHeader: req.headers.get("host"),
         via: "setup",
       });
-      domainOutcome = { outcome: r.outcome, message: r.outcome === "pending" ? r.check?.message : undefined };
+      domainOutcome = {
+        outcome: r.outcome,
+        domain: r.pending?.domain ?? normalizeDomain(String(body?.custom_domain ?? "")),
+        message: r.outcome === "pending" ? r.pending?.last_check.message ?? r.check?.message : undefined,
+      };
     } catch (e) {
       /* proxy may be unreachable during first-run; settings are saved regardless */
       console.error("[setup] domain step:", e);
@@ -148,7 +166,8 @@ export async function POST(req: Request) {
   await createSession(token, user.id, expires, null, req.headers.get("user-agent"), "setup");
   await markLogin(user.id);
 
-  // A domain left pending: the wizard opens Settings → Domain & HTTPS, which says why.
+  // A domain left pending: the wizard opens Settings → Domain & HTTPS, which
+  // says why; one being verified: it waits for HTTPS, then opens the domain.
   const res = NextResponse.json({ ok: true, ...(domainOutcome ? { domain: domainOutcome } : {}) });
   res.cookies.set(SESSION_COOKIE, token, cookieOptions(SESSION_MAX_AGE, await secureCookie(req)));
   return res;

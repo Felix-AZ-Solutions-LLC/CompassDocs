@@ -36,6 +36,22 @@ export function SetupForm({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const [switching, setSwitching] = useState("");
+
+  /** Poll the domain's state until its HTTPS answered (true) or it went back (false); about 3 minutes at most. */
+  async function waitForSwitch(name: string): Promise<boolean> {
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 5000));
+      const res = await fetch("/api/admin/domain").catch(() => null);
+      if (!res?.ok) continue;
+      const state = await res.json().catch(() => null);
+      if (!state) continue;
+      if (!state.pending && state.custom_domain === name) return true;
+      if (state.pending && state.pending.phase !== "verifying") return false;
+    }
+    return false;
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -71,8 +87,26 @@ export function SetupForm({
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Setup failed.");
       // 1.20.29: a domain that didn't pass its check waits; Settings →
-      // Domain & HTTPS says why, with Check again and Use it anyway.
-      router.push(data?.domain?.outcome === "pending" ? "/admin/domain" : "/");
+      // Domain & HTTPS says why, with Check again and Use it anyway. One
+      // that passed is being switched: wait for HTTPS on it (the proxy keeps
+      // this address working meanwhile), then open it (review M3).
+      const d = data?.domain as { outcome?: string; domain?: string } | undefined;
+      if (d?.outcome === "verifying" && d.domain) {
+        setSwitching(d.domain);
+        const live = await waitForSwitch(d.domain);
+        if (live) {
+          window.location.href = `https://${d.domain}/`;
+          return;
+        }
+        router.push("/admin/domain");
+        router.refresh();
+        return;
+      }
+      if (d?.outcome === "applied" && d.domain) {
+        window.location.href = `https://${d.domain}/`;
+        return;
+      }
+      router.push(d?.outcome === "pending" ? "/admin/domain" : "/");
       router.refresh();
     } catch (e: any) {
       setError(e.message);
@@ -280,7 +314,7 @@ export function SetupForm({
         disabled={loading}
         className={buttonClass("primary", "md", "w-full")}
       >
-        {loading ? "Creating…" : "Create account & get started"}
+        {switching ? `Switching to ${switching}…` : loading ? "Creating…" : "Create account & get started"}
       </button>
     </form>
   );

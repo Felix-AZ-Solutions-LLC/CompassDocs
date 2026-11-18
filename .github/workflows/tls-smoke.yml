@@ -136,9 +136,10 @@ jobs:
 
       - name: The fallback host still answers after the domain is applied
         run: |
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" --resolve fallback.compassdocs.test:80:127.0.0.1 http://fallback.compassdocs.test/login)
-          echo "fallback http -> $CODE"
-          test "$CODE" = "200"
+          # Plain HTTP redirects to HTTPS on the fallback itself; HTTPS serves the app.
+          LOC=$(curl -s -o /dev/null -w "%{http_code} %{redirect_url}" --resolve fallback.compassdocs.test:80:127.0.0.1 http://fallback.compassdocs.test/login)
+          echo "fallback http -> $LOC"
+          test "$LOC" = "308 https://fallback.compassdocs.test/login"
           CODE=$(curl -sk -o /dev/null -w "%{http_code}" --resolve fallback.compassdocs.test:443:127.0.0.1 https://fallback.compassdocs.test/login)
           echo "fallback https -> $CODE"
           test "$CODE" = "200"
@@ -147,16 +148,21 @@ jobs:
       - name: The domain check reaches the app on any host over plain HTTP
         run: |
           # A name the proxy doesn't serve yet: the check's path reaches the
-          # app (its 404 for an unknown token), everything else still redirects.
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" -H 'Host: next.compassdocs.test' http://localhost/.well-known/compassdocs-domain-check/not-a-token)
-          echo "check path, unknown host -> $CODE (expect the app's 404)"
-          test "$CODE" = "404"
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" -H 'Host: next.compassdocs.test' http://localhost/login)
-          echo "other path, unknown host -> $CODE (expect 3xx)"
-          case "$CODE" in 3*) : ;; *) echo "::error::plain HTTP on an unknown host no longer redirects"; exit 1;; esac
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" --resolve smoke.compassdocs.test:80:127.0.0.1 http://smoke.compassdocs.test/.well-known/compassdocs-domain-check/not-a-token)
-          echo "check path, the domain over http -> $CODE (expect the app's 404)"
-          test "$CODE" = "404"
+          # app, whose answer to an unknown token carries a header only that
+          # route sends; everything else redirects to the custom domain.
+          HDRS=$(curl -s -D - -o /dev/null -H 'Host: next.compassdocs.test' http://localhost/.well-known/compassdocs-domain-check/not-a-token)
+          echo "$HDRS"
+          echo "$HDRS" | head -1 | grep -q " 404"
+          echo "$HDRS" | grep -qi '^x-compassdocs-domain-check: unknown-token'
+          LOC=$(curl -s -o /dev/null -w "%{http_code} %{redirect_url}" -H 'Host: next.compassdocs.test' http://localhost/login)
+          echo "other path, unknown host -> $LOC (expect 308 to https://smoke.compassdocs.test/login)"
+          test "$LOC" = "308 https://smoke.compassdocs.test/login"
+          # An IP address goes to the domain too, never to https://<ip> (no certificate there).
+          LOC=$(curl -s -o /dev/null -w "%{http_code} %{redirect_url}" http://127.0.0.1/login)
+          echo "IP -> $LOC"
+          test "$LOC" = "308 https://smoke.compassdocs.test/login"
+          HDRS=$(curl -s -D - -o /dev/null --resolve smoke.compassdocs.test:80:127.0.0.1 http://smoke.compassdocs.test/.well-known/compassdocs-domain-check/not-a-token)
+          echo "$HDRS" | grep -qi '^x-compassdocs-domain-check: unknown-token'
 
       - name: No admin-API rejections in the Caddy log
         run: |

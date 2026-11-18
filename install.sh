@@ -49,8 +49,9 @@ fi
 # (nofail hides the error), so after a reboot Docker starts on the empty
 # directory underneath and no containers exist. Fix that line (fstab is backed
 # up first), make Docker wait for the mount when /var/lib/docker is a separate
-# mount, and mount it now if it isn't. Does nothing on a host without a
-# /var/lib/docker line in /etc/fstab; needs root for the changes.
+# mount that mounts at boot (not one marked noauto), and mount it now if it
+# isn't. Does nothing on a host without a /var/lib/docker line in /etc/fstab;
+# needs root for the changes.
 DOCKER_FSTAB_BARE='^[0-9A-Fa-f-]{36}[[:space:]]+/var/lib/docker[[:space:]]'
 repair_docker_disk() {
   [ "$(uname -s 2>/dev/null)" = Linux ] && [ -f /etc/fstab ] || return 0
@@ -76,6 +77,11 @@ repair_docker_disk() {
     ok "Fixed the /var/lib/docker line in /etc/fstab (it lacked UUID=; backup: $backup)"
   fi
 
+  # A line marked noauto is the admin's business: no drop-in, no mount.
+  if awk '$1 !~ /^#/ && $2 == "/var/lib/docker" && $4 ~ /(^|,)noauto(,|$)/ { f = 1 } END { exit !f }' /etc/fstab; then
+    return 0
+  fi
+
   local systemd=0
   command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] && systemd=1
   if [ "$systemd" = 1 ]; then
@@ -89,11 +95,11 @@ repair_docker_disk() {
   fi
 
   # Not mounted right now: Docker is running on the empty directory underneath.
-  # (A line marked noauto is the admin's business.)
-  if command -v findmnt >/dev/null 2>&1 && ! findmnt /var/lib/docker >/dev/null 2>&1 \
-    && ! awk '$1 !~ /^#/ && $2 == "/var/lib/docker" && $4 ~ /(^|,)noauto(,|$)/ { f = 1 } END { exit !f }' /etc/fstab; then
+  if command -v findmnt >/dev/null 2>&1 && ! findmnt /var/lib/docker >/dev/null 2>&1; then
     if [ "$systemd" != 1 ]; then
-      die "/var/lib/docker is not mounted. Stop Docker, run: mount /var/lib/docker && findmnt /var/lib/docker, start Docker and re-run."
+      # Without systemd this script doesn't stop and start Docker for you.
+      printf '\033[1;33m!\033[0m %s\n' "/var/lib/docker is in /etc/fstab but not mounted. Stop Docker, run: mount /var/lib/docker && findmnt /var/lib/docker, then start Docker."
+      return 0
     fi
     say "Mounting the data disk on /var/lib/docker (Docker restarts)…"
     $SUDO systemctl stop docker.service docker.socket 2>/dev/null || true

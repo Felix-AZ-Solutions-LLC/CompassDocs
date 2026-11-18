@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, iconButtonClass } from "@/components/Button";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toasts";
@@ -12,6 +12,7 @@ import { useLeaveGuard, useUnsavedChanges } from "@/lib/use-unsaved";
 import type { TlsMode, SecureCookieMode } from "@/lib/settings";
 import { Field, TextInput, Textarea } from "@/components/form";
 import { Check, Clock, RefreshCw, X } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 
 interface ProxyStatus {
   managed: boolean;
@@ -40,11 +41,15 @@ interface PendingDomain {
   next_check_at: string;
   attempts: number;
   last_check: DomainCheck;
+  /** "verifying": switched, HTTPS being checked; the settings follow when it answers. */
+  phase?: "waiting" | "verifying";
+  verify?: { address: string; until: string; origin: string };
 }
 
 interface FallbackHost {
   host: string;
   source: "env" | "remembered";
+  acme: boolean;
 }
 
 export interface DomainState {
@@ -108,6 +113,8 @@ export function DomainSettings({ initial }: { initial: DomainState }) {
   const [mode, setModeRaw] = useState<TlsMode>(initial.pending?.tls_mode ?? initial.tls_mode);
   const [email, setEmailRaw] = useState(initial.pending?.tls_email ?? initial.tls_email);
   const [live, setLive] = useState(initial.custom_domain);
+  // The mode the live domain is served in: fallback links follow it, not the form (review L8).
+  const [liveMode, setLiveMode] = useState<TlsMode>(initial.tls_mode);
   const [pending, setPending] = useState<PendingDomain | null>(initial.pending);
   const [fallbacks, setFallbacks] = useState<FallbackHost[]>(initial.fallbacks);
   const [checking, setChecking] = useState(false);
@@ -137,6 +144,7 @@ export function DomainSettings({ initial }: { initial: DomainState }) {
   function takeState(state: DomainState | undefined) {
     if (!state) return;
     setLive(state.custom_domain);
+    setLiveMode(state.tls_mode);
     setPending(state.pending);
     setFallbacks(state.fallbacks ?? []);
     setDomainRaw(state.pending?.domain ?? state.custom_domain);
@@ -175,7 +183,9 @@ export function DomainSettings({ initial }: { initial: DomainState }) {
       setHasCert(true);
     }
     takeState(data?.state);
-    if (data?.outcome === "pending") {
+    if (data?.outcome === "verifying") {
+      toast("ok", `${data.state?.pending?.domain} reaches this server. Checking HTTPS before switching for good.`);
+    } else if (data?.outcome === "pending") {
       toast("error", `${data.state?.pending?.domain ?? "The domain"} isn't switched on yet. The reason is under the domain.`);
     } else if (!data.applied && data.proxyError) {
       setWarning(data.proxyError);
@@ -202,6 +212,8 @@ export function DomainSettings({ initial }: { initial: DomainState }) {
     if (data.status === "applied") {
       if (data.proxyError) setWarning(data.proxyError);
       toast("ok", `${data.check?.domain} reaches this server and is live now.`);
+    } else if (data.status === "verifying") {
+      toast("ok", `${data.check?.domain} reaches this server. Checking HTTPS before switching for good.`);
     } else {
       toast("error", data.check?.message || "The domain still doesn't reach this server.");
     }
@@ -271,6 +283,20 @@ export function DomainSettings({ initial }: { initial: DomainState }) {
   }
 
   async function removeFallback(host: string) {
+    // Not reversible from here when it is the address someone relies on (review M5).
+    const ok = await confirmDialog({
+      title: `Remove ${host}?`,
+      body: (
+        <p>
+          CompassDocs stops answering at {host}. If {live || "the custom domain"} stops working, this
+          address won&rsquo;t be a way back in. It comes back only when an administrator saves a domain
+          while using it.
+        </p>
+      ),
+      confirmLabel: "Remove address",
+      danger: true,
+    });
+    if (ok !== true) return;
     const res = await fetch("/api/admin/domain/fallback", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
@@ -288,6 +314,27 @@ export function DomainSettings({ initial }: { initial: DomainState }) {
   }
 
   const autoChecking = pending ? Date.parse(pending.auto_until) > Date.now() : false;
+  const verifying = pending?.phase === "verifying";
+
+  // While HTTPS on a switched domain is being verified, follow it here.
+  const watched = useRef<string | null>(null);
+  useEffect(() => {
+    if (!verifying || !pending) return;
+    watched.current = pending.domain;
+    const timer = setInterval(async () => {
+      const res = await fetch("/api/admin/domain").catch(() => null);
+      if (!res?.ok) return;
+      const state = (await res.json().catch(() => null)) as DomainState | null;
+      if (!state || state.pending?.phase === "verifying") return;
+      takeState(state);
+      const name = watched.current;
+      if (!state.pending && state.custom_domain === name) toast("ok", `${name} is live with HTTPS.`);
+      else if (state.pending) toast("error", state.pending.last_check.message);
+      router.refresh();
+    }, 5000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [verifying, pending?.domain]);
 
   return (
     <div className="space-y-6">
@@ -346,8 +393,24 @@ export function DomainSettings({ initial }: { initial: DomainState }) {
           </Field>
         </div>
 
+        {/* 1.20.29: switched, HTTPS being verified (review M3). */}
+        {pending && verifying && (
+          <div className="notice-info mt-4 rounded-lg border p-3 text-sm" data-testid="domain-verifying">
+            <p className="flex items-center gap-2 font-semibold" role="status">
+              <Spinner size="sm" />
+              Switching to {pending.domain}: checking HTTPS
+            </p>
+            <p className="mt-1 text-xs">
+              {pending.domain} reaches this server. The proxy serves it now and is getting its
+              certificate, which can take up to 2 minutes; this address keeps working meanwhile. If
+              HTTPS doesn&rsquo;t answer, CompassDocs goes back to {live || "the current address"} and
+              says why here.
+            </p>
+          </div>
+        )}
+
         {/* 1.20.29: the domain waiting for its check, with why and the ways on. */}
-        {pending && (
+        {pending && !verifying && (
           <div className="notice-warn mt-4 rounded-lg border p-3 text-sm" data-testid="domain-pending">
             <p className="flex items-center gap-1.5 font-semibold">
               <Clock className="h-4 w-4 shrink-0" aria-hidden />
@@ -367,7 +430,7 @@ export function DomainSettings({ initial }: { initial: DomainState }) {
                   switches on by itself when it passes, and administrators get a notice.
                 </>
               ) : (
-                <>Automatic checks stopped after 24 hours. Check again to start them for another 24 hours.</>
+                <>Automatic checks have stopped. Check again to start them for another 24 hours.</>
               )}
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
@@ -393,7 +456,7 @@ export function DomainSettings({ initial }: { initial: DomainState }) {
                 <li key={f.host} className="flex min-w-0 items-center gap-2">
                   <a
                     className="link truncate font-mono text-xs"
-                    href={`${mode === "off" ? "http" : "https"}://${f.host}/`}
+                    href={`${liveMode === "off" ? "http" : "https"}://${f.host}/`}
                   >
                     {f.host}
                   </a>

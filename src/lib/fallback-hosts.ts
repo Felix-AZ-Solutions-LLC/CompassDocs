@@ -12,7 +12,13 @@
 //     domain (remembered in the settings table, at most five, newest first),
 //     when it is a DNS name and not the new domain itself.
 //
-// Each is its own site with the TLS mode's certificate plus plain HTTP. The
+// Each is its own site (lib/caddy buildCaddyfile): over HTTPS with a
+// certificate, plain HTTP redirecting to it, the plain-HTTP app only when TLS
+// is off. A name from the environment gets a public certificate in the
+// automatic and own-certificate modes. A remembered name gets one only when
+// it passed the reachability check (lib/domain-check) when it was
+// remembered; otherwise the internal CA, so a split-horizon intranet name
+// (*.corp) never sends Caddy into endless Let's Encrypt attempts. The
 // canonical address for links stays the custom domain (lib/workspace-origin):
 // nothing here is ever used to build a link.
 //
@@ -29,6 +35,14 @@ export interface FallbackHost {
   host: string;
   /** "env": COMPASSDOCS_FALLBACK_HOSTS (changed only on the server); "remembered": the address an admin saved a domain from. */
   source: "env" | "remembered";
+  /** May Caddy ask Let's Encrypt for it? Env names: yes. Remembered: only if it passed the check. */
+  acme: boolean;
+}
+
+/** A remembered name and whether it passed the reachability check when remembered. */
+export interface RememberedFallback {
+  host: string;
+  acme: boolean;
 }
 
 /**
@@ -80,16 +94,17 @@ export function envFallbackHosts(raw: string | undefined = process.env.COMPASSDO
 const warned = new Set<string>();
 
 /** The remembered hostnames, newest first. */
-export async function rememberedFallbackHosts(): Promise<string[]> {
+export async function rememberedFallbackHosts(): Promise<RememberedFallback[]> {
   const raw = await getSetting(REMEMBERED_KEY);
   if (!raw) return [];
   try {
     const list = JSON.parse(raw);
     if (!Array.isArray(list)) return [];
-    const out: string[] = [];
+    const out: RememberedFallback[] = [];
     for (const v of list) {
-      const h = validFallbackHost(v);
-      if (h && !out.includes(h)) out.push(h);
+      // A bare string is a name remembered before it carried the flag: no public certificate.
+      const h = validFallbackHost(typeof v === "string" ? v : v?.host);
+      if (h && !out.some((x) => x.host === h)) out.push({ host: h, acme: typeof v === "object" && v?.acme === true });
     }
     return out.slice(0, MAX_REMEMBERED_FALLBACKS);
   } catch {
@@ -97,17 +112,30 @@ export async function rememberedFallbackHosts(): Promise<string[]> {
   }
 }
 
+/** True when `host` would be newly remembered (a valid name, not from the environment, not already first). */
+export async function wouldRememberFallbackHost(host: string): Promise<boolean> {
+  const h = validFallbackHost(host);
+  if (!h || envFallbackHosts().includes(h)) return false;
+  const list = await rememberedFallbackHosts();
+  return list[0]?.host !== h;
+}
+
 /**
  * Remember `host` (already validated) as a fallback, newest first, at most
- * MAX_REMEMBERED_FALLBACKS. Returns true when the list changed.
+ * MAX_REMEMBERED_FALLBACKS, with whether it passed the reachability check
+ * (`acme`). Returns true when the list changed.
+ *
+ * Read-modify-write without a lock (review L4, left as is): two admins
+ * saving a domain in the same instant can each drop the other's name. The
+ * name the request came from is remembered again on the next save.
  */
-export async function rememberFallbackHost(host: string): Promise<boolean> {
+export async function rememberFallbackHost(host: string, acme = false): Promise<boolean> {
   const h = validFallbackHost(host);
   if (!h) return false;
   if (envFallbackHosts().includes(h)) return false; // already a fallback, from the server
   const list = await rememberedFallbackHosts();
-  if (list[0] === h) return false;
-  const next = [h, ...list.filter((x) => x !== h)].slice(0, MAX_REMEMBERED_FALLBACKS);
+  if (list[0]?.host === h && list[0].acme === acme) return false;
+  const next = [{ host: h, acme }, ...list.filter((x) => x.host !== h)].slice(0, MAX_REMEMBERED_FALLBACKS);
   await setSetting(REMEMBERED_KEY, JSON.stringify(next));
   return true;
 }
@@ -117,8 +145,8 @@ export async function forgetFallbackHost(host: string): Promise<boolean> {
   const h = validFallbackHost(host);
   if (!h) return false;
   const list = await rememberedFallbackHosts();
-  if (!list.includes(h)) return false;
-  await setSetting(REMEMBERED_KEY, JSON.stringify(list.filter((x) => x !== h)));
+  if (!list.some((x) => x.host === h)) return false;
+  await setSetting(REMEMBERED_KEY, JSON.stringify(list.filter((x) => x.host !== h)));
   return true;
 }
 
@@ -126,23 +154,25 @@ export async function forgetFallbackHost(host: string): Promise<boolean> {
  * Every fallback address: the environment's first, then the remembered
  * ones, never `exclude` (the custom domain itself) and never twice.
  */
-export function mergeFallbackHosts(env: string[], remembered: string[], exclude: string[] = []): FallbackHost[] {
+export function mergeFallbackHosts(env: string[], remembered: RememberedFallback[], exclude: string[] = []): FallbackHost[] {
   const skip = new Set(exclude.filter(Boolean).map((x) => x.toLowerCase()));
   const out: FallbackHost[] = [];
   const seen = new Set<string>();
-  for (const [list, source] of [[env, "env"], [remembered, "remembered"]] as const) {
-    for (const host of list) {
-      if (skip.has(host) || seen.has(host)) continue;
-      seen.add(host);
-      out.push({ host, source });
-    }
+  const all: FallbackHost[] = [
+    ...env.map((host) => ({ host, source: "env" as const, acme: true })),
+    ...remembered.map((r) => ({ host: r.host, source: "remembered" as const, acme: r.acme })),
+  ];
+  for (const f of all) {
+    if (skip.has(f.host) || seen.has(f.host)) continue;
+    seen.add(f.host);
+    out.push(f);
   }
   return out;
 }
 
 /** The fallback addresses for a config serving `domain`. */
 export async function fallbackHosts(domain: string): Promise<FallbackHost[]> {
-  let remembered: string[] = [];
+  let remembered: RememberedFallback[] = [];
   try {
     remembered = await rememberedFallbackHosts();
   } catch {

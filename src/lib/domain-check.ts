@@ -93,10 +93,25 @@ export function checkTokenValid(token: string, now = Date.now()): boolean {
   }
 }
 
-/** What the well-known route answers for a valid token, and what the check expects back. */
-export function checkProof(token: string): string {
-  return mac(`proof|${token}`);
+/**
+ * What the well-known route answers for a valid token asked for on `host`,
+ * and what the check expects back. Bound to the host (1.20.29 review L2):
+ * a proof fetched for one name can't stand in for another.
+ */
+export function checkProof(token: string, host: string): string {
+  return mac(`proof|${token}|${normalHost(host)}`);
 }
+
+/** A Host header or URL host as the proof binds it: lowercase, no port, no trailing dot. */
+export function normalHost(host: string): string {
+  let h = (host || "").trim().toLowerCase();
+  if (h.startsWith("[")) h = h.slice(0, h.indexOf("]") + 1);
+  else h = h.replace(/:\d+$/, "");
+  return h.replace(/\.$/, "");
+}
+
+/** The route's answer to a token it didn't issue or that expired: a marker only this route sends. */
+export const UNKNOWN_TOKEN_HEADER = "x-compassdocs-domain-check";
 
 // --- Cloudflare's proxy ranges ---------------------------------------------------
 // https://www.cloudflare.com/ips/ (stable for years). Only used to word the
@@ -172,7 +187,13 @@ export type DomainCheckCode =
   | "timeout"
   | "refused"
   | "unreachable"
-  | "wrong_server";
+  | "wrong_server"
+  // Set by lib/domain-flow rather than the check itself:
+  | "internal_error" // the check couldn't run (no usable master key)
+  | "proxy_error" // the check passed, the proxy refused the new config
+  | "https_port" // after the switch, port 443 didn't answer
+  | "https_certificate" // after the switch, no valid certificate in time
+  | "https_wrong_server"; // after the switch, something else answered on 443
 
 export interface DomainCheckResult {
   ok: boolean;
@@ -184,8 +205,6 @@ export interface DomainCheckResult {
   cname: string | null;
   /** The address that answered with the proof, or the one(s) that did not. */
   tried: string[];
-  /** The HTTP status something other than this server answered with (wrong_server). */
-  http_status: number | null;
   /** The plain-language reason (or "reaches this server"), for the admin. */
   message: string;
   checked_at: string;
@@ -203,7 +222,7 @@ export interface DomainCheckDeps {
   /** GET http://<host><path>, connected to `address`, never following a redirect. Throws on a network failure. */
   get(input: { host: string; address: string; path: string; timeoutMs: number }): Promise<ChallengeResponse>;
   issueToken(): string;
-  proofFor(token: string): string;
+  proofFor(token: string, host: string): string;
   now(): number;
 }
 
@@ -226,7 +245,7 @@ function listAddrs(a: string[]): string {
 
 /** The admin-facing sentence for a result. */
 export function checkMessage(
-  r: Pick<DomainCheckResult, "code" | "domain" | "cname" | "tried" | "addresses" | "http_status"> & { dns_code?: string },
+  r: Pick<DomainCheckResult, "code" | "domain" | "cname" | "tried" | "addresses"> & { dns_code?: string; detail?: string },
   mode: TlsMode
 ): string {
   const d = r.domain;
@@ -253,13 +272,25 @@ export function checkMessage(
         ? `${d} is behind Cloudflare's proxy (orange cloud) and the check didn't come back through it: check how Cloudflare reaches this server for this name.`
         : `Cloudflare's proxy is on for ${d} (orange cloud): turn it off until the certificate is issued.`;
     case "timeout":
-      return `Couldn't reach ${d} on port 80 (timed out at ${at}): check that ports 80 and 443 are open.`;
+      return `Couldn't reach ${d} on port 80 (timed out at ${at}): check that ports 80 and 443 are open. If they are and this server can't reach its own public address (a router or firewall without NAT hairpinning), use Use it anyway.`;
     case "refused":
       return `Couldn't reach ${d} on port 80 (connection refused at ${at}): check that ports 80 and 443 are open and that ${at} is this server.`;
     case "unreachable":
       return `Couldn't reach ${d} on port 80 (no route to ${at}): check that ${at} is this server's public address.`;
     case "wrong_server":
       return `${d} points at ${at}; this server didn't answer there.`;
+    case "internal_error":
+      return `Couldn't run the check for ${d}: ${r.detail || "the workspace's master key isn't readable"}.`;
+    case "proxy_error":
+      return `${d} reaches this server, but the proxy didn't take the new configuration${r.detail ? `: ${r.detail}` : ""}.`;
+    case "https_port":
+      return `Port 443 didn't answer for ${d} at ${at} after the switch, so CompassDocs went back to the previous address: check that port 443 is open.`;
+    case "https_certificate":
+      return mode === "auto"
+        ? `Let's Encrypt couldn't issue a certificate for ${d} within 2 minutes, so CompassDocs went back to the previous address. Caddy's log says why: docker compose logs caddy.`
+        : `${d} didn't answer over HTTPS within 2 minutes of the switch${r.detail ? ` (${r.detail})` : ""}, so CompassDocs went back to the previous address.`;
+    case "https_wrong_server":
+      return `${d} answered on port 443 at ${at}, but not from this server, so CompassDocs went back to the previous address.`;
   }
 }
 
@@ -275,9 +306,8 @@ const NO_DATA = new Set(["ENODATA"]);
  * Never throws: every failure is a result with a reason.
  */
 export async function checkDomain(domain: string, mode: TlsMode, deps: DomainCheckDeps = defaultDeps()): Promise<DomainCheckResult> {
-  const started = deps.now();
-  const base = { domain, cname: null as string | null, addresses: [] as string[], tried: [] as string[], http_status: null as number | null };
-  const done = (code: DomainCheckCode, extra: Partial<typeof base> & { dns_code?: string } = {}): DomainCheckResult => {
+  const base = { domain, cname: null as string | null, addresses: [] as string[], tried: [] as string[] };
+  const done = (code: DomainCheckCode, extra: Partial<typeof base> & { dns_code?: string; detail?: string } = {}): DomainCheckResult => {
     const r = { ...base, ...extra, code };
     return {
       ok: code === "ok",
@@ -286,7 +316,6 @@ export async function checkDomain(domain: string, mode: TlsMode, deps: DomainChe
       addresses: r.addresses,
       cname: r.cname,
       tried: r.tried,
-      http_status: r.http_status,
       message: checkMessage(r, mode),
       checked_at: new Date(deps.now()).toISOString(),
     };
@@ -319,9 +348,16 @@ export async function checkDomain(domain: string, mode: TlsMode, deps: DomainChe
   candidates = candidates.slice(0, MAX_ADDRESSES_TRIED);
   const cloudflare = candidates.every(isCloudflareAddress);
 
-  // 3. Prove it is this server.
-  const token = deps.issueToken();
-  const expected = deps.proofFor(token);
+  // 3. Prove it is this server. The time budget starts here, after DNS.
+  const started = deps.now();
+  let token: string;
+  let expected: string;
+  try {
+    token = deps.issueToken();
+    expected = deps.proofFor(token, domain);
+  } catch (e) {
+    return done("internal_error", { detail: e instanceof Error ? e.message : String(e) });
+  }
   const tried: string[] = [];
   let answeredStatus: number | null = null;
   let firstFailure: "timeout" | "refused" | "unreachable" | null = null;
@@ -342,23 +378,34 @@ export async function checkDomain(domain: string, mode: TlsMode, deps: DomainChe
       firstFailure ??= classifyFetchError(e);
     }
   }
-  if (cloudflare) return done("cloudflare", { tried, http_status: answeredStatus });
-  if (answeredStatus !== null) return done("wrong_server", { tried, http_status: answeredStatus });
+  if (cloudflare) return done("cloudflare", { tried });
+  if (answeredStatus !== null) return done("wrong_server", { tried });
   return done(firstFailure ?? "unreachable", { tried });
 }
 
 // --- The real network -------------------------------------------------------------
 
 /** GET over a connection pinned to `address`, no proxy, no redirect, 512-byte body cap. */
-async function pinnedGet(input: { host: string; address: string; path: string; timeoutMs: number }): Promise<ChallengeResponse> {
+async function pinnedGet(input: {
+  host: string;
+  address: string;
+  path: string;
+  timeoutMs: number;
+  /** https on 443 instead of http on 80; `verifyCert` false accepts a self-signed (internal CA) certificate. */
+  https?: { verifyCert: boolean };
+}): Promise<ChallengeResponse> {
   const family = isIP(input.address);
   const agent = new Agent({
-    connect: { lookup: pinnedLookup(input.address, family) as never, timeout: input.timeoutMs },
+    connect: {
+      lookup: pinnedLookup(input.address, family) as never,
+      timeout: input.timeoutMs,
+      ...(input.https ? { rejectUnauthorized: input.https.verifyCert, servername: input.host } : {}),
+    },
     keepAliveTimeout: 1_000,
     keepAliveMaxTimeout: 1_000,
   });
   try {
-    const res = (await undiciFetch(`http://${input.host}${input.path}`, {
+    const res = (await undiciFetch(`${input.https ? "https" : "http"}://${input.host}${input.path}`, {
       method: "GET",
       redirect: "manual",
       dispatcher: agent,
@@ -369,6 +416,65 @@ async function pinnedGet(input: { host: string; address: string; path: string; t
     return { status: res.status, body: body ? body.toString("utf8") : "" };
   } finally {
     void agent.close().catch(() => {});
+  }
+}
+
+// --- HTTPS after the switch (1.20.29 review M3) ------------------------------------
+//
+// The check proves port 80. Once the proxy serves the new domain, lib/
+// domain-flow asks it over HTTPS at the address that was checked, every ten
+// seconds for up to two minutes while Caddy obtains the certificate, and
+// goes back to the previous address if it never answers.
+
+export type HttpsVerifyCode = "ok" | "https_port" | "https_certificate" | "https_wrong_server" | "internal_error";
+
+export interface HttpsVerifyResult {
+  ok: boolean;
+  code: HttpsVerifyCode;
+  /** The TLS or network error, for the message (never the response body). */
+  detail?: string;
+}
+
+export interface HttpsVerifyDeps {
+  get: DomainCheckDeps["get"];
+  issueToken(): string;
+  proofFor(token: string, host: string): string;
+}
+
+/**
+ * One HTTPS attempt on `domain`, connected to `address`. Let's Encrypt
+ * certificates are verified; self-signed and pasted ones are not (the proof
+ * in the body still has to come back).
+ */
+export async function verifyHttpsOnce(
+  domain: string,
+  mode: TlsMode,
+  address: string,
+  deps: HttpsVerifyDeps = { get: pinnedGet, issueToken: () => issueCheckToken(), proofFor: checkProof }
+): Promise<HttpsVerifyResult> {
+  let token: string;
+  try {
+    token = deps.issueToken();
+  } catch (e) {
+    return { ok: false, code: "internal_error", detail: e instanceof Error ? e.message : String(e) };
+  }
+  try {
+    const res = await (deps.get as typeof pinnedGet)({
+      host: domain,
+      address,
+      path: `${DOMAIN_CHECK_PATH}${token}`,
+      timeoutMs: CHECK_TIMEOUT_MS,
+      https: { verifyCert: mode === "auto" },
+    });
+    if (res.status === 200 && safeEqual(res.body.trim(), deps.proofFor(token, domain))) return { ok: true, code: "ok" };
+    return { ok: false, code: "https_wrong_server" };
+  } catch (e) {
+    const kind = classifyFetchError(e);
+    const err = e as { cause?: { code?: string; message?: string }; message?: string };
+    if (kind === "timeout" || kind === "refused") return { ok: false, code: "https_port", detail: kind };
+    const code = err?.cause?.code;
+    if (code === "EHOSTUNREACH" || code === "ENETUNREACH") return { ok: false, code: "https_port", detail: code };
+    return { ok: false, code: "https_certificate", detail: code || err?.cause?.message || err?.message };
   }
 }
 

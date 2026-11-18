@@ -12,6 +12,8 @@ import assert from "node:assert/strict";
 import {
   checkDomain,
   checkProof,
+  verifyHttpsOnce,
+  UNKNOWN_TOKEN_HEADER,
   checkTokenValid,
   classifyFetchError,
   issueCheckToken,
@@ -22,6 +24,7 @@ import {
   type DomainCheckDeps,
 } from "../src/lib/domain-check";
 import { GET as wellKnown } from "../src/app/.well-known/compassdocs-domain-check/[token]/route";
+import { addressBlocked } from "../src/lib/safe-fetch";
 
 before(() => {
   // A fixed master key for the token and proof (no key file is written).
@@ -42,11 +45,13 @@ function fake(opts: {
   a?: string[] | string; // an error code string = the lookup fails with it
   aaaa?: string[] | string;
   cname?: string[] | string;
-  answer?: (address: string, path: string) => Promise<ChallengeResponse>;
+  answer?: (address: string, path: string, host: string) => Promise<ChallengeResponse>;
   clock?: () => number;
+  dnsDelay?: () => void;
 }): Fake {
   const gets: Fake["gets"] = [];
   const lookup = (v: string[] | string | undefined) => async () => {
+    opts.dnsDelay?.();
     if (v === undefined) throw dnsError("ENODATA");
     if (typeof v === "string") throw dnsError(v);
     return v;
@@ -58,7 +63,7 @@ function fake(opts: {
     get: async ({ host, address, path }) => {
       gets.push({ host, address, path });
       if (!opts.answer) throw new Error("no answer configured");
-      return opts.answer(address, path);
+      return opts.answer(address, path, host);
     },
     issueToken: () => issueCheckToken(),
     proofFor: checkProof,
@@ -67,10 +72,10 @@ function fake(opts: {
   return { deps, gets };
 }
 
-/** This server: the real well-known route answering the request. */
-async function thisServer(_address: string, path: string): Promise<ChallengeResponse> {
+/** This server: the real well-known route answering the request, for the Host it was asked on. */
+async function thisServer(_address: string, path: string, host = "x"): Promise<ChallengeResponse> {
   const token = path.slice(DOMAIN_CHECK_PATH.length);
-  const res = await wellKnown(new Request(`http://x${path}`), { params: Promise.resolve({ token }) });
+  const res = await wellKnown(new Request(`http://${host}${path}`), { params: Promise.resolve({ token }) });
   return { status: res.status, body: await res.text() };
 }
 
@@ -112,7 +117,7 @@ describe("domain check: is it this server?", () => {
     const r = await checkDomain("docs.example.com", "auto", f.deps);
     assert.equal(r.code, "wrong_server");
     assert.equal(r.message, "docs.example.com points at 1.2.3.4; this server didn't answer there.");
-    assert.equal(r.http_status, 404);
+    assert.equal("http_status" in r, false, "no HTTP status in the stored result (review L1)");
     assert.deepEqual(r.addresses, ["1.2.3.4"]);
     // The request went to the address DNS gave, for the name, on the check path.
     assert.equal(f.gets[0].address, "1.2.3.4");
@@ -129,7 +134,8 @@ describe("domain check: is it this server?", () => {
     });
     const r = await checkDomain("docs.example.com", "auto", f.deps);
     assert.equal(r.code, "timeout");
-    assert.equal(r.message, "Couldn't reach docs.example.com on port 80 (timed out at 20.30.40.50): check that ports 80 and 443 are open.");
+    assert.match(r.message, /^Couldn't reach docs\.example\.com on port 80 \(timed out at 20\.30\.40\.50\): check that ports 80 and 443 are open\./);
+    assert.match(r.message, /NAT hairpinning\), use Use it anyway/);
   });
 
   test("a refused connection", async () => {
@@ -159,7 +165,7 @@ describe("domain check: is it this server?", () => {
     const other = await checkDomain(
       "docs.example.com",
       "auto",
-      fake({ a: ["1.2.3.4"], answer: async (_a, path) => ({ status: 200, body: `${checkProof(path.slice(DOMAIN_CHECK_PATH.length))}x` }) }).deps
+      fake({ a: ["1.2.3.4"], answer: async (_a, path, host) => ({ status: 200, body: `${checkProof(path.slice(DOMAIN_CHECK_PATH.length), host)}x` }) }).deps
     );
     assert.equal(other.ok, false);
   });
@@ -178,7 +184,7 @@ describe("domain check: is it this server?", () => {
     const f = fake({
       a: ["1.2.3.4"],
       aaaa: ["2001:db8::5"],
-      answer: async (address, path) => (address === "1.2.3.4" ? { status: 502, body: "" } : thisServer(address, path)),
+      answer: async (address, path, host) => (address === "1.2.3.4" ? { status: 502, body: "" } : thisServer(address, path, host)),
     });
     const r = await checkDomain("docs.example.com", "auto", f.deps);
     assert.equal(r.ok, true);
@@ -259,15 +265,49 @@ describe("domain check: the token and the route", () => {
     assert.equal(checkTokenValid("", now), false);
   });
 
-  test("the route answers the proof for a valid token and a plain 404 otherwise, never cached", async () => {
+  test("the route answers the proof for a valid token and its Host, a marked 404 otherwise, never cached", async () => {
     const t = issueCheckToken();
-    const ok = await wellKnown(new Request("http://x"), { params: Promise.resolve({ token: t }) });
+    const ok = await wellKnown(new Request("http://docs.example.com:80/x"), { params: Promise.resolve({ token: t }) });
     assert.equal(ok.status, 200);
     assert.equal(ok.headers.get("cache-control"), "no-store");
-    assert.equal(await ok.text(), checkProof(t));
-    assert.notEqual(checkProof(t), t);
+    assert.equal(await ok.text(), checkProof(t, "docs.example.com"));
+    assert.notEqual(checkProof(t, "docs.example.com"), t);
     const bad = await wellKnown(new Request("http://x"), { params: Promise.resolve({ token: "nope" }) });
     assert.equal(bad.status, 404);
+    assert.equal(bad.headers.get(UNKNOWN_TOKEN_HEADER), "unknown-token");
+  });
+
+  test("the proof is bound to the host (review L2): one fetched for another name doesn't pass", async () => {
+    const t = issueCheckToken();
+    assert.notEqual(checkProof(t, "a.example.com"), checkProof(t, "b.example.com"));
+    assert.equal(checkProof(t, "A.Example.com:80"), checkProof(t, "a.example.com"));
+    // This install, but answering as if asked for another name (a proxy rewriting Host).
+    const r = await checkDomain(
+      "docs.example.com",
+      "auto",
+      fake({ a: ["1.2.3.4"], answer: (a, path) => thisServer(a, path, "other.example.com") }).deps
+    );
+    assert.equal(r.ok, false);
+    assert.equal(r.code, "wrong_server");
+  });
+
+  test("no usable master key: a failed result with a reason, never a throw (review L7)", async () => {
+    const f = fake({ a: ["1.2.3.4"], answer: thisServer });
+    f.deps.issueToken = () => {
+      throw new Error("Key file /uploads/.secret.key exists but is not readable");
+    };
+    const r = await checkDomain("docs.example.com", "auto", f.deps);
+    assert.equal(r.code, "internal_error");
+    assert.match(r.message, /Couldn't run the check for docs\.example\.com: Key file/);
+    assert.equal(f.gets.length, 0);
+  });
+
+  test("the HTTP time budget starts after DNS (review L6)", async () => {
+    let t = 0;
+    const f = fake({ a: ["1.2.3.4"], clock: () => t, dnsDelay: () => (t += 5_000), answer: thisServer });
+    const r = await checkDomain("docs.example.com", "auto", f.deps);
+    assert.equal(r.ok, true, "a slow DNS answer leaves the full 8 s for the request");
+    assert.equal(f.gets.length, 1);
   });
 
   test("fetch failures map to timeout, refused or unreachable", () => {
@@ -276,5 +316,61 @@ describe("domain check: the token and the route", () => {
     assert.equal(classifyFetchError({ cause: { code: "ECONNREFUSED" } }), "refused");
     assert.equal(classifyFetchError({ cause: { code: "EHOSTUNREACH" } }), "unreachable");
     assert.equal(classifyFetchError(null), "unreachable");
+  });
+});
+
+describe("HTTPS after the switch (review M3)", () => {
+  const deps = (get: (input: { host: string; address: string; path: string; https?: unknown }) => Promise<ChallengeResponse>) => ({
+    get: get as never,
+    issueToken: () => issueCheckToken(),
+    proofFor: checkProof,
+  });
+
+  test("this server over HTTPS, with Let's Encrypt certificates verified", async () => {
+    let seen: { https?: unknown } | null = null;
+    const r = await verifyHttpsOnce(
+      "docs.example.com",
+      "auto",
+      "20.30.40.50",
+      deps(async (input) => {
+        seen = input;
+        return thisServer(input.address, input.path, input.host);
+      })
+    );
+    assert.equal(r.ok, true);
+    assert.deepEqual(seen!.https, { verifyCert: true });
+    // Self-signed in internal mode: the certificate isn't verified, the proof still is.
+    let internal: { https?: unknown } | null = null;
+    const ok = await verifyHttpsOnce("docs.example.com", "internal", "10.0.0.5", deps(async (i) => ((internal = i), thisServer(i.address, i.path, i.host))));
+    assert.equal(ok.ok, true);
+    assert.deepEqual(internal!.https, { verifyCert: false });
+  });
+
+  test("port 443 closed, no certificate, or someone else", async () => {
+    const refused = await verifyHttpsOnce("docs.example.com", "auto", "1.2.3.4", deps(async () => {
+      throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+    }));
+    assert.equal(refused.code, "https_port");
+    const tls = await verifyHttpsOnce("docs.example.com", "auto", "1.2.3.4", deps(async () => {
+      throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR" } });
+    }));
+    assert.equal(tls.code, "https_certificate");
+    assert.equal(tls.detail, "ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR");
+    const other = await verifyHttpsOnce("docs.example.com", "auto", "1.2.3.4", deps(async () => ({ status: 200, body: "hello" })));
+    assert.equal(other.code, "https_wrong_server");
+  });
+});
+
+describe("IPv4 carried inside IPv6 (review L1)", () => {
+  test("NAT64 and 6to4 forms are judged as the IPv4 address they carry", () => {
+    assert.equal(addressBlocked("64:ff9b::7f00:1", false), true); // 127.0.0.1
+    assert.equal(addressBlocked("64:ff9b::169.254.169.254", false), true); // metadata
+    assert.equal(addressBlocked("64:ff9b::a00:5", true), true); // 10.0.0.5, private
+    assert.equal(addressBlocked("64:ff9b::a00:5", false), false);
+    assert.equal(addressBlocked("64:ff9b::808:808", true), false); // 8.8.8.8
+    assert.equal(addressBlocked("2002:7f00:1::1", false), true); // 6to4 of 127.0.0.1
+    assert.equal(addressBlocked("2002:c0a8:101::", true), true); // 192.168.1.1
+    assert.equal(addressBlocked("2002:808:808::1", true), false);
+    assert.equal(addressBlocked("2001:db8::1", true), false);
   });
 });

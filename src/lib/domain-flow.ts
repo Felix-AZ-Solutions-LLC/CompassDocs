@@ -4,19 +4,31 @@
 // saveDomainSettings. A new domain (or a new TLS mode for it) is checked
 // first (lib/domain-check) whenever the bundled proxy is managed:
 //
-//   - it passes: saved and pushed to the proxy, as before (domain.applied);
-//   - it fails: NOT pushed. The proxy keeps serving the current address,
-//     and the request waits as the pending domain (settings key
-//     `custom_domain_pending`, JSON) with the reason. custom_domain keeps
-//     the address that works, so links (lib/workspace-origin) never point
-//     at a name that does not answer yet (domain.check_failed);
-//   - "Use it anyway" (force): saved and pushed without the check, for a
-//     setup the check cannot see (a proxy in front, split DNS) (domain.forced).
+//   - it fails: NOT pushed. The proxy keeps serving the current address and
+//     the request waits as the pending domain (settings key
+//     `custom_domain_pending`, JSON, phase "waiting") with the reason.
+//     custom_domain keeps the address that works, so links (lib/workspace-
+//     origin) never point at a name that doesn't answer (domain.check_failed);
+//   - it passes: the proxy is switched FIRST, to a transitional config that
+//     serves the new domain and still serves the app on plain HTTP for any
+//     other name (lib/caddy). A refused push changes nothing and the request
+//     keeps waiting with the proxy's error. With TLS on, the row moves to
+//     phase "verifying": the new domain is asked over HTTPS, at the address
+//     the check proved, every ten seconds for two minutes while Caddy gets
+//     its certificate (finishVerification). Only when that answers are the
+//     settings switched (custom_domain, a certificate pasted with the
+//     request), the final config pushed (plain HTTP on other names now
+//     redirects to https://<domain>) and the switch audited (domain.applied).
+//     If it never answers, the previous config is pushed back and the
+//     request waits again with the reason (domain.rolled_back), its
+//     automatic re-checks stopped until Check again;
+//   - "Use it anyway" (force): saved and pushed without the check or the
+//     HTTPS verification, for a setup the check can't see (domain.forced).
 //
-// A pending domain is checked again in the background every five minutes
+// A waiting domain is checked again in the background every five minutes
 // for 24 hours (recheckPendingDomain, from the minute tick in
 // instrumentation.ts), and at once with "Check again" (which also restarts
-// the 24 hours). When it passes it is applied and every administrator, and
+// the 24 hours). When one of those goes live, every administrator, and
 // whoever asked, gets a bell notice. Each step is claimed with a
 // compare-and-swap on the settings row, so two instances never check or
 // apply the same request twice, and a request replaced while its check ran
@@ -24,27 +36,54 @@
 //
 // Saving also remembers the hostname the admin was browsing on as a
 // fallback address (lib/fallback-hosts) when it is a DNS name other than
-// the new domain.
+// the new domain; it gets a public certificate only if it passes the same
+// reachability check.
 //
 // Server-only.
 
 import "server-only";
 import { dbReady, pool } from "./db";
 import { getAppSettings, updateAppSettings } from "./settings-store";
-import { normalizeDomain, TLS_MODES, type TlsMode } from "./settings";
-import { applyProxyConfig, hasCustomCert, proxyManaged, proxyStatus, type ApplyResult } from "./caddy";
-import { checkDomain, type DomainCheckResult } from "./domain-check";
+import { normalizeDomain, TLS_MODES, type SecureCookieMode, type TlsMode } from "./settings";
+import {
+  applyProxyConfig,
+  clearPendingCert,
+  hasCustomCert,
+  promotePendingCert,
+  proxyManaged,
+  proxyStatus,
+  storeCustomCert,
+  storePendingCert,
+  PENDING_KEY,
+  type ApplyResult,
+  type CaddyfileOptions,
+  type ProxyTarget,
+} from "./caddy";
+import { checkDomain, checkMessage, verifyHttpsOnce, type DomainCheckResult, type HttpsVerifyResult } from "./domain-check";
 import { audit, type AuditActor } from "./audit";
-import { fallbackHostFromHostHeader, fallbackHosts, rememberFallbackHost, type FallbackHost } from "./fallback-hosts";
+import {
+  fallbackHostFromHostHeader,
+  fallbackHosts,
+  rememberFallbackHost,
+  wouldRememberFallbackHost,
+  type FallbackHost,
+} from "./fallback-hosts";
 
-export const PENDING_KEY = "custom_domain_pending";
+export { PENDING_KEY };
 export const RECHECK_INTERVAL_MS = 5 * 60_000;
 export const RECHECK_WINDOW_MS = 24 * 60 * 60_000;
+/** How long HTTPS on a switched domain may take to answer (Caddy getting its certificate). */
+export const VERIFY_WINDOW_MS = 2 * 60_000;
+export const VERIFY_POLL_MS = 10_000;
+
+type SwitchOrigin = "settings" | "setup" | "background" | "check_again";
 
 export interface PendingDomain {
   domain: string;
   tls_mode: TlsMode;
   tls_email: string;
+  /** A certificate pasted with the request waits beside it (lib/caddy storePendingCert). */
+  has_cert?: boolean;
   requested_at: string;
   requested_by: { id: number | null; name: string };
   /** Background re-checks run until then; Check again restarts the window. */
@@ -52,14 +91,23 @@ export interface PendingDomain {
   next_check_at: string;
   attempts: number;
   last_check: DomainCheckResult;
+  /** "waiting" for its check (absent on rows written before the phase existed), or "verifying" HTTPS after the switch. */
+  phase?: "waiting" | "verifying";
+  verify?: { address: string; until: string; origin: SwitchOrigin };
 }
 
 export interface DomainFlowDeps {
   check: (domain: string, mode: TlsMode) => Promise<DomainCheckResult>;
-  apply: () => Promise<ApplyResult>;
+  /** Push a config: the saved settings (no target), or a target being verified. */
+  apply: (target?: ProxyTarget, opts?: CaddyfileOptions) => Promise<ApplyResult>;
+  /** One HTTPS attempt on a switched domain at the checked address. */
+  verifyHttps: (domain: string, mode: TlsMode, address: string) => Promise<HttpsVerifyResult>;
   managed: () => boolean;
   now: () => number;
-  /** The bell notice that a pending domain went live. */
+  sleep: (ms: number) => Promise<void>;
+  /** Run the HTTPS verification after the response returns (tests run it inline). */
+  schedule: (job: () => Promise<unknown>) => void;
+  /** The bell notice that a waiting domain went live. */
   notifyLive: (domain: string, requestedBy: number | null) => Promise<void>;
 }
 
@@ -79,9 +127,14 @@ async function notifyLiveDefault(domain: string, requestedBy: number | null): Pr
 
 const DEFAULT_DEPS: DomainFlowDeps = {
   check: (d, m) => checkDomain(d, m),
-  apply: applyProxyConfig,
+  apply: (t, o) => applyProxyConfig(t, o),
+  verifyHttps: (d, m, a) => verifyHttpsOnce(d, m, a),
   managed: proxyManaged,
   now: () => Date.now(),
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  schedule: (job) => {
+    void job().catch((e) => console.error("[domain] HTTPS verification error:", e));
+  },
   notifyLive: notifyLiveDefault,
 };
 
@@ -97,6 +150,7 @@ function parsePending(raw: string | undefined | null): PendingDomain | null {
     const p = JSON.parse(raw) as PendingDomain;
     if (!p || typeof p.domain !== "string" || !normalizeDomain(p.domain)) return null;
     if (!TLS_MODES.includes(p.tls_mode)) return null;
+    if (p.phase === "verifying" && !p.verify?.address) return null;
     return p;
   } catch {
     return null;
@@ -113,7 +167,7 @@ async function readPendingRaw(): Promise<{ raw: string; pending: PendingDomain }
   return raw && pending ? { raw, pending } : null;
 }
 
-/** The domain waiting for its check, or null. */
+/** The domain waiting for its check (or having its HTTPS verified), or null. */
 export async function getPendingDomain(): Promise<PendingDomain | null> {
   return (await readPendingRaw())?.pending ?? null;
 }
@@ -127,7 +181,7 @@ async function writePending(p: PendingDomain): Promise<string> {
   return raw;
 }
 
-/** Replace the row only if it still holds `expected`. True when it did. */
+/** Replace the row only if it still holds `expected`. The new text when it did. */
 async function swapPending(expected: string, next: PendingDomain): Promise<string | null> {
   const raw = JSON.stringify(next);
   const r = await pool().query("UPDATE settings SET value = $3 WHERE key = $1 AND value = $2", [PENDING_KEY, expected, raw]);
@@ -141,13 +195,185 @@ async function deletePending(expected?: string): Promise<boolean> {
   return !!r.rowCount;
 }
 
+/** A result for a failure the flow found after the check itself passed. */
+function laterFailure(p: PendingDomain, code: DomainCheckResult["code"], now: number, address: string | null, detail?: string): DomainCheckResult {
+  const tried = address ? [address] : p.last_check.tried;
+  const base = { code, domain: p.domain, cname: p.last_check.cname, addresses: p.last_check.addresses, tried };
+  return { ...base, ok: false, message: checkMessage({ ...base, detail }, p.tls_mode), checked_at: new Date(now).toISOString() };
+}
+
+// --- Switching -------------------------------------------------------------------------------
+
+interface SwitchResult {
+  status: "applied" | "verifying" | "pending" | "superseded";
+  applied: boolean;
+  proxyError?: string;
+  pending: PendingDomain | null;
+}
+
+/**
+ * The settings change itself, after HTTPS answered (or with TLS off): the
+ * domain triple, a certificate pasted with it, the final config, the audit
+ * row and, for a switch nobody was watching, the bell.
+ */
+async function commitSwitch(p: PendingDomain, origin: SwitchOrigin, d: DomainFlowDeps, actor: AuditActor, ip: string | null | undefined, https: boolean): Promise<ApplyResult> {
+  await updateAppSettings({ custom_domain: p.domain, tls_mode: p.tls_mode, tls_email: p.tls_email });
+  if (p.has_cert) await promotePendingCert();
+  const final = await d.apply();
+  await audit({
+    actor,
+    action: "domain.applied",
+    targetType: "domain",
+    targetLabel: p.domain,
+    details: {
+      domain: p.domain,
+      tls_mode: p.tls_mode,
+      addresses: p.last_check.addresses,
+      applied: final.ok,
+      https_verified: https,
+      via: origin,
+      attempts: p.attempts,
+      requested_by: p.requested_by.name,
+    },
+    ip: ip ?? null,
+  });
+  if (origin === "background" || origin === "check_again") {
+    try {
+      await d.notifyLive(p.domain, p.requested_by.id);
+    } catch (e) {
+      console.error("[domain] could not send the go-live notice:", e);
+    }
+  }
+  return final;
+}
+
+/**
+ * Switch the proxy to a request whose check passed. `expectedRaw`: the row
+ * as claimed (a re-check), so a request replaced meanwhile isn't applied;
+ * null for a fresh save, which owns the row.
+ */
+async function switchTo(
+  p: PendingDomain,
+  check: DomainCheckResult,
+  origin: SwitchOrigin,
+  d: DomainFlowDeps,
+  actor: AuditActor,
+  ip: string | null | undefined,
+  expectedRaw: string | null
+): Promise<SwitchResult> {
+  const now = d.now();
+  const target: ProxyTarget = { domain: p.domain, tls_mode: p.tls_mode, tls_email: p.tls_email, cert: p.has_cert ? "pending" : "live" };
+  const store = async (next: PendingDomain | null): Promise<boolean> => {
+    if (expectedRaw === null) {
+      if (next) await writePending(next);
+      else await deletePending();
+      return true;
+    }
+    return next ? !!(await swapPending(expectedRaw, next)) : await deletePending(expectedRaw);
+  };
+
+  // Push first; nothing is saved unless the proxy took it (review M4).
+  const res = await d.apply(target, p.tls_mode === "off" ? {} : { transitional: true });
+  if (!res.ok) {
+    const waiting: PendingDomain = { ...p, phase: "waiting", verify: undefined, last_check: laterFailure(p, "proxy_error", now, null, res.error) };
+    if (!(await store(waiting))) return { status: "superseded", applied: false, pending: await getPendingDomain() };
+    return { status: "pending", applied: false, proxyError: res.error, pending: waiting };
+  }
+
+  if (p.tls_mode === "off") {
+    // TLS is terminated elsewhere: nothing on 443 to verify.
+    if (!(await store(null))) {
+      await d.apply();
+      return { status: "superseded", applied: false, pending: await getPendingDomain() };
+    }
+    const final = await commitSwitch(p, origin, d, actor, ip, false);
+    return { status: "applied", applied: final.ok, proxyError: final.ok ? undefined : final.error, pending: null };
+  }
+
+  const verifying: PendingDomain = {
+    ...p,
+    phase: "verifying",
+    verify: { address: check.tried[0] ?? check.addresses[0], until: new Date(now + VERIFY_WINDOW_MS).toISOString(), origin },
+  };
+  if (!(await store(verifying))) {
+    await d.apply(); // whatever the row says now
+    return { status: "superseded", applied: false, pending: await getPendingDomain() };
+  }
+  d.schedule(() => finishVerification({ actor, ip }, d));
+  return { status: "verifying", applied: true, pending: verifying };
+}
+
+export interface VerifyOutcome {
+  status: "none" | "applied" | "rolled_back" | "superseded";
+  pending?: PendingDomain | null;
+}
+
+/**
+ * Ask the switched domain over HTTPS until it answers or its two minutes
+ * are up, then keep it (commit) or go back (roll back). Run after the
+ * response by switchTo, and by the minute tick for a verification whose
+ * process died (one attempt, past its deadline).
+ */
+export async function finishVerification(
+  opts: { actor?: AuditActor; ip?: string | null } = {},
+  deps?: Partial<DomainFlowDeps>
+): Promise<VerifyOutcome> {
+  const d = withDefaults(deps);
+  const row = await readPendingRaw();
+  if (!row || row.pending.phase !== "verifying" || !row.pending.verify) return { status: "none" };
+  const { raw, pending: p } = row;
+  const v = p.verify!;
+  let r: HttpsVerifyResult;
+  for (;;) {
+    r = await d.verifyHttps(p.domain, p.tls_mode, v.address);
+    if (r.ok || d.now() >= Date.parse(v.until)) break;
+    await d.sleep(VERIFY_POLL_MS);
+  }
+  const actor: AuditActor = v.origin === "background" ? { name: "system" } : opts.actor ?? { name: "system" };
+
+  if (r.ok) {
+    // Narrow window (review L4, left as is): an admin's save landing between
+    // this delete and the settings write below is overwritten by this switch.
+    if (!(await deletePending(raw))) return { status: "superseded", pending: await getPendingDomain() };
+    await commitSwitch(p, v.origin, d, actor, opts.ip, true);
+    return { status: "applied", pending: null };
+  }
+
+  const now = d.now();
+  const code = r.code === "internal_error" ? "https_certificate" : r.code;
+  const back: PendingDomain = {
+    ...p,
+    phase: "waiting",
+    verify: undefined,
+    last_check: laterFailure(p, code, now, v.address, r.detail),
+    next_check_at: new Date(now + RECHECK_INTERVAL_MS).toISOString(),
+    // Stop the automatic re-checks: each would switch, ask Let's Encrypt
+    // again and roll back, into its rate limits. Check again restarts them.
+    auto_until: new Date(now).toISOString(),
+  };
+  if (!(await swapPending(raw, back))) return { status: "superseded", pending: await getPendingDomain() };
+  await d.apply(); // the saved settings: the previous address
+  await audit({
+    actor,
+    action: "domain.rolled_back",
+    targetType: "domain",
+    targetLabel: p.domain,
+    details: { domain: p.domain, tls_mode: p.tls_mode, code, reason: back.last_check.message, via: v.origin },
+    ip: opts.ip ?? null,
+  });
+  return { status: "rolled_back", pending: back };
+}
+
 // --- Saving ---------------------------------------------------------------------------------
 
 export interface DomainSaveInput {
   /** The domain as entered (validated by the caller; normalised here). "" clears it. */
   domain: string;
   tls_mode?: TlsMode;
+  /** Validated by the caller (settings validTlsEmail). */
   tls_email?: string;
+  /** A certificate and key pasted with the save (validated by the caller). */
+  cert?: { cert: string; key: string };
   /** "Use it anyway": skip the check. */
   force?: boolean;
   actor: AuditActor;
@@ -158,8 +384,13 @@ export interface DomainSaveInput {
 }
 
 export interface DomainSaveOutcome {
-  /** applied: checked and switched; pending: the check failed, nothing switched; forced: switched without the check; saved: no check was needed. */
-  outcome: "applied" | "pending" | "forced" | "saved";
+  /**
+   * applied: checked and switched; verifying: checked, switched, HTTPS
+   * being verified (the settings follow when it answers); pending: not
+   * switched (the check failed, or the proxy refused); forced: switched
+   * without the check; saved: no check was needed.
+   */
+  outcome: "applied" | "verifying" | "pending" | "forced" | "saved";
   /** Whether the proxy took a new config. */
   applied: boolean;
   proxyError?: string;
@@ -170,8 +401,10 @@ export interface DomainSaveOutcome {
 }
 
 /**
- * Save the domain/TLS triple: checked, switched, forced or left pending.
- * The caller saved everything else (cookies, a pasted certificate) already.
+ * Save the domain/TLS triple: checked and switched, forced, left pending,
+ * or (nothing to switch) saved. The caller saved everything else (cookies)
+ * already; a pasted certificate comes in `cert` and is stored with the
+ * outcome: live when the switch is immediate, with the request otherwise.
  */
 export async function saveDomainSettings(input: DomainSaveInput, deps?: Partial<DomainFlowDeps>): Promise<DomainSaveOutcome> {
   const d = withDefaults(deps);
@@ -181,69 +414,113 @@ export async function saveDomainSettings(input: DomainSaveInput, deps?: Partial<
   const email = (input.tls_email ?? cur.tls_email).trim().slice(0, 254);
   const changing = domain !== cur.custom_domain || mode !== cur.tls_mode;
   const managed = d.managed();
+  const existing = await readPendingRaw();
+  const actor = input.actor;
+  const origin: SwitchOrigin = input.via;
 
-  // The way back in: the DNS name the admin is on now keeps working.
-  let remembered: string | null = null;
+  // The same waiting request saved again (the form shows it): that is
+  // Check again, without restarting its 24 hours or writing another
+  // check_failed row (review L5).
+  if (managed && domain && changing && !input.force && existing && existing.pending.domain === domain && existing.pending.tls_mode === mode) {
+    if (existing.pending.phase === "verifying") {
+      return { outcome: "verifying", applied: true, pending: existing.pending, remembered_fallback: null };
+    }
+    if (input.cert || existing.pending.tls_email !== email) {
+      if (input.cert) await storePendingCert(input.cert.cert, input.cert.key);
+      await swapPending(existing.raw, { ...existing.pending, tls_email: email, has_cert: existing.pending.has_cert || !!input.cert });
+    }
+    const r = await recheckPendingDomain({ manual: true, quiet: true, actor, ip: input.ip, origin }, d);
+    const outcome = r.status === "applied" ? "applied" : r.status === "verifying" ? "verifying" : "pending";
+    return { outcome, applied: !!r.applied, proxyError: r.proxyError, check: r.check, pending: r.pending ?? null, remembered_fallback: null };
+  }
+
+  // The way back in: the DNS name the admin is on now keeps working. It
+  // gets a public certificate only if it passes the reachability check.
+  let candidate: string | null = null;
   if (domain && changing) {
     const host = fallbackHostFromHostHeader(input.hostHeader);
-    if (host && host !== domain && (await rememberFallbackHost(host))) remembered = host;
+    if (host && host !== domain && (await wouldRememberFallbackHost(host))) candidate = host;
   }
-
-  const switchNow = async (): Promise<ApplyResult> => {
-    await updateAppSettings({ custom_domain: domain, tls_mode: mode, tls_email: email });
-    await deletePending();
-    return d.apply();
+  const candidateCheck = candidate && managed ? d.check(candidate, "auto").catch(() => null) : Promise.resolve(null);
+  const remember = async (): Promise<string | null> => {
+    if (!candidate) return null;
+    const c = await candidateCheck;
+    return (await rememberFallbackHost(candidate, !!c?.ok)) ? candidate : null;
   };
 
-  // Nothing to check: no proxy to switch, no domain, or the same domain and
-  // mode (a re-apply, a new email or certificate).
-  if (!managed || !domain || !changing) {
-    const applied = await switchNow();
-    return { outcome: "saved", applied: applied.ok, proxyError: applied.ok ? undefined : applied.error, pending: null, remembered_fallback: remembered };
+  // Nothing to check: no proxy to switch, no domain, the same domain and
+  // mode (a re-apply, a new email or certificate), or "Use it anyway".
+  if (!managed || !domain || !changing || input.force) {
+    if (input.cert) await storeCustomCert(input.cert.cert, input.cert.key);
+    await updateAppSettings({ custom_domain: domain, tls_mode: mode, tls_email: email });
+    if (existing) {
+      await deletePending(existing.raw);
+      await clearPendingCert();
+      // Dropped by a save for something else: say so in the log.
+      if (!(input.force && existing.pending.domain === domain)) {
+        await audit({
+          actor,
+          action: "domain.pending_discarded",
+          targetType: "domain",
+          targetLabel: existing.pending.domain,
+          details: { domain: existing.pending.domain, tls_mode: existing.pending.tls_mode, attempts: existing.pending.attempts, replaced_by: domain || null },
+          ip: input.ip ?? null,
+        });
+      }
+    }
+    const remembered = await remember();
+    const applied = await d.apply();
+    const forced = !!input.force && managed && !!domain && changing;
+    if (forced) {
+      await audit({
+        actor,
+        action: "domain.forced",
+        targetType: "domain",
+        targetLabel: domain,
+        details: { domain, tls_mode: mode, applied: applied.ok, via: input.via, previous: cur.custom_domain || null },
+        ip: input.ip ?? null,
+      });
+    }
+    return {
+      outcome: forced ? "forced" : "saved",
+      applied: applied.ok,
+      proxyError: applied.ok ? undefined : applied.error,
+      pending: null,
+      remembered_fallback: remembered,
+    };
   }
 
-  if (input.force) {
-    const applied = await switchNow();
-    await audit({
-      actor: input.actor,
-      action: "domain.forced",
-      targetType: "domain",
-      targetLabel: domain,
-      details: { domain, tls_mode: mode, applied: applied.ok, via: input.via, previous: cur.custom_domain || null },
-      ip: input.ip ?? null,
-    });
-    return { outcome: "forced", applied: applied.ok, proxyError: applied.ok ? undefined : applied.error, pending: null, remembered_fallback: remembered };
-  }
-
-  const check = await d.check(domain, mode);
-  if (check.ok) {
-    const applied = await switchNow();
-    await audit({
-      actor: input.actor,
-      action: "domain.applied",
-      targetType: "domain",
-      targetLabel: domain,
-      details: { domain, tls_mode: mode, addresses: check.addresses, applied: applied.ok, via: input.via, previous: cur.custom_domain || null },
-      ip: input.ip ?? null,
-    });
-    return { outcome: "applied", applied: applied.ok, proxyError: applied.ok ? undefined : applied.error, check, pending: null, remembered_fallback: remembered };
-  }
-
+  // A new request: its certificate waits with it.
+  if (input.cert) await storePendingCert(input.cert.cert, input.cert.key);
+  else await clearPendingCert();
+  const [check] = await Promise.all([d.check(domain, mode), candidateCheck]);
+  const remembered = await remember();
   const now = d.now();
   const pending: PendingDomain = {
     domain,
     tls_mode: mode,
     tls_email: email,
+    has_cert: !!input.cert,
     requested_at: new Date(now).toISOString(),
-    requested_by: { id: input.actor.id ?? null, name: input.actor.name ?? "system" },
+    requested_by: { id: actor.id ?? null, name: actor.name ?? "system" },
     auto_until: new Date(now + RECHECK_WINDOW_MS).toISOString(),
     next_check_at: new Date(now + RECHECK_INTERVAL_MS).toISOString(),
     attempts: 1,
     last_check: check,
+    phase: "waiting",
   };
+
+  if (check.ok) {
+    const r = await switchTo(pending, check, origin, d, actor, input.ip, null);
+    const outcome = r.status === "applied" ? "applied" : r.status === "verifying" ? "verifying" : "pending";
+    return { outcome, applied: r.applied, proxyError: r.proxyError, check, pending: r.pending, remembered_fallback: remembered };
+  }
+
   await writePending(pending);
+  // It replaced a switch being verified: back to the saved config.
+  if (existing?.pending.phase === "verifying") await d.apply();
   await audit({
-    actor: input.actor,
+    actor,
     action: "domain.check_failed",
     targetType: "domain",
     targetLabel: domain,
@@ -256,7 +533,7 @@ export async function saveDomainSettings(input: DomainSaveInput, deps?: Partial<
 // --- Checking again ---------------------------------------------------------------------
 
 export interface RecheckOutcome {
-  status: "none" | "waiting" | "busy" | "superseded" | "pending" | "applied";
+  status: "none" | "waiting" | "busy" | "superseded" | "pending" | "verifying" | "applied" | "rolled_back";
   check?: DomainCheckResult;
   pending?: PendingDomain | null;
   applied?: boolean;
@@ -264,12 +541,14 @@ export interface RecheckOutcome {
 }
 
 /**
- * Check the pending domain again. Background (`manual` false): only when
- * its next check is due and inside its 24 hours. Manual ("Check again"):
- * now, and a failure restarts the 24 hours. Applies it when it passes.
+ * Check the waiting domain again. Background (`manual` false): only when
+ * its next check is due and inside its 24 hours; also finishes a HTTPS
+ * verification whose process died. Manual ("Check again"): now, and a
+ * failure restarts the 24 hours and is audited, unless `quiet` (the same
+ * request saved again). Switches it when it passes.
  */
 export async function recheckPendingDomain(
-  opts: { manual?: boolean; actor?: AuditActor; ip?: string | null } = {},
+  opts: { manual?: boolean; quiet?: boolean; actor?: AuditActor; ip?: string | null; origin?: SwitchOrigin } = {},
   deps?: Partial<DomainFlowDeps>
 ): Promise<RecheckOutcome> {
   const d = withDefaults(deps);
@@ -277,6 +556,15 @@ export async function recheckPendingDomain(
   if (!row) return { status: "none" };
   const { raw, pending: p } = row;
   const now = d.now();
+
+  if (p.phase === "verifying") {
+    // Its own process finishes it; a minute past the deadline, it died.
+    if (!opts.manual && p.verify && now > Date.parse(p.verify.until) + 60_000) {
+      const v = await finishVerification({ actor: opts.actor, ip: opts.ip }, d);
+      return { status: v.status === "none" ? "none" : v.status === "applied" ? "applied" : v.status === "rolled_back" ? "rolled_back" : "superseded", pending: v.pending };
+    }
+    return { status: "verifying", pending: p };
+  }
   if (!opts.manual && (now < Date.parse(p.next_check_at) || now > Date.parse(p.auto_until))) {
     return { status: "waiting", pending: p };
   }
@@ -289,45 +577,20 @@ export async function recheckPendingDomain(
 
   const check = await d.check(p.domain, p.tls_mode);
   const actor: AuditActor = opts.actor ?? { name: "system" };
+  const next: PendingDomain = { ...claimed, attempts: p.attempts + 1, last_check: check };
 
   if (check.ok) {
-    // Still the request that was checked? (An admin may have saved another
-    // domain, forced one or discarded this one meanwhile.)
-    if (!(await deletePending(claimedRaw))) return { status: "superseded", check, pending: await getPendingDomain() };
-    await updateAppSettings({ custom_domain: p.domain, tls_mode: p.tls_mode, tls_email: p.tls_email });
-    const applied = await d.apply();
-    await audit({
-      actor,
-      action: "domain.applied",
-      targetType: "domain",
-      targetLabel: p.domain,
-      details: {
-        domain: p.domain,
-        tls_mode: p.tls_mode,
-        addresses: check.addresses,
-        applied: applied.ok,
-        via: opts.manual ? "check_again" : "background",
-        attempts: p.attempts + 1,
-        requested_by: p.requested_by.name,
-      },
-      ip: opts.ip ?? null,
-    });
-    try {
-      await d.notifyLive(p.domain, p.requested_by.id);
-    } catch (e) {
-      console.error("[domain] could not send the go-live notice:", e);
-    }
-    return { status: "applied", check, applied: applied.ok, proxyError: applied.ok ? undefined : applied.error, pending: null };
+    const origin: SwitchOrigin = opts.origin ?? (opts.manual ? "check_again" : "background");
+    const r = await switchTo(next, check, origin, d, actor, opts.ip, claimedRaw);
+    return { status: r.status, check, applied: r.applied, proxyError: r.proxyError, pending: r.pending };
   }
 
-  const next: PendingDomain = {
-    ...claimed,
-    attempts: p.attempts + 1,
-    last_check: check,
-    ...(opts.manual ? { auto_until: new Date(now + RECHECK_WINDOW_MS).toISOString() } : {}),
+  const failed: PendingDomain = {
+    ...next,
+    ...(opts.manual && !opts.quiet ? { auto_until: new Date(now + RECHECK_WINDOW_MS).toISOString() } : {}),
   };
-  const nextRaw = await swapPending(claimedRaw, next);
-  if (opts.manual) {
+  const nextRaw = await swapPending(claimedRaw, failed);
+  if (opts.manual && !opts.quiet) {
     await audit({
       actor,
       action: "domain.check_failed",
@@ -337,13 +600,16 @@ export async function recheckPendingDomain(
       ip: opts.ip ?? null,
     });
   }
-  return { status: nextRaw ? "pending" : "superseded", check, pending: nextRaw ? next : await getPendingDomain() };
+  return { status: nextRaw ? "pending" : "superseded", check, pending: nextRaw ? failed : await getPendingDomain() };
 }
 
-/** "Keep the current address": drop the pending domain. True when there was one. */
-export async function discardPendingDomain(actor: AuditActor, ip?: string | null): Promise<boolean> {
+/** "Keep the current address": drop the waiting domain. True when there was one. */
+export async function discardPendingDomain(actor: AuditActor, ip?: string | null, deps?: Partial<DomainFlowDeps>): Promise<boolean> {
+  const d = withDefaults(deps);
   const row = await readPendingRaw();
   if (!row || !(await deletePending(row.raw))) return false;
+  await clearPendingCert();
+  if (row.pending.phase === "verifying") await d.apply(); // back to the saved config
   await audit({
     actor,
     action: "domain.pending_discarded",
@@ -361,10 +627,10 @@ export interface DomainState {
   custom_domain: string;
   tls_mode: TlsMode;
   tls_email: string;
-  secure_cookies: import("./settings").SecureCookieMode;
+  secure_cookies: SecureCookieMode;
   has_custom_cert: boolean;
   proxy: { managed: boolean; reachable: boolean };
-  /** The domain waiting for its check. */
+  /** The domain waiting for its check, or having its HTTPS verified. */
   pending: PendingDomain | null;
   /** The addresses the proxy also serves while a custom domain is applied ("Also reachable at"). */
   fallbacks: FallbackHost[];

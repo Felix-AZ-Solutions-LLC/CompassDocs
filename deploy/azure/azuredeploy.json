@@ -191,7 +191,7 @@
         "managedDisk": { "storageAccountType": "[parameters('dataDiskType')]" }
       }
     ],
-    "fallbackHost": "[if(and(variables('usePublicIp'), not(empty(parameters('publicIpDns')))), toLower(concat(parameters('publicIpDns'), '.', parameters('location'), '.cloudapp.azure.com')), '')]",
+    "fallbackHost": "[if(and(equals(parameters('publicIpNewOrExistingOrNone'), 'new'), not(empty(parameters('publicIpDns')))), toLower(concat(parameters('publicIpDns'), '.', parameters('location'), '.cloudapp.azure.com')), '')]",
     "webPorts": "[if(parameters('enableTls'), createArray('80', '443'), createArray('80'))]",
     "installScriptLines": [
       "#!/bin/bash",
