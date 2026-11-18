@@ -56,11 +56,20 @@ test.describe("Workspace email through Microsoft 365 (fake Microsoft)", () => {
   let base = "";
   let ours = false;
   let saved: { key: string; value: string }[] = [];
+  // What this run wrote to the audit log is deleted afterwards, and nothing else.
+  let runStart = "";
+  let adminId = 0;
+  let adminEmail = "";
 
   const ctl = async (op: string, body?: unknown) => (await fetch(`${base}/__fake/${op}`, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) })).json();
   const card = (page: Page) => page.getByTestId("mail-settings");
   const m365 = (page: Page) => page.getByTestId("mail-m365");
   const method = (page: Page, name: "SMTP" | "Microsoft 365") => page.getByRole("radiogroup", { name: "Send email with" }).getByRole("radio", { name });
+  // The rig may hold helpdesk send-from addresses or export schedules from other specs: then the switch asks first.
+  const maybeConfirm = async (page: Page) => {
+    const d = page.getByRole("dialog");
+    if (await d.waitFor({ state: "visible", timeout: 5_000 }).then(() => true, () => false)) await d.getByRole("button", { name: "Switch" }).click();
+  };
   const sentAs = async (address: string): Promise<string[]> => ((await ctl("state")).mailboxes as { address: string; sent: string[] }[]).find((m) => m.address === address)?.sent ?? [];
 
   test.beforeAll(async () => {
@@ -71,9 +80,11 @@ test.describe("Workspace email through Microsoft 365 (fake Microsoft)", () => {
     if (ours) {
       await db.query("DELETE FROM settings WHERE key = ANY($1)", [KEYS]);
       for (const s of saved) await db.query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", [s.key, s.value]);
-      await db.query("DELETE FROM audit_log WHERE action LIKE 'settings.mail%' AND at > now() - interval '1 hour'");
+      await db.query("DELETE FROM audit_log WHERE action LIKE 'settings.mail%' AND at >= $1 AND actor_id = $2", [runStart, adminId]);
       await db.query("SELECT pg_advisory_unlock($1)", [LOCK]).catch(() => {});
     }
+    // The fake Microsoft is the rig's: leave it empty for the next spec.
+    if (base) await ctl("reset").catch(() => {});
     await db.end();
     await fake?.close();
   });
@@ -96,6 +107,10 @@ test.describe("Workspace email through Microsoft 365 (fake Microsoft)", () => {
     }
     await db.query("SELECT pg_advisory_lock($1)", [LOCK]);
     ours = true;
+    runStart = (await db.query("SELECT now()::text AS t")).rows[0].t;
+    const me = (await db.query("SELECT id, email FROM users WHERE username = $1", [ADMIN.username])).rows[0];
+    adminId = me.id;
+    adminEmail = String(me.email || "").toLowerCase();
     saved = (await db.query("SELECT key, value FROM settings WHERE key = ANY($1)", [KEYS])).rows;
     // Start as a workspace that sends nothing yet.
     await db.query("DELETE FROM settings WHERE key = ANY($1)", [KEYS]);
@@ -126,6 +141,7 @@ test.describe("Workspace email through Microsoft 365 (fake Microsoft)", () => {
     // A wrong secret: Microsoft's refusal, in plain words; nothing saved.
     await manual.getByLabel(/Client secret/).fill("fake~not-the-secret");
     await m365(page).getByRole("button", { name: "Save and send through Microsoft 365" }).click();
+    await maybeConfirm(page);
     await expect(m365(page).getByRole("alert")).toHaveText(
       "Microsoft 365 refused the app's sign-in: the client secret is wrong. Paste the secret's Value (not its Secret ID), or create a new one.",
       { timeout: 30_000 }
@@ -135,6 +151,7 @@ test.describe("Workspace email through Microsoft 365 (fake Microsoft)", () => {
     // The right one: saved, signed in, chosen.
     await manual.getByLabel(/Client secret/).fill(made.secret);
     await m365(page).getByRole("button", { name: "Save and send through Microsoft 365" }).click();
+    await maybeConfirm(page);
     await expect(page.getByText("Saved. Email now goes out through Microsoft 365.")).toBeVisible({ timeout: 30_000 });
     await expect(card(page)).toHaveAttribute("data-method", "m365");
     await expect(page.getByTestId("mail-draft")).toHaveCount(0);
@@ -142,6 +159,12 @@ test.describe("Workspace email through Microsoft 365 (fake Microsoft)", () => {
     const v = (await api(page, "/api/admin/mail")).body;
     expect([v.method, v.m365.mailbox, v.m365.entra_send, v.m365.has_secret]).toEqual(["m365", MAILBOX, true, true]);
     expect(JSON.stringify(v)).not.toContain(made.secret);
+
+    // Changing the sending mailbox takes the secret again.
+    await m365(page).getByLabel("Sending mailbox").fill(OTHER);
+    await m365(page).getByRole("button", { name: "Save", exact: true }).click();
+    await expect(m365(page).getByRole("alert")).toContainText("Enter the client secret again to change the sending mailbox", { timeout: 30_000 });
+    await m365(page).getByLabel("Sending mailbox").fill(MAILBOX);
 
     // --- Check connection: signed in and allowed, nothing sent ------------------------------------------
     const sentBefore = (await sentAs(MAILBOX)).length;
@@ -154,16 +177,31 @@ test.describe("Workspace email through Microsoft 365 (fake Microsoft)", () => {
     await expect(lock.getByRole("heading", { name: `Limit the app to ${MAILBOX}` })).toBeVisible();
     await expect(lock).toContainText("Mail.Send permission lets an app send as any mailbox in your organisation");
     const commands = lock.getByTestId("mail-commands");
-    await expect(commands).toContainText(`New-DistributionGroup -Name 'CompassDocs sending mailbox' -Alias 'compassdocs-sending-mailbox' -Type Security -Members '${MAILBOX}'`);
-    await expect(commands).toContainText(`New-ApplicationAccessPolicy -AppId '${made.client_id}' -PolicyScopeGroupId 'CompassDocs sending mailbox' -AccessRight RestrictAccess -Description 'CompassDocs sending mailbox'`);
+    const short = String(made.client_id).slice(0, 8);
+    // Named after the app, so a second CompassDocs in the same tenant makes its own group.
+    await expect(commands).toContainText(`New-DistributionGroup -Name 'CompassDocs sending mailbox ${short}' -Alias 'compassdocs-mail-${short}' -Type Security -Members '${MAILBOX}'`);
+    await expect(commands).toContainText(`New-ApplicationAccessPolicy -AppId '${made.client_id}' -PolicyScopeGroupId 'CompassDocs sending mailbox ${short}' -AccessRight RestrictAccess -Description 'CompassDocs sending mailbox ${short}'`);
     await expect(commands).toContainText(`Test-ApplicationAccessPolicy -Identity '${MAILBOX}' -AppId '${made.client_id}'`);
     expect(await commands.innerText()).not.toContain('"');
     await expect(lock.getByRole("button", { name: "Copy commands" }).first()).toBeVisible();
     await lock.getByText("Microsoft's newer way: RBAC for Applications").click();
-    await expect(lock.getByTestId("mail-commands-rbac")).toContainText("-Role 'Application Mail.Send' -CustomResourceScope 'CompassDocs sending mailbox'");
+    await expect(lock.getByTestId("mail-commands-rbac")).toContainText(`-Role 'Application Mail.Send' -CustomResourceScope 'CompassDocs sending mailbox ${short}'`);
 
-    // "The admin ran them": the policy holds the mailbox. Sending still works; another mailbox would be refused.
+    // Check connection also tries the admin's own mailbox: before the lock-down the app can send as it too.
+    if (adminEmail) {
+      await ctl("mailbox", { address: adminEmail, kind: "user" });
+      await m365(page).getByRole("button", { name: "Check connection" }).click();
+      await expect(lock.getByTestId("mail-not-limited")).toContainText(`Needs attention: the app can also send as ${adminEmail}`, { timeout: 30_000 });
+      await expect(page.locator("#email").getByText("Needs attention", { exact: true })).toBeVisible();
+    }
+
+    // "The admin ran them": the policy holds the mailbox. Sending still works; another mailbox is refused.
     await ctl("policy", { addresses: [MAILBOX] });
+    if (adminEmail) {
+      await m365(page).getByRole("button", { name: "Check connection" }).click();
+      await expect(lock.getByTestId("mail-limited")).toContainText(`The app can't send as ${adminEmail}: it is limited, as it should be.`, { timeout: 30_000 });
+      await expect(page.locator("#email").getByText("Set up", { exact: true })).toBeVisible();
+    }
 
     // --- Send test email ----------------------------------------------------------------------------------
     await page.getByLabel("Send a test to").fill(`me-${stamp}@example.test`);
@@ -228,6 +266,7 @@ test.describe("Workspace email through Microsoft 365 (fake Microsoft)", () => {
       await expect(m365(page).getByRole("button", { name: "Set up with Microsoft" })).toHaveCount(0);
       // Back to a secret that works, for what follows.
       const fresh = await ctl("app", { roles: ["Mail.Send"] });
+      await ctl("mailbox", { address: MAILBOX, kind: "shared" }).catch(() => {});
       const man = m365(page).getByTestId("mail-m365-manual");
       await man.getByLabel("Application (client) ID").fill(fresh.client_id);
       await man.getByLabel(/Client secret/).fill(fresh.secret);
@@ -247,8 +286,11 @@ test.describe("Workspace email through Microsoft 365 (fake Microsoft)", () => {
     await expect(card(page)).toHaveAttribute("data-method", "smtp");
     const back = (await api(page, "/api/admin/mail")).body;
     expect([back.method, back.m365.configured, back.m365.mailbox]).toEqual(["smtp", true, MAILBOX]);
-    // Microsoft 365 is set up, so choosing it again switches at once.
+    // Microsoft 365 is set up, so choosing it again switches, after saying what changes: the From is not the SMTP one.
     await method(page, "Microsoft 365").click();
+    const ask = page.getByRole("dialog");
+    await expect(ask.getByTestId("mail-switch-warnings")).toContainText(`Email now comes from docs-${stamp}@acme.example. Through Microsoft 365 it comes from ${MAILBOX} instead.`, { timeout: 30_000 });
+    await ask.getByRole("button", { name: "Switch" }).click();
     await expect(page.getByText("Email now goes out through Microsoft 365.")).toBeVisible({ timeout: 30_000 });
     await expect(card(page)).toHaveAttribute("data-method", "m365");
     await expect(m365(page).getByLabel("Sending mailbox")).toHaveValue(MAILBOX);
@@ -258,7 +300,7 @@ test.describe("Workspace email through Microsoft 365 (fake Microsoft)", () => {
     await expect(page.locator("li", { hasText: "Email (SMTP)" }).first()).toContainText("Configured for 127.0.0.1:2525.", { timeout: 60_000 });
 
     // Audited.
-    const actions = (await db.query("SELECT action FROM audit_log WHERE action LIKE 'settings.mail%' AND at > now() - interval '1 hour'")).rows.map((r) => r.action);
-    for (const a of ["settings.mail_m365", "settings.mail_method", "settings.mail_test"]) expect(actions).toContain(a);
+    const actions = (await db.query("SELECT action FROM audit_log WHERE action LIKE 'settings.mail%' AND at >= $1 AND actor_id = $2", [runStart, adminId])).rows.map((r) => r.action);
+    for (const a of ["settings.mail_m365", "settings.mail_method", "settings.mail_test", "settings.mail_check"]) expect(actions).toContain(a);
   });
 });
