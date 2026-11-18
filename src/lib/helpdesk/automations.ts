@@ -311,9 +311,60 @@ export interface AutomationInput {
   position?: number;
 }
 
-/** Validate a create (or, `partial`, an update) body, checking that named teams, people, macros and request types exist. */
-export async function validateAutomationInput(raw: Record<string, unknown>, partial = false): Promise<Checked<Partial<AutomationInput>>> {
+/**
+ * 1.20.30: the teams and request types a stored rule names (live, and in a
+ * waiting draft). A save may keep naming one that was deleted since: see
+ * validateAutomationInput.
+ */
+export interface AutomationStoredRefs {
+  teams: readonly number[];
+  types: readonly number[];
+}
+
+export const NO_AUTOMATION_REFS: AutomationStoredRefs = { teams: [], types: [] };
+
+type RuleRefs = { conditions?: HdAutomationConditions | null; actions?: HdAutomationActions | null } | null | undefined;
+
+export function automationStoredRefs(...rules: RuleRefs[]): AutomationStoredRefs {
+  const teams = new Set<number>();
+  const types = new Set<number>();
+  for (const r of rules) {
+    for (const id of r?.conditions?.team_ids ?? []) teams.add(id);
+    if (r?.actions?.team_id) teams.add(r.actions.team_id);
+    for (const id of r?.conditions?.request_type_ids ?? []) types.add(id);
+  }
+  return { teams: [...teams], types: [...types] };
+}
+
+/** 1.20.30: what a save says when a team or request type the rule named was deleted (see validateAutomationInput). */
+export const AUTOMATION_GONE = {
+  teamCondition: "The team this rule checks for was deleted, so the rule matches no tickets. Under If, pick another team, or remove the deleted team to run the rule on tickets of any team.",
+  typeCondition:
+    "The request type this rule checks for was deleted, so the rule matches no tickets. Under If, pick another request type, or remove the deleted one to run the rule on tickets of any request type.",
+  teamAction: "The team this rule moved tickets to was deleted, so the rule no longer moves them.",
+  teamOnlyAction: "The team this rule moved tickets to was deleted, and moving them was all the rule did. Under Then, pick another team or another action, or delete the rule.",
+} as const;
+
+/** Validation that passed, with what a save should tell the person (1.20.30: a deleted team the rule no longer moves tickets to). */
+export type CheckedAutomation = { ok: true; value: Partial<AutomationInput>; notices: string[] } | { ok: false; error: string };
+
+/**
+ * Validate a create (or, `partial`, an update) body, checking that named teams, people, macros and request types exist.
+ *
+ * 1.20.30: `stored`, the teams and request types the rule already names (automationStoredRefs:
+ * live and draft). One of those deleted since is no refusal that no edit could clear (the page
+ * can't show a deleted team), and never silently changes what the rule does:
+ *   - in a condition's list beside others that exist, it is dropped (no ticket has it any more);
+ *   - when it was all the list held, the save is refused with what to do (dropping it would
+ *     turn "only team X" into "any team"; the page shows the deleted entry with Remove);
+ *   - as the team the rule moves tickets to, it is dropped, which changes nothing (the move
+ *     already failed and was skipped), and the save says so (`notices`); refused with what to
+ *     do when moving was the rule's only action.
+ * A team or request type the rule did not name before must exist ("Unknown team.").
+ */
+export async function validateAutomationInput(raw: Record<string, unknown>, partial = false, stored: AutomationStoredRefs = NO_AUTOMATION_REFS): Promise<CheckedAutomation> {
   const out: Partial<AutomationInput> = {};
+  const notices: string[] = [];
   if (!partial || raw.name !== undefined) {
     if (typeof raw.name !== "string" || !raw.name.trim()) return { ok: false, error: "Give the automation a name." };
     if (raw.name.trim().length > AUTOMATION_LIMITS.name) return { ok: false, error: `Keep the name under ${AUTOMATION_LIMITS.name} characters.` };
@@ -340,15 +391,30 @@ export async function validateAutomationInput(raw: Record<string, unknown>, part
     if (!Number.isInteger(p) || p < 0 || p > 10_000) return { ok: false, error: "Bad position." };
     out.position = p;
   }
-  // References must exist.
-  const teamIds = [...(out.conditions?.team_ids ?? []), ...(out.actions?.team_id ? [out.actions.team_id] : [])];
+  // References must exist (1.20.30: or be ones the rule already named, see above).
+  const teamIds = [...new Set([...(out.conditions?.team_ids ?? []), ...(out.actions?.team_id ? [out.actions.team_id] : [])])];
   if (teamIds.length) {
-    const n = await hq("SELECT id FROM hd_teams WHERE id = ANY($1)", [teamIds]);
-    if (n.length !== new Set(teamIds).size) return { ok: false, error: "Unknown team." };
+    const live = new Set((await hq<{ id: number }>("SELECT id FROM hd_teams WHERE id = ANY($1)", [teamIds])).map((r) => r.id));
+    if (teamIds.some((id) => !live.has(id) && !stored.teams.includes(id))) return { ok: false, error: "Unknown team." };
+    if (out.conditions?.team_ids?.length) {
+      const kept = out.conditions.team_ids.filter((id) => live.has(id));
+      if (!kept.length) return { ok: false, error: AUTOMATION_GONE.teamCondition };
+      out.conditions.team_ids = kept;
+    }
+    if (out.actions?.team_id && !live.has(out.actions.team_id)) {
+      const { team_id: _gone, ...rest } = out.actions;
+      if (!Object.keys(rest).length) return { ok: false, error: AUTOMATION_GONE.teamOnlyAction };
+      out.actions = rest;
+      notices.push(AUTOMATION_GONE.teamAction);
+    }
   }
   if (out.conditions?.request_type_ids?.length) {
-    const n = await hq("SELECT id FROM hd_request_types WHERE id = ANY($1)", [out.conditions.request_type_ids]);
-    if (n.length !== out.conditions.request_type_ids.length) return { ok: false, error: "Unknown request type." };
+    const ids = out.conditions.request_type_ids;
+    const live = new Set((await hq<{ id: number }>("SELECT id FROM hd_request_types WHERE id = ANY($1)", [ids])).map((r) => r.id));
+    if (ids.some((id) => !live.has(id) && !stored.types.includes(id))) return { ok: false, error: "Unknown request type." };
+    const kept = ids.filter((id) => live.has(id));
+    if (!kept.length) return { ok: false, error: AUTOMATION_GONE.typeCondition };
+    out.conditions.request_type_ids = kept;
   }
   if (out.actions?.macro_id) {
     // A rule sends shared macros only, never someone's personal one.
@@ -400,7 +466,7 @@ export async function validateAutomationInput(raw: Record<string, unknown>, part
     if (out.actions?.assignee_id && !found.has(out.actions.assignee_id)) return { ok: false, error: "Assign to someone on the desk: that person is not a desk agent." };
     if (typeof out.actions?.notify === "object" && !found.has(out.actions.notify.user_id)) return { ok: false, error: "Notify someone on the desk: that person is not a desk agent." };
   }
-  return { ok: true, value: out };
+  return { ok: true, value: out, notices };
 }
 
 // --- Storage ---------------------------------------------------------------------
@@ -473,7 +539,7 @@ export async function updateAutomation(
   patch: Partial<AutomationInput>,
   /** 1.20.23 review N4: `dept` (a PATCH's desk department) is written in the same transaction as the edit. */
   opts: { publish?: boolean; publishDraft?: boolean; draftAt?: unknown; dept?: number | null } = {}
-): Promise<{ before: HdAutomation; after: HdAutomation; published: boolean } | undefined> {
+): Promise<{ before: HdAutomation; after: HdAutomation; published: boolean; notices: string[] } | undefined> {
   // The list's adoption takes its lock outright: never from inside a transaction that holds it shared.
   await categoriesReady();
   return withTx(async (client) => {
@@ -491,9 +557,11 @@ export async function updateAutomation(
     // The draft is the base only when publishing it; otherwise the copy the row holds.
     const base = publishDraft ? { ...cur, ...cur.draft! } : cur;
     let next: HdAutomation = { ...base, ...patch } as HdAutomation;
+    const notices: string[] = [];
     if (publish || publishDraft) {
-      const full = await validateAutomationInput({ name: next.name, event: next.event, conditions: next.conditions, actions: next.actions });
+      const full = await validateAutomationInput({ name: next.name, event: next.event, conditions: next.conditions, actions: next.actions }, false, automationStoredRefs(cur, cur.draft));
       if (!full.ok) throw new AutomationDraftError(full.error, 400);
+      notices.push(...full.notices);
       next = { ...next, ...full.value, active: next.active, position: next.position } as HdAutomation;
     }
     let active = next.active;
@@ -518,7 +586,7 @@ export async function updateAutomation(
       await (await import("./desk-departments")).setItemDeskDepartment("automations", id, opts.dept, client);
       after.desk_department_id = opts.dept;
     }
-    return after ? { before: cur, after, published: publish || publishDraft } : undefined;
+    return after ? { before: cur, after, published: publish || publishDraft, notices } : undefined;
   });
 }
 
@@ -531,7 +599,7 @@ export const RULE_CHANGED_SINCE = "The rule changed since this draft was made. R
  * With `base` (an existing rule's draft or live copy), fields not sent come
  * from it. Answers the rule in the shape the list stores.
  */
-export async function checkAutomationDraft(raw: unknown, base?: HdAutomationDraft): Promise<HdAutomationDraft> {
+export async function checkAutomationDraft(raw: unknown, base?: HdAutomationDraft, stored: AutomationStoredRefs = automationStoredRefs(base)): Promise<HdAutomationDraft> {
   const r = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
   const merged: Record<string, unknown> = {
     name: r.name ?? base?.name,
@@ -539,7 +607,7 @@ export async function checkAutomationDraft(raw: unknown, base?: HdAutomationDraf
     conditions: r.conditions ?? base?.conditions,
     actions: r.actions ?? base?.actions,
   };
-  const v = await validateAutomationInput(merged);
+  const v = await validateAutomationInput(merged, false, stored);
   if (!v.ok) throw new AutomationDraftError(v.error, 400);
   return draftOf(v.value as AutomationInput);
 }
@@ -584,7 +652,7 @@ export async function saveAutomationDraft(
   // Checked against the row as it is now (outside the lock: validation reads other tables), then again under it.
   const peek = await getAutomation(id);
   if (!peek) throw new AutomationDraftError(`No automation with id ${id}.`, 404);
-  const input = await checkAutomationDraft(raw, peek.draft ?? draftOf(peek));
+  const input = await checkAutomationDraft(raw, peek.draft ?? draftOf(peek), automationStoredRefs(peek, peek.draft));
   await categoriesReady();
   return withTx(async (client) => {
     await client.query(CATEGORY_LIST_SHARED_LOCK_SQL);

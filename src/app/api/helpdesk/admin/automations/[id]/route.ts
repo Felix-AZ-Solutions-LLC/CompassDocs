@@ -27,7 +27,7 @@
 import { NextResponse } from "next/server";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { readJson } from "@/lib/helpdesk/access";
-import { AutomationDraftError, deleteAutomation, discardAutomationDraft, getAutomation, updateAutomation, validateAutomationInput } from "@/lib/helpdesk/automations";
+import { AutomationDraftError, automationStoredRefs, deleteAutomation, discardAutomationDraft, getAutomation, updateAutomation, validateAutomationInput } from "@/lib/helpdesk/automations";
 import {
   automationMacroRefusal,
   deskDepartmentFieldOr,
@@ -98,7 +98,8 @@ async function patchHandler(req: Request, ctx: Ctx) {
       return NextResponse.json({ error: "Publish sends the rule as you reviewed it: its name, when, if and then." }, { status: 400 });
     }
     const { desk_department_id: _dept, ...fields } = body;
-    const input = await validateAutomationInput(fields, true);
+    // 1.20.30: a team or request type the rule already names may have been deleted since (lib/helpdesk/automations).
+    const input = await validateAutomationInput(fields, true, automationStoredRefs(cur, cur.draft));
     if (!input.ok) return NextResponse.json({ error: input.error }, { status: 400 });
     const macroId = input.value.actions !== undefined ? input.value.actions.macro_id : body.publish_draft === true ? cur.draft?.actions?.macro_id : cur.actions?.macro_id;
     // Review M4 (b): checked only when the macro or the department changes, so switching a rule off
@@ -135,7 +136,9 @@ async function patchHandler(req: Request, ctx: Ctx) {
         ip: ipFrom(req),
       });
     }
-    return NextResponse.json({ automation });
+    // 1.20.30: what the save changed by itself (a deleted team the rule no longer moves tickets to).
+    const notices = [...new Set([...input.notices, ...r.notices])];
+    return NextResponse.json({ automation, ...(notices.length ? { notices } : {}) });
   } catch (e) {
     if (e instanceof AutomationDraftError) return NextResponse.json({ error: e.message }, { status: e.status });
     throw e;

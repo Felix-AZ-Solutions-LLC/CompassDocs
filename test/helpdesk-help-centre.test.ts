@@ -845,9 +845,6 @@ describe("routes and stats", () => {
     assert.ok(got.body.spaces.some((s: { id: number; private: boolean }) => s.id === sp.priv && s.private), "a chosen private space is named, to remove it");
     assert.ok(!got.body.spaces.some((s: { id: number }) => s.id === sp.priv2), "a private space nobody chose and this person can't open is never named");
     assert.ok(!JSON.stringify(got.body).includes("Board secret"));
-    const sneaky = await call(adminRoute.PUT, "/api/helpdesk/admin/portal/help-centre", { method: "PUT", origin: ORIGIN, cookie: as(admin), json: settings({ spaces: [sp.guides, sp.priv2] }) });
-    assert.equal(sneaky.status, 400);
-    assert.ok(!JSON.stringify(sneaky.body).includes("Board secret"), "refused without its name");
     assert.deepEqual(Object.keys(got.body.stats).sort(), ["answered_pct", "journeys", "searches", "top_search"]);
 
     const priv = await call(adminRoute.PUT, "/api/helpdesk/admin/portal/help-centre", { method: "PUT", origin: ORIGIN, cookie: as(admin), json: settings() });
@@ -855,6 +852,13 @@ describe("routes and stats", () => {
     assert.match(priv.body.error, /private space/);
     const empty = await call(adminRoute.PUT, "/api/helpdesk/admin/portal/help-centre", { method: "PUT", origin: ORIGIN, cookie: as(admin), json: settings({ spaces: [], tagged: false }) });
     assert.equal(empty.status, 400);
+    // 1.20.30: a space this person was never shown reads as one that no longer exists, and
+    // both drop out of the save (a deleted space was a refusal no reload could clear).
+    const sneaky = await call(adminRoute.PUT, "/api/helpdesk/admin/portal/help-centre", { method: "PUT", origin: ORIGIN, cookie: as(admin), json: settings({ spaces: [sp.guides, sp.priv2] }) });
+    assert.equal(sneaky.status, 200, JSON.stringify(sneaky.body));
+    assert.deepEqual(sneaky.body.settings.spaces, [sp.guides], "the unseen private space is not chosen");
+    assert.ok(!sneaky.body.spaces.some((s: { id: number }) => s.id === sp.priv2), "nor named");
+    assert.ok(!JSON.stringify(sneaky.body).includes("Board secret"), "dropped without its name");
     const agentTry = await call(adminRoute.PUT, "/api/helpdesk/admin/portal/help-centre", { method: "PUT", origin: ORIGIN, cookie: as(agent), json: settings({ spaces: [sp.guides] }) });
     assert.equal(agentTry.status, 403);
 
@@ -877,6 +881,53 @@ describe("routes and stats", () => {
     assert.equal(preview.status, 200);
     assert.ok(preview.body.categories.some((c: { key: string }) => c.key === `s${sp.other}`), "a preview runs the rule on the unsaved selection");
     assert.ok(!preview.body.categories.some((c: { key: string }) => c.key === `s${sp.priv}`));
+  });
+
+  test("1.20.30: category keys are kept only when stored or shown; a heal is audited", async () => {
+    const as = (u: { session: string }) => `compass_session=${u.session}`;
+    const KEY = "helpdesk_portal_hc";
+    const keep = await getSetting(KEY);
+    const privFolder = await category(sp.priv2, `Board minutes ${STAMP}`, 0);
+    try {
+      // Probing: a folder of a private space this person can't open, and a folder id that doesn't exist,
+      // are both left out of the save, so what is stored says nothing about which ids exist.
+      const probe = await call(adminRoute.PUT, "/api/helpdesk/admin/portal/help-centre", {
+        method: "PUT",
+        origin: ORIGIN,
+        cookie: as(admin),
+        json: settings({ spaces: [sp.guides], hidden: [`c${privFolder}`, "c2000000000", `c${cat.billing}`], order: [`s${sp.priv2}`, `s${sp.guides}`] }),
+      });
+      assert.equal(probe.status, 200, JSON.stringify(probe.body));
+      assert.deepEqual(probe.body.settings.hidden, [`c${cat.billing}`]);
+      assert.deepEqual(probe.body.settings.order, [`s${sp.guides}`]);
+
+      // Another admin's stored choice for a private space this person can't open stays through their save.
+      await setSetting(KEY, JSON.stringify(settings({ spaces: [sp.guides], hidden: [`s${sp.priv2}`, `c${privFolder}`] })));
+      const theirs = await call(adminRoute.PUT, "/api/helpdesk/admin/portal/help-centre", {
+        method: "PUT",
+        origin: ORIGIN,
+        cookie: as(admin),
+        json: settings({ spaces: [sp.guides], hidden: [`s${sp.priv2}`, `c${privFolder}`], indexing: true }),
+      });
+      assert.equal(theirs.status, 200, JSON.stringify(theirs.body));
+      assert.deepEqual(theirs.body.settings.hidden, [`s${sp.priv2}`, `c${privFolder}`]);
+
+      // A stored space that no longer exists: the read cleans it and is on the record, by the system.
+      await setSetting(KEY, JSON.stringify(settings({ spaces: [sp.guides, 2_000_000_000], order: ["s2000000000"] })));
+      const got = await call(adminRoute.GET, "/api/helpdesk/admin/portal/help-centre", { cookie: as(admin) });
+      assert.equal(got.status, 200);
+      assert.deepEqual(got.body.settings.spaces, [sp.guides]);
+      const row = (await pool().query("SELECT actor_id, actor_name, details FROM audit_log WHERE action = 'helpdesk.portal.help_centre_updated' ORDER BY id DESC LIMIT 1")).rows[0];
+      assert.equal(row.actor_id, null);
+      assert.equal(row.actor_name, "system");
+      assert.equal(row.details.cleanup, "read");
+      assert.deepEqual(row.details.help_centre_spaces_removed, [2_000_000_000]);
+      assert.deepEqual(row.details.help_centre_keys_removed, ["s2000000000"]);
+    } finally {
+      await pool().query("DELETE FROM space_categories WHERE id = $1", [privFolder]);
+      if (keep === undefined) await pool().query("DELETE FROM settings WHERE key = $1", [KEY]);
+      else await setSetting(KEY, keep);
+    }
   });
 
   test("the stats: searches and the top search over 30 days", async () => {

@@ -15,6 +15,7 @@ import type { PoolClient } from "pg";
 import { slugify } from "../db";
 import { hq, hqOne, withTx } from "./db-core";
 import type { HdQueryable } from "./db-core";
+import { prunePortalSettingsTx, type PortalPruneResult } from "./portal-refs";
 import { HD_PRIORITIES } from "./types";
 import type {
   HdFormAnswers,
@@ -537,13 +538,22 @@ export async function updateRequestType(id: number, input: RequestTypeInput, dep
 /**
  * Delete a request type. Its tickets keep their answers (request_type_id
  * is SET NULL); a type with open requests is better switched off, which is
- * what the settings page offers first, but deleting is allowed.
+ * what the settings page offers first, but deleting is allowed. 1.20.30:
+ * it leaves the customer portal's offered types in the same transaction
+ * (lib/helpdesk/portal-refs), so the portal settings never hold it.
  */
-export async function deleteRequestType(id: number): Promise<HdRequestType | undefined> {
+export async function deleteRequestType(id: number, out?: { portal?: PortalPruneResult | null }): Promise<HdRequestType | undefined> {
   const existing = await getRequestType(id);
   if (!existing) return undefined;
-  await hq("DELETE FROM hd_request_types WHERE id = $1", [id]);
-  return existing;
+  const gone = await withTx(async (client) => {
+    const r = await client.query("DELETE FROM hd_request_types WHERE id = $1", [id]);
+    if (!r.rowCount) return false;
+    // `out.portal`: what left the portal settings, for the delete's audit row.
+    const pruned = await prunePortalSettingsTx(client);
+    if (out) out.portal = pruned;
+    return true;
+  });
+  return gone ? existing : undefined;
 }
 
 /** Open requests of a type (the delete dialog's warning). */

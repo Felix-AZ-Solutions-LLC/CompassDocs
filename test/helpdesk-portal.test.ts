@@ -659,6 +659,37 @@ describe("what customers can ask for", () => {
     assert.deepEqual(audited.rows[0].details.changed, ["brand_name"]);
     await useSettings(settings());
   });
+
+  test("1.20.30: the admin route heals a deleted request type or team instead of refusing every save", async () => {
+    const s = settings();
+    const goneType = (await pool().query("SELECT COALESCE(max(id), 0) + 1000 AS id FROM hd_request_types")).rows[0].id as number;
+    const goneTeam = (await pool().query("SELECT COALESCE(max(id), 0) + 1000 AS id FROM hd_teams")).rows[0].id as number;
+    const stale = { ...s, types: [{ id: goneType, team_id: null }, ...s.types.map((t) => (t.id === typeIds.bug ? { ...t, team_id: goneTeam } : t))] };
+    const clean = s.types.map((t) => (t.id === typeIds.bug ? { ...t, team_id: null } : t));
+    try {
+      // The production state (1.20.28): stored, invisible on the page, sent back with every save.
+      await useSettings(stale);
+      const put = await call(adminRoute.PUT, "/api/helpdesk/admin/portal", { method: "PUT", cookie: `compass_session=${admin.session}`, json: stale });
+      assert.equal(put.status, 200, JSON.stringify(put.body));
+      assert.deepEqual(put.body.settings.types, clean);
+      assert.deepEqual(JSON.parse((await getSetting("helpdesk_portal"))!).types, clean);
+      // A read heals it as well, and writes it back.
+      await useSettings(stale);
+      const got = await call(adminRoute.GET, "/api/helpdesk/admin/portal", { cookie: `compass_session=${admin.session}` });
+      assert.equal(got.status, 200);
+      assert.deepEqual(got.body.settings.types, clean);
+      assert.deepEqual(JSON.parse((await getSetting("helpdesk_portal"))!).types, clean);
+      // The heal is on the record, by the system, naming what it removed.
+      const row = (await pool().query("SELECT actor_id, actor_name, details FROM audit_log WHERE action = 'helpdesk.portal.updated' ORDER BY id DESC LIMIT 1")).rows[0];
+      assert.equal(row.actor_id, null);
+      assert.equal(row.actor_name, "system");
+      assert.equal(row.details.cleanup, "read");
+      assert.deepEqual(row.details.portal_types_removed, [goneType]);
+      assert.deepEqual(row.details.portal_team_cleared_types, [typeIds.bug]);
+    } finally {
+      await useSettings(settings());
+    }
+  });
 });
 
 // --- Access rules ----------------------------------------------------------------------------

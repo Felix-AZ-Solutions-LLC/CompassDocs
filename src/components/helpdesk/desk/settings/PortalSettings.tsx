@@ -32,6 +32,7 @@ import {
   PORTAL_BLOCKER_TEXT,
   PORTAL_LIMIT_BOUNDS,
   brandInitials,
+  prunePortalRefs,
   type PortalAccess,
   type PortalBlocker,
   type PortalSettings as Settings,
@@ -88,10 +89,14 @@ export function PortalSettings() {
   const { dirty, markDirty, markClean, hasUnsavedChanges } = useUnsavedChanges(snap);
   useLeaveGuard(dirty, hasUnsavedChanges);
 
-  function take(d: Loaded) {
+  function take(d: Loaded): Settings {
+    // 1.20.30: only what the page can show goes back on save. The server already
+    // drops a deleted request type or team; this keeps a hidden one out of the draft.
+    const settings = prunePortalRefs(d.settings, { types: d.types.map((t) => t.id), teams: d.teams.map((t) => t.id) }).settings;
     setData(d);
-    setS(d.settings);
-    setText({ domains: lines(d.settings.domains), words: lines(d.settings.blocked_words), blockedDomains: lines(d.settings.blocked_domains) });
+    setS(settings);
+    setText({ domains: lines(settings.domains), words: lines(settings.blocked_words), blockedDomains: lines(settings.blocked_domains) });
+    return settings;
   }
 
   useEffect(() => {
@@ -128,8 +133,8 @@ export function PortalSettings() {
         { ...s, domains: parseLines(text.domains), blocked_words: parseLines(text.words), blocked_domains: parseLines(text.blockedDomains) },
         "Couldn't save the portal settings."
       );
-      take(d);
-      markClean(JSON.stringify({ ...d.settings, brand_logo: "" }) + JSON.stringify({ domains: lines(d.settings.domains), words: lines(d.settings.blocked_words), blockedDomains: lines(d.settings.blocked_domains) }));
+      const saved = take(d);
+      markClean(JSON.stringify({ ...saved, brand_logo: "" }) + JSON.stringify({ domains: lines(saved.domains), words: lines(saved.blocked_words), blockedDomains: lines(saved.blocked_domains) }));
       toast("ok", d.settings.enabled ? "Portal settings saved. The portal is on." : "Portal settings saved. The portal is off.");
     } catch (e) {
       toast("error", (e as Error).message);

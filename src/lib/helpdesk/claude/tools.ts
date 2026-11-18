@@ -413,7 +413,8 @@ async function draftAutomation(a: Record<string, any>, ctx: ToolCtx): Promise<To
   if (live && !dd.mayManageDept(access, live.desk_department_id)) return fail(CANT("that rule's desk department"));
   let draft: Awaited<ReturnType<typeof au.checkAutomationDraft>>;
   try {
-    draft = await au.checkAutomationDraft(automationInput(a));
+    // 1.20.30: a team or request type the rule already names may have been deleted since.
+    draft = await au.checkAutomationDraft(automationInput(a), undefined, au.automationStoredRefs(live, live?.draft));
   } catch (e) {
     if (e instanceof au.AutomationDraftError) return fail(e.message);
     throw e;

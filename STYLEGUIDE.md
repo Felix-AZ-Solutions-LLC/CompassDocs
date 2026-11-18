@@ -5216,6 +5216,14 @@ live in `components/helpdesk/desk/checklists`.
   agent by name, a shared macro by name even when the reviewer can't
   manage it). The strip's line adds "edited by {person}" once someone has
   edited the draft.
+- **A chosen entry that was deleted** (1.20.30, the Automations editor):
+  a checkbox row (If → Team, Request type) that still holds a deleted team
+  or request type ends with a `warn` `md` chip "A deleted team" (or "2
+  deleted") and a remove `X` (`aria-label` "Remove a deleted team",
+  `data-tt` "Remove"); a picker (Then → Move to team) lists it as "A
+  deleted team" so it can be changed. Never hide such an entry: a save
+  would send it back unseen. What the save drops by itself is appended to
+  the save's toast in the server's words.
 - **Claude in the desk's settings draft cards** (1.20.16) are the
   checklist draft card's shape with `FolderTree` (categories), `Bot`
   (an automation) or `Repeat` (a recurring ticket): the title, the hint,

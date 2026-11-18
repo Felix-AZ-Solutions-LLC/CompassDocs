@@ -35,6 +35,7 @@ import {
   auditItemDeskDepartment,
   requestTypeWorkflowRefusal,
 } from "@/lib/helpdesk/desk-departments";
+import { portalPruneDetails, type PortalPruneResult } from "@/lib/helpdesk/portal-refs";
 
 export const dynamic = "force-dynamic";
 
@@ -114,7 +115,8 @@ export async function DELETE(req: Request, ctx: Ctx) {
   if (!existing) return NextResponse.json({ error: "Not found." }, { status: 404 });
   const refused = itemRefusal(g.access, existing.desk_department_id);
   if (refused) return refused;
-  const removed = await deleteRequestType(existing.id);
+  const pruned: { portal?: PortalPruneResult | null } = {};
+  const removed = await deleteRequestType(existing.id, pruned);
   if (!removed) return NextResponse.json({ error: "Not found." }, { status: 404 });
   await audit({
     actor: actorFrom(gate),
@@ -122,7 +124,8 @@ export async function DELETE(req: Request, ctx: Ctx) {
     targetType: "helpdesk_request_type",
     targetId: removed.id,
     targetLabel: removed.title,
-    details: { slug: removed.slug },
+    // 1.20.30: and what left the customer portal's settings with it.
+    details: { slug: removed.slug, ...portalPruneDetails(pruned.portal) },
     ip: ipFrom(req),
   });
   return NextResponse.json({ ok: true });

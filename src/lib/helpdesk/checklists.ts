@@ -157,7 +157,9 @@ export async function listTemplateRows(): Promise<HdChecklistTemplateRow[]> {
         if (!added.includes(line)) added.push(line);
       }
     }
-    return { ...t, request_type_ids: (t.request_type_ids ?? []).filter((id) => typeName.has(id)), used: usedBy.get(t.id) ?? 0, added_to: added };
+    // 1.20.30: a waiting draft's request types too, so a deleted one is not shown or sent back.
+    const draft = t.draft ? { ...t.draft, request_type_ids: (t.draft.request_type_ids ?? []).filter((id) => typeName.has(id)) } : t.draft;
+    return { ...t, draft, request_type_ids: (t.request_type_ids ?? []).filter((id) => typeName.has(id)), used: usedBy.get(t.id) ?? 0, added_to: added };
   });
 }
 
@@ -166,20 +168,44 @@ export async function listTemplateRows(): Promise<HdChecklistTemplateRow[]> {
  * added to are in the checklist's desk department `dept` (unless it is in All departments: null),
  * so another department's required items never block solving. Only types not already on it
  * (`had`) are checked, so a save that keeps an older list always works.
+ *
+ * 1.20.30: a team or request type deleted since the checklist named it (`stored`: the
+ * owner teams and request types of the stored checklist, live and in a waiting draft) is
+ * dropped here instead of refusing every later save: an item loses its owner team (as
+ * adding the checklist to a ticket already treated it) and the checklist is no longer
+ * added to the deleted type. The editor can't show either, so neither could be unpicked,
+ * and a save that leaves the list out (a publish, a Claude draft) keeps the stored one.
+ * A team or request type the checklist did not name before must exist.
  */
-async function checkTemplateRefs(input: HdChecklistTemplateInput, dept: number | null, had: readonly number[] = []): Promise<void> {
+async function checkTemplateRefs(input: HdChecklistTemplateInput, dept: number | null, had: readonly number[] = [], stored: StoredRefs = NO_REFS): Promise<void> {
   const teamIds = [...new Set(input.items.map((i) => i.team_id).filter((x): x is number => !!x))];
   if (teamIds.length) {
-    const found = await hq<{ id: number }>("SELECT id FROM hd_teams WHERE id = ANY($1::int[])", [teamIds]);
-    if (found.length !== teamIds.length) throw new ChecklistError("One of the owner teams no longer exists. Pick another.");
+    const found = new Set((await hq<{ id: number }>("SELECT id FROM hd_teams WHERE id = ANY($1::int[])", [teamIds])).map((r) => r.id));
+    if (teamIds.some((t) => !found.has(t) && !stored.teams.includes(t))) throw new ChecklistError("One of the owner teams no longer exists. Pick another.");
+    for (const i of input.items) if (i.team_id && !found.has(i.team_id)) delete i.team_id;
   }
   if (input.request_type_ids.length) {
-    const found = await hq<{ id: number }>("SELECT id FROM hd_request_types WHERE id = ANY($1::int[])", [input.request_type_ids]);
-    if (found.length !== input.request_type_ids.length) throw new ChecklistError("One of the request types no longer exists.");
+    const found = new Set((await hq<{ id: number }>("SELECT id FROM hd_request_types WHERE id = ANY($1::int[])", [input.request_type_ids])).map((r) => r.id));
+    if (input.request_type_ids.some((id) => !found.has(id) && !stored.types.includes(id))) throw new ChecklistError("One of the request types no longer exists.");
+    input.request_type_ids = input.request_type_ids.filter((id) => found.has(id));
     const added = input.request_type_ids.filter((id) => !had.includes(id));
     const refusal = await (await import("./desk-departments")).checklistRefsRefusal(dept, added);
     if (refusal) throw new ChecklistError(refusal);
   }
+}
+
+/** 1.20.30: the owner teams and request types a stored checklist names, live and in a waiting draft. */
+interface StoredRefs {
+  teams: readonly number[];
+  types: readonly number[];
+}
+const NO_REFS: StoredRefs = { teams: [], types: [] };
+
+function storedRefsOf(t: Pick<HdChecklistTemplate, "items" | "draft" | "request_type_ids">): StoredRefs {
+  return {
+    teams: [...(t.items ?? []), ...(t.draft?.items ?? [])].map((i) => i.team_id).filter((x): x is number => !!x),
+    types: [...(t.request_type_ids ?? []), ...(t.draft?.request_type_ids ?? [])],
+  };
 }
 
 /** A new checklist's department: the caller's choice, or the default one when left out. */
@@ -251,7 +277,7 @@ export async function updateTemplate(
       items: r.items ?? base.items,
       request_type_ids: r.request_type_ids ?? base.request_type_ids,
     });
-    await checkTemplateRefs(input, opts.dept !== undefined ? opts.dept : (before.desk_department_id ?? null), before.request_type_ids ?? []);
+    await checkTemplateRefs(input, opts.dept !== undefined ? opts.dept : (before.desk_department_id ?? null), before.request_type_ids ?? [], storedRefsOf(before));
     const after = await hqOne<HdChecklistTemplate>(
       `UPDATE hd_checklist_templates SET name = $2, items = $3, request_type_ids = $4, updated_at = now()${publish ? ", published = 1" : ""}${
         publish || publishDraft ? `, ${CLEAR_DRAFT}` : ""
@@ -307,7 +333,7 @@ export async function saveTemplateDraft(
     if (!before) throw new ChecklistError(`No checklist with id ${id}.`, 404);
     const base = before.draft ?? before;
     const input = checked({ name: r.name ?? base.name, items: r.items ?? base.items, request_type_ids: r.request_type_ids ?? base.request_type_ids });
-    await checkTemplateRefs(input, before.desk_department_id ?? null, before.request_type_ids ?? []);
+    await checkTemplateRefs(input, before.desk_department_id ?? null, before.request_type_ids ?? [], storedRefsOf(before));
     if (!before.published) {
       const t = await hqOne<HdChecklistTemplate>(
         `UPDATE hd_checklist_templates SET name = $2, items = $3, request_type_ids = $4, updated_at = now(), draft_by = $5, draft_by_name = $6, draft_at = now(), draft_via = $7
