@@ -65,14 +65,30 @@ function pgEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-function run(cmd: string, args: string[]): Promise<void> {
+/**
+ * 1.20.31: a dump made by a newer pg_dump (17+) carries session settings an
+ * older server doesn't know, such as `SET transaction_timeout = 0;`. pg_restore
+ * reports that as its only error and exits 1 although everything else was
+ * restored. Those, and nothing else, are tolerated: every error pg_restore
+ * printed must be an unrecognized configuration parameter on a SET statement.
+ */
+export function onlyUnknownSettingErrors(stderr: string): boolean {
+  const errors = stderr.split("\n").filter((l) => /\berror:/i.test(l));
+  if (!errors.length) return false;
+  const known = /could not execute query: ERROR:\s+unrecognized configuration parameter "[a-z_.]+"/i;
+  if (!errors.every((l) => known.test(l))) return false;
+  const commands = stderr.split("\n").filter((l) => /^\s*Command was:/i.test(l));
+  return commands.every((l) => /^\s*Command was:\s*SET\s+[a-z_.]+\s*(=|TO)/i.test(l));
+}
+
+function run(cmd: string, args: string[], tolerate?: (stderr: string) => boolean): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { env: pgEnv() });
     let stderr = "";
     child.stderr.on("data", (d) => (stderr += d.toString()));
     child.on("error", reject);
     child.on("close", (code) =>
-      code === 0
+      code === 0 || (code === 1 && tolerate?.(stderr))
         ? resolve()
         : reject(new Error(`${basename(cmd)} exited ${code}: ${stderr.trim().slice(-500)}`))
     );
@@ -350,7 +366,7 @@ export async function restoreBackup(name: string): Promise<RestoreResult> {
         "-d",
         env.PGDATABASE as string,
         dump.path,
-      ]);
+      ], onlyUnknownSettingErrors);
     } catch (e) {
       failure = e;
     } finally {

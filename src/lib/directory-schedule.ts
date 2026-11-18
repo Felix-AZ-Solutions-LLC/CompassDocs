@@ -13,7 +13,7 @@ import "server-only";
 import { getSetting, setSetting, pool, drainAudienceSyncTally } from "./db";
 import { ee, featureEnabled } from "./ee";
 import { sendMail } from "./mailer";
-import { getSmtpConfig, smtpConfigured } from "./smtp-config";
+import { mailConfigured } from "./mail-config";
 import type { DirectorySyncProvider, DirectorySyncSummary } from "@/ee-contract";
 import { getSyncReport } from "./directory";
 import { SYNC_FREQUENCIES, isSyncDue, parseRecipients, syncReportEmail, type SyncFrequency, type SyncSchedule } from "./directory-schedule-rules";
@@ -135,8 +135,7 @@ export async function runScheduledDirectorySyncs(now: Date = new Date()): Promis
         ran.push(provider);
         if (schedule.report_to.length && (!quiet || schedule.report_quiet)) {
           try {
-            const cfg = await getSmtpConfig();
-            if (smtpConfigured(cfg)) {
+            if (await mailConfigured()) {
               const report = await getSyncReport(provider === "microsoft" ? "graph" : "google");
               const mail = syncReportEmail({ provider, ok, error, summary, unresolved: report?.unresolved, adopted: report?.adopted, origin, at: now });
               await sendMail(schedule.report_to, mail.subject, ...withAudienceLine(mail, ok ? audiences : null));

@@ -5,7 +5,7 @@
 
 import edition from "@ee";
 import type { EnterpriseEdition } from "@/ee-contract";
-import { effectiveFeatures, evaluate, licenseGrants } from "./license";
+import { effectiveFeatures, evaluate, licenseGrants, licenseState } from "./license";
 import type { EntitlementFeature } from "./license";
 import { licenceEnforces, licenceEnforcesFrom } from "./license-enforcement";
 
@@ -25,6 +25,19 @@ export function eePresent(): boolean {
 export async function featureEnabled(feature: EntitlementFeature): Promise<boolean> {
   if (!ee().features.includes(feature)) return false;
   return licenseGrants(feature);
+}
+
+/**
+ * An Enterprise build with a licence that is active or in its grace
+ * (1.20.31): what an Enterprise convenience with no entitlement of its own
+ * needs, such as Set up with Microsoft for the workspace's outgoing email
+ * (ee/workspace-mail-setup; the dispatcher checks the same). The feature it
+ * sets up stays usable by hand in every edition.
+ */
+export async function enterpriseLicensed(): Promise<boolean> {
+  if (!eePresent()) return false;
+  const s = await licenseState();
+  return s.status === "active" || s.status === "grace";
 }
 
 // The licence answer for a key, remembered for a minute: featureEnabledFrom

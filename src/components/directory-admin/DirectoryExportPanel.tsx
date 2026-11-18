@@ -33,6 +33,7 @@ export function DirectoryExportPanel({
   initialPresets,
   initialMarkers = [],
   smtpConfigured = false,
+  mailM365 = false,
   runLog = {},
   linkOrigin,
 }: {
@@ -42,6 +43,8 @@ export function DirectoryExportPanel({
   initialMarkers?: ExportMarker[];
   /** Whether scheduled emails can be sent at all. */
   smtpConfigured?: boolean;
+  /** 1.20.31: email goes out through Microsoft 365 (an email is at most about 2.9 MB with its attachment). */
+  mailM365?: boolean;
   /** When each preset last went out on its schedule. */
   runLog?: Record<string, { at: string; ok: boolean; detail?: string }>;
   /** What download links are built on: the custom domain, when one is set (else this browser's origin). */
@@ -283,6 +286,7 @@ export function DirectoryExportPanel({
       if (next.join("\n") !== cur.schedule.recipients.join("\n")) updateSchedule({ recipients: next });
     },
     smtpConfigured,
+    mailM365,
     lastRun: runLog[cur.id],
     linkOrigin,
     saved: !isDraftId(cur.id),

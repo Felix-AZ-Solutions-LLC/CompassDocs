@@ -393,7 +393,9 @@ export function NewsletterPeople({
           Senders a newsletter can go out as — composers pick one per newsletter, or leave
           the workspace default from <SettingsLink href="/admin/notifications/email" />. Use{" "}
           <code className="rounded-sm bg-slate-100 px-1 text-xs">address@domain</code> or{" "}
-          <code className="rounded-sm bg-slate-100 px-1 text-xs">Name &lt;address@domain&gt;</code>.
+          <code className="rounded-sm bg-slate-100 px-1 text-xs">Name &lt;address@domain&gt;</code>. When email goes out through
+          Microsoft 365, it is always sent from the sending mailbox: a different address here becomes the Reply-To, under its name, so
+          answers still reach it.
         </p>
         {senders.length > 0 && (
           <ul className="mt-3 flex flex-wrap gap-2">

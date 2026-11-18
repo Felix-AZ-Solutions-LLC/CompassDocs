@@ -23,6 +23,7 @@ import type { HdCap } from "@/lib/helpdesk/roles";
 import { badRequest } from "@/lib/helpdesk/routes";
 import { markSetupSteps } from "@/lib/helpdesk/settings";
 import { getSmtpConfig } from "@/lib/smtp-config";
+import { getMailMethod, workspaceFrom } from "@/lib/mail-config";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +32,8 @@ const CAPS: HdCap[] = ["settings.manage", "channels.manage"];
 /** The workspace transport's bare From address, for the page's "sent from" help ('' when mail isn't set up). */
 async function transportFrom(): Promise<string> {
   try {
-    const from = (await getSmtpConfig()).from ?? "";
+    // 1.20.31: by the chosen mail method (the Microsoft 365 sending mailbox, or the SMTP From).
+    const from = (await workspaceFrom()) || ((await getMailMethod()) === "smtp" ? ((await getSmtpConfig()).from ?? "") : "");
     return (from.match(/<([^>]+)>/)?.[1] ?? from).trim();
   } catch {
     return "";
@@ -41,15 +43,16 @@ async function transportFrom(): Promise<string> {
 export async function GET() {
   const gate = await hdAnyCapGate(CAPS);
   if (gate instanceof NextResponse) return gate;
-  const [mailboxes, send_addresses, teams, mail_ready, transport_from] = await Promise.all([
+  const [mailboxes, send_addresses, teams, mail_ready, transport_from, transport_method] = await Promise.all([
     mailboxViews(),
     sendAddressViews(),
     // The dialog's team choice: names only (the Teams page needs teams.manage; this page does not).
     hq<{ id: number; name: string }>("SELECT id, name FROM hd_teams ORDER BY position, id"),
     helpdeskMailReady().catch(() => false),
     transportFrom(),
+    getMailMethod().catch(() => "smtp" as const),
   ]);
-  return NextResponse.json({ mailboxes, teams, mail_ready, transport_from, send_addresses, send_address_limit: SEND_ADDRESS_LIMITS.addresses });
+  return NextResponse.json({ mailboxes, teams, mail_ready, transport_from, transport_method, send_addresses, send_address_limit: SEND_ADDRESS_LIMITS.addresses });
 }
 
 export async function POST(req: Request) {

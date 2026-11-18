@@ -16,6 +16,8 @@ import { sendNewsletter, archiveNewsletter } from "./newsletter";
 import { getAppSettings } from "./settings-store";
 import { uploadDir } from "./uploads";
 import { audit } from "./audit";
+import { getMailMethod } from "./mail-config";
+import { queueM365Send } from "./newsletter-delivery-start";
 
 export async function sendDueNewsletters(): Promise<void> {
   const due = await claimDueNewsletters();
@@ -25,7 +27,7 @@ export async function sendDueNewsletters(): Promise<void> {
   for (const n of due) {
     try {
       const groupIds = (n.group_ids || "").split(",").map(Number).filter(Boolean);
-      const r = await sendNewsletter({
+      const input = {
         subject: n.subject,
         markdown: n.body,
         orgName: settings.company_name || "CompassDocs",
@@ -33,13 +35,28 @@ export async function sendDueNewsletters(): Promise<void> {
         accent: settings.accent_color || "#2e75bd",
         origin: n.scheduled_origin || "",
         authorName: n.author_name,
-        to: n.mode === "groups" ? groupIds : "all",
+        to: n.mode === "groups" ? groupIds : ("all" as const),
         from: n.from_address || undefined,
         attachments: (await listNewsletterFiles(n.id)).map((f) => ({
           filename: f.filename,
           path: join(uploadDir(), f.stored_name),
         })),
-      });
+      };
+      // 1.20.31: through Microsoft 365 the send is queued and paced in the background (lib/newsletter-delivery).
+      if ((await getMailMethod()) === "m365") {
+        let audience = "Everyone";
+        if (n.mode === "groups") {
+          const names = (await listGroups()).filter((g) => groupIds.includes(g.id)).map((g) => g.name);
+          audience = `Groups: ${names.join(", ") || groupIds.join(", ")}`;
+        }
+        const q = await queueM365Send(n.id, input, audience, null, { scheduled: true });
+        if ("error" in q) {
+          await addNewsletterComment({ newsletter_id: n.id, user_id: null, author_name: "Scheduler", body: `Scheduled send failed: ${q.error}`, kind: "comment" });
+          console.error(`[newsletter] scheduled send of #${n.id} failed: ${q.error}`);
+        }
+        continue;
+      }
+      const r = await sendNewsletter(input);
       if (r.error) {
         // Sending isn't possible right now (SMTP off, no recipients). Leave
         // the piece approved with the schedule cleared and say why in the

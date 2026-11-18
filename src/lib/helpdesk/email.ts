@@ -30,17 +30,19 @@
 // number, so knowing #1047 is not enough to write into it; the inbound side
 // still checks the sender may (lib/helpdesk/inbound).
 //
-// The SMTP transport is the one lib/mailer builds from Settings →
-// Notifications; it is built here because helpdesk mail needs headers the
-// shared sendMail does not take (Reply-To, Message-ID, References). Tests
+// The transport is the workspace's (lib/mailer workspaceTransport, by the
+// method chosen under Settings → Notifications → Email: SMTP or, 1.20.31,
+// Microsoft 365); helpdesk mail needs headers the shared sendMail does not
+// take (Reply-To, Message-ID, References). Tests
 // swap the transport with setHelpdeskTransportForTests. Mail is never sent
 // while a database client is held: callers run this after their
 // transaction. Server-only.
 
 import "server-only";
 import { randomBytes } from "node:crypto";
-import nodemailer from "nodemailer";
-import { getSmtpConfig, smtpConfigured } from "../smtp-config";
+import { getSmtpConfig } from "../smtp-config";
+import { getMailMethod, mailConfigured, workspaceFrom } from "../mail-config";
+import { workspaceTransport } from "../mailer";
 import { renderEmail } from "../email-templates";
 import { getUserById } from "../db";
 import { logEvent } from "../log";
@@ -198,43 +200,37 @@ export function setHelpdeskTransportForTests(t: HelpdeskTransport | null): void 
   testTransport = t;
 }
 
-async function smtpTransport(): Promise<{ send: HelpdeskTransport; from: string } | null> {
-  const cfg = await getSmtpConfig();
-  if (testTransport) return { send: testTransport, from: cfg.from || "helpdesk@example.test" };
-  if (!smtpConfigured(cfg)) return null;
-  const transport = nodemailer.createTransport({
-    host: cfg.host,
-    port: cfg.port,
-    secure: cfg.secure === "tls",
-    ignoreTLS: cfg.secure === "none",
-    requireTLS: cfg.secure === "starttls",
-    auth: cfg.user ? { user: cfg.user, pass: cfg.pass } : undefined,
-    connectionTimeout: 8000,
-    socketTimeout: 10000,
-  });
-  return {
-    from: cfg.from,
-    send: async (m) => {
-      await transport.sendMail({
-        from: m.from,
-        to: m.to,
-        cc: m.cc,
-        replyTo: m.replyTo,
-        subject: m.subject,
-        text: m.text,
-        html: m.html,
-        messageId: m.messageId,
-        references: m.references,
-        headers: m.headers,
-      });
-    },
-  };
+/**
+ * The workspace's transport for helpdesk mail (1.20.31: by the method chosen
+ * under Settings → Notifications → Email, lib/mailer workspaceTransport:
+ * SMTP, or Microsoft 365 as the one sending mailbox).
+ *
+ * Through Microsoft 365 the desk never sends From any address but the
+ * sending mailbox: Exchange often accepts a From the mailbox may not send as
+ * (202) and bounces it later (5.7.60), so a customer's reply would be
+ * recorded as sent and never arrive, with no refusal to fall back on. So a
+ * help address's send-from address is not used then (`m365only`): the mail
+ * leaves From the sending mailbox under the help address's name, Reply-To
+ * the help address (with the ticket's token), and answers still come back.
+ * A true From is the desk's own Microsoft 365 mailbox connection (1.20.7,
+ * lib/helpdesk/m365/send), which is tried first as before.
+ */
+type Transport = { send: HelpdeskTransport; from: string; m365only?: boolean };
+
+async function smtpTransport(): Promise<Transport | null> {
+  if (testTransport) {
+    const from = (await workspaceFrom().catch(() => "")) || (await getSmtpConfig()).from;
+    return { send: testTransport, from: from || "helpdesk@example.test", m365only: (await getMailMethod().catch(() => "smtp")) === "m365" };
+  }
+  const t = await workspaceTransport();
+  if (!t) return null;
+  return { from: t.from, send: (m) => t.send(m), m365only: t.method === "m365" };
 }
 
-/** Whether helpdesk mail can go out at all (SMTP set, or a test transport). */
+/** Whether helpdesk mail can go out at all (the chosen mail method set up, or a test transport). */
 export async function helpdeskMailReady(): Promise<boolean> {
   if (testTransport) return true;
-  return smtpConfigured(await getSmtpConfig());
+  return mailConfigured();
 }
 
 /** A From with the helpdesk's display name over the configured address. */
@@ -293,7 +289,7 @@ export function isSenderRejection(e: unknown): boolean {
  * have gone through, and the address is not to blame.
  */
 async function sendAsMailbox(
-  transport: { send: HelpdeskTransport; from: string },
+  transport: Transport,
   mail: HelpdeskOutgoingMail,
   who: { name: string; address: string; sendFrom: boolean; sendAddressId?: number; fromAddress?: string; sendFromFailing?: boolean; mailboxId?: number | null; m365?: boolean }
 ): Promise<void> {
@@ -306,7 +302,8 @@ async function sendAsMailbox(
     if (via === "refused") return transport.send(mail);
   }
   // The stored address went through cleanMailboxAddress when it was saved; it is checked again before it becomes a header.
-  const picked = who.sendFrom && who.sendAddressId ? cleanMailboxAddress(who.fromAddress) : null;
+  // Through Microsoft 365, never From a send-from address (see smtpTransport).
+  const picked = who.sendFrom && who.sendAddressId && !transport.m365only ? cleanMailboxAddress(who.fromAddress) : null;
   const own = picked && picked !== bareAddress(transport.from) ? fromWithName(picked, who.name) : null;
   if (!own) {
     await transport.send(mail);
@@ -327,7 +324,7 @@ const escHtml = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").re
 
 /** One test mail, no fallback: the provider's refusal is the answer, in its own words. */
 async function sendTestMail(
-  transport: { send: HelpdeskTransport; from: string },
+  transport: Transport,
   m: { to: string; from: string; shown: string; replyTo?: string; subject: string; line: string }
 ): Promise<{ ok: boolean; from: string; error?: string; senderRejected?: boolean }> {
   try {
@@ -346,7 +343,9 @@ async function sendTestMail(
   }
 }
 
-const NO_MAIL = "Outgoing mail isn't set up yet. Add your mail server in Settings, Notifications, Email first.";
+const NO_MAIL = "Outgoing mail isn't set up yet. Set it up in Settings, Notifications, Email first.";
+const M365_NO_SEND_FROM = (mailbox: string) =>
+  `Email goes out through Microsoft 365, so replies are sent from ${mailbox} under the help address's name and send-from addresses are not used. For replies that leave as the help address itself, connect its mailbox under Microsoft 365 on this page.`;
 
 /**
  * The Email settings page's "Send test" for one help address: a short mail
@@ -363,7 +362,7 @@ export async function sendMailboxTestMail(
 ): Promise<{ ok: boolean; from: string; error?: string; senderRejected?: boolean }> {
   const transport = await smtpTransport().catch(() => null);
   if (!transport) return { ok: false, from: "", error: NO_MAIL };
-  const picked = cleanMailboxAddress(box.send_address);
+  const picked = transport.m365only ? null : cleanMailboxAddress(box.send_address);
   const name = effectiveFromName(box.name, picked ? box.send_address_name : null);
   const shown = picked ?? bareAddress(transport.from);
   const line =
@@ -388,6 +387,10 @@ export async function sendSendAddressTestMail(
   if (!transport) return { ok: false, from: "", error: NO_MAIL };
   const address = cleanMailboxAddress(sender.address);
   if (!address) return { ok: false, from: "", error: "That is not an email address." };
+  if (transport.m365only && address !== bareAddress(transport.from)) {
+    // Nothing is sent and nothing is recorded on the address: it is not refused, it is not used.
+    return { ok: false, from: address, error: M365_NO_SEND_FROM(bareAddress(transport.from)) };
+  }
   const name = cleanMailboxName(sender.name) || cleanMailboxName(fallbackName);
   const line = `This test was sent from ${address} through your workspace mail server. Your mail provider accepted the address, so help addresses can send replies from it.`;
   return sendTestMail(transport, { to, from: name ? fromWithName(address, name) : address, shown: address, subject: `Test from ${address}`, line });

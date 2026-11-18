@@ -116,8 +116,8 @@ export async function remindDueReviews(): Promise<void> {
     }
   }
 
-  const { getSmtpConfig, smtpConfigured } = await import("./smtp-config");
-  if (!smtpConfigured(await getSmtpConfig())) return;
+  const { mailConfigured } = await import("./mail-config");
+  if (!(await mailConfigured())) return;
 
   // Per-user routing (1.19.0, lib/notify-policy): approvers can turn
   // review-reminder emails off or into a digest (Account → Notifications)

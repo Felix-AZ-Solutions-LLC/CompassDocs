@@ -50,6 +50,8 @@ interface MailboxData {
   teams: { id: number; name: string }[];
   mail_ready: boolean;
   transport_from: string;
+  /** 1.20.31: how the workspace's email is sent (Settings → Notifications → Email). */
+  transport_method?: "smtp" | "m365";
   /** 1.20.5: the send-from addresses (the second list, and the dialog's "Send replies from"). */
   send_addresses: HdSendAddressView[];
   send_address_limit: number;
@@ -311,8 +313,11 @@ export function EmailSettings() {
             </ul>
           )}
           <p className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
-            Replies about a ticket go out under the name of the address it came in on, and answers come back to that address. Each address sends its replies from {workspaceFrom},
-            or from a send-from address you pick when you edit it. Send test goes to your own email and shows how a reply leaves.
+            Replies about a ticket go out under the name of the address it came in on, and answers come back to that address. Each address sends its replies from {workspaceFrom}
+            {boxes.transport_method === "m365"
+              ? " (while email goes out through Microsoft 365, a send-from address is not used; connect the address's own mailbox under Microsoft 365 for that)."
+              : ", or from a send-from address you pick when you edit it."}{" "}
+            Send test goes to your own email and shows how a reply leaves.
             {!boxes.mail_ready && " Outgoing mail isn't set up yet, so nothing is sent."}
           </p>
         </Card>
@@ -373,9 +378,20 @@ export function EmailSettings() {
             </ul>
           )}
           <p className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
-            Mail goes out through your workspace mail server (<SettingsLink href="/admin/notifications/email">Settings → Notifications → Email</SettingsLink>). Your mail provider, such as SMTP2GO, must allow each address: verify the sender or its
-            domain there first. Send test goes to your own email and shows the provider&apos;s answer. Answers to a reply always come back to the help address, whatever address the
-            reply was sent from.
+            {boxes.transport_method === "m365" ? (
+              <>
+                Email goes out through Microsoft 365 as {workspaceFrom} (<SettingsLink href="/admin/notifications/email">Settings → Notifications → Email</SettingsLink>), so
+                send-from addresses are not used: replies leave from {workspaceFrom} under the help address&apos;s name, and answers still come back to the help address. For
+                replies that leave as the help address itself, connect its mailbox under <a href="#microsoft-365" className="link font-medium">Microsoft 365</a> below.
+              </>
+            ) : (
+              <>
+                Mail goes out through your workspace mail server (<SettingsLink href="/admin/notifications/email">Settings → Notifications → Email</SettingsLink>). Your mail
+                provider, such as SMTP2GO, must allow each address: verify the sender or its domain there first.
+              </>
+            )}{" "}
+            Send test goes to your own email and shows the provider&apos;s answer. Answers to a reply always come back to the help address, whatever address the reply was sent
+            from.
           </p>
         </Card>
 

@@ -48,6 +48,20 @@
 //               tags). A new app answers 404 Request_ResourceNotFound to its
 //               first `replicationLag` calls, as Microsoft can while it
 //               finishes making it.
+//   workspace mail  1.20.31 (lib/mail-m365, ee/workspace-mail-setup): sendMail
+//               also takes Graph's JSON form; a message with no recipients is
+//               400 ErrorInvalidRecipients once the access check has passed
+//               (the connection check, which sends nothing). An application
+//               access policy (app.policy: the mailboxes its group holds)
+//               limits an app's Entra-granted Mail.Send to those mailboxes,
+//               as Exchange does. `strictFrom` refuses a MIME From that is
+//               not the mailbox (403 ErrorSendAsDenied). `expiredSecrets`
+//               answers a sign-in with one of them AADSTS7000222. For the
+//               setup: Microsoft Graph's own service principal with its
+//               Mail.Send app role, GET /applications?$filter (appId or
+//               displayName), PATCH requiredResourceAccess, the service
+//               principal's appRoleAssignments (granting Mail.Send puts it in
+//               the app's token roles) and removePassword.
 //   provisioning  1.20.27: /servicePrincipals/{id}/synchronization/…
 //               templates (only on an app made from the non-gallery
 //               template: an App registrations app lists none and refuses a
@@ -147,7 +161,20 @@ export interface FakeApp {
   spTags?: string[];
   /** Calls on this app still answered 404 (Microsoft not done making it). */
   lag?: number;
+  /** 1.20.31: what the app registration asks for (requiredResourceAccess). */
+  requiredResourceAccess?: { resourceAppId: string; resourceAccess: { id: string; type: string }[] }[];
+  /** 1.20.31: app roles granted to its service principal (admin consent), by app role id. */
+  assignments?: { id: string; appRoleId: string; resourceId: string }[];
+  /** 1.20.31: secrets by keyId, for removePassword. */
+  secretIds?: Map<string, string>;
+  /** 1.20.31: an application access policy (RestrictAccess): the mailboxes its group holds. Null: none. */
+  policy?: Set<string> | null;
 }
+
+/** 1.20.31: Microsoft Graph's own service principal in the fake tenant, and its Mail.Send app role (Microsoft's well-known id). */
+export const GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000";
+export const GRAPH_SP_ID = "5c7f4b9a-1d2e-4f3a-8b6c-9d0e1f2a3b4c";
+export const MAIL_SEND_ROLE_ID = "b633e1c5-b582-4048-a93e-9f11b44c7e96";
 
 /** 1.20.27: a provisioning (synchronization) job on a service principal. */
 export interface FakeSyncJob {
@@ -228,6 +255,10 @@ export interface FakeM365 {
   devicePending: number;
   /** The delta query's next page link points at another host. */
   evilNextLink: boolean;
+  /** 1.20.31: a MIME From that is not the mailbox is refused (403 ErrorSendAsDenied). */
+  strictFrom: boolean;
+  /** 1.20.31: secrets that have expired (their sign-in answers AADSTS7000222). */
+  expiredSecrets: string[];
   addApp(over?: Partial<FakeApp> & { secret?: string }): FakeApp;
   addMailbox(address: string, kind?: FakeMailbox["kind"], over?: { upn?: string; objectId?: string }): FakeMailbox;
   addMessage(address: string, over?: Partial<FakeMessage>): FakeMessage;
@@ -318,6 +349,8 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
     tenantDomains: { "contoso.example": tenantId },
     devicePending: 1,
     evilNextLink: false,
+    strictFrom: false,
+    expiredSecrets: [],
     addApp(over = {}) {
       const app: FakeApp = {
         appId: randomUUID(),
@@ -496,7 +529,9 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
     const mb = resolve(key);
     if (!mb || (mb.kind !== "shared" && mb.kind !== "user")) return [404, gerr("ErrorInvalidUser", "The requested user is invalid.")];
     const address = mb.address;
-    const wide = sending ? app.roles.includes("Mail.Send") : app.roles.some((r) => r === "Mail.ReadWrite" || r === "Mail.Read" || r === "MailboxItem.Read.All" || r === "Mail-Advanced.ReadWrite.All");
+    const granted = sending ? app.roles.includes("Mail.Send") : app.roles.some((r) => r === "Mail.ReadWrite" || r === "Mail.Read" || r === "MailboxItem.Read.All" || r === "Mail-Advanced.ReadWrite.All");
+    // 1.20.31: an application access policy limits what Entra granted to the mailboxes its group holds.
+    const wide = granted && (!app.policy || app.policy.has(address));
     const scoped = sending ? app.sendScope.has(address) : app.scope.has(address);
     return wide || scoped ? null : [403, gerr("ErrorAccessDenied", "Access is denied. Check credentials and try again.")];
   };
@@ -618,14 +653,34 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
       const b = json();
       // A complex property is replaced whole.
       if (b.web && typeof b.web === "object") a.web = b.web as Record<string, unknown>;
+      if (Array.isArray(b.requiredResourceAccess)) a.requiredResourceAccess = b.requiredResourceAccess as FakeApp["requiredResourceAccess"];
       if (typeof b.signInAudience === "string") a.signInAudience = b.signInAudience;
       return [204, undefined];
+    }
+
+    if (path === "/applications" && method === "GET") {
+      // 1.20.31: an app registration by its client ID or its name.
+      const m = (url.searchParams.get("$filter") ?? "").match(/^(appId|displayName) eq '((?:[^']|'')*)'$/);
+      if (!m) return [400, gerr("Request_UnsupportedQuery", "Unsupported query.")];
+      const want = m[2].replace(/''/g, "'");
+      const value = [...apps.values()]
+        .filter((a) => live(a) && (m[1] === "appId" ? a.appId === want : a.displayName === want))
+        .map((a) => ({ id: a.objectId, appId: a.appId, displayName: a.displayName, requiredResourceAccess: a.requiredResourceAccess ?? [] }));
+      return [200, { value }];
     }
 
     if (path === "/servicePrincipals" && method === "GET") {
       const m = (url.searchParams.get("$filter") ?? "").match(/^(appId|displayName) eq '((?:[^']|'')*)'$/);
       if (!m) return [400, gerr("Request_UnsupportedQuery", "Unsupported query.")];
       const want = m[2].replace(/''/g, "'");
+      // 1.20.31: Microsoft Graph's own service principal, with its app roles.
+      if (m[1] === "appId" && want === GRAPH_APP_ID) {
+        return [200, { value: [{ id: GRAPH_SP_ID, appId: GRAPH_APP_ID, displayName: "Microsoft Graph", appRoles: [
+          { id: MAIL_SEND_ROLE_ID, value: "Mail.Send", allowedMemberTypes: ["Application"] },
+          { id: "e2a3a72e-5f79-4c64-b1b1-878b674786c9", value: "Mail.ReadWrite", allowedMemberTypes: ["Application"] },
+          { id: "df021288-bdef-4463-88db-98f22de89214", value: "User.Read.All", allowedMemberTypes: ["Application"] },
+        ] }] }];
+      }
       const value = [...apps.values()].filter((a) => live(a) && (m[1] === "appId" ? a.appId === want : a.displayName === want)).map(spJson);
       return [200, { value }];
     }
@@ -634,7 +689,26 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
     if (!spPath) return null;
     const a = [...apps.values()].find((x) => x.spId === spPath[1] && live(x));
     const rest = spPath[2] ?? "";
-    if (rest === "/appRoleAssignments") return null;
+    if (rest === "/appRoleAssignments") {
+      // 1.20.31: admin consent, as an app role assigned to the service principal.
+      if (!a) return [404, gerr("Request_ResourceNotFound", "No such service principal.")];
+      a.assignments ??= [];
+      if (method === "GET") return [200, { value: a.assignments.map((x) => ({ ...x, principalId: a.spId })) }];
+      if (method === "POST") {
+        if (fake.failStep === "consent") return denied;
+        const b = json();
+        const appRoleId = String(b.appRoleId ?? "");
+        const resourceId = String(b.resourceId ?? "");
+        if (a.assignments.some((x) => x.appRoleId === appRoleId && x.resourceId === resourceId)) {
+          return [400, gerr("Request_BadRequest", "Permission being assigned already exists on the object")];
+        }
+        const made = { id: randomBytes(16).toString("base64url"), appRoleId, resourceId };
+        a.assignments.push(made);
+        if (resourceId === GRAPH_SP_ID && appRoleId === MAIL_SEND_ROLE_ID && !a.roles.includes("Mail.Send")) a.roles = [...a.roles, "Mail.Send"];
+        return [201, { ...made, principalId: a.spId }];
+      }
+      return null;
+    }
     if (notYet(a)) return "sent";
     if (!a) return [404, gerr("Request_ResourceNotFound", "No such service principal.")];
     if (rest === "" && method === "GET") return [200, spJson(a)];
@@ -735,8 +809,14 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
       if (method === "POST" && path === "/applications") {
         const b = json();
         if (Array.isArray(b.requiredResourceAccess) && b.requiredResourceAccess.length) fake.log.push("! setup asked for Graph permissions");
-        const app = fake.addApp({ displayName: String(b.displayName ?? ""), tenant: delegated.get(bearer)!, secrets: [], activeAt: Date.now() + fake.signInDelayMs });
-        return send(res, 201, { id: app.objectId, appId: app.appId, displayName: app.displayName });
+        const app = fake.addApp({
+          displayName: String(b.displayName ?? ""),
+          tenant: delegated.get(bearer)!,
+          secrets: [],
+          activeAt: Date.now() + fake.signInDelayMs,
+          requiredResourceAccess: Array.isArray(b.requiredResourceAccess) ? (b.requiredResourceAccess as FakeApp["requiredResourceAccess"]) : [],
+        });
+        return send(res, 201, { id: app.objectId, appId: app.appId, displayName: app.displayName, requiredResourceAccess: app.requiredResourceAccess });
       }
       const pw = path.match(/^\/applications\/([^/]+)\/addPassword$/);
       if (method === "POST" && pw) {
@@ -746,7 +826,19 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
         if (!app) return send(res, 404, gerr("Request_ResourceNotFound", "No such application."));
         const secret = `fake~${randomBytes(24).toString("base64url")}`;
         app.secrets.push(secret);
-        return send(res, 200, { secretText: secret, keyId: randomUUID() });
+        const keyId = randomUUID();
+        (app.secretIds ??= new Map()).set(keyId, secret);
+        return send(res, 200, { secretText: secret, keyId });
+      }
+      const rpw = path.match(/^\/applications\/([^/]+)\/removePassword$/);
+      if (method === "POST" && rpw) {
+        const app = [...apps.values()].find((a) => a.objectId === rpw[1]);
+        if (!app) return send(res, 404, gerr("Request_ResourceNotFound", "No such application."));
+        const keyId = String(json().keyId ?? "");
+        const secret = app.secretIds?.get(keyId);
+        if (secret) app.secrets = app.secrets.filter((x) => x !== secret);
+        app.secretIds?.delete(keyId);
+        return send(res, 204);
       }
       if (method === "POST" && path === "/servicePrincipals") {
         if (fake.failStep === "servicePrincipals") return send(res, 403, gerr("Authorization_RequestDenied", "Insufficient privileges to complete the operation."));
@@ -832,10 +924,23 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
 
     if (sending && method === "POST") {
       if (fake.fail.sendMail) return send(res, fake.fail.sendMail, gerr(fake.fail.sendMail === 403 ? "ErrorSendAsDenied" : "ErrorInternalServerError", "The user account which was used to submit this request does not have the right to send mail on behalf of the specified sending account."));
+      if (String(req.headers["content-type"] ?? "").startsWith("application/json")) {
+        // 1.20.31: Graph's JSON form. With no recipients Graph refuses the message itself (the access check has passed).
+        const b = json() as { message?: { toRecipients?: unknown[]; ccRecipients?: unknown[]; bccRecipients?: unknown[] } };
+        const n = (b.message?.toRecipients?.length ?? 0) + (b.message?.ccRecipients?.length ?? 0) + (b.message?.bccRecipients?.length ?? 0);
+        if (!n) return send(res, 400, gerr("ErrorInvalidRecipients", "At least one recipient isn't valid., A message can't be sent because it contains no recipients."));
+        return send(res, 400, gerr("BadRequest", "The fake takes only the JSON form without recipients (the connection check)."));
+      }
       if (!String(req.headers["content-type"] ?? "").startsWith("text/plain")) return send(res, 400, gerr("BadRequest", "The fake takes the MIME form only."));
       const text = raw.toString("utf8");
       if (!/^[A-Za-z0-9+/=\r\n]+$/.test(text)) return send(res, 400, gerr("ErrorMimeContentInvalidBase64String", "Invalid base64 string for MIME content."));
-      mb.sent.push(Buffer.from(text, "base64"));
+      const mime = Buffer.from(text, "base64");
+      if (fake.strictFrom) {
+        const from = (mime.toString("utf8").match(/^From:\s*(.*)$/im)?.[1] ?? "").trim();
+        const addr = (from.match(/<([^>]+)>/)?.[1] ?? from).trim().toLowerCase();
+        if (addr !== mb.address && addr !== mb.upn) return send(res, 403, gerr("ErrorSendAsDenied", "The user account which was used to submit this request does not have the right to send mail on behalf of the specified sending account."));
+      }
+      mb.sent.push(mime);
       return send(res, 202);
     }
     if (rest === "/mailFolders/inbox/messages" && method === "GET") {
@@ -1003,6 +1108,9 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
     const app = apps.get(form.get("client_id") ?? "");
     if (!app || app.deleted) return send(res, 400, { error: "unauthorized_client", error_description: "AADSTS700016: Application with identifier was not found in the directory." });
     if (tenant !== app.tenant && tenant !== "contoso.example") return send(res, 400, { error: "invalid_request", error_description: "AADSTS90002: Tenant not found." });
+    if (fake.expiredSecrets.includes(form.get("client_secret") ?? "")) {
+      return send(res, 401, { error: "invalid_client", error_description: "AADSTS7000222: The provided client secret keys for app are expired. Visit the Azure portal to create new keys for your app." });
+    }
     if (!app.secrets.includes(form.get("client_secret") ?? "") || Date.now() < app.activeAt) {
       return send(res, 401, { error: "invalid_client", error_description: "AADSTS7000215: Invalid client secret provided. Ensure the secret being sent in the request is the client secret value." });
     }
@@ -1028,7 +1136,7 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
       fake.syncJobs.clear();
       fake.syncSecrets.clear();
       fake.deviceScopes.length = 0;
-      Object.assign(fake, { fail: {}, retryAfter: 0, delayMs: 0, maxInflight: 0, failAttachmentId: "", signInDelayMs: 0, failStep: "", replicationLag: 0, scimProbe: null, deleteFails: false, deviceTenant: tenantId, devicePending: 1, evilNextLink: false });
+      Object.assign(fake, { fail: {}, retryAfter: 0, delayMs: 0, maxInflight: 0, failAttachmentId: "", signInDelayMs: 0, failStep: "", replicationLag: 0, scimProbe: null, deleteFails: false, deviceTenant: tenantId, devicePending: 1, evilNextLink: false, strictFrom: false, expiredSecrets: [] });
       return send(res, 200, { ok: true });
     }
     if (op === "set") {
@@ -1036,8 +1144,8 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
       return send(res, 200, { ok: true });
     }
     if (op === "app") {
-      // An app registration the admin "made by hand", for the manual form.
-      const made = fake.addApp();
+      // An app registration the admin "made by hand", for the manual form (1.20.31: optionally with Entra roles, a name).
+      const made = fake.addApp({ ...(Array.isArray(b.roles) ? { roles: b.roles as string[] } : {}), ...(typeof b.displayName === "string" ? { displayName: b.displayName } : {}) });
       return send(res, 200, { tenant: made.tenant, client_id: made.appId, secret: made.secrets[0] });
     }
     if (op === "mailbox") {
@@ -1067,9 +1175,19 @@ export async function startFakeM365(opts: { port?: number } = {}): Promise<FakeM
       for (const app of apps.values()) app.roles = b.roles as string[];
       return send(res, 200, { ok: true });
     }
+    if (op === "policy") {
+      // 1.20.31: what New-ApplicationAccessPolicy -AccessRight RestrictAccess would do, for every app (null: no policy).
+      for (const app of apps.values()) app.policy = Array.isArray(b.addresses) ? new Set((b.addresses as string[]).map((a) => a.toLowerCase())) : null;
+      return send(res, 200, { ok: true });
+    }
+    if (op === "expire") {
+      // 1.20.31: every app's current secrets have expired.
+      for (const app of apps.values()) fake.expiredSecrets.push(...app.secrets);
+      return send(res, 200, { ok: true });
+    }
     if (op === "state") {
       return send(res, 200, {
-        apps: [...apps.values()].map((a) => ({ appId: a.appId, spId: a.spId, displayName: a.displayName, roles: a.roles, scope: [...a.scope], deleted: a.deleted })),
+        apps: [...apps.values()].map((a) => ({ appId: a.appId, spId: a.spId, displayName: a.displayName, roles: a.roles, scope: [...a.scope], deleted: a.deleted, secrets: a.secrets.length, requiredResourceAccess: a.requiredResourceAccess ?? [], policy: a.policy ? [...a.policy] : null })),
         mailboxes: [...mailboxes.values()].map((m) => ({
           address: m.address,
           upn: m.upn,

@@ -195,9 +195,9 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
   {
     label: "Operations",
     sections: [
-      { href: "/admin/notifications", label: "Notifications", icon: BellRing, description: "Webhooks, SMTP, channels, email templates, and notification policies.", keywords: "webhooks slack teams webex smtp email templates alerts channels", permission: "integration.webhook_read", docs: "https://docs.compassdocs.io/admin/notifications/", pages: [
+      { href: "/admin/notifications", label: "Notifications", icon: BellRing, description: "Webhooks, email (SMTP or Microsoft 365), channels, email templates, and notification policies.", keywords: "webhooks slack teams webex smtp email templates alerts channels", permission: "integration.webhook_read", docs: "https://docs.compassdocs.io/admin/notifications/", pages: [
           { href: "/admin/notifications", label: "Webhooks", icon: Webhook, keywords: "webhook slack teams webex channel events" },
-          { href: "/admin/notifications/email", label: "Email", icon: Share2, keywords: "smtp mail server host port from" },
+          { href: "/admin/notifications/email", label: "Email", icon: Share2, keywords: "smtp mail server host port from microsoft 365 office 365 exchange graph outlook send mail mailbox" },
           { href: "/admin/notifications/templates", label: "Email templates", icon: MailPlus, keywords: "email templates subject body tags" },
           { href: "/admin/notifications/policies", label: "Policies", icon: ListChecks, keywords: "notification policy defaults lock locked digest hourly daily quiet hours preferences who decides", permission: "notification.policy_read" },
           { href: "/admin/notifications/chat", label: "Ask in chat", icon: MessageSquare, keywords: "ask chat slack teams bot" },

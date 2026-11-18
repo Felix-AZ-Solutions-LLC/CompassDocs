@@ -83,7 +83,7 @@ async function recordRefusal(link: Link, helpAddress: string, error: string): Pr
       targetType: "helpdesk_mailbox",
       targetId: link.mailbox_id,
       targetLabel: helpAddress,
-      details: { address: helpAddress, mailbox: link.m365_address, error: text, fallback: "smtp_workspace_address" },
+      details: { address: helpAddress, mailbox: link.m365_address, error: text, fallback: "workspace_address" },
     });
   }
 }
@@ -109,7 +109,7 @@ const post = (creds: M365Credentials, link: Link, mime: Buffer) =>
  * Send one mail through Graph when its help address chose that. "sent": it
  * is in the mailbox's Sent Items. "not_chosen": nothing was done, SMTP
  * carries it as before. "refused": Microsoft turned it down (recorded); the
- * caller sends it by SMTP from the workspace address.
+ * caller sends it through the workspace's email from the workspace address.
  */
 export async function sendThroughM365(helpMailboxId: number, helpAddress: string, fromName: string, mail: HelpdeskOutgoingMail): Promise<M365SendResult> {
   const state = await m365State();

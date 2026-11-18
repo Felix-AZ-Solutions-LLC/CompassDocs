@@ -65,6 +65,8 @@ export interface PresetEditorModel {
   setRecipientsText: (text: string) => void;
   commitRecipients: (raw: string) => void;
   smtpConfigured: boolean;
+  /** 1.20.31: email goes out through Microsoft 365. */
+  mailM365?: boolean;
   lastRun?: { at: string; ok: boolean; detail?: string };
   /** The custom domain's origin, when one is set: download links are built on it. */
   linkOrigin?: string;
@@ -575,8 +577,14 @@ function ScheduleCard({ m }: { m: PresetEditorModel }) {
     >
       {!m.smtpConfigured && (
         <div className="notice-warn mb-3 rounded-lg border px-3 py-2 text-sm">
-          SMTP is not set up (<SettingsLink href="/admin/notifications/email" />); the schedule is kept but nothing is sent until it is.
+          Email is not set up (<SettingsLink href="/admin/notifications/email" />); the schedule is kept but nothing is sent until it is.
         </div>
+      )}
+      {m.smtpConfigured && m.mailM365 && (
+        <p className="mb-3 text-xs text-slate-500" data-testid="export-m365-limit">
+          Email goes out through Microsoft 365, where one email can be at most about 2.9 MB with its attachment. A larger export is not sent, and the last run says why: send
+          a link instead, or a smaller format.
+        </p>
       )}
       <div className="grid gap-3 @sm:grid-cols-2 @2xl:grid-cols-4">
         <Field label="How often">

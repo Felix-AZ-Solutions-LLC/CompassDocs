@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { canAccessSection } from "@/lib/section-access";
 import { listAllAnnouncements, listGroups, listWebhooks } from "@/lib/db";
-import { getSmtpConfig, smtpConfigured } from "@/lib/smtp-config";
+import { mailConfigured } from "@/lib/mail-config";
 import { AnnouncementsAdmin } from "@/components/AnnouncementsAdmin";
 import { PageContainer } from "@/components/PageWidth";
 
@@ -19,14 +19,14 @@ export default async function AnnouncementsPage() {
     listAllAnnouncements(),
     listGroups(),
     listWebhooks(),
-    getSmtpConfig(),
+    mailConfigured(),
   ]);
   return (
     <PageContainer>
     <AnnouncementsAdmin
       initial={announcements}
       groups={groups.map((g) => ({ id: g.id, name: g.name, member_count: g.member_count }))}
-      smtpReady={smtpConfigured(smtp)}
+      smtpReady={smtp}
       webhookCount={
         hooks.filter((h) => h.enabled === 1 && (h.events ?? []).includes("announcement.posted"))
           .length

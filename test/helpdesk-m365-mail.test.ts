@@ -1828,7 +1828,7 @@ describe("send replies through Microsoft 365", () => {
     await reply("Refused twice.");
     const a = await audits("helpdesk.m365.send_refused");
     assert.equal(a.length, before + 1, "once per streak");
-    assert.deepEqual([a.at(-1)!.details.address, a.at(-1)!.details.mailbox, a.at(-1)!.details.fallback], [HELP, HELP, "smtp_workspace_address"]);
+    assert.deepEqual([a.at(-1)!.details.address, a.at(-1)!.details.mailbox, a.at(-1)!.details.fallback], [HELP, HELP, "workspace_address"]);
     fake.fail = {};
     await reply("Through again.");
     assert.equal(sentMime().length, sent + 1);

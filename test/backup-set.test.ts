@@ -148,3 +148,20 @@ test("a database restore that fails says the attachments were already put back, 
   assert.equal(await readFile(join(uploadDir, "aaaabbbbccccddddeeeeffff00001111.txt"), "utf8"), "an attachment", "the files half went back first");
   assert.ok((await count("SELECT count(*)::int AS n FROM audit_log")) > 0, "the audit log is still there");
 });
+
+test("a dump from a newer pg_dump restores: only unknown SET parameters are tolerated", () => {
+  const newer = [
+    'pg_restore: error: could not execute query: ERROR:  unrecognized configuration parameter "transaction_timeout"',
+    "Command was: SET transaction_timeout = 0;",
+    "pg_restore: warning: errors ignored on restore: 1",
+  ].join("\n");
+  assert.equal(backup.onlyUnknownSettingErrors(newer), true);
+  const other = [
+    'pg_restore: error: could not execute query: ERROR:  relation "documents" does not exist',
+    "Command was: ALTER TABLE ONLY public.documents ADD CONSTRAINT x;",
+  ].join("\n");
+  assert.equal(backup.onlyUnknownSettingErrors(other), false, "a real error still fails");
+  const mixed = `${newer}\n${other}`;
+  assert.equal(backup.onlyUnknownSettingErrors(mixed), false, "anything beside the SET still fails");
+  assert.equal(backup.onlyUnknownSettingErrors(""), false, "no error printed: not tolerated");
+});

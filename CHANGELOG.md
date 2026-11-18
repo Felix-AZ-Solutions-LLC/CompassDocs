@@ -4,6 +4,62 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.31] - 2026-11-18
+
+Send the workspace's email through Microsoft 365.
+
+### Added
+- **Email through Microsoft 365.** Under Settings, Notifications, Email,
+  choose "Send email with: Microsoft 365" and enter the sending mailbox's
+  email address (and its sign-in name if different) and the app
+  registration. Mail goes out through Microsoft Graph, and a copy lands in
+  the mailbox's Sent Items, so use a dedicated mailbox. Available in every
+  edition.
+- **Set up with Microsoft** (Enterprise): the first run creates the
+  "CompassDocs Workspace Mail" app with only Mail.Send, grants consent and
+  makes a client secret. Later runs give that same app a new secret, change
+  nothing else and remove the secret made before. It never reuses another
+  app found by its name.
+- **Lock it to one mailbox.** The page shows the Exchange Online PowerShell
+  that limits the app to the sending mailbox, ready to copy.
+- **Check connection** signs in and confirms the app may send as the mailbox
+  without sending anything, and warns if it can also send as other
+  mailboxes.
+- **Newsletters through Microsoft 365** go out in the background at about 25
+  a minute, with progress, the reason for each failure and a way to retry
+  the ones that failed.
+- System diagnostics shows Microsoft 365 email by its last check and warns
+  30 days before a client secret made by Set up with Microsoft expires.
+
+### Changed
+- Switching to Microsoft 365 first says what changes: the From address,
+  helpdesk send-from addresses and the attachment size limit. Both SMTP and
+  Microsoft 365 settings are kept when you switch.
+- Through Microsoft 365, helpdesk replies go out from the sending mailbox
+  under the help address's name, and answers still come back to the help
+  address. Send-from addresses are used only with SMTP; the desk's own
+  Microsoft 365 mailbox connection still sends as each help mailbox.
+- One email through Microsoft 365 can be at most about 2.9 MB with its
+  attachments. Larger scheduled exports and newsletters are refused with a
+  clear message.
+- Changing the sending mailbox needs the client secret again.
+- Opening the admin page no longer contacts Microsoft; Run checks or Check
+  connection does.
+- Messages that said SMTP isn't configured now say email isn't set up.
+- The audit log records changing how email is sent, saving or checking
+  Microsoft 365 settings, replacing its secret, a one-click setup that did
+  not finish, and test emails.
+
+### Fixed
+- A backup restores again when it was made by a newer pg_dump (17 or
+  later) than the database server: the newer client's session settings,
+  such as transaction_timeout, no longer stop the restore.
+
+### Upgrading
+Nothing changes until an administrator chooses Microsoft 365: existing
+workspaces keep sending through SMTP. Two new tables for newsletter delivery
+are created on start.
+
 ## [1.20.30] - 2026-11-18
 
 Settings that name something deleted save again.

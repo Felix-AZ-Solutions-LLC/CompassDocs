@@ -4,7 +4,7 @@ import { listFields } from "@/lib/directory";
 import { listExportPresets } from "@/lib/directory-export-config";
 import { listMarkers } from "@/lib/directory-markers";
 import { getExportRunLog } from "@/lib/directory-export-schedule";
-import { getSmtpConfig, smtpConfigured } from "@/lib/smtp-config";
+import { getMailMethod, mailConfigured } from "@/lib/mail-config";
 import { DirectoryExportPanel } from "@/components/directory-admin/DirectoryExportPanel";
 
 import { settingsMetadata } from "@/lib/settings-sections";
@@ -16,11 +16,12 @@ export default async function DirectoryExportPage() {
   const fields = await listFields();
   // The markers first: the presets' marker ids are checked against them.
   const markers = await listMarkers(fields);
-  const [presets, smtp, runLog, domain] = await Promise.all([
+  const [presets, smtp, runLog, domain, method] = await Promise.all([
     listExportPresets(fields, markers),
-    getSmtpConfig(),
+    mailConfigured(),
     getExportRunLog(),
     getSetting("custom_domain"),
+    getMailMethod(),
   ]);
   // Download links go out by email, so they carry the address people know
   // the workspace by (the custom domain, as other emailed links do); without
@@ -31,7 +32,8 @@ export default async function DirectoryExportPage() {
       fields={fields}
       initialPresets={presets}
       initialMarkers={markers}
-      smtpConfigured={smtpConfigured(smtp)}
+      smtpConfigured={smtp}
+      mailM365={method === "m365"}
       runLog={runLog}
       linkOrigin={linkOrigin}
     />

@@ -14,7 +14,7 @@ import "server-only";
 import { pool, getSetting, readableSpaceIdsSql } from "./db";
 import { sendMail } from "./mailer";
 import { formatDate, settingsForUser } from "./format";
-import { smtpConfigured, getSmtpConfig } from "./smtp-config";
+import { mailConfigured } from "./mail-config";
 import { audit } from "./audit";
 import { findScopeFor, handbookFilterSql } from "./handbook-visibility";
 import type { Role } from "./types";
@@ -109,7 +109,7 @@ function escapeHtml(s: string): string {
 }
 
 export async function maybeSendWeeklyDigests(now = new Date()): Promise<void> {
-  if (!smtpConfigured(await getSmtpConfig())) return;
+  if (!(await mailConfigured())) return;
 
   const candidates = await q<{
     id: number;
