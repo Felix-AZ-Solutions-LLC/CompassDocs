@@ -119,11 +119,25 @@ export async function register() {
     }
     // 1.20.31: newsletters going out through Microsoft 365, about 25 a minute
     // (lib/newsletter-delivery; one claimed job at a time, so every instance may run this).
+    // 1.20.32: its sends are spread over the minute on the mailbox's shared budget, so the
+    // batch is not waited on here (the job's claim keeps a second batch from starting).
+    void (async () => {
+      try {
+        const { newsletterDeliveryTick } = await import("./lib/newsletter-delivery");
+        await newsletterDeliveryTick();
+      } catch (e) {
+        console.error("[newsletter] delivery error:", e);
+      }
+    })();
+    // 1.20.32: the outbox of the workspace's email through Microsoft 365 (lib/mail-outbox):
+    // rows a dead instance left half-sent are taken back, uncertain ones settled where the
+    // mailbox can be read, and the worker started. Each enqueue starts it too; the claim
+    // takes a row lock with SKIP LOCKED and one shared budget, so every instance may run this.
     try {
-      const { newsletterDeliveryTick } = await import("./lib/newsletter-delivery");
-      await newsletterDeliveryTick();
+      const { outboxTick } = await import("./lib/mail-outbox");
+      await outboxTick();
     } catch (e) {
-      console.error("[newsletter] delivery error:", e);
+      console.error("[mail-outbox] tick error:", e);
     }
     // Scheduled document publishes / auto-unpublishes (atomic claims too).
     try {

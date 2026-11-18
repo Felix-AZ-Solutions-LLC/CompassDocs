@@ -100,6 +100,7 @@ const mailer = require("../src/lib/mailer") as typeof import("../src/lib/mailer"
 const graphLib = require("../src/lib/helpdesk/m365/graph") as typeof import("../src/lib/helpdesk/m365/graph");
 const diagnostics = require("../src/lib/diagnostics") as typeof import("../src/lib/diagnostics");
 const delivery = require("../src/lib/newsletter-delivery") as typeof import("../src/lib/newsletter-delivery");
+const outbox = require("../src/lib/mail-outbox") as typeof import("../src/lib/mail-outbox");
 const email = require("../src/lib/helpdesk/email") as typeof import("../src/lib/helpdesk/email");
 const labels = require("../src/lib/audit-labels") as typeof import("../src/lib/audit-labels");
 const mailRoute = require("../src/app/api/admin/mail/route") as typeof import("../src/app/api/admin/mail/route");
@@ -118,6 +119,10 @@ const SMTP_KEYS = ["smtp_host", "smtp_port", "smtp_secure", "smtp_user", "smtp_p
 const KEYS = [...config.MAIL_CONFIG_KEYS, ...SMTP_KEYS];
 let saved: { key: string; value: string }[] = [];
 let auditFrom = 0;
+// 1.20.32: mail through Microsoft 365 is queued in the outbox (lib/mail-outbox); this file drains it by hand, unpaced.
+let outboxFrom = 0;
+let ledgerFrom = "";
+const drain = () => outbox.drainOutboxForTests();
 let fake: FakeM365;
 let app: FakeApp;
 let mailLock: WorkspaceMailLock | null = null;
@@ -153,6 +158,9 @@ before(async () => {
   saved = (await pool().query("SELECT key, value FROM settings WHERE key = ANY($1)", [KEYS])).rows;
   await pool().query("DELETE FROM settings WHERE key = ANY($1)", [KEYS]);
   auditFrom = Number((await pool().query("SELECT COALESCE(max(id), 0) AS n FROM audit_log")).rows[0].n);
+  outboxFrom = Number((await pool().query("SELECT COALESCE(max(id), 0) AS n FROM mail_outbox")).rows[0].n);
+  ledgerFrom = (await pool().query("SELECT now()::text AS t")).rows[0].t;
+  outbox.setOutboxForTests({ autoDrain: false, limits: { gapMs: 0, perMinute: 10_000 } });
   const expires = new Date(Date.now() + 3_600_000).toISOString();
   for (const role of ["admin", "viewer"] as const) {
     const r = await fixtureQuery(`INSERT INTO users (username, name, email, role, status) VALUES ($1, $2, $3, $4, 'active') RETURNING id`, [`${STAMP}-${role}`, `Mail ${role}`, `${STAMP}-${role}@example.test`, role]);
@@ -173,6 +181,10 @@ before(async () => {
 
 after(async () => {
   send.setM365RetryWaitForTests(null);
+  outbox.setOutboxForTests(null);
+  await pool().query("DELETE FROM mail_outbox WHERE id > $1", [outboxFrom]).catch(() => {});
+  await pool().query("DELETE FROM mail_send_ledger WHERE at >= $1", [ledgerFrom]).catch(() => {});
+  await pool().query("UPDATE mail_outbox_control SET paused_until = NULL, rate_until = NULL, pause_reason = '', pause_kind = '', noticed_reason = '' WHERE id = 1").catch(() => {});
   graphLib.clearM365TokensForTests();
   await pool().query("DELETE FROM settings WHERE key = ANY($1)", [KEYS]);
   for (const s of saved) await pool().query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", [s.key, s.value]);
@@ -363,9 +375,11 @@ describe("the configuration and the method", () => {
 // --- Sending --------------------------------------------------------------------------------
 
 describe("sending through Microsoft 365", () => {
-  test("sendMail: the MIME goes to Graph as the mailbox, under its name", async () => {
+  test("sendMail: queued in the outbox, then the MIME goes to Graph as the mailbox, under its name", async () => {
     const before = fake.mailboxes.get(MAILBOX)!.sent.length;
     await mailer.sendMail(["reader@example.test"], `Hello ${STAMP}`, "Plain words.", "<p>Plain words.</p>");
+    assert.equal(fake.mailboxes.get(MAILBOX)!.sent.length, before, "queued, not sent in the call");
+    await drain();
     assert.equal(fake.mailboxes.get(MAILBOX)!.sent.length, before + 1);
     const mime = sentText();
     assert.match(mime, /^From: "?Firm Docs"? <compassdocs@/m);
@@ -380,12 +394,14 @@ describe("sending through Microsoft 365", () => {
     const file = path.join(dir, "agenda.txt");
     fs.writeFileSync(file, "Agenda for Monday");
     await mailer.sendMail(["reader@example.test"], "Newsletter", "Body", undefined, "HR Team <hr@firm.example>", [{ filename: "agenda.txt", path: file }]);
+    // The MIME was built when it was queued: the file may go before it is sent.
+    fs.rmSync(dir, { recursive: true, force: true });
+    await drain();
     const mime = sentText();
     assert.match(mime, /^From: "?HR Team"? <compassdocs@/m);
     assert.match(mime, /^Reply-To: HR Team <hr@firm\.example>/m);
     assert.match(mime, /filename=agenda\.txt/);
     assert.match(mime, new RegExp(Buffer.from("Agenda for Monday").toString("base64")));
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   test("too large with its attachments: refused before anything is sent, in words; a newsletter loop stops", async () => {
@@ -406,13 +422,13 @@ describe("sending through Microsoft 365", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  test("429: Retry-After is waited out, twice at most, then the sentence", async () => {
+  test("429 on a direct send (the test email): Retry-After is waited out, twice at most, then the sentence", async () => {
     const waits: number[] = [];
     send.setM365RetryWaitForTests(async (ms) => void waits.push(ms));
     fake.retryAfter = 3;
     fake.fail.sendMail = 429;
     try {
-      await assert.rejects(() => mailer.sendMail(["reader@example.test"], "Busy", "Body"), /Microsoft 365 is limiting how fast this app sends\. Try again in 3 seconds\./);
+      await assert.rejects(() => mailer.sendMail(["reader@example.test"], "Busy", "Body", undefined, undefined, undefined, { direct: true }), /Microsoft 365 is limiting how fast this app sends\. Try again in 3 seconds\./);
       assert.deepEqual(waits, [3000, 3000]);
     } finally {
       delete fake.fail.sendMail;
@@ -421,16 +437,17 @@ describe("sending through Microsoft 365", () => {
     }
   });
 
-  test("refusals: no Mail.Send, an access policy that leaves the mailbox out, a mailbox that is not there", async () => {
+  test("refusals (direct sends): no Mail.Send, an access policy that leaves the mailbox out, a mailbox that is not there", async () => {
+    const direct = { direct: true } as const;
     app.roles = [];
     graphLib.clearM365TokensForTests();
-    await assert.rejects(() => mailer.sendMail(["r@example.test"], "x", "y"), (e: Error) => e.message === `The app isn't allowed to send as ${MAILBOX} (Mail.Send not granted or blocked by an application access policy).` && send.refusalRepeats(e));
+    await assert.rejects(() => mailer.sendMail(["r@example.test"], "x", "y", undefined, undefined, undefined, direct), (e: Error) => e.message === `The app isn't allowed to send as ${MAILBOX} (Mail.Send not granted or blocked by an application access policy).` && send.refusalRepeats(e));
     app.roles = ["Mail.Send"];
     app.policy = new Set([OTHER]);
     graphLib.clearM365TokensForTests();
-    await assert.rejects(() => mailer.sendMail(["r@example.test"], "x", "y"), /blocked by an application access policy/);
+    await assert.rejects(() => mailer.sendMail(["r@example.test"], "x", "y", undefined, undefined, undefined, direct), /blocked by an application access policy/);
     app.policy = new Set([MAILBOX]);
-    await mailer.sendMail(["r@example.test"], "allowed by the policy", "y");
+    await mailer.sendMail(["r@example.test"], "allowed by the policy", "y", undefined, undefined, undefined, direct);
     app.policy = null;
     const cfg = await config.getM365SendConfig();
     await assert.rejects(() => send.sendViaM365({ to: ["r@example.test"], subject: "x", text: "y" }, { ...cfg, mailbox: `nobody@${STAMP}.example.test` }), /Microsoft 365 found no mailbox nobody@/);
@@ -441,6 +458,7 @@ describe("sending through Microsoft 365", () => {
     assert.equal(t.method, "m365");
     assert.equal(t.from, `"Firm Docs" <${MAILBOX}>`);
     await t.send({ from: t.from, to: "req@example.test", replyTo: "help+hd-abc@firm.example", subject: "[#12 ref:abc]", text: "Reply", html: "<p>Reply</p>", messageId: "<hd.abc.1@firm.example>", references: "<hd.abc.root@firm.example>", headers: { "Auto-Submitted": "auto-replied" } });
+    await drain();
     const mime = sentText();
     assert.match(mime, /^Message-ID: <hd\.abc\.1@firm\.example>/m);
     assert.match(mime, /^References: <hd\.abc\.root@firm\.example>/m);
@@ -448,7 +466,7 @@ describe("sending through Microsoft 365", () => {
     fake.strictFrom = true;
     try {
       await assert.rejects(
-        () => t.send({ from: "support@firm.example", to: "req@example.test", subject: "x", text: "y", headers: {} }),
+        () => t.sendNow({ from: "support@firm.example", to: "req@example.test", subject: "x", text: "y", headers: {} }),
         (e: unknown) => {
           assert.equal(email.isSenderRejection(e), true);
           assert.match((e as Error).message, /^Microsoft 365 refused the From address/);
@@ -613,6 +631,7 @@ describe("the sending mailbox, the secret, the desk's From", () => {
     check = await patch({ action: "check" });
     assert.equal(check.body.check.ok, true);
     await mailer.sendMail(["reader@example.test"], "By sign-in name", "Body");
+    await drain();
     const mime = fake.mailboxes.get(ADDR)!.sent.at(-1)!.toString("utf8");
     assert.match(mime, new RegExp(`^From: .*${ADDR.replace(/[.]/g, "\\.")}`, "m"));
     // Back to the main mailbox for what follows.
@@ -836,6 +855,7 @@ describe("Set up with Microsoft (enterprise overlay)", { skip: !fs.existsSync(EE
     assert.equal(auto.details.client_id, a.appId);
     assert.ok(!JSON.stringify(auto.details).includes(a.secrets[0]));
     await mailer.sendMail(["reader@example.test"], "After one click", "Body");
+    await drain();
     assert.match(sentText(), /Subject: After one click/);
   });
 

@@ -45,7 +45,7 @@ export async function emailAnnouncement(input: {
   let sent = 0;
   for (const r of recipients) {
     try {
-      await sendMail([r.email], subject, text, html);
+      await sendMail([r.email], subject, text, html, undefined, undefined, { kind: "announcement" });
       sent++;
     } catch (e) {
       console.error(`Announcement email to ${r.email} failed:`, e);

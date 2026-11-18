@@ -295,6 +295,12 @@ export interface HdMessage {
   event?: string | null;
   /** 1.20.8: the email it came from had an HTML part, kept for the desk's "View original" (lib/helpdesk/email-html); agent-side only. */
   has_original_html?: boolean;
+  /**
+   * 1.20.32: an agent's reply whose email, through the workspace's Microsoft 365 outbox (lib/mail-outbox), failed, may
+   * not have gone out, was discarded or is still waiting; null when it went out (or never went through the outbox).
+   * Agent-side only (lib/helpdesk/messages listMessages mailState).
+   */
+  mail_delivery?: import("../mail-outbox-shared").MessageMailState | null;
 }
 
 export type HdReviewState = "pending" | "approved" | "returned";

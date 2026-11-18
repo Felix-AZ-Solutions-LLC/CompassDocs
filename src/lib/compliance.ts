@@ -127,7 +127,7 @@ export const ACK_NOTICE_HEARTBEAT_EVERY = 10;
 const ACK_REQUEST_LOCK_CLASS = 710101;
 
 async function defaultMailer(): Promise<Mailer | null> {
-  return (await mailConfigured()) ? sendMail : null;
+  return (await mailConfigured()) ? (to, subject, text, html) => sendMail(to, subject, text, html, undefined, undefined, { kind: "compliance" }) : null;
 }
 
 function errorMessage(e: unknown): string {

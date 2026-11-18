@@ -429,10 +429,13 @@ export async function sendNewsletter(input: NewsletterSendInput): Promise<{ sent
   if (recipients.length === 0) return { sent: 0, error: "No recipients matched." };
 
   const mail = await newsletterMail(input);
+  const isTest = typeof input.to === "object" && !Array.isArray(input.to);
   let sent = 0;
   for (const email of recipients) {
     try {
-      await sendMail([email], mail.subject, mail.text, mail.html, input.from || undefined, input.attachments);
+      // 1.20.32: a test send (to the author's own address, `to: { emails }`) is sent at once, never queued, so the
+      // author hears Microsoft's answer as in 1.20.31. A real send through Microsoft 365 is lib/newsletter-delivery's job.
+      await sendMail([email], mail.subject, mail.text, mail.html, input.from || undefined, input.attachments, { kind: "newsletter", direct: isTest });
       sent++;
     } catch (e) {
       console.error(`Newsletter to ${email} failed:`, e);
@@ -464,7 +467,7 @@ export async function sendWorkflowNotice(
   const allowed = await emailAllowedAddresses(emails, "newsletter_review");
   for (const email of [...new Set(emails)].filter((e) => allowed.has(e.trim().toLowerCase())).slice(0, 50)) {
     try {
-      await sendMail([email], subject, text);
+      await sendMail([email], subject, text, undefined, undefined, undefined, { kind: "workflow_notice" });
     } catch (e) {
       console.error(`Workflow notice to ${email} failed:`, e);
     }

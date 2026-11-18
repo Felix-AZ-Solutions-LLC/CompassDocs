@@ -67,7 +67,7 @@ export async function runScheduledDirectoryExports(now: Date = new Date()): Prom
               `${people.filter((p) => !p.hidden).length} people in the directory.`,
               origin ? `Change the schedule under ${origin}/admin/directory/export.` : "",
             ].filter(Boolean).join("\n\n");
-            await sendMail(preset.schedule.recipients, subject, text, undefined, undefined, [{ filename: file.filename, path: tmp }]);
+            await sendMail(preset.schedule.recipients, subject, text, undefined, undefined, [{ filename: file.filename, path: tmp }], { kind: "directory_export" });
           } finally {
             await fs.unlink(tmp).catch(() => {});
           }

@@ -71,6 +71,7 @@ import type { HdAttachment, HdMessage } from "@/lib/helpdesk/types";
 import { bytesLabel } from "../ui";
 import { OriginalEmailDialog } from "./OriginalEmail";
 import { useInlineEmail } from "./InlineEmail";
+import { MailStateLine } from "./MailStateLine";
 
 const VIA: Record<string, string> = { email: "by email", portal: "in Get help", desk: "", system: "", mcp: "via Claude", customer_portal: "in the customer portal", api: "via API" };
 
@@ -423,6 +424,8 @@ function MessageCard({
       {review.review_state === "returned" && review.review_note && (
         <p className="mt-1 pl-9 text-xs text-slate-600">Reviewer&apos;s note: {review.review_note}</p>
       )}
+      {/* 1.20.32: the reply's email failed, may not have gone out, or still waits in the Microsoft 365 outbox. */}
+      {m.mail_delivery && ticketNumber ? <MailStateLine ticketNumber={ticketNumber} messageId={m.id} state={m.mail_delivery} /> : null}
       <div className={`${rule ? "mt-1" : "mt-1.5"} min-w-0`}>{email.body}</div>
       {/* On paper the email is its text, so its pictures are listed there too (hidden on screen while it is formatted). */}
       {all.length > 0 && <FileList files={all} shown={files} formatted={email.formatted} />}

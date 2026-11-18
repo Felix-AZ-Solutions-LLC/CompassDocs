@@ -124,6 +124,30 @@ export async function checkMail(opts: { live?: boolean } = {}): Promise<Diagnost
 
 const PROBE_BUDGET_MS = 15_000;
 
+/**
+ * 1.20.32: the outbox of email through Microsoft 365 (lib/mail-outbox).
+ * Shown while Microsoft 365 is chosen or anything is left in it: paused by a
+ * refusal (fail), paused because Microsoft asked to slow down or messages
+ * that failed or may not have gone out (warn), else how much waits.
+ */
+export async function checkOutbox(): Promise<DiagnosticCheck | null> {
+  try {
+    const { outboxView } = await import("./mail-outbox");
+    const v = await outboxView();
+    if (!v.m365 && !v.queued && !v.problems_total) return null;
+    const fix = { href: "/admin/notifications/email#outbox", label: "Open the outbox" };
+    const label = "Email outbox";
+    if (v.paused?.kind === "refusal") return { key: "mail_outbox", label, status: "fail", detail: `Paused: ${v.paused.reason} ${v.queued} waiting.`, fix };
+    if (v.problems_total) {
+      return { key: "mail_outbox", label, status: "warn", detail: `${v.problems_total === 1 ? "1 email" : `${v.problems_total} emails`} failed or may not have gone out. ${v.queued} waiting.`, fix };
+    }
+    if (v.paused) return { key: "mail_outbox", label, status: "warn", detail: `Microsoft 365 asked to slow down; sending resumes at ${v.paused.until?.slice(11, 16) ?? "soon"} UTC. ${v.queued} waiting.`, fix };
+    return { key: "mail_outbox", label, status: "pass", detail: `${v.queued} waiting, ${v.sent_last_hour} sent in the last hour, ${v.day_recipients.toLocaleString("en-US")} of ${v.daily_limit.toLocaleString("en-US")} recipients today.` };
+  } catch (e) {
+    return { key: "mail_outbox", label: "Email outbox", status: "warn", detail: e instanceof Error ? e.message : "Could not read the outbox." };
+  }
+}
+
 async function checkM365Mail(live: boolean): Promise<DiagnosticCheck> {
   const label = "Email (Microsoft 365)";
   const cfg = await getM365SendConfig();
@@ -429,6 +453,7 @@ export async function runDiagnostics(req?: Request, opts: { live?: boolean } = {
     checkDatabase(),
     checkUploads(),
     checkMail({ live: opts.live === true }),
+    checkOutbox(),
     checkAi(),
     checkSemantic(),
     checkLicense(),

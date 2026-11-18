@@ -282,6 +282,8 @@ test.describe("Workspace email through Microsoft 365 (fake Microsoft)", () => {
     await smtp.getByLabel("Port").fill("2525");
     await smtp.getByLabel("From address").fill(`docs-${stamp}@acme.example`);
     await smtp.getByRole("button", { name: "Save and send by SMTP" }).click();
+    // 1.20.32: mail still waiting in the Microsoft 365 outbox on this rig makes the switch ask first.
+    await maybeConfirm(page);
     await expect(page.getByText("SMTP settings saved. Email now goes out by SMTP.")).toBeVisible({ timeout: 30_000 });
     await expect(card(page)).toHaveAttribute("data-method", "smtp");
     const back = (await api(page, "/api/admin/mail")).body;

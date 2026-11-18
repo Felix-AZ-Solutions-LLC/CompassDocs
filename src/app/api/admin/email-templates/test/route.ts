@@ -42,7 +42,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "That's a lot of test emails. Try again in a few minutes." }, { status: 429 });
   }
   try {
-    await sendMail([to], `[Test] ${out.subject.replace(/[\r\n]+/g, " ")}`.slice(0, 400), out.text, out.html);
+    // 1.20.32: direct, never through the outbox: the admin sees Microsoft's answer at once.
+    await sendMail([to], `[Test] ${out.subject.replace(/[\r\n]+/g, " ")}`.slice(0, 400), out.text, out.html, undefined, undefined, { direct: true });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     logEvent("error", "email_template.test_failed", { event, error: message });

@@ -940,7 +940,7 @@ async function activeReportRecipients(ack_report: ComplianceSettings["ack_report
 
 /** The SMTP settings' mailer, or null when SMTP is not configured (nothing can be sent). */
 async function defaultReportMailer(): Promise<Mailer | null> {
-  return (await mailConfigured()) ? sendMail : null;
+  return (await mailConfigured()) ? (to, subject, text, html) => sendMail(to, subject, text, html, undefined, undefined, { kind: "compliance_report" }) : null;
 }
 
 /** What the weekly entry point takes beside `now` (tests inject a mailer; the tick passes nothing). */

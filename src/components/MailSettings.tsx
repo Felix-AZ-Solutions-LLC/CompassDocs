@@ -28,6 +28,11 @@
 // The status chip is the chosen method's: Not set up, Set up, or Needs
 // attention (Microsoft 365's last check failed, or its secret ends within
 // 30 days).
+//
+// 1.20.32: under the card, the Outbox (components/MailOutbox) while Microsoft
+// 365 is chosen or mail is left in it. Switching to SMTP with mail still
+// waiting asks first (the server's 409 "confirm" sentences, as switching to
+// Microsoft 365 does), from the method picker and from the SMTP save.
 
 import { useState } from "react";
 import { Check, KeyRound, Send, ShieldCheck } from "lucide-react";
@@ -37,6 +42,8 @@ import { Chip, EnterpriseBadge } from "@/components/Chip";
 import { CopyButton } from "@/components/CopyButton";
 import { Field, FormError, Select, TextInput } from "@/components/form";
 import { MsDeviceSetup } from "@/components/MsDeviceSetup";
+import { MailOutbox } from "@/components/MailOutbox";
+import type { OutboxView } from "@/lib/mail-outbox-shared";
 import { Segmented } from "@/components/Segmented";
 import { useFormatDate } from "@/components/SettingsProvider";
 import { toast } from "@/components/Toasts";
@@ -82,15 +89,16 @@ function attention(v: MailView): boolean {
 async function withConfirm(body: Record<string, unknown>, url = URL_): Promise<{ ok: boolean; status: number; data: any } | null> {
   const r = await patch(body, url);
   if (r.status !== 409 || r.data?.code !== "confirm") return r;
-  const ok = await confirmSwitch(r.data.warnings ?? []);
+  const target: MailMethod = body.method === "smtp" || url === "/api/admin/smtp" ? "smtp" : "m365";
+  const ok = await confirmSwitch(r.data.warnings ?? [], target);
   return ok ? patch({ ...body, confirm: true }, url) : null;
 }
 
-export async function confirmSwitch(warnings: string[]): Promise<boolean> {
+export async function confirmSwitch(warnings: string[], target: MailMethod = "m365"): Promise<boolean> {
   if (!warnings.length) return true;
   return (
     (await confirmDialog({
-      title: "Send email through Microsoft 365?",
+      title: target === "smtp" ? "Send email by SMTP?" : "Send email through Microsoft 365?",
       body: (
         <ul className="list-disc space-y-1 pl-5" data-testid="mail-switch-warnings">
           {warnings.map((w) => (
@@ -103,7 +111,7 @@ export async function confirmSwitch(warnings: string[]): Promise<boolean> {
   );
 }
 
-export function MailSettings({ initial }: { initial: MailView }) {
+export function MailSettings({ initial, outbox = null }: { initial: MailView; outbox?: OutboxView | null }) {
   const [v, setV] = useState(initial);
   const [shown, setShown] = useState<MailMethod>(initial.method);
   const [switching, setSwitching] = useState(false);
@@ -131,51 +139,54 @@ export function MailSettings({ initial }: { initial: MailView }) {
   }
 
   return (
-    <Card
-      id="email"
-      className="scroll-mt-6"
-      title="How email is sent"
-      description="Notifications, reminders, digests, newsletters and helpdesk replies all go out this way."
-      actions={
-        !v.configured ? (
-          <Chip tone="neutral" size="sm">
-            Not set up
-          </Chip>
-        ) : attention(v) ? (
-          <Chip tone="warn" size="sm">
-            Needs attention
-          </Chip>
-        ) : (
-          <Chip tone="ok" size="sm">
-            Set up
-          </Chip>
-        )
-      }
-    >
-      <div data-testid="mail-settings" data-method={v.method}>
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-sm font-medium text-slate-700" aria-hidden>
-            Send email with
-          </span>
-          <Segmented<MailMethod> label="Send email with" options={MAIL_METHODS} value={shown} onChange={(m) => void choose(m)} />
-          {switching && <span className="text-xs text-slate-500">Switching…</span>}
-        </div>
-        {shown !== v.method && (
-          <p className="notice-info mt-3 rounded-lg border px-3 py-2 text-sm" data-testid="mail-draft">
-            {v.configured ? `Email still goes out ${goesOut(v.method)}.` : "Email isn't set up yet, so nothing goes out."} Once the {methodLabel(shown)} settings below are saved, email goes out{" "}
-            {goesOut(shown)} instead. Both settings are kept.
-          </p>
-        )}
-        <div className="mt-4">
-          {shown === "smtp" ? (
-            <SmtpForm v={v} use={v.method !== "smtp"} onSaved={setV} />
+    <>
+      <Card
+        id="email"
+        className="scroll-mt-6"
+        title="How email is sent"
+        description="Notifications, reminders, digests, newsletters and helpdesk replies all go out this way."
+        actions={
+          !v.configured ? (
+            <Chip tone="neutral" size="sm">
+              Not set up
+            </Chip>
+          ) : attention(v) ? (
+            <Chip tone="warn" size="sm">
+              Needs attention
+            </Chip>
           ) : (
-            <M365Form v={v} use={v.method !== "m365"} onSaved={setV} />
+            <Chip tone="ok" size="sm">
+              Set up
+            </Chip>
+          )
+        }
+      >
+        <div data-testid="mail-settings" data-method={v.method}>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-sm font-medium text-slate-700" aria-hidden>
+              Send email with
+            </span>
+            <Segmented<MailMethod> label="Send email with" options={MAIL_METHODS} value={shown} onChange={(m) => void choose(m)} />
+            {switching && <span className="text-xs text-slate-500">Switching…</span>}
+          </div>
+          {shown !== v.method && (
+            <p className="notice-info mt-3 rounded-lg border px-3 py-2 text-sm" data-testid="mail-draft">
+              {v.configured ? `Email still goes out ${goesOut(v.method)}.` : "Email isn't set up yet, so nothing goes out."} Once the {methodLabel(shown)} settings below are saved, email goes out{" "}
+              {goesOut(shown)} instead. Both settings are kept.
+            </p>
           )}
+          <div className="mt-4">
+            {shown === "smtp" ? (
+              <SmtpForm v={v} use={v.method !== "smtp"} onSaved={setV} />
+            ) : (
+              <M365Form v={v} use={v.method !== "m365"} onSaved={setV} />
+            )}
+          </div>
+          <TestRow method={shown} enabled={shownConfigured} />
         </div>
-        <TestRow method={shown} enabled={shownConfigured} />
-      </div>
-    </Card>
+      </Card>
+      <MailOutbox initial={outbox} m365={v.method === "m365"} />
+    </>
   );
 }
 
@@ -223,7 +234,11 @@ function SmtpForm({ v, use, onSaved }: { v: MailView; use: boolean; onSaved: (v:
 
   async function save() {
     setBusy(true);
-    const r = await patch({ host: s.host, port: s.port, secure: s.secure, user: s.user, ...(pass ? { pass } : {}), from: s.from, use }, "/api/admin/smtp");
+    const r = await withConfirm({ host: s.host, port: s.port, secure: s.secure, user: s.user, ...(pass ? { pass } : {}), from: s.from, use }, "/api/admin/smtp");
+    if (!r) {
+      setBusy(false);
+      return;
+    }
     if (!r.ok) {
       setBusy(false);
       toast("error", r.data?.error || "Could not save.");

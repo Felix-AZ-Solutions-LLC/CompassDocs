@@ -117,7 +117,7 @@ export async function notifyMentions(input: {
       await gate.route(
         target.id,
         { title: `${input.authorName} mentioned you`, body: `In "${input.docTitle}": ${excerpt}`, link: `/doc/${input.docId}#comments` },
-        () => sendMail([target.email], sent.subject, sent.text, sent.html)
+        () => sendMail([target.email], sent.subject, sent.text, sent.html, undefined, undefined, { kind: "mention" })
       );
     } catch (e) {
       console.error(`Mention email to ${target.email} failed:`, e);

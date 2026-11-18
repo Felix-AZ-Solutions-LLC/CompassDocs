@@ -88,7 +88,7 @@ export async function notifySpaceSubscribers(ev: SubscriberEvent): Promise<void>
     const item = { title: `${ev.actorName} ${verb} "${ev.title}"`, body: `In ${ev.spaceName}`, link: `/doc/${ev.docId}` };
     for (const r of recipients) {
       try {
-        await gate.route(r.id, item, () => sendMail([r.email], subject, text, html));
+        await gate.route(r.id, item, () => sendMail([r.email], subject, text, html, undefined, undefined, { kind: "subscription" }));
       } catch (e) {
         console.error(`Subscriber email to ${r.email} failed:`, e);
       }
