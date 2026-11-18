@@ -47,11 +47,12 @@ async function safely(step: string, fn: () => Promise<unknown>): Promise<void> {
   }
 }
 
-async function rules(event: "ticket_created" | "ticket_updated" | "requester_message", ticketId: number, ctx: HdHookContext) {
+async function rules(event: "ticket_created" | "ticket_updated" | "requester_message", ticketId: number, ctx: HdHookContext, messageId?: number) {
   if (ctx.fromAutomation) return;
   await safely(`automations.${event}`, async () => {
     const { runAutomations } = await import("./automations");
-    await runAutomations(event, ticketId, { triggeredBy: ctx.actorId ?? null }); // 1.20.20: for the reply lock
+    // 1.20.20: triggeredBy, for the reply lock. 1.20.33: messageId, the message requester_message rules read.
+    await runAutomations(event, ticketId, { triggeredBy: ctx.actorId ?? null, messageId: messageId ?? null });
   });
 }
 
@@ -111,7 +112,7 @@ export async function afterMessageAdded(
       await notifyReply(ticketId, messageId, { origin: ctx.origin, actorId: ctx.actorId, actorName: ctx.actorName, reopened: info.reopened, directRecipients: ctx.directRecipients });
     });
   }
-  if (info.fromRequester && info.kind === "public") await rules("requester_message", ticketId, ctx);
+  if (info.fromRequester && info.kind === "public") await rules("requester_message", ticketId, ctx, messageId);
   // Followers hear of it; an agent who wrote it follows (1.19.1, agent V3, lib/helpdesk/ccs).
   await safely("ccs.afterMessage", async () => {
     const { notifyFollowers, autoFollowOnReply } = await import("./ccs");

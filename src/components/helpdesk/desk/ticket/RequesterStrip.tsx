@@ -15,11 +15,15 @@
 //           no facts there is no band.
 //   open    four tiles under it: Contact, Devices, Work, History.
 //
+// 1.20.33: "Change requester" (desk/ticket/ChangeRequester), a bordered icon
+// button beside Show details, for agents who work the ticket (as for its other
+// field edits), on a ticket that isn't merged.
 // Open or closed is remembered per agent in this browser (localStorage).
 // Devices come from GET /api/helpdesk/tickets/[number]/assets/requester
 // (agents who work the ticket, a connected asset source, the cache only).
-// A ticket with no requester has no strip; the side panel then lists
-// everyone under "Also on this ticket" (contacts/TicketContacts).
+// A ticket with no requester has no strip (1.20.33: an agent who works it
+// gets one line with Add requester); the side panel then lists everyone
+// under "Also on this ticket" (contacts/TicketContacts).
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
@@ -62,6 +66,7 @@ import { getJson } from "../api";
 import { AssetGlyph, assetHref } from "../assets/TicketAssets";
 import { useDeskMe } from "../me";
 import { firstName, ticketHref } from "../ui";
+import { ChangeRequester } from "./ChangeRequester";
 
 /** How many ways to reach them the joined group shows before the rest move under "More". */
 const METHODS_SHOWN = 4;
@@ -155,9 +160,12 @@ export function RequesterStrip({
   canWork,
   onReply,
   refreshKey,
+  onRequesterChanged,
 }: {
   /** The ticket's display number (#1047). */
   number: number;
+  /** 1.20.33: "Change requester" shows (an agent who works an unmerged ticket); called after a change. */
+  onRequesterChanged?: () => void;
   /** The agent works the ticket: their devices are read (the asset routes answer nobody else). */
   canWork: boolean;
   /** "Reply in ticket" beside the email: focus the composer. Left out where there is no composer. */
@@ -182,11 +190,20 @@ export function RequesterStrip({
   }
   const card = data?.contacts[0];
   // No requester on the ticket (an alert, say): no strip. Everyone else stays in the side panel.
-  if (!card || card.relation !== "requester") return null;
-  return <Strip card={card} number={number} canWork={canWork} onReply={onReply} />;
+  // 1.20.33 review L10: an agent who works it may add one, from a one-line strip in its place.
+  if (!card || card.relation !== "requester") {
+    if (!canWork || !onRequesterChanged) return null;
+    return (
+      <section aria-label="Requester" data-testid="requester-strip-empty" className={`${CARD_CLASS} mt-3 flex flex-wrap items-center gap-3 px-3 py-2.5 print:hidden`}>
+        <p className="min-w-0 flex-1 text-sm text-slate-500">This ticket has no requester.</p>
+        <ChangeRequester number={number} current="" add onChanged={onRequesterChanged} />
+      </section>
+    );
+  }
+  return <Strip card={card} number={number} canWork={canWork} onReply={onReply} onRequesterChanged={onRequesterChanged} />;
 }
 
-function Strip({ card, number, canWork, onReply }: { card: HdContactCard; number: number; canWork: boolean; onReply?: () => void }) {
+function Strip({ card, number, canWork, onReply, onRequesterChanged }: { card: HdContactCard; number: number; canWork: boolean; onReply?: () => void; onRequesterChanged?: () => void }) {
   const me = useDeskMe();
   const [open, setOpen] = useRememberedOpen(me.id);
   const [devices, setDevices] = useState<HdRequesterDevices | null>(null);
@@ -414,6 +431,7 @@ function Strip({ card, number, canWork, onReply }: { card: HdContactCard; number
             )}
           </div>
         )}
+        {canWork && onRequesterChanged && <ChangeRequester number={number} current={card.name} onChanged={onRequesterChanged} className={`ml-auto @2xl:ml-0 ${TT_END}`} />}
         <button
           type="button"
           onClick={() => setOpen(!open)}
@@ -422,7 +440,7 @@ function Strip({ card, number, canWork, onReply }: { card: HdContactCard; number
           aria-label={open ? "Hide requester details" : "Show requester details"}
           data-tt={open ? "Hide requester details" : "Show requester details"}
           data-testid="requester-toggle"
-          className={`ml-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-surface text-slate-500 transition hover:bg-slate-50 hover:text-slate-700 print:hidden @2xl:ml-0 [&>svg]:h-4 [&>svg]:w-4 ${TT_END}`}
+          className={`${canWork && onRequesterChanged ? "" : "ml-auto "}inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-surface text-slate-500 transition hover:bg-slate-50 hover:text-slate-700 print:hidden @2xl:ml-0 [&>svg]:h-4 [&>svg]:w-4 ${TT_END}`}
         >
           {open ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}
         </button>

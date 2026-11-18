@@ -171,6 +171,40 @@ export function scanAddresses(raw: string, max = 1): string[] {
   return out;
 }
 
+/**
+ * 1.20.33: the address in angle brackets of a "Display Name <addr>" value: the last bracketed part outside double
+ * quotes (RFC 5322's angle-addr comes last; a quoted display name may hold its own "<…>"). Null when there is none
+ * or it holds no address. Whatever the display name says, even an address, is never the address: in
+ * `"ceo@company.com" <attacker@evil.example>` the sender is attacker@evil.example. One pass, linear.
+ */
+export function bracketedAddress(raw: string): { address: string; start: number } | null {
+  let quoted = false;
+  let open = -1;
+  let last: { from: number; to: number } | null = null;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (c === "\\" && quoted) {
+      i++;
+      continue;
+    }
+    if (c === '"') quoted = !quoted;
+    else if (!quoted && c === "<") open = i;
+    else if (!quoted && c === ">" && open >= 0) {
+      last = { from: open, to: i };
+      open = -1;
+    }
+  }
+  if (!last) return null;
+  const inner = raw.slice(last.from + 1, last.to).trim().replace(/^mailto:/i, "");
+  const a = scanAddresses(inner, 1)[0];
+  return a ? { address: a, start: last.from } : null;
+}
+
+/** 1.20.33: the sender's address of a header-like value: the bracketed one when there is one, else the first address. */
+export function headerAddress(raw: string): string {
+  return (bracketedAddress(raw)?.address ?? scanAddresses(raw, 1)[0] ?? "").toLowerCase();
+}
+
 /** "local@domain" without the plus tag, lower-cased; '' when the value is no address. */
 export function mailboxKey(address: string): string {
   const a = (address ?? "").trim().toLowerCase();

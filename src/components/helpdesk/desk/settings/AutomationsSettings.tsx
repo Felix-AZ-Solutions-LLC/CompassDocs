@@ -21,6 +21,11 @@
 // Admin's choice) and runs on that department's tickets: the dialog's Desk
 // department field, the list's filter and chip. Rules the person doesn't
 // manage show without controls; Move up / Move down swap their own rules only.
+// 1.20.33: the subject and the body (./AutomationBodyFields): under If, "Subject
+// and body" phrases and a closed "Advanced: patterns" with a Try it box; under
+// Then, "Change the requester" (to a person, or from the message with the
+// required "Only for messages from") and "Copy a value into a field" (into a
+// custom field of the rule's desk department's teams, or a tag).
 
 import { useEffect, useId, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Bot, Pencil, Plus, Trash2, X } from "lucide-react";
@@ -69,6 +74,22 @@ import {
   useDeskDepartmentChoices,
 } from "./DeskDepartmentField";
 import type { HdDeskDepartmentChoices } from "@/lib/helpdesk/desk-departments-shared";
+import {
+  CopyValuesAction,
+  RequesterAction,
+  SubjectBodyConditions,
+  bodyConditionsDraft,
+  bodyConditionsOf,
+  copyDrafts,
+  copyValuesOf,
+  requesterActionsOf,
+  requesterDraft,
+  REQUESTER_EVENTS,
+  type BodyConditionsDraft,
+  type CopyDraft,
+  type RequesterDraft,
+  type RuleField,
+} from "./AutomationBodyFields";
 
 /** 1.20.16: a rule as GET lists it, with its plain words (and its draft's). 1.20.23: can_edit (its desk department is one the person manages). */
 type RuleWords = { when: string; if: string[]; then: string[] };
@@ -88,6 +109,9 @@ export function AutomationsSettings() {
   // 1.20.16 review fix: who a rule may assign or notify (desk agents), and the names of the macros rules send.
   const [people, setPeople] = useState<{ id: number; name: string }[]>([]);
   const [ruleMacros, setRuleMacros] = useState<{ id: number; title: string; shared: boolean }[]>([]);
+  // 1.20.33: the people rules make the requester (by name), and the custom fields rules can copy into.
+  const [requesters, setRequesters] = useState<{ id: number; name: string }[]>([]);
+  const [fields, setFields] = useState<RuleField[]>([]);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<RuleRow | "new" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -101,7 +125,14 @@ export function AutomationsSettings() {
   const mine = (rows ?? []).filter((r) => r.can_edit !== false).map((r) => r.id);
 
   const load = () =>
-    getJson<{ automations: RuleRow[]; events?: Record<string, string>; people?: { id: number; name: string }[]; macros?: { id: number; title: string; shared: boolean }[] }>(
+    getJson<{
+      automations: RuleRow[];
+      events?: Record<string, string>;
+      people?: { id: number; name: string }[];
+      macros?: { id: number; title: string; shared: boolean }[];
+      requesters?: { id: number; name: string }[];
+      fields?: RuleField[];
+    }>(
       "/api/helpdesk/admin/automations",
       "Couldn't load the automations."
     )
@@ -111,6 +142,8 @@ export function AutomationsSettings() {
         if (d.events) setEvents(d.events);
         setPeople(Array.isArray(d.people) ? d.people : []);
         setRuleMacros(Array.isArray(d.macros) ? d.macros : []);
+        setRequesters(Array.isArray(d.requesters) ? d.requesters : []);
+        setFields(Array.isArray(d.fields) ? d.fields : []);
         // 1.20.16: ?id= opens that rule (a link from Claude) on the first load.
         if (!asked.current) {
           asked.current = true;
@@ -180,6 +213,9 @@ export function AutomationsSettings() {
     if (cats.length) parts.push(`category ${cats.join(" or ")}`);
     if (c.sources?.length) parts.push(`from ${c.sources.map((s) => HD_SOURCE_LABEL[s]).join(" or ")}`);
     if (c.request_type_ids?.length) parts.push(c.request_type_ids.map((id) => types?.find((t) => t.id === id)?.title ?? "a request type").join(" or "));
+    // 1.20.33: the subject and the body.
+    if (c.subject_contains?.length || c.subject_not_contains?.length || c.subject_pattern) parts.push("subject check");
+    if (c.body_contains?.length || c.body_not_contains?.length || c.body_pattern) parts.push("message check");
     const x = a.actions ?? {};
     const then: string[] = [];
     if (x.team_id) then.push(`move to ${teamName(x.team_id)}`);
@@ -191,6 +227,8 @@ export function AutomationsSettings() {
     if (x.macro_id) then.push("send a macro");
     if (x.notify) then.push("notify");
     if (x.assignee_id) then.push("assign");
+    if (x.requester_set || x.requester_from_message) then.push(x.requester_from_message ? "requester from the message" : "change the requester");
+    if (x.copy_values?.length) then.push(x.copy_values.length === 1 ? "copy a value" : `copy ${x.copy_values.length} values`);
     return `If ${parts.length ? parts.join(", ") : "any ticket"}, then ${then.join(", ") || "nothing"}.`;
   }
 
@@ -280,6 +318,9 @@ export function AutomationsSettings() {
         types={(types ?? []).map((t) => ({ id: t.id, name: t.title }))}
         people={people}
         ruleMacros={ruleMacros}
+        requesters={requesters}
+        fields={fields}
+        teamDepts={(teams ?? []).map((t) => ({ id: t.id, dept: t.desk_department_id ?? null }))}
         depts={depts}
         onClose={() => setEditing(null)}
         onSaved={(saved) => {
@@ -304,6 +345,9 @@ function RuleDialog({
   types,
   people,
   ruleMacros,
+  requesters,
+  fields,
+  teamDepts,
   depts,
   onClose,
   onSaved,
@@ -314,6 +358,9 @@ function RuleDialog({
   types: { id: number; name: string }[];
   people: { id: number; name: string }[];
   ruleMacros: { id: number; title: string; shared: boolean }[];
+  requesters: { id: number; name: string }[];
+  fields: RuleField[];
+  teamDepts: { id: number; dept: number | null }[];
   depts: HdDeskDepartmentChoices | null;
   onClose: () => void;
   onSaved: (saved?: HdAutomation) => void;
@@ -327,6 +374,10 @@ function RuleDialog({
   const [categories, setCategories] = useState<CategoryPairs>({ categories: [], subcategories: [] });
   const [x, setX] = useState<HdAutomationActions>({});
   const [tags, setTags] = useState("");
+  // 1.20.33: the subject and body conditions, the requester and the values copied (./AutomationBodyFields).
+  const [bodyC, setBodyC] = useState<BodyConditionsDraft>(bodyConditionsDraft(undefined));
+  const [req, setReq] = useState<RequesterDraft>(requesterDraft(undefined));
+  const [copies, setCopies] = useState<CopyDraft[]>([]);
   const [macros, setMacros] = useState<HdMacro[]>([]);
   // 1.20.23: the rule's desk department: it runs on that department's tickets (All departments: every ticket).
   const [dept, setDept] = useState(ALL_DEPTS);
@@ -348,6 +399,9 @@ function RuleDialog({
     setCategories({ categories: r?.conditions?.categories ?? [], subcategories: r?.conditions?.subcategories ?? [] });
     setX(r?.actions ?? {});
     setTags((r?.actions?.tags_add ?? []).join(", "));
+    setBodyC(bodyConditionsDraft(r?.conditions));
+    setReq(requesterDraft(r?.actions));
+    setCopies(copyDrafts(r?.actions));
     setDept(deptValue(rule === "new" ? (depts?.default_id ?? null) : rule.desk_department_id));
     setTried(false);
     setError("");
@@ -359,15 +413,35 @@ function RuleDialog({
     if (rule === "new") setDept(deptValue(startDept));
   }, [rule, startDept]);
 
-  const actions: HdAutomationActions = { ...x, tags_add: split(tags).length ? split(tags).map((t) => t.toLowerCase()) : undefined };
+  // 1.20.33: the requester and copy actions come from their own parts of the form.
+  const reqOut = requesterActionsOf(req, event);
+  const copyOut = copyValuesOf(copies);
+  const { requester_set: _rs, requester_from_message: _rm, copy_values: _cv, ...plain } = x;
+  const actions: HdAutomationActions = {
+    ...plain,
+    tags_add: split(tags).length ? split(tags).map((t) => t.toLowerCase()) : undefined,
+    ...reqOut.actions,
+    ...(copyOut.copies.length ? { copy_values: copyOut.copies } : {}),
+  };
   for (const k of Object.keys(actions) as (keyof HdAutomationActions)[]) {
     const v = actions[k];
     if (v === undefined || v === "" || v === null) delete actions[k];
   }
   const errs = {
     name: !name.trim() ? "Name the rule." : undefined,
-    actions: Object.keys(actions).length === 0 ? "Choose at least one thing for the rule to do." : undefined,
+    actions: Object.keys(actions).length === 0 && !reqOut.error && !copyOut.error ? "Choose at least one thing for the rule to do." : undefined,
+    requester: reqOut.error,
+    copies: copyOut.error,
   };
+  // 1.20.33: the fields this rule may copy into: its desk department's teams' and all teams' (All departments: any).
+  // One it already names that isn't offered (archived, another department's) is listed by name so it can be changed.
+  const ruleDept = deptPayload(dept);
+  const inDept = (f: RuleField) => ruleDept === null || f.all_teams || f.team_ids.some((id) => teamDepts.find((t) => t.id === id)?.dept === ruleDept);
+  const offered: RuleField[] = fields.filter((f) => !f.archived && inDept(f));
+  for (const c of copies) {
+    const f = c.field_key ? fields.find((y) => y.key === c.field_key) : undefined;
+    if (f && !offered.some((o) => o.key === f.key)) offered.push({ ...f, label: `${f.label} (${f.archived ? "archived" : "not a field of this department's teams"})` });
+  }
 
   // Which submit button was used (a ref: the form's submit runs before a state update would show).
   const mode = useRef<"save" | "publish">("save");
@@ -381,8 +455,9 @@ function RuleDialog({
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setTried(true);
-    if (errs.name || errs.actions) return;
+    if (errs.name || errs.actions || errs.requester || errs.copies) return;
     const conditions: HdAutomationConditions = {
+      ...bodyConditionsOf(bodyC),
       ...(c.team_ids?.length ? { team_ids: c.team_ids } : {}),
       ...(c.priorities?.length ? { priorities: c.priorities } : {}),
       ...(c.sources?.length ? { sources: c.sources } : {}),
@@ -518,6 +593,8 @@ function RuleDialog({
               </Field>
               {/* 1.20.6: ticked from the desk admin's list (Desk settings → Categories), never typed. */}
               <CategoryChecks label="Category is any of" value={categories} onChange={setCategories} />
+              {/* 1.20.33: phrases, and patterns under a closed "Advanced". */}
+              <SubjectBodyConditions value={bodyC} onChange={setBodyC} />
             </div>
           </fieldset>
           <fieldset className="rounded-lg border border-slate-200 p-3">
@@ -617,6 +694,9 @@ function RuleDialog({
               <Field label="Add an internal note" className="sm:col-span-2">
                 <Textarea value={x.internal_note ?? ""} onChange={(e) => setX({ ...x, internal_note: e.target.value || undefined })} className="h-20" maxLength={5000} />
               </Field>
+              {/* 1.20.33: the requester, and values copied from the subject or the message. */}
+              <RequesterAction value={req} onChange={setReq} names={requesters} tried={tried} error={errs.requester} eventAllowed={REQUESTER_EVENTS.includes(event)} />
+              <CopyValuesAction rows={copies} onChange={setCopies} fields={offered} tried={tried} error={errs.copies} />
             </div>
             {tried && errs.actions && (
               <p role="alert" className="mt-2 text-xs text-red-600">

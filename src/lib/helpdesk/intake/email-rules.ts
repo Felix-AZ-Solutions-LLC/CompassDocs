@@ -130,12 +130,16 @@ export function authVerdict(inp: AuthInput): AuthVerdict {
     else if (aligned(domain, fromDomain)) pass = true;
     else note(domain ? `DKIM pass for ${domain} (not aligned)` : "DKIM pass (signing domain unknown)");
   };
-  const seeDmarc = (verdict: string, headerFrom: string) => {
+  // 1.20.33: a DMARC pass counts only when it is for the From domain. Out of band (the provider's own field, or the
+  // Microsoft 365 intake, which aligns header.from itself) it is the provider's verdict on the From it parsed, which is
+  // the From used here. In an Authentication-Results header it must name header.from, and that must align with the
+  // From domain: a pass without header.from (or for another domain) said nothing about this From.
+  const seeDmarc = (verdict: string, headerFrom: string, outOfBandVerdict = false) => {
     const v = result(verdict);
     if (!v) return;
     checked = true;
-    if (v === "pass" && (!headerFrom || aligned(headerFrom, fromDomain))) pass = true;
-    else if (v === "pass") note(`DMARC pass for ${headerFrom} (not the From domain)`);
+    if (v === "pass" && (outOfBandVerdict ? !!fromDomain : aligned(headerFrom, fromDomain))) pass = true;
+    else if (v === "pass") note(headerFrom ? `DMARC pass for ${headerFrom} (not the From domain)` : "DMARC pass (header.from not given)");
     else {
       note(`DMARC ${v}`);
       if (v === "fail") dmarcFail = true;
@@ -144,7 +148,7 @@ export function authVerdict(inp: AuthInput): AuthVerdict {
 
   // 1. Out-of-band fields (SendGrid's form fields, the generic JSON's own).
   const outOfBand = !!(auth.spf || auth.dkim || auth.dmarc);
-  if (auth.dmarc) seeDmarc(auth.dmarc, "");
+  if (auth.dmarc) seeDmarc(auth.dmarc, "", true);
   if (auth.spf) seeSpf(auth.spf, "");
   if (auth.dkim) {
     // "{@example.com : pass, @other.example : fail}" or a bare "pass".

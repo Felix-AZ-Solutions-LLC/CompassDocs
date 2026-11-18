@@ -290,6 +290,8 @@ export interface CreateTicketInput {
   workflow_run_id?: number | null;
   attachments?: HdAttachment[];
   email_message_id?: string | null;
+  /** 1.20.33 (lib/helpdesk/automation-body-schema): an emailed opening message's sender check; absent = not an email. */
+  sender_verified?: boolean | null;
   /** 1.20.2 (lib/helpdesk/mailboxes): the address the ticket came in on; null/absent = its team's, else the default. */
   mailbox_id?: number | null;
   /** For tests and imports: the creation instant. */
@@ -395,8 +397,8 @@ export async function insertTicketTx(client: PoolClient, input: CreateTicketInpu
   if (body.trim() || (input.attachments?.length ?? 0) > 0) {
     const author = input.author ?? input.requester;
     await client.query(
-      `INSERT INTO hd_messages (ticket_id, author_id, author_name, author_email, kind, body, via, attachments, email_message_id, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      `INSERT INTO hd_messages (ticket_id, author_id, author_name, author_email, kind, body, via, attachments, email_message_id, created_at, sender_verified)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
       [
         row.id,
         author.id,
@@ -408,6 +410,7 @@ export async function insertTicketTx(client: PoolClient, input: CreateTicketInpu
         JSON.stringify(input.attachments ?? []),
         input.email_message_id ?? null,
         createdAt,
+        input.sender_verified ?? null,
       ]
     );
   }

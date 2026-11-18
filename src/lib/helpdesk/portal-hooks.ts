@@ -189,7 +189,7 @@ export async function portalContactBlocked(fromEmail: string): Promise<boolean> 
 export async function createPortalFollowUp(
   contactId: number,
   // closedNumber null (1.19.4, C7): a follow-up to a request in the recycle bin, which it never names.
-  input: { subject: string; body: string; name: string; email: string; teamId: number | null; emailMessageId: string | null; closedNumber: number | null; /** 1.20.2: the address the mail came in on. */ mailboxId?: number | null },
+  input: { subject: string; body: string; name: string; email: string; teamId: number | null; emailMessageId: string | null; closedNumber: number | null; /** 1.20.2: the address the mail came in on. */ mailboxId?: number | null; /** 1.20.33: the email's sender check passed (aligned). */ senderVerified?: boolean },
   ctx: { origin?: string }
 ): Promise<{ id: number; number: number }> {
   const { insertTicketTx } = await import("./tickets");
@@ -199,6 +199,8 @@ export async function createPortalFollowUp(
       body: input.body,
       requester: { id: null, name: input.name, email: input.email },
       via: "email",
+      // 1.20.33: whether the email's sender passed the sender check (lib/helpdesk/inbound).
+      sender_verified: input.senderVerified === true,
       source: "portal_external",
       source_ref: input.closedNumber ? { follow_up_of: input.closedNumber } : {},
       team_id: input.teamId,

@@ -480,6 +480,23 @@ export async function automationMacroRefusal(ruleDept: number | null, macroId: n
   }.`;
 }
 
+/**
+ * 1.20.33: a rule copies values only into custom fields its desk department's tickets can have: a field of All teams,
+ * or one assigned to at least one of the department's teams (a rule of All departments may name any). The sentence
+ * a save is refused with, or null.
+ */
+export async function automationFieldsRefusal(ruleDept: number | null, copies: readonly { field_key?: string }[] | null | undefined): Promise<string | null> {
+  const keys = [...new Set((copies ?? []).map((c) => c.field_key).filter((k): k is string => !!k))];
+  if (ruleDept === null || !keys.length) return null;
+  const fields = await hq<{ key: string; label: string; all_teams: number; team_ids: number[] | null }>("SELECT key, label, all_teams, team_ids FROM hd_custom_fields WHERE key = ANY($1::text[])", [keys]);
+  const teams = new Set((await hq<{ id: number }>("SELECT id FROM hd_teams WHERE desk_department_id = $1", [ruleDept])).map((r) => r.id));
+  for (const f of fields) {
+    if (f.all_teams === 1 || (f.team_ids ?? []).some((id) => teams.has(id))) continue;
+    return `The custom field ${f.label} isn't a field of any team in the ${await deskDepartmentName(ruleDept)} desk department, so this rule can't copy into it. Pick a field of one of its teams, or of all teams.`;
+  }
+  return null;
+}
+
 // --- References stay inside a department (1.20.23 review: M1, M2, M4, L2) -----------------------
 
 /** May an item of `usedDept` be used by one of `userDept`? When it is in that department, or in All departments. */

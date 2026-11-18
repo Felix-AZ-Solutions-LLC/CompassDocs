@@ -3268,7 +3268,8 @@ open in its own tab beside CompassDocs. Components live in
   time" (`RelativeTime`; "· from #1051" after a merge). The status line and
   the CC lines (`UserPlus` / `UserMinus`) are system lines; a field change
   (owner `UserRoundCheck` / `UserRoundX`, team `Users`, priority `Flag`,
-  category `FolderTree`, a custom field `SlidersHorizontal`, a rename
+  category `FolderTree`, a custom field `SlidersHorizontal`, the requester
+  `UserRoundPen` (1.20.33, "changed the requester from A to B"), a rename
   `PencilLine`, the event and its setup `CalendarCheck`, the language
   `Languages`, solve details
   `ClipboardCheck`, anything else `History`) is an internal line marked
@@ -4101,6 +4102,27 @@ it stays in the side panel's "Also on this ticket".
   (`aria-expanded`) over the five latest and "All N tickets", and
   "4.8 of 5 · 12 ratings" when they have rated. A tile with nothing to
   show is left out (Devices only while an asset source is connected).
+- **Change requester** (1.20.33, `desk/ticket/ChangeRequester`): for an
+  agent who works the ticket (as for its other field edits) on a ticket
+  that isn't merged, a 32px bordered icon button (`UserRoundPen`, `data-tt`
+  and `aria-label` "Change requester", the right-edge bubble recipe) sits
+  just before the details button and takes its `ml-auto`. It opens a
+  `Popover` (`role="dialog"`, `w-80`, `p-3`): a `text-sm font-semibold`
+  title, one `text-xs text-slate-500` sentence ("Replies and notices go to
+  the new requester from now on."), an `EntityPicker` of people (a picked
+  person shows as the bordered row with a `link` **Change**, as in New
+  ticket), "Or an email address" (`Field`, someone outside the
+  workspace), a checkbox "Keep {name} as a CC", a `FormError` for the
+  server's sentence, and ghost **Cancel** / primary `sm` **Change
+  requester**. A change toasts "{name} is now the requester." and reloads
+  the ticket; the timeline gets the agents-only requester line. The
+  sentence under the title also says rules no longer change it (an
+  agent's change locks the ticket's requester against automations).
+- **No requester** (1.20.33 review): where the strip would be, an agent who
+  works the ticket gets a one-line `CARD_CLASS` strip ("This ticket has no
+  requester." in `text-sm text-slate-500`) with a secondary `sm`
+  **Add requester** (`UserPlus`) that opens the same panel titled "Add
+  requester". Nobody else sees anything there.
 - **Only what exists.** The strip shows what the contact card, the asset
   cache and the tickets already hold. No field is invented for it: there
   are no working hours, language or requester notes until a feature
@@ -5329,6 +5351,79 @@ live in `components/helpdesk/desk/checklists`.
   picker.
 - Requesters, CCs and portal customers never see checklists: no
   requester route returns them and every timeline line is internal.
+
+## Helpdesk: automations, subject and body
+
+Rules that read the subject and the body and change the requester (1.20.33,
+`desk/settings/AutomationBodyFields`; the matching is
+`lib/helpdesk/automation-body-shared`, shared with the server). The rule
+dialog keeps its two fieldsets, If and Then; these parts go at the end of
+each.
+
+- **"Subject and body"** is a nested `fieldset` (`rounded-lg border
+  border-slate-200 p-3`, legend in the label tier `text-xs font-medium
+  text-slate-500`) at the end of If: one `text-xs text-slate-500` sentence
+  (one phrase a line; any case, exact text, part of a word counts), then a
+  `sm:grid-cols-2` grid of four `Textarea`s (`h-16`, `spellCheck={false}`):
+  Subject contains any of, Subject doesn't contain, Body contains any of,
+  Body doesn't contain. The keyword field above stays whole words.
+- **Advanced: patterns** is a native `<details>` under the grid (summary
+  `cursor-pointer text-sm font-semibold text-slate-800`), closed unless a
+  pattern is set, with one `text-xs` sentence on the engine and the limits
+  (RE2, no lookarounds or backreferences, 200 characters, the first 100 KB)
+  and two pattern fields: a `font-mono` `TextInput` (`maxLength` 200), a
+  "Match case" checkbox under it, then the Try it box.
+- **The Try it box** (`PatternTester`) is a closed `<details>` whose summary
+  reads "Try it" (`text-xs font-medium text-compass-700`). Open: a
+  `rounded-lg border bg-canvas p-3` panel with a labelled `font-mono
+  text-xs` `Textarea` ("Sample text", capped at 20,000 characters) and an
+  `aria-live="polite"` result under it: a `ok` `sm` chip **Matches** and
+  the matched text in `font-mono`, then an `ol` "Capture groups" ("Group 1:
+  LT-0042", "took no part" in `text-slate-500`); a `neutral` `sm` chip **No
+  match**; or the refusal sentence in `text-red-600`, the same sentence the
+  save gives. It runs in the browser with the server's own engine and
+  functions (loaded the first time it is used, 150ms after typing stops)
+  and says that nothing is sent. Where a pattern must have one group (Copy
+  a value), it also says in `ink-warn` when there is none, or more than
+  one. Any later tester (a label, a template) follows this recipe.
+- **"Change the requester"** is a nested `fieldset` spanning Then's grid
+  (`sm:col-span-2`): a `sm` `Segmented` (Leave as it is / To a person /
+  From the message, `flex-wrap`), then one `text-xs text-slate-500`
+  sentence that it works only when a ticket is created or the requester
+  writes, and that rules leave a requester an agent set by hand. With
+  another When chosen, a `role="alert"` `text-xs text-red-600` line says
+  so (the save is refused with the same sentence). To a person: the people `EntityPicker`
+  (or the picked row with **Change**), "Or an email address (optional)"
+  with a help sentence on outside senders, and "Keep the previous requester
+  as a CC"; with an address typed, a "Name (optional)" field shown for
+  someone outside the workspace. A person a saved rule names who is no longer in the picker
+  shows as a `warn` `md` chip "A deleted person" in that row, never hidden
+  (§A chosen entry that was deleted). From the message: one sentence on
+  what it is for, "Where to look" as two radios (After a label, on the same
+  line / The first address in the message), Labels (comma-separated,
+  "From:, Email:" by default), **Only for messages from** (required; a
+  `Textarea`, one address or @domain a line, whose help says in a sentence
+  why: otherwise anyone could write "From:" with someone else's address),
+  "Only accept addresses at (optional)", the two checkboxes (Keep the
+  original sender as a CC, Allow addresses of desk agents), and one closing
+  `text-xs` sentence on what is never picked and that a skip is noted on
+  the ticket. A missing scope is the field's own error once a save was
+  tried, the server's sentence on a refusal.
+- **"Copy a value into a field"** is the next full-width `fieldset`: a
+  sentence on what a misfit does, then an `ol` of bordered rows (`p-3`),
+  each a `sm:grid-cols-2` grid (From, Find it, the Label or the pattern
+  field with its own Try it, Into, "Only if the field is empty") and a quiet
+  `X` (`hover-danger`, `aria-label` "Remove copy N", `data-tt` "Remove") at
+  the right. **Into** lists the custom fields of the rule's desk
+  department's teams and of all teams ("Asset tag (Short text)"), then
+  "Add as a tag"; a field the rule names that isn't offered stays listed
+  with why ("(archived)"), and a deleted one reads "A deleted field". **Add
+  a value to copy** is a secondary `sm` `Plus` button, `disabled` inside
+  `Tooltip` ("A rule copies up to 10 values.") at the limit.
+- **What a rule couldn't do** (no usable address, a sender who failed the
+  sender check, a value that doesn't fit its field) is one agents-only
+  activity line on the ticket in the rule's name, written once per reason;
+  never a note card, never a toast.
 
 ## Helpdesk: before you solve
 

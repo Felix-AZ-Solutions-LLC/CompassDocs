@@ -475,7 +475,13 @@ export function TicketPane({ number }: { number: number }) {
         </div>
 
         {/* The requester strip (1.20.3): full pane width, above the conversation and the side column. */}
-        <RequesterStrip number={t.number} canWork={can} refreshKey={d.messages.length} onReply={can && !merged ? () => (elsewhere.away ? elsewhere.show() : composer.current?.focus("public")) : undefined} />
+        <RequesterStrip
+          number={t.number}
+          canWork={can}
+          refreshKey={`${d.messages.length}:${t.requester_id ?? ""}:${t.requester_email}`}
+          onReply={can && !merged ? () => (elsewhere.away ? elsewhere.show() : composer.current?.focus("public")) : undefined}
+          onRequesterChanged={can && !merged && !t.deleted_at ? () => void load(true).then(() => { refreshQueue(); people.reload(); }) : undefined}
+        />
 
         {/* One column: the grid is plain flow inside the article's scroll. Two (@2xl): it takes the
             height the header leaves (never less than 20rem; a short window then scrolls the article a

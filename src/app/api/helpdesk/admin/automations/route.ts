@@ -13,12 +13,16 @@
 //      departments' (?desk_department=<id>|all filters), each with can_edit; "Manage a desk
 //      department" opens it for their own teams' departments (review M3). A rule's macro must be of its department or
 //      All departments (400). A card's new draft goes into the caller's starting department.
+// 1.20.33 (additive): GET also lists `fields` (the custom fields a rule can copy into: key, label, kind, options, teams;
+//      archived ones marked) and `requesters` (the names of the people rules make the requester). A rule's "Copy a value
+//      into a field" must name a field of a team in its desk department, or of all teams (400, code desk_department).
 
 import { NextResponse } from "next/server";
 import type { SessionUser } from "@/lib/types";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { readJson } from "@/lib/helpdesk/access";
 import {
+  automationFieldsRefusal,
   automationMacroRefusal,
   deskDepartmentFieldOr,
   deskDepartmentGate,
@@ -69,15 +73,22 @@ export async function GET(req: Request) {
     draft_in_words: a.draft ? words[k++] : null,
   }));
   const macroIds = [...new Set(shapes.map((a) => a.actions?.macro_id).filter((x): x is number => !!x))];
-  const [agents, macros] = await Promise.all([
+  // 1.20.33: the people rules make the requester (by name, even one who is no desk agent), and the fields rules can copy into.
+  const requesterIds = [...new Set(shapes.map((a) => a.actions?.requester_set?.user_id).filter((x): x is number => !!x))];
+  const { listCustomFields } = await import("@/lib/helpdesk/custom-fields");
+  const [agents, macros, requesters, fields] = await Promise.all([
     listDeskAgents(),
     macroIds.length ? hq<{ id: number; title: string; owner_id: number | null }>("SELECT id, title, owner_id FROM hd_macros WHERE id = ANY($1::int[])", [macroIds]) : [],
+    requesterIds.length ? hq<{ id: number; name: string }>("SELECT id, COALESCE(NULLIF(name, ''), username) AS name FROM users WHERE id = ANY($1::int[]) AND status = 'active'", [requesterIds]) : [],
+    listCustomFields(),
   ]);
   return NextResponse.json({
     automations: withWords,
     events: HD_AUTOMATION_EVENT_LABEL,
     people: agents.filter((a) => a.role !== null).map((a) => ({ id: a.user_id, name: a.name || a.username })),
     macros: macros.map((m) => ({ id: m.id, title: m.title, shared: m.owner_id === null })),
+    requesters,
+    fields: fields.map((f) => ({ key: f.key, label: f.label, type: f.type, options: f.options, all_teams: f.all_teams, team_ids: f.team_ids, archived: f.archived })),
   });
 }
 
@@ -92,7 +103,7 @@ async function postHandler(req: Request) {
   if (dept instanceof NextResponse) return dept;
   const input = await validateAutomationInput(body);
   if (!input.ok) return NextResponse.json({ error: input.error }, { status: 400 });
-  const mismatch = await automationMacroRefusal(dept.value, input.value.actions?.macro_id);
+  const mismatch = (await automationMacroRefusal(dept.value, input.value.actions?.macro_id)) ?? (await automationFieldsRefusal(dept.value, input.value.actions?.copy_values));
   if (mismatch) return NextResponse.json({ error: mismatch, code: "desk_department" }, { status: 400 });
   let automation;
   try {

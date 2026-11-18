@@ -71,6 +71,8 @@ export interface AddMessageInput {
   asRequester?: boolean;
   attachments?: HdAttachment[];
   email_message_id?: string | null;
+  /** 1.20.33 (lib/helpdesk/automation-body-schema): an emailed message's sender check; absent = not an email. */
+  sender_verified?: boolean | null;
   /** Agents only: the status to set in the same step ("send and mark solved"). */
   then_status?: HdStatus;
   /**
@@ -167,8 +169,8 @@ export async function addMessage(ticketId: number, input: AddMessageInput, ctx: 
       }
     }
     const ins = await hq<HdMessage>(
-      `INSERT INTO hd_messages (ticket_id, author_id, author_name, author_email, kind, body, via, attachments, email_message_id, review_state)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING ${MSG_COLS}`,
+      `INSERT INTO hd_messages (ticket_id, author_id, author_name, author_email, kind, body, via, attachments, email_message_id, review_state, sender_verified)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING ${MSG_COLS}`,
       [
         ticketId,
         input.author.id,
@@ -180,6 +182,7 @@ export async function addMessage(ticketId: number, input: AddMessageInput, ctx: 
         JSON.stringify(input.attachments ?? []),
         input.email_message_id ?? null,
         reviewState,
+        input.sender_verified ?? null,
       ],
       client
     );

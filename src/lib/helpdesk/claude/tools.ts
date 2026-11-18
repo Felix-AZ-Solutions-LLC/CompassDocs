@@ -392,11 +392,45 @@ function automationInput(a: Record<string, any>): Record<string, unknown> {
   const x = (a.actions ?? {}) as Record<string, any>;
   const list = (v: unknown) => (Array.isArray(v) && v.length ? v : undefined);
   const conditions: Record<string, unknown> = {};
-  for (const k of ["team_ids", "categories", "subcategories", "priorities", "request_type_ids", "sources", "keywords"]) if (list(c[k])) conditions[k] = c[k];
+  for (const k of ["team_ids", "categories", "subcategories", "priorities", "request_type_ids", "sources", "keywords", "subject_contains", "subject_not_contains", "body_contains", "body_not_contains"]) {
+    if (list(c[k])) conditions[k] = c[k];
+  }
+  // 1.20.33: a pattern with text is used; an empty one is not.
+  for (const k of ["subject_pattern", "body_pattern"]) {
+    const p = c[k] as { pattern?: unknown; match_case?: unknown } | undefined;
+    if (p && typeof p.pattern === "string" && p.pattern.trim()) conditions[k] = { pattern: p.pattern, match_case: p.match_case === true };
+  }
   const actions: Record<string, unknown> = {};
   for (const k of ["team_id", "assignee_id", "macro_id"]) if (Number.isInteger(x[k]) && x[k] > 0) actions[k] = x[k];
   for (const k of ["priority", "status", "category", "subcategory", "internal_note", "notify"]) if (typeof x[k] === "string" && x[k].trim()) actions[k] = x[k];
   if (list(x.tags_add)) actions.tags_add = x.tags_add;
+  // 1.20.33: the requester and copied values (strict shapes: 0, "" and [] mean not used).
+  const rs = (x.requester_set ?? {}) as Record<string, any>;
+  if (Number.isInteger(rs.user_id) && rs.user_id > 0) actions.requester_set = { user_id: rs.user_id, keep_cc: rs.keep_cc === true };
+  else if (typeof rs.email === "string" && rs.email.trim()) {
+    actions.requester_set = { email: rs.email.trim(), ...(typeof rs.name === "string" && rs.name.trim() ? { name: rs.name.trim() } : {}), keep_cc: rs.keep_cc === true };
+  }
+  const rm = (x.requester_from_message ?? {}) as Record<string, any>;
+  if (rm.find === "label" || rm.find === "first") {
+    actions.requester_from_message = {
+      find: rm.find,
+      ...(rm.find === "label" && list(rm.labels) ? { labels: rm.labels } : {}),
+      senders: Array.isArray(rm.senders) ? rm.senders : [],
+      ...(list(rm.domains) ? { domains: rm.domains } : {}),
+      keep_cc: rm.keep_cc === true,
+      allow_agents: rm.allow_agents === true,
+    };
+  }
+  if (list(x.copy_values)) {
+    actions.copy_values = (x.copy_values as Record<string, any>[]).map((cv) => ({
+      from: cv.from === "subject" ? "subject" : "body",
+      ...(typeof cv.label === "string" && cv.label.trim() ? { label: cv.label } : {}),
+      ...(typeof cv.pattern === "string" && cv.pattern.trim() ? { pattern: cv.pattern } : {}),
+      match_case: cv.match_case === true,
+      ...(typeof cv.field_key === "string" && cv.field_key.trim() ? { field_key: cv.field_key.trim() } : { tag: cv.tag === true }),
+      ...(typeof cv.field_key === "string" && cv.field_key.trim() ? { only_if_empty: cv.only_if_empty !== false } : {}),
+    }));
+  }
   return { name: a.name, event: a.event, conditions, actions };
 }
 

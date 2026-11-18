@@ -379,8 +379,8 @@ test.describe("claude in the desk (licensed, fake Messages API)", () => {
                 id: 0,
                 name: rule,
                 event: "ticket_created",
-                conditions: { team_ids: [], categories: [], subcategories: [], priorities: [], request_type_ids: [], sources: [], keywords: ["printer", "toner"] },
-                actions: { team_id: teamId, assignee_id: 0, priority: "high", status: "", category: "", subcategory: "", tags_add: ["printer"], internal_note: "", macro_id: 0, notify: "" },
+                conditions: { team_ids: [], categories: [], subcategories: [], priorities: [], request_type_ids: [], sources: [], keywords: ["printer", "toner"], subject_contains: [], subject_not_contains: [], body_contains: [], body_not_contains: [], subject_pattern: { pattern: "", match_case: false }, body_pattern: { pattern: "", match_case: false } },
+                actions: { team_id: teamId, assignee_id: 0, priority: "high", status: "", category: "", subcategory: "", tags_add: ["printer"], internal_note: "", macro_id: 0, notify: "", requester_set: { user_id: 0, email: "", name: "", keep_cc: false }, requester_from_message: { find: "", labels: [], senders: [], domains: [], keep_cc: false, allow_agents: false }, copy_values: [] },
               },
             },
             {

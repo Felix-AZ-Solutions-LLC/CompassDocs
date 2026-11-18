@@ -203,7 +203,9 @@ export const TOOL_SPECS: ToolSpec[] = [
     name: "draft_automation",
     cap: "drafts",
     description:
-      "Draft an automation rule (When an event, If the ticket matches, Then do things), or the whole rule as it should become for an existing one (id from list_desk_settings). Nothing runs: the agent sees a card and clicks Save as draft; a new rule is saved switched off, changes wait beside the running rule, until someone who manages automations publishes them in Desk settings → Automations. Empty lists, empty strings and 0 mean not used. At least one action. Only for agents who manage automations.",
+      "Draft an automation rule (When an event, If the ticket matches, Then do things), or the whole rule as it should become for an existing one (id from list_desk_settings). Nothing runs: the agent sees a card and clicks Save as draft; a new rule is saved switched off, changes wait beside the running rule, until someone who manages automations publishes them in Desk settings → Automations. Empty lists, empty strings and 0 mean not used. At least one action. Only for agents who manage automations. " +
+      "Phrases match exact text in any case; patterns are RE2 regular expressions (no lookarounds or backreferences), up to 200 characters. " +
+      "The requester can change only on ticket_created or requester_message, and never on a ticket whose requester an agent set by hand. requester_from_message makes an address found in the message the requester: it needs senders, the forwarder or web-form mailbox addresses (or @domain) it may act on, or the draft is refused, because anyone could otherwise write \"From:\" with someone else's address. copy_values copies a value after a label, or a pattern's one capture group, into a custom field (by key) or a tag.",
     input_schema: obj({
       id: { type: "integer", description: "0 for a new rule, or the rule's id to propose changes to it." },
       name: { type: "string", description: "Up to 120 characters." },
@@ -216,6 +218,12 @@ export const TOOL_SPECS: ToolSpec[] = [
         request_type_ids: { type: "array", items: { type: "integer" } },
         sources: { type: "array", items: { type: "string" }, description: "portal, email, chat, phone, api, …" },
         keywords: { type: "array", items: { type: "string" }, description: "Whole words in the subject or first message." },
+        subject_contains: { type: "array", items: { type: "string" }, description: "Any of these phrases in the subject." },
+        subject_not_contains: { type: "array", items: { type: "string" }, description: "None of these phrases in the subject." },
+        body_contains: { type: "array", items: { type: "string" }, description: "Any of these phrases in the message." },
+        body_not_contains: { type: "array", items: { type: "string" }, description: "None of these phrases in the message." },
+        subject_pattern: obj({ pattern: { type: "string", description: "A regular expression; empty for none." }, match_case: { type: "boolean" } }),
+        body_pattern: obj({ pattern: { type: "string", description: "A regular expression; empty for none." }, match_case: { type: "boolean" } }),
       }),
       actions: obj({
         team_id: { type: "integer" },
@@ -228,6 +236,33 @@ export const TOOL_SPECS: ToolSpec[] = [
         internal_note: { type: "string" },
         macro_id: { type: "integer", description: "A shared macro's id." },
         notify: { type: "string", enum: ["", "assignee", "team"] },
+        requester_set: obj({
+          user_id: { type: "integer", description: "Make this person the requester; 0 for none." },
+          email: { type: "string", description: "Or this address; empty for none." },
+          name: { type: "string", description: "The name to show for that address; empty for the address." },
+          keep_cc: { type: "boolean", description: "Keep the previous requester as a CC." },
+        }),
+        requester_from_message: obj({
+          find: { type: "string", enum: ["", "label", "first"], description: "Empty: not used. label: the address after a label; first: the first address in the message." },
+          labels: { type: "array", items: { type: "string" }, description: 'Labels tried in order; empty for "From:", "Email:".' },
+          senders: { type: "array", items: { type: "string" }, description: "Required when used: the forwarder addresses or @domains it may act on." },
+          domains: { type: "array", items: { type: "string" }, description: "Only addresses at these @domains; empty for any." },
+          keep_cc: { type: "boolean", description: "Keep the original sender as a CC." },
+          allow_agents: { type: "boolean", description: "Allow a desk agent's address." },
+        }),
+        copy_values: {
+          type: "array",
+          description: "Up to 10; empty for none.",
+          items: obj({
+            from: { type: "string", enum: ["body", "subject"] },
+            label: { type: "string", description: "The label before the value (the rest of its line); empty when a pattern is used." },
+            pattern: { type: "string", description: "A regular expression with one capture group; empty when a label is used." },
+            match_case: { type: "boolean" },
+            field_key: { type: "string", description: "The custom field's key; empty to add a tag." },
+            tag: { type: "boolean", description: "Add the value as a tag." },
+            only_if_empty: { type: "boolean", description: "Only while the field is empty (usually true)." },
+          }),
+        },
       }),
     }),
   },
