@@ -84,7 +84,16 @@ export async function requesterCard(t: HdTicket, viewer?: { role: Role }): Promi
 /** The agent's full view of a ticket. */
 export async function ticketDetail(user: { id: number; role: Role }, t: HdTicket, canWork: boolean): Promise<HdTicketDetail> {
   const [messages, requester, form, workflow, children, hours, policy, parent] = await Promise.all([
-    listMessages(t.id),
+    // 1.20.28: each attachment its formatted email draws itself is marked `inline` (lib/helpdesk/email-html); a failure
+    // only leaves every file listed.
+    listMessages(t.id).then((list) =>
+      import("./email-html")
+        .then((m) => m.markInlineAttachments(list))
+        .catch((e) => {
+          console.error("[helpdesk] inline attachments:", e);
+          return list;
+        })
+    ),
     requesterCard(t, user),
     requestForm(t.request_type_id),
     t.workflow_run_id ? progress(t.id, "agent") : Promise.resolve(null),

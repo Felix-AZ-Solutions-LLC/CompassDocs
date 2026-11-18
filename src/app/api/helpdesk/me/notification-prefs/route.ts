@@ -3,7 +3,8 @@
 //     zone, teams, devices and whether a pause holds now
 // PUT /api/helpdesk/me/notification-prefs   change part of them:
 //     { matrix?, teams?, quiet?, preview?, sound?, pause?: "1h"|"tomorrow"|"indefinite"|"off",
-//       auto_follow?, email_view?: "formatted"|"plain" (1.20.11: how emails read in the desk conversation) }
+//       auto_follow?, email_view?: "formatted"|"plain" (1.20.11: how emails read in the desk conversation),
+//       ticket_order?: "newest"|"oldest" (1.20.28: the ticket pane's Order) }
 //     A matrix cell the workspace locks is refused.
 // Agents only, licence-gated, same-origin (Helpdesk 1.19.0).
 

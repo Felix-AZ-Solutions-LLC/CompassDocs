@@ -51,6 +51,7 @@ import { hq, hqOne } from "./db-core";
 import { EMAIL_HTML_LIMITS, EMAIL_HTML_SANITIZER_VERSION, HD_ORIGINAL_COPY, type HdOriginalInfo } from "./email-html-shared";
 import { cidKey, sanitizeEmailHtml } from "./email-html-sanitize";
 import type { InboundEmail } from "./inbound-parse";
+import type { HdMessage } from "./types";
 
 export interface StoredOriginal {
   message_id: number;
@@ -184,6 +185,47 @@ async function cidPictures(messageId: number, stored: StoredOriginal): Promise<M
     for (const key of ids.get(Number(r.id)) ?? []) out.set(key, `data:${img.mime};base64,${buf.toString("base64")}`);
   }
   return out;
+}
+
+/**
+ * 1.20.28: the desk's ticket read marks each attachment its message's formatted email draws itself (`inline`): a
+ * picture the stored HTML names by cid ("cid:image001.png@01DB…") that the cids map points at, within the inline
+ * view's picture budget in the same order cidPictures spends it. Outlook re-attaches every signature picture of the
+ * quoted chain to the newest email; those are drawn inside the email (the quoted ones under "Show quoted text"), so
+ * the desk leaves them out of the message's file list while the email shows formatted. A file that carries a
+ * Content-ID the HTML never names (some mail apps give every part one) stays listed. Only messages with an
+ * original are read; the HTML never leaves the database here.
+ */
+export async function markInlineAttachments<M extends Pick<HdMessage, "id" | "attachments" | "has_original_html">>(messages: M[]): Promise<M[]> {
+  const isPicture = (type: string) => /^image\/(png|jpeg|gif|webp)$/.test(type);
+  const ids = messages.filter((m) => m.has_original_html === true && (m.attachments ?? []).some((a) => isPicture(a.type))).map((m) => m.id);
+  if (!ids.length) return messages;
+  const rows = await hq<{ message_id: number; ids: (number | string)[] | null }>(
+    `SELECT h.message_id, array_agg(DISTINCT (e.value->>'attachment_id')::bigint) AS ids
+       FROM hd_message_html h
+            CROSS JOIN LATERAL (SELECT lower(h.html) AS html) l
+            CROSS JOIN LATERAL jsonb_each(CASE WHEN jsonb_typeof(h.cids) = 'object' THEN h.cids ELSE '{}'::jsonb END) e
+      WHERE h.message_id = ANY($1::int[])
+        AND jsonb_typeof(e.value->'attachment_id') = 'number'
+        AND e.key <> '' AND strpos(l.html, 'cid:' || e.key) > 0
+      GROUP BY h.message_id`,
+    [ids]
+  );
+  const named = new Map(rows.map((r) => [Number(r.message_id), new Set((r.ids ?? []).map(Number))]));
+  return messages.map((m) => {
+    const refs = named.get(m.id);
+    if (!refs?.size) return m;
+    // cidPictures' budget, spent in attachment id order: a picture past it is not drawn, so it stays listed.
+    let budget: number = EMAIL_HTML_LIMITS.inlineBytes;
+    const inline = new Set<number>();
+    for (const a of [...m.attachments].sort((x, y) => x.id - y.id)) {
+      if (!refs.has(a.id) || !isPicture(a.type) || a.size > budget) continue;
+      budget -= a.size;
+      inline.add(a.id);
+    }
+    if (!inline.size) return m;
+    return { ...m, attachments: m.attachments.map((a) => (inline.has(a.id) ? { ...a, inline: true } : a)) };
+  });
 }
 
 export type OriginalView =

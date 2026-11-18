@@ -15,6 +15,7 @@ import type { PoolClient } from "pg";
 import { hq, hqOne, normalizeRow, withTx } from "./db-core";
 import type { HdQueryable } from "./db-core";
 import { mdInline } from "./md-inline";
+import { HD_CHANGE_EVENT } from "./conversation-shared";
 import { afterTicketCreated, afterTicketUpdated } from "./events";
 import type { HdHookContext } from "./events";
 import { computeDues, dueLabel, nextDue, pausesSla, resumedDues, resumesSla, slaState } from "./sla";
@@ -799,11 +800,21 @@ export async function updateTicket(
     if (!sets.length && !changed.includes("custom_fields")) return { before, changed, assigneeChangedTo, solved: false, setupCompleted: false };
     set("updated_at", now);
     await client.query(`UPDATE hd_tickets SET ${sets.join(", ")} WHERE id = $1`, params);
+    // 1.20.28: an internal line here is a field change, marked event 'change' (lib/helpdesk/conversation-shared): the
+    // desk draws it as an activity line, not a note card. The status line (kind system) needs no marker.
     for (const l of lines) {
       await client.query(
-        `INSERT INTO hd_messages (ticket_id, author_id, author_name, kind, body, via, created_at)
-         VALUES ($1, $2, $3, $4, $5, 'system', $6)`,
-        [ticketId, actor.id, actor.name, l.kind, actor.via === "mcp" ? `${l.body} via Claude` : actor.via === "api" ? `${l.body} via API` : actor.via === "claude_desk" ? `${l.body} via Claude in the desk` : l.body, now]
+        `INSERT INTO hd_messages (ticket_id, author_id, author_name, kind, body, via, created_at, event)
+         VALUES ($1, $2, $3, $4, $5, 'system', $6, $7)`,
+        [
+          ticketId,
+          actor.id,
+          actor.name,
+          l.kind,
+          actor.via === "mcp" ? `${l.body} via Claude` : actor.via === "api" ? `${l.body} via API` : actor.via === "claude_desk" ? `${l.body} via Claude in the desk` : l.body,
+          now,
+          l.kind === "internal" ? HD_CHANGE_EVENT : null,
+        ]
       );
     }
     return { before, changed, assigneeChangedTo, solved, setupCompleted };

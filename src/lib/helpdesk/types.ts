@@ -181,6 +181,12 @@ export interface HdAttachment {
   name: string;
   size: number;
   type: string;
+  /**
+   * 1.20.28, the desk's ticket read only (lib/helpdesk/email-html markInlineAttachments): a picture the message's
+   * formatted email draws where its HTML names it by cid (a signature logo, a pasted screenshot). The desk leaves it
+   * out of the message's file list while the email shows formatted. Never set for requesters.
+   */
+  inline?: boolean;
 }
 
 /** The stored row (hd_tickets). */
@@ -281,7 +287,11 @@ export interface HdMessage {
   reviewed_by?: number | null;
   reviewed_at?: string | null;
   review_note?: string | null;
-  /** 1.19.4 (C6): a feature's own internal timeline line ('share'), else null; agent-side only (lib/helpdesk/share-schema). */
+  /**
+   * 1.19.4 (C6): a feature's own internal timeline line ('share'), else null; agent-side only (lib/helpdesk/share-schema).
+   * 1.20.28: 'change', a field change updateTicket wrote ("Sam changed the priority from Normal to High"), drawn as an
+   * activity line (lib/helpdesk/conversation-shared).
+   */
   event?: string | null;
   /** 1.20.8: the email it came from had an HTML part, kept for the desk's "View original" (lib/helpdesk/email-html); agent-side only. */
   has_original_html?: boolean;

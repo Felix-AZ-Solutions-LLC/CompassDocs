@@ -17,6 +17,7 @@ import { HD_ROLE_LABEL } from "@/lib/helpdesk/roles-shared";
 import type { SessionUser } from "@/lib/types";
 import type { HdAvailability } from "@/lib/helpdesk/types";
 import type { HdEmailView } from "@/lib/helpdesk/email-html-shared";
+import type { HdTicketOrder } from "@/lib/helpdesk/conversation-shared";
 
 export interface DeskAccess {
   licensed: boolean;
@@ -51,12 +52,15 @@ export async function agentAvailability(userId: number): Promise<HdAvailability>
   return getAvailability(userId).catch(() => "available" as const);
 }
 
-/** 1.20.11: how emailed messages read in the agent's desk conversation (their desk preference, lib/helpdesk/notify-prefs). */
-export async function agentEmailView(userId: number): Promise<HdEmailView> {
+/**
+ * How the agent reads a ticket (their desk preferences, lib/helpdesk/notify-prefs): emailed messages formatted or
+ * as plain text (1.20.11), and the conversation newest first with the reply box on top or oldest first (1.20.28).
+ */
+export async function agentReadingPrefs(userId: number): Promise<{ emailView: HdEmailView; ticketOrder: HdTicketOrder }> {
   const { getNotifyPrefs } = await import("@/lib/helpdesk/notify-prefs");
   return getNotifyPrefs(userId)
-    .then((p) => p.email_view)
-    .catch(() => "formatted" as const);
+    .then((p) => ({ emailView: p.email_view, ticketOrder: p.ticket_order }))
+    .catch(() => ({ emailView: "formatted" as const, ticketOrder: "newest" as const }));
 }
 
 /**
