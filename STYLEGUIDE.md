@@ -1824,6 +1824,19 @@ text-slate-500` before them ("Notary · Phoenix").
   which holds no menus, keeps the mask.) A settings grid of controls a phone
   must use (Reply targets) is the stacked grid list instead
   (§Business-time counting: "A settings list that must stack on a phone").
+- **A table that stacks on a phone** (1.20.28, Settings → Agents is the
+  worked example): when each row is a person with a few short values, the
+  same `<table>` stacks under `sm` instead of scrolling sideways. Cells are
+  `align-top` at every width (a row centred against a tall wrapped cell
+  leaves a gap above the name); under `sm` the head row is `max-sm:hidden`,
+  the table and body `max-sm:block` (and `max-sm:min-w-0` over `Table`'s
+  minimum width), each row a `max-sm:grid
+  grid-cols-[minmax(0,1fr)_auto]` with `px-4 py-3`, and each cell
+  `max-sm:p-0` placed by row and column: name with the row's actions at the
+  right, then the role control with the status chip at the right, then the
+  long cell (teams) across the width. One set of controls, so their
+  `aria-label`s still name the row. A grid of settings controls keeps the
+  grid list ("A settings list that must stack on a phone").
 - `<Table scroll minWidth>` wraps a wide table in a sideways scroll
   container (the width rides on `--table-min` and is dropped under
   `print:`, with the wrapper's scroll released, so a wide record prints
@@ -3120,8 +3133,69 @@ open in its own tab beside CompassDocs. Components live in
   `dark:amber-100`) with a `warn` `sm` chip "Internal note" and `Lock`;
   a system event is one `text-xs text-slate-500` line with `RotateCw`. A
   newbie's held reply carries J's `ReviewStateChip`. Bodies are
-  `MarkdownView` at `text-sm`, `headingOffset={2}`. Attachments link to
-  `/api/helpdesk/attachments/[id]`, images with a thumbnail.
+  `MarkdownView` at `text-sm`, `headingOffset={2}`. Files are a list under
+  their message (below, "Files under a message"); never thumbnails.
+- **Activity lines** (1.20.28, `lib/helpdesk/conversation-shared`): what
+  happened to a ticket, as opposed to what someone wrote, is one line, never
+  a card: `flex items-start gap-2 px-1 text-xs text-slate-500`, a
+  `h-3.5 w-3.5 text-slate-400` lucide icon at `mt-0.5`, then "who what ·
+  time" (`RelativeTime`; "· from #1051" after a merge). The status line and
+  the CC lines (`UserPlus` / `UserMinus`) are system lines; a field change
+  (owner `UserRoundCheck` / `UserRoundX`, team `Users`, priority `Flag`,
+  category `FolderTree`, a custom field `SlidersHorizontal`, a rename
+  `PencilLine`, event setup `CalendarCheck`, solve details
+  `ClipboardCheck`, anything else `History`) is an internal line marked
+  `hd_messages.event = 'change'` by `updateTicket`, so it stays agents-only.
+  The actor is `font-medium text-slate-700`; an **automation's** line carries
+  `Bot` and its rule's name in `font-semibold text-slate-700` without the
+  "Automation: " prefix (an `sr-only` "Automation" says what it is). The
+  change's text is the server's own Markdown shown as plain text (the
+  `mdInline` escapes undone, never parsed). The icon is picked from the verb
+  after the name; what the line *is* comes from its marker, never its words.
+  A note a person or an automation wrote (an automation's "Add an internal
+  note") stays a note card; an automation's note is the compact card (`p-3`,
+  `Bot` in the amber avatar, the rule's name).
+- **Order and fold** (1.20.28, `ticket/ticket-order`): the ticket pane shows
+  the conversation **newest first with the reply box on top** by default.
+  Shown: the newest requester message and the newest agent reply, and
+  everything newer than the older of the two; older history folds behind one
+  full-width control, a hairline either side of "**Show N earlier
+  messages**" (`ChevronDown`, `text-xs font-medium text-compass-700`; N
+  counts messages, never lines). It opens everything, focus moving to the
+  first message it revealed, and the fold is decided once as the ticket
+  opens (a message arriving later never folds what the agent is reading).
+  **Order** sits at the column's top right, the queue Sort's quiet trigger
+  (`ArrowDownUp`, "Order: Newest first", `ChevronDown`) on a `PickMenu`
+  (Newest first, "Reply box on top" | Oldest first, "Reply box at the
+  bottom"); the choice is the agent's desk preference (`ticket_order`, with
+  the notification preferences), so it follows them across devices. Oldest
+  first is the pre-1.20.28 layout, nothing folded. A new message never moves
+  what the agent is reading: scrolled into the list, the list keeps its place
+  (`KeepPlace`); with its top in view, the message simply appears there.
+  Each message row is `id="message-{id}"` and a link to a folded one opens
+  the fold. On paper the conversation is whole and oldest first
+  (`print:flex-col-reverse`, folded rows `hidden print:block`), and the
+  reply area and Order are `print:hidden`. The pop-out, the recycle bin, a
+  request's view, Get help and the portal keep oldest first.
+- **Files under a message** (1.20.28): a `rounded-lg border
+  border-slate-200 bg-surface` list, `sm:ml-9` (full width on a phone),
+  `break-inside-avoid`. Its head row is `bg-slate-50 text-xs
+  text-slate-500` with `Paperclip`: "4 attachments · 2.1 MB"
+  (`tabular-nums`). Each file is a row, `grid-cols-[1.75rem_minmax(0,1fr)
+  _auto_auto]`: a 28px **type square** (`rounded-md`, a 9px bold white label
+  on a fixed hue in both themes: PDF `bg-red-600`, DOC `bg-blue-600`, XLS
+  `bg-emerald-600`, PPT `bg-orange-600`, EML `bg-violet-600`, IMG
+  `bg-sky-600`, the rest `bg-slate-500`; `fileKind()` picks it from the
+  name, then the type), the name (`truncate font-medium`; past 36
+  characters its `data-tt` holds the whole name), the size (`text-xs
+  tabular-nums text-slate-500`) and **Download** (a `text-compass-700`
+  text link with `download`, `aria-label` "Download {name}"). A picture's
+  name opens it in a new tab; any other name downloads. The `ul` is
+  `aria-label="Files"`. A picture the formatted email draws itself (its
+  attachment is `inline` on the desk's ticket read: the stored HTML names it
+  by cid, within the inline view's picture budget) is left out while that
+  email shows formatted, and listed again when it shows as text. No
+  "Download all".
 - **View original** (1.20.8, `ticket/OriginalEmail`): a message whose email
   had an HTML part carries one quiet icon button at the right of its
   header row (`MailOpen`, `iconButtonClass("quiet", "sm")`, `data-tt` and
@@ -3182,7 +3256,8 @@ open in its own tab beside CompassDocs. Components live in
   the email in its own shadow root. Page numbers and "Ticket #n ·
   Original email" are `@page` margin boxes. No automatic print dialog:
   the page runs no script.
-- **The composer**: a `Segmented size="sm"` (Reply to {first name} |
+- **The composer** (on top of the conversation newest first, under it
+  oldest first, "Order and fold" above): a `Segmented size="sm"` (Reply to {first name} |
   Internal note), never hand-rolled tabs; the box turns amber in note
   mode. Macro (`Zap`) and Article (`BookOpen`) are `secondary` `sm`
   buttons opening `Popover` comboboxes; `/` in an empty box opens the
