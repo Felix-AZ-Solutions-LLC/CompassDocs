@@ -2530,6 +2530,9 @@ describe("1.20.25: why a message was dropped or waits, and what an admin can do 
     sam.email = `${STAMP}-sam@example.test`;
     sam.name = `Sam Lee ${STAMP.slice(-4)}`;
     sam.id = (await fixtureQuery("INSERT INTO users (username, name, email, role, status, timezone) VALUES ($1, $2, $3, 'viewer', 'active', 'UTC') RETURNING id", [`${STAMP}-sam`, sam.name, sam.email])).rows[0].id;
+    // A rung that names no built-in role: every process's schema bootstrap re-adds a missing
+    // ladder assignment (db.ts migrateLadderToAssignments), and the Viewer role holds Get help.
+    await pool().query("UPDATE users SET role = $2 WHERE id = $1", [sam.id, `${STAMP}-norung`]);
     await pool().query("DELETE FROM role_assignments WHERE user_id = $1", [sam.id]);
   });
   after(async () => {
@@ -2688,6 +2691,8 @@ describe("1.20.25: why a message was dropped or waits, and what an admin can do 
     const agentEmail = `${STAMP}-agent2@example.test`;
     const agentId = (await fixtureQuery("INSERT INTO users (username, name, email, role, status, timezone) VALUES ($1, $2, $3, 'viewer', 'active', 'UTC') RETURNING id", [`${STAMP}-agent2`, `Desk Agent ${STAMP.slice(-4)}`, agentEmail])).rows[0].id;
     try {
+      // A rung that names no built-in role, so a parallel boot's ladder backfill can't hand Viewer (and Get help) back.
+      await pool().query("UPDATE users SET role = $2 WHERE id = $1", [agentId, `${STAMP}-norung`]);
       await pool().query("DELETE FROM role_assignments WHERE user_id = $1", [agentId]);
       await fixtureQuery("INSERT INTO hd_agent_roles (user_id, role) VALUES ($1, 'agent')", [agentId]);
       await pool().query("INSERT INTO hd_team_members (team_id, user_id, role) VALUES ($1, $2, 'agent')", [teamA, agentId]);

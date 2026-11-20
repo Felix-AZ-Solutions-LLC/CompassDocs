@@ -141,8 +141,16 @@ async function person(key: string, opts: { desk?: "agent" | "admin" | "manager";
   const session = newToken();
   await createSession(session, id, new Date(Date.now() + 3_600_000).toISOString());
   // No role at all (the ladder role taken away): an account that can't use Get help.
-  if (opts.request === false) await pool().query("DELETE FROM role_assignments WHERE user_id = $1", [id]);
-  else {
+  // Deleting the Viewer assignment alone is not enough: every process's schema
+  // bootstrap re-adds a ladder rung's missing assignment (db.ts
+  // migrateLadderToAssignments), and the built-in Viewer role holds
+  // helpdesk.request, so any test file starting in parallel handed Get help
+  // back. The rung names no built-in role instead (as test/helpdesk-status-teams
+  // does): the ladder trigger drops the Viewer row and the backfill has nothing to restore.
+  if (opts.request === false) {
+    await pool().query("UPDATE users SET role = $2 WHERE id = $1", [id, `${STAMP}-norung`]);
+    await pool().query("DELETE FROM role_assignments WHERE user_id = $1", [id]);
+  } else {
     const role = await fixtureQuery("INSERT INTO roles (key, name) VALUES ($1, $1) RETURNING id", [`${STAMP}-req-${key}`]);
     roleIds.push(role.rows[0].id);
     await fixtureQuery("INSERT INTO role_permissions (role_id, permission) VALUES ($1, 'helpdesk.request')", [role.rows[0].id]);
