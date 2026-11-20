@@ -599,9 +599,12 @@ describe("contact cards (integration)", () => {
     const { contactCardFor, HD_CARD_FIELDS_DEFAULT } = await import("../src/lib/helpdesk/contact-cards");
     await settings({ office_timezones: { [`${STAMP} Phoenix`.toLowerCase()]: "America/Phoenix" } });
     const t = await ticketRef(ticketNo);
+    // The card reads the clock itself, so a minute can turn between it and this check: either side counts.
+    const before = localTimeIn("America/Phoenix")!.time;
     const c = await contactCardFor(viewer("agentA"), P.requester.id, { ticket: t, audience: "agent" });
+    const after = localTimeIn("America/Phoenix")!.time;
     assert.equal(c.office?.timezone, "America/Phoenix");
-    assert.equal(c.office?.local_time, localTimeIn("America/Phoenix")!.time);
+    assert.ok([before, after].includes(c.office?.local_time ?? ""), `office time ${c.office?.local_time} is ${before} or ${after}`);
     assert.equal(c.office?.utc_offset, "GMT-7");
     await settings({ fields: { ...HD_CARD_FIELDS_DEFAULT, timezone: F.tz } });
     const b = await contactCardFor(viewer("requester"), P.agentA.id, { ticket: t, audience: "requester" });

@@ -21,6 +21,8 @@ import { SaveRow } from "@/components/SaveRow";
 import { SettingsLink } from "@/components/SettingsLink";
 import { useLeaveGuard, useUnsavedChanges } from "@/lib/use-unsaved";
 import { contrastRatio, solidAccent } from "@/lib/theme";
+import { DarkStylePicker } from "@/components/DarkStylePicker";
+import { DARK_STYLES, DARK_STYLE_DESCRIPTION, DARK_STYLE_LABEL } from "@/lib/dark-style";
 
 // IANA zones the runtime knows about, with a couple of common ones pinned first.
 function timeZones(): string[] {
@@ -36,7 +38,7 @@ export type WorkspaceScope = "branding" | "content";
 /** The settings each page owns; a save sends only its own keys, so the
  *  other page's fields are never reset by a stale copy. */
 const SCOPE_KEYS: Record<WorkspaceScope, (keyof AppSettings)[]> = {
-  branding: ["company_name", "logo_url", "accent_color", "timezone", "date_format", "time_format"],
+  branding: ["company_name", "logo_url", "accent_color", "dark_style", "timezone", "date_format", "time_format"],
   content: [
     "trash_retention_days",
     "max_attachment_mb",
@@ -303,6 +305,24 @@ export function WorkspaceSettings({ initial, scope }: { initial: AppSettings; sc
           The sign-in page has its own artwork and text:{" "}
           <SettingsLink href="/admin/workspace/sign-in">Sign-in page</SettingsLink>.
         </p>
+      </div>
+
+      {/* Default dark style (1.20.35, lib/dark-style) */}
+      <div id="dark-style" className="scroll-mt-6 rounded-xl border border-slate-200 bg-surface p-4 shadow-xs">
+        <h3 className="mb-1 font-semibold text-slate-900">Default dark style</h3>
+        <p id="workspace-dark-style-help" className="mb-3 text-xs text-slate-500">
+          How dark mode looks for everyone who hasn&apos;t chosen their own style under Account → Preferences.
+          The customer portal, the help centre and the sign-in pages always use it. Light mode and the accent
+          colour don&apos;t change.
+        </p>
+        <DarkStylePicker
+          label="Default dark style"
+          name="workspace-dark-style"
+          value={s.dark_style}
+          onChange={(v) => set("dark_style", v)}
+          options={DARK_STYLES.map((d) => ({ value: d, label: DARK_STYLE_LABEL[d], description: DARK_STYLE_DESCRIPTION[d], swatch: d }))}
+          describedBy="workspace-dark-style-help"
+        />
       </div>
 
       {/* Localization */}

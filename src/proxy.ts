@@ -4,7 +4,8 @@
 //    visitor can be sent to /login with that page as `?next=` and come back
 //    to it afterwards (lib/auth requireUser, lib/return-to). Server
 //    components cannot see the request URL on their own, so this forwards it
-//    as a request header. Pages only (and everything under /desk).
+//    as a request header. Pages only (and everything under /desk); one a
+//    client sent itself is dropped on every path (1.20.35).
 //
 // 2. (1.20.11 security review) A picture, media, font, style sheet or script
 //    that another site asks for, or that reached us through a redirect from
@@ -54,8 +55,13 @@ export function proxy(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
   const page = isPagePath(pathname);
   const anonymous = crossSiteSubresource(req.headers) && req.headers.has("cookie");
-  if (!page && !anonymous) return NextResponse.next();
+  // 1.20.35: a page header the client sent itself is never passed on, on any
+  // path: the root layout reads it to decide the dark style (and the sign-in
+  // return path before it), so only the proxy may write it.
+  const forged = req.headers.has(RETURN_PATH_HEADER);
+  if (!page && !anonymous && !forged) return NextResponse.next();
   const headers = new Headers(req.headers);
+  headers.delete(RETURN_PATH_HEADER);
   if (page) headers.set(RETURN_PATH_HEADER, `${pathname}${search}`);
   if (anonymous) headers.delete("cookie");
   return NextResponse.next({ request: { headers } });

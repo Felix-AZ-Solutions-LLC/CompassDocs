@@ -31,6 +31,21 @@
   --color-compass-ink: rgb(var(--compass-ink));
   --color-compass-ink-strong: rgb(var(--compass-ink-strong));
 
+  /* 1.20.35: a form control's edge (components/form controlClass). The same
+   * value as slate-200 in light mode and in Slate; Graphite and Black raise
+   * it to 3:1 on the surface (WCAG 1.4.11), where slate-200 stays a quiet
+   * divider. */
+  --color-control-edge: rgb(var(--control-edge));
+  /* 1.20.35: the always-dark panel (code blocks, a token or command shown
+   * once, the media stage's controls). Navy in light mode and in Slate, as
+   * it always was; Graphite and Black re-declare it neutral, so no dark
+   * style is left with a slate-blue slab (STYLEGUIDE §Color and theming). */
+  --color-dark-panel: rgb(var(--dark-panel));
+  --color-dark-panel-raised: rgb(var(--dark-panel-raised));
+  --color-dark-panel-hover: rgb(var(--dark-panel-hover));
+  --color-dark-panel-ink: rgb(var(--dark-panel-ink));
+  --color-dark-panel-muted: rgb(var(--dark-panel-muted));
+
   --font-sans: var(--font-sans), system-ui, sans-serif;
 
   /* Two steps below text-xs for chips, keycaps and captions. Font-size only
@@ -55,10 +70,11 @@
 
   /* Three elevation tiers (STYLEGUIDE §Overlays): a resting card, a
    * floating panel (menu, popover, dropdown, toast), a modal. Four menu
-   * recipes used four shadows before these existed. */
-  --shadow-card: 0 1px 2px 0 rgb(15 23 42 / 0.05);
-  --shadow-float: 0 10px 24px -8px rgb(15 23 42 / 0.18), 0 2px 6px -1px rgb(15 23 42 / 0.08);
-  --shadow-modal: 0 24px 48px -12px rgb(15 23 42 / 0.28), 0 8px 16px -4px rgb(15 23 42 / 0.12);
+   * recipes used four shadows before these existed. The ink is a token
+   * (1.20.35): slate-900 as always, plain black under Graphite and Black. */
+  --shadow-card: 0 1px 2px 0 rgb(var(--shadow-ink) / 0.05);
+  --shadow-float: 0 10px 24px -8px rgb(var(--shadow-ink) / 0.18), 0 2px 6px -1px rgb(var(--shadow-ink) / 0.08);
+  --shadow-modal: 0 24px 48px -12px rgb(var(--shadow-ink) / 0.28), 0 8px 16px -4px rgb(var(--shadow-ink) / 0.12);
 }
 
 /* A card grid sized by the column it is in, not the viewport (STYLEGUIDE
@@ -129,8 +145,26 @@
    * the token can be used directly for accent text in either theme. */
   --compass-ink: 46 117 189;
   --compass-ink-strong: 39 95 153;
+
+  /* 1.20.35 tokens for what used to be literals (see @theme above). Light
+   * values are the literals they replaced, so light mode is byte-for-byte
+   * what it was. */
+  --control-edge: 226 232 240;
+  --shadow-ink: 15 23 42;
+  --tt-bg: 15 23 42;
+  --tt-ink: 248 250 252;
+  --scrim-ink: 2 6 23;
+  --dark-panel: 15 23 42;
+  --dark-panel-raised: 30 41 59;
+  --dark-panel-hover: 51 65 85;
+  --dark-panel-ink: 226 232 240;
+  --dark-panel-muted: 148 163 184;
 }
 
+/* Dark mode, Slate: the ramp dark mode has always had, and the default dark
+ * style (lib/dark-style). Graphite and Black below override every variable
+ * this block sets except the accent ink, which is derived from the accent
+ * and reads on all three (test/dark-style.test.ts measures it). */
 :root[data-theme="dark"] {
   color-scheme: dark;
   --compass-ink: 130 180 224;
@@ -151,6 +185,77 @@
   --slate-950: 248 250 252;
   --compass-50: 23 34 58;
   --compass-100: 30 45 78;
+  --control-edge: 45 56 78;
+  --tt-bg: 226 232 240;
+  --tt-ink: 15 23 42;
+}
+
+/* --- Dark styles (1.20.35, STYLEGUIDE §Color and theming → Dark styles) ----
+ * Graphite and Black: dark-only token override sets on <html
+ * data-dark-style>, which the root layout stamps on the server (the person's
+ * choice from the compass-dark-style cookie, else the workspace default), so
+ * the first paint is already right. Each block re-declares every variable the
+ * Slate block above sets, plus the tokens that are dark in both themes
+ * (--dark-panel*, --shadow-ink), so nothing keeps a blue cast; the accent
+ * tints (compass-50 / -100) blend the default accent toward the style's own
+ * canvas, as lib/theme accentCss does for a custom accent. A new dark colour
+ * goes in all three ramps. Screen only: print re-declares the light theme
+ * below, and these would otherwise outrank it. */
+@media screen {
+  :root[data-theme="dark"][data-dark-style="graphite"] {
+    --surface: 24 24 26;
+    --canvas: 16 16 18;
+    --slate-50: 16 16 18;
+    --slate-100: 36 36 39;
+    --slate-200: 52 52 55;
+    --slate-300: 68 68 72;
+    --slate-400: 134 134 138;
+    --slate-500: 163 163 167;
+    --slate-600: 189 189 192;
+    --slate-700: 210 210 213;
+    --slate-800: 227 227 229;
+    --slate-900: 241 241 242;
+    --slate-950: 250 250 250;
+    --compass-50: 22 36 52;
+    --compass-100: 25 46 69;
+    --control-edge: 104 104 108;
+    --tt-bg: 229 229 231;
+    --tt-ink: 24 24 26;
+    --shadow-ink: 0 0 0;
+    --scrim-ink: 0 0 0;
+    --dark-panel: 14 14 16;
+    --dark-panel-raised: 38 38 41;
+    --dark-panel-hover: 58 58 62;
+    --dark-panel-ink: 229 229 231;
+    --dark-panel-muted: 163 163 167;
+  }
+  :root[data-theme="dark"][data-dark-style="black"] {
+    --surface: 13 13 14;
+    --canvas: 0 0 0;
+    --slate-50: 0 0 0;
+    --slate-100: 27 27 28;
+    --slate-200: 46 46 48;
+    --slate-300: 62 62 64;
+    --slate-400: 130 130 132;
+    --slate-500: 160 160 163;
+    --slate-600: 187 187 189;
+    --slate-700: 209 209 211;
+    --slate-800: 227 227 228;
+    --slate-900: 242 242 243;
+    --slate-950: 250 250 250;
+    --compass-50: 9 23 38;
+    --compass-100: 14 35 57;
+    --control-edge: 98 98 100;
+    --tt-bg: 229 229 231;
+    --tt-ink: 13 13 14;
+    --shadow-ink: 0 0 0;
+    --scrim-ink: 0 0 0;
+    --dark-panel: 8 8 9;
+    --dark-panel-raised: 30 30 32;
+    --dark-panel-hover: 50 50 53;
+    --dark-panel-ink: 229 229 231;
+    --dark-panel-muted: 160 160 163;
+  }
 }
 
 /* --- Interface scale (STYLEGUIDE §Scaling) -------------------------------
@@ -315,11 +420,12 @@ mark {
 :root[data-theme="dark"] .doc-prose code {
   @apply text-pink-300;
 }
-/* Code blocks stay dark in both themes (literal, immune to the neutral flip). */
+/* Code blocks stay dark in both themes (the --dark-panel token: navy in light
+ * mode and Slate, neutral in Graphite and Black; never the flipping slate). */
 .doc-prose pre {
   @apply my-4 overflow-x-auto rounded-lg p-4 text-[0.8125rem] leading-6;
-  background: #0f172a;
-  color: #e2e8f0;
+  background: rgb(var(--dark-panel));
+  color: rgb(var(--dark-panel-ink));
 }
 .doc-prose pre code {
   @apply bg-transparent p-0;
@@ -806,8 +912,8 @@ table {
   transform: translateX(calc(-50% + var(--tt-shift, 0px))) translateY(0.125rem);
   padding: 0.25rem 0.5625rem;
   border-radius: 0.4375rem;
-  background: rgb(15 23 42 / 0.94);
-  color: #f8fafc;
+  background: rgb(var(--tt-bg) / 0.94);
+  color: rgb(var(--tt-ink));
   font-size: 0.75rem;
   font-weight: 500;
   letter-spacing: 0;
@@ -885,9 +991,9 @@ table {
   max-width: 16rem;
   text-align: center;
 }
+/* Dark mode inverts the bubble: a light one, from the style's own tokens. */
 :root[data-theme="dark"] [data-tt]::after {
-  background: rgb(226 232 240 / 0.97);
-  color: #0f172a;
+  background: rgb(var(--tt-bg) / 0.97);
 }
 /* Desk panes never scroll sideways (1.20.12; STYLEGUIDE §Helpdesk: the desk,
  * "Desk panes own their scroll"). A resting bubble above is only invisible:
@@ -1023,6 +1129,15 @@ table {
 }
 :root[data-theme="dark"] .select-chevron {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a1b5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+/* A data URI cannot read a token: each dark style's slate-500, literally. */
+@media screen {
+  :root[data-theme="dark"][data-dark-style="graphite"] .select-chevron {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a3a3a7' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  }
+  :root[data-theme="dark"][data-dark-style="black"] .select-chevron {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a0a0a3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  }
 }
 @media print {
   .select-chevron {
@@ -1451,15 +1566,16 @@ table {
 /* The backdrop. It must NOT be bg-slate-900/50 or any themed variable: the
  * slate ramp INVERTS in dark mode (--slate-900 goes 15 23 42 → 237 241 247),
  * so every slate scrim in this app paints a near-WHITE full-screen wash in
- * dark. Hard-coded near-black in both themes, a little heavier in dark where
- * the app behind it is already dim. */
+ * dark. Near-black in both themes (--scrim-ink: slate-950 as always, plain
+ * black on Graphite and Black, 1.20.35, whose pages the navy tinted blue), a
+ * little heavier in dark where the app behind it is already dim. */
 .cmd-scrim {
-  background: rgb(2 6 23 / 0.55);
+  background: rgb(var(--scrim-ink) / 0.55);
   backdrop-filter: blur(2px);
   animation: cmd-scrim-in 0.12s ease-out;
 }
 :root[data-theme="dark"] .cmd-scrim {
-  background: rgb(2 6 23 / 0.72);
+  background: rgb(var(--scrim-ink) / 0.72);
 }
 @keyframes cmd-scrim-in {
   from {
@@ -1529,7 +1645,8 @@ table {
 
 /* Print always renders the light theme. A dark-mode page sent to the printer
  * as-is comes out as white text on white paper; re-declaring the light tokens
- * here (after the dark block, same specificity) wins by order. */
+ * here (after the dark block, same specificity) wins by order. The dark
+ * styles (Graphite, Black) are screen-only, so they never reach paper. */
 @media print {
   :root[data-theme="dark"] {
     color-scheme: light;
@@ -1548,6 +1665,9 @@ table {
     --slate-950: 2 6 23;
     --compass-50: 237 245 251;
     --compass-100: 212 230 245;
+    --control-edge: 226 232 240;
+    --tt-bg: 15 23 42;
+    --tt-ink: 248 250 252;
   }
   :root[data-theme="dark"] {
     --compass-ink: 46 117 189;

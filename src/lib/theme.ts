@@ -6,6 +6,8 @@
 // Pure module (no server imports): the Workspace settings page uses the
 // contrast helpers to show the admin what a chosen accent will become.
 
+import { DARK_STYLE_CANVAS } from "./dark-style";
+
 export const DEFAULT_ACCENT = "#2e75bd";
 
 /** White text on a primary button must reach WCAG AA for normal text. */
@@ -36,8 +38,16 @@ function mixRgb(a: Rgb, b: Rgb, t: number): Rgb {
 const WHITE: Rgb = [255, 255, 255];
 const BLACK: Rgb = [0, 0, 0];
 // The dark theme's canvas color — dark-mode tints blend toward this so the
-// subtle compass-50/100 surfaces stay muted instead of glowing.
-const DARK_CANVAS: Rgb = [9, 13, 22];
+// subtle compass-50/100 surfaces stay muted instead of glowing. Each dark
+// style (1.20.35, lib/dark-style) blends toward its own canvas, so a tint on
+// Graphite or Black never carries Slate's navy.
+const DARK_CANVAS: Rgb = DARK_STYLE_CANVAS.slate;
+
+/** The dark-mode accent tints (compass-50 / -100) for an accent on a dark style's canvas. */
+export function darkAccentTints(accent: string, canvas: Rgb = DARK_CANVAS): { c50: string; c100: string } {
+  const a = hexToRgb(accent.toLowerCase());
+  return { c50: mix(canvas, a, 0.2), c100: mix(canvas, a, 0.3) };
+}
 
 /** WCAG relative luminance. */
 function luminance([r, g, b]: Rgb): number {
@@ -86,9 +96,19 @@ export function accentCss(accent: string): string {
   // Solid steps (600 and darker) come from the AA-adjusted colour; tints keep
   // the chosen hue at full strength.
   const s = hexToRgb(solidAccent(hex));
+  // Graphite and Black (1.20.35) re-tint compass-50 / -100 toward their own
+  // canvas. Screen only, like globals.css's dark-style blocks, and the same
+  // specificity, so this (later in the document) wins for a custom accent.
+  const styled = (["graphite", "black"] as const)
+    .map((style) => {
+      const t = darkAccentTints(hex, DARK_STYLE_CANVAS[style]);
+      return `:root[data-theme="dark"][data-dark-style="${style}"]{--compass-50:${t.c50};--compass-100:${t.c100}}`;
+    })
+    .join("");
   // Dark-mode accent ink: the 300 / 250 steps of the ramp (globals.css reads
   // --compass-ink for text-compass-600/700 in dark mode). Without these a
   // custom accent gets accent buttons but stock-blue text in dark mode.
   return `:root{--compass-50:${mix(a, WHITE, 0.93)};--compass-100:${mix(a, WHITE, 0.84)};--compass-200:${mix(a, WHITE, 0.7)};--compass-300:${mix(a, WHITE, 0.5)};--compass-400:${mix(a, WHITE, 0.28)};--compass-500:${mix(a, WHITE, 0.12)};--compass-600:${s.join(" ")};--compass-700:${mix(s, BLACK, 0.18)};--compass-800:${mix(s, BLACK, 0.32)};--compass-900:${mix(s, BLACK, 0.45)};--compass-ink:${s.join(" ")};--compass-ink-strong:${mix(s, BLACK, 0.18)}}
-:root[data-theme="dark"]{--compass-50:${mix(DARK_CANVAS, a, 0.2)};--compass-100:${mix(DARK_CANVAS, a, 0.3)};--compass-ink:${mix(a, WHITE, 0.5)};--compass-ink-strong:${mix(a, WHITE, 0.62)}}`;
+:root[data-theme="dark"]{--compass-50:${mix(DARK_CANVAS, a, 0.2)};--compass-100:${mix(DARK_CANVAS, a, 0.3)};--compass-ink:${mix(a, WHITE, 0.5)};--compass-ink-strong:${mix(a, WHITE, 0.62)}}
+@media screen{${styled}}`;
 }

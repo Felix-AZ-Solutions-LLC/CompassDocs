@@ -12,7 +12,10 @@ import { RotateCcw, TriangleAlert } from "lucide-react";
 import "./globals.css";
 
 // Same logic as the root layout's THEME_INIT: honor the saved preference (or
-// the OS) before first paint so dark mode never flashes white.
+// the OS) before first paint so dark mode never flashes white. The root
+// layout renders data-dark-style on the server; this page replaces that
+// layout, so it reads the person's own choice from its cookie (1.20.35; a
+// "workspace" choice keeps Slate here, since the settings may be what broke).
 const THEME_INIT = `
 (function(){try{
   var p = localStorage.getItem('compass-theme') || 'system';
@@ -20,6 +23,8 @@ const THEME_INIT = `
   document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
   var s = localStorage.getItem('compass-ui-scale');
   if (s && s !== 'default') document.documentElement.setAttribute('data-ui-scale', s);
+  var m = document.cookie.match(/(?:^|; )compass-dark-style=(slate|graphite|black)(?:;|$)/);
+  if (m) document.documentElement.setAttribute('data-dark-style', m[1]);
 }catch(e){}})();
 `;
 
@@ -42,6 +47,8 @@ export default function GlobalError({
       document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
       const s = localStorage.getItem("compass-ui-scale");
       if (s && s !== "default") document.documentElement.setAttribute("data-ui-scale", s);
+      const m = document.cookie.match(/(?:^|; )compass-dark-style=(slate|graphite|black)(?:;|$)/);
+      if (m) document.documentElement.setAttribute("data-dark-style", m[1]);
     } catch {
       /* storage blocked — the light default stands */
     }

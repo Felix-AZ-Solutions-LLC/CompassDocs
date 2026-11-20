@@ -43,6 +43,17 @@
     --slate-500: 176 187 204;
     --color-slate-500: rgb(176 187 204);
   }
+  /* 1.20.35: the same step (slate-600) of the dark style in use, so Graphite
+     and Black keep no Slate blue over a picture. As light as Slate's, and their
+     surfaces under the scrim no lighter, so the measured ratios hold. */
+  :root[data-theme="dark"][data-dark-style="graphite"] .desk-art[data-art-dark] {
+    --slate-500: 189 189 192;
+    --color-slate-500: rgb(189 189 192);
+  }
+  :root[data-theme="dark"][data-dark-style="black"] .desk-art[data-art-dark] {
+    --slate-500: 187 187 189;
+    --color-slate-500: rgb(187 187 189);
+  }
 
   /* The root lets the picture through; the layer sits behind every child. */
   :is(:root:not([data-theme="dark"]) .desk-art[data-art-light], :root[data-theme="dark"] .desk-art[data-art-dark]) {
@@ -109,6 +120,10 @@
   }
   :is(:root:not([data-theme="dark"]) .desk-art[data-art-light], :root[data-theme="dark"] .desk-art[data-art-dark]) .border-slate-200 {
     border-color: rgb(var(--slate-200) / 0.6);
+  }
+  /* A form field's edge (1.20.35, --control-edge, components/form) softens the same way. */
+  :is(:root:not([data-theme="dark"]) .desk-art[data-art-light], :root[data-theme="dark"] .desk-art[data-art-dark]) .border-control-edge {
+    border-color: rgb(var(--control-edge) / 0.6);
   }
 
   /* Stronger inks over the artwork, light mode: accent text as the 800 step, red-800, amber-800, emerald-800. */

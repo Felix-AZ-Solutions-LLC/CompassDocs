@@ -13,6 +13,7 @@ import type { Metadata } from "next";
 import { currentPortalContact, getPortalSettings, portalBrand, portalOpen } from "@/lib/helpdesk/portal";
 import { helpCentreOpen } from "@/lib/helpdesk/help-centre";
 import { PortalHeader } from "@/components/helpdesk/portal/PortalHeader";
+import { WorkspaceDarkStyle } from "@/components/WorkspaceDarkStyle";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,8 @@ export default async function PortalLayout({ children }: { children: React.React
   const helpCentre = open ? await helpCentreOpen({ portal: settings }).catch(() => false) : false;
   return (
     <div className="min-h-screen bg-canvas text-slate-700">
+      {/* 1.20.35: the portal and its help centre wear the workspace's default dark style. */}
+      <WorkspaceDarkStyle />
       {brand && <PortalHeader name={brand.name} logoUrl={brand.logo_url} email={contact?.email ?? null} helpCentre={helpCentre} />}
       <main id="main" className="px-4 pb-16 sm:px-6">
         {children}

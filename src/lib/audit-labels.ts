@@ -577,6 +577,8 @@ export const AUDIT_LABELS: Record<string, string> = {
   // Settings
   "settings.workspace": "Updated workspace settings",
   "settings.approval_mode": "Changed approval mode",
+  // 1.20.35 (lib/dark-style): details from / to.
+  "settings.dark_style": "Changed the default dark style",
   "settings.editors_edit_all": "Changed who can edit spaces",
   "settings.domain": "Updated domain & HTTPS",
   // The custom-domain check (1.20.29, lib/domain-flow)

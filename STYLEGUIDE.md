@@ -1542,9 +1542,12 @@ and `py-1.5` (`dense`) in the settings and account rails. Group labels
   of these is a **deletion**. Same for `bg-white`: use `bg-surface` (literal
   white is right only for brand tiles, QR codes, media stages, the toggle knob
   and email previews). `test/style-drift.test.ts` enforces all of this.
-- Anything that must stay dark in both themes (code blocks, the code-block
-  header bar, the modal scrim, the sign-in cover's white ink and its
-  `rgb(2 6 23 / …)` text scrims) is **hard-coded literal**, never themed.
+- Anything that must stay dark in both themes never uses the flipping
+  slate ramp. Code blocks and their header bar are the always-dark panel
+  tokens (`bg-dark-panel`, `bg-dark-panel-raised`; 1.20.35, so they turn
+  neutral on Graphite and Black, §Dark styles), and so is the modal scrim
+  (`--scrim-ink`); the sign-in cover's white ink and its `rgb(2 6 23 / …)`
+  text scrims are **hard-coded literal**.
 - **Accent AA.** `lib/theme.ts` derives the solid steps (600 and darker:
   buttons, links, focus rings) from `solidAccent(hex)`, which darkens a light
   accent until white text reaches 4.5:1; the tints (50–500) keep the chosen
@@ -1557,6 +1560,87 @@ and `py-1.5` (`dense`) in the settings and account rails. Group labels
   destructive control's hover is `hover-danger`, never a bare
   `hover:bg-red-50`. A link inside a sentence is `link` (underlined); nav
   links and table-cell links keep their own styling.
+
+### Dark styles
+
+Dark mode has three ramps (1.20.35, `lib/dark-style`): **Slate** (the
+blue-grey ramp dark mode always had, and the default), **Graphite**
+(neutral greys) and **Black** (a `#000` page with neutral surfaces stepping
+up from it). Each is a dark-only token override set on `<html
+data-dark-style="slate | graphite | black">`: `:root[data-theme="dark"]` is
+Slate, and `:root[data-theme="dark"][data-dark-style="graphite"]` /
+`"black"` (inside `@media screen`, so print stays light) re-declare every
+variable it sets.
+
+- **A new dark colour goes in all three ramps.** Add the token to `:root`
+  (its light value), to the Slate block if dark mode needs a different one,
+  and to both the Graphite and the Black blocks. `test/dark-style.test.ts`
+  fails when a style leaves a Slate variable undeclared, when a Graphite or
+  Black neutral leans blue, and when a pair drops below its floor.
+- **Never hard-code a dark background.** Not `bg-[#0f172a]`, not
+  `dark:bg-zinc-900`, not a hex in a CSS rule under `[data-theme="dark"]`:
+  it is one colour in all three styles, so Graphite and Black keep a navy
+  slab there. Use the themed tokens, or for something dark in **both**
+  themes (code blocks, a token or command shown once, the media stage's
+  controls) the always-dark panel: `bg-dark-panel`, `bg-dark-panel-raised`
+  (its header bar), `hover:bg-dark-panel-hover`, `text-dark-panel-ink`,
+  `text-dark-panel-muted` (navy in light mode and Slate, neutral in
+  Graphite and Black). `test/style-drift.test.ts` fails on a literal colour
+  on a background, ring or border, and on a `dark:` literal background. The
+  modal and palette scrim is `rgb(var(--scrim-ink) / …)` (slate-950, plain
+  black on Graphite and Black: the navy washed their whole page blue);
+  shadows read `--shadow-ink` the same way. The sign-in art's scrims and
+  white ink stay literal: they sit on the art, which is the same on every
+  style. A data URI that cannot read a token (the select chevron), and the
+  desk background's measured inks (`desk-look.css`, which its contrast
+  test pins as literals), carry one literal per style, checked against
+  the ramps by `test/dark-style.test.ts`.
+- **Form fields' edges are `--control-edge`** (`border-control-edge`, set by
+  `controlClass`): slate-200 in light mode and Slate, 3:1 on the surface
+  in Graphite and Black (WCAG 1.4.11). Over desk artwork it softens to 60%
+  like `border-slate-200` (`desk-look.css`; the test follows whatever edge
+  class `controlClass` paints). Slate's field edge is 1.48:1 and is
+  left as it was, since changing it changes every dark page; it is held
+  there by the test so it can only go up.
+- **The floors** (`test/dark-style.test.ts` computes them from
+  `globals.css` for all three): body text (slate-700 to -900), muted text
+  (slate-500, -600), accent ink and red / amber / emerald ink 4.5:1 on
+  `surface`, `canvas` and `slate-100`; placeholders (slate-400) 4.5:1 on
+  `surface` and `canvas`; focus rings (compass-300) 3:1; field edges 3:1
+  (Slate 1.45); `canvas` < `surface` < slate-100 < -200 < -300.
+- **Accent tints follow the style.** compass-50 / -100 blend the accent
+  toward the style's own canvas (`lib/theme` `darkAccentTints`; for a
+  custom accent `accentCss` emits the Graphite and Black blocks too). The
+  accent ink, the solid steps and light mode are the same on every style.
+- **Who sees which.** A person's choice (Account → Preferences →
+  Appearance: **Workspace default**, Slate, Graphite or Black) is stored on
+  the account (`users.dark_style`). The root layout renders
+  `data-dark-style` on the server, so there is no script and no flash: with
+  a session it reads the account itself (`requestDarkStylePref`, one
+  indexed read), so a single sign-on, a cleared browser or someone else's
+  leftover cookie never decides; without one, the `compass-dark-style`
+  cookie does. One helper writes that cookie (`setDarkStyleCookie` /
+  `darkStyleSetCookieHeader` in `lib/auth`): every sign-in that opens a
+  session, and a saved preference, only once it is saved (a request with
+  any bad field saves nothing). Sign-out clears it
+  (`clearDarkStyleCookie`). Without a choice, the workspace default
+  (Settings → Workspace → **Default dark style**, audited as
+  `settings.dark_style`). The customer portal, its help centre, the public
+  site, share and upload links, first-run setup, the OAuth consent screen
+  and the sign-in surfaces always wear the workspace default
+  (`workspaceOnlyPath`). Each shell mounts `DarkStyleSync` (those surfaces
+  `WorkspaceDarkStyle`), which keeps the attribute right after a
+  client-side navigation, writes the cookie when the account's choice came
+  from another device, and (signed-in shells only) remembers the resolved
+  style for the desk's offline page. The desk's PWA `theme-color` follows
+  the same order. Only the proxy writes the page-path header the root
+  layout reads; a client-sent one is dropped.
+- **The choice is `DarkStylePicker`**: radio cards, each with a preview
+  (`DarkStyleSwatch`: the style's page, a card with its edge, a line of body
+  and of muted text, an accent dot), in a `card-grid` with the house
+  selected style. The previews read `DARK_STYLE_SWATCH`, the one place
+  outside `globals.css` that holds dark colours; the test keeps the two
+  equal.
 
 ## Focus
 
@@ -2352,9 +2436,10 @@ per-route variants:
 - **Escape belongs to the top-most layer only.** Anything that binds Escape
   globally must check `overlayOpen()` from `lib/overlay-stack` first.
 - Every overlay carries `role="dialog"`, `aria-modal="true"`, and an
-  accessible name. The scrim's color is hard-coded (never a themed
-  variable — the slate ramp inverts and would paint a near-white wash in
-  dark mode).
+  accessible name. The scrim's color is never the slate ramp (it inverts
+  and would paint a near-white wash in dark mode): it is `.cmd-scrim`,
+  near-black from its own `--scrim-ink` token, which only the dark styles
+  change (§Dark styles).
 
 ## Keyboard shortcuts
 
@@ -2762,7 +2847,8 @@ boxes, filters) and keep tables/breaks clean (`break-inside: avoid` for
 cards and images — see the `@media print` block in globals.css). Printing
 always renders the **light** theme: the `@media print` block re-declares the
 light tokens and `color-scheme: light`, because a dark-mode page printed as-is
-is white text on white paper.
+is white text on white paper. The Graphite and Black dark styles (1.20.35)
+are `@media screen` blocks, so whatever style is on screen, paper is light.
 
 **Exports are files, not print dialogs.** When something needs to leave the
 app as a document — the directory, a report — render it on the server

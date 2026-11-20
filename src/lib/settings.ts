@@ -2,6 +2,8 @@
 // This module has NO server-only imports so it is safe to import from client
 // components. The DB-backed read/write helpers live in `settings-store.ts`.
 
+import { DEFAULT_DARK_STYLE, sanitizeDarkStyle, type DarkStyle } from "./dark-style";
+
 export type DateFormat = "medium" | "long" | "iso" | "us" | "eu";
 export type TimeFormat = "12h" | "24h";
 
@@ -33,6 +35,11 @@ export interface AppSettings {
   logo_url: string;
   /** Workspace accent color (hex) — re-tints the whole compass palette. */
   accent_color: string;
+  /**
+   * The dark style (1.20.35, lib/dark-style) for everyone who has not chosen
+   * their own, and for the portal, the help centre and sign-in pages.
+   */
+  dark_style: DarkStyle;
   /** IANA timezone used to render absolute timestamps (e.g. "America/New_York"). */
   timezone: string;
   /** How calendar dates are formatted. */
@@ -81,6 +88,7 @@ export const SETTINGS_DEFAULTS: AppSettings = {
   company_name: "CompassDocs",
   logo_url: "",
   accent_color: "#2e75bd",
+  dark_style: DEFAULT_DARK_STYLE,
   timezone: "UTC",
   date_format: "medium",
   time_format: "24h",
@@ -180,6 +188,7 @@ export function normalizeSettings(raw: Record<string, string>): AppSettings {
     accent_color: /^#[0-9a-fA-F]{6}$/.test(raw.accent_color ?? "")
       ? raw.accent_color.toLowerCase()
       : SETTINGS_DEFAULTS.accent_color,
+    dark_style: sanitizeDarkStyle(raw.dark_style) ?? SETTINGS_DEFAULTS.dark_style,
     timezone: isValidTimeZone(raw.timezone ?? "") ? raw.timezone : SETTINGS_DEFAULTS.timezone,
     date_format: DATE_FORMATS.includes(raw.date_format as DateFormat)
       ? (raw.date_format as DateFormat)

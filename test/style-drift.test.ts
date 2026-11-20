@@ -212,6 +212,25 @@ describe("style drift guard", () => {
     assert.deepEqual(hits, [], `hand-written empty state — use <SectionEmpty> / <EmptyState>:\n${hits.join("\n")}`);
   });
 
+  test("no hand-written dark surface: backgrounds and edges are tokens (§Color and theming → Dark styles)", () => {
+    // 1.20.35: a literal colour on a background, ring or border (bg-[#0f172a],
+    // ring-[#1e293b]/60) is the same in every dark style, so Graphite and
+    // Black kept a navy slab wherever one was written. The always-dark panel
+    // is bg-dark-panel / -raised / -hover; anything else themed is a slate,
+    // surface, canvas or compass token. Literal *text* ink on a fixed ground
+    // (a pastel heading's #0f172a) is not matched.
+    const hits = offenders(/\b(?:bg|ring|border|from|to|via|divide|outline)-\[(?:#|rgb|hsl|oklch)/);
+    assert.deepEqual(hits, [], `a literal colour where a token belongs — use bg-dark-panel* or a themed token:\n${hits.join("\n")}`);
+  });
+
+  test("no dark: variant paints a literal background (§Color and theming → Dark styles)", () => {
+    // dark:bg-[#…] / dark:bg-zinc-900 would be one colour for Slate, Graphite
+    // and Black alike. A translucent white or black wash (dark:hover:bg-white/10)
+    // is neutral on all three and allowed.
+    const hits = offenders(/dark:(?:hover:|focus:|group-hover:)?bg-(?:\[|(?:gray|zinc|neutral|stone)-|black\b)/);
+    assert.deepEqual(hits, [], `a fixed dark background ignores the dark style — use a token:\n${hits.join("\n")}`);
+  });
+
   test("bg-white only where white is literal (brand tiles, QR, media stages, email previews)", () => {
     const ALLOW = [
       "components/Brand.tsx",

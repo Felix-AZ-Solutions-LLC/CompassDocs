@@ -59,6 +59,8 @@ export interface User {
   newsletter_role: string;
   /** Color theme preference: light | dark | system. */
   theme: string;
+  /** Dark style (1.20.35): workspace | slate | graphite | black. Optional: rows read before the column existed. */
+  dark_style?: string;
   /** IANA time zone for rendered timestamps; empty = browser/server default. */
   timezone: string;
   /** Date rendering: auto | us | iso | eu. */
@@ -89,6 +91,13 @@ export interface SessionUser {
   newsletter_role: "none" | "contributor" | "approver";
   /** Color theme preference: light | dark | system. */
   theme: "light" | "dark" | "system";
+  /**
+   * Which dark ramp this person sees when the page is dark (1.20.35,
+   * lib/dark-style); "workspace" follows the workspace default. Optional so
+   * a SessionUser built elsewhere (an API token's, a test's) needs no change;
+   * read it as `user.dark_style ?? "workspace"`.
+   */
+  dark_style?: "workspace" | "slate" | "graphite" | "black";
   /** IANA time zone for rendered timestamps; empty = workspace default. */
   timezone: string;
   /** Date rendering; auto = workspace default. */

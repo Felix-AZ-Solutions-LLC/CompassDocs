@@ -3,7 +3,7 @@ import { passwordProblem } from "@/lib/password-policy";
 import { needsSetup, createUser, createSession, markLogin, setSetting } from "@/lib/db";
 import { hashPassword, newToken } from "@/lib/password";
 import { getSessionTimeoutMinutes } from "@/lib/settings-store";
-import { SESSION_COOKIE, cookieOptions, SESSION_MAX_AGE, secureCookie } from "@/lib/auth";
+import { SESSION_COOKIE, cookieOptions, SESSION_MAX_AGE, secureCookie, setDarkStyleCookie } from "@/lib/auth";
 import { normalizeDomain, SECURE_COOKIE_MODES, TLS_MODES, validTlsEmail, type SecureCookieMode } from "@/lib/settings";
 import type { TlsMode } from "@/lib/settings";
 import { parseLicense } from "@/lib/license";
@@ -169,6 +169,9 @@ export async function POST(req: Request) {
   // A domain left pending: the wizard opens Settings → Domain & HTTPS, which
   // says why; one being verified: it waits for HTTPS, then opens the domain.
   const res = NextResponse.json({ ok: true, ...(domainOutcome ? { domain: domainOutcome } : {}) });
-  res.cookies.set(SESSION_COOKIE, token, cookieOptions(SESSION_MAX_AGE, await secureCookie(req)));
+  const secure = await secureCookie(req);
+  res.cookies.set(SESSION_COOKIE, token, cookieOptions(SESSION_MAX_AGE, secure));
+  // 1.20.35: the new admin's dark style (Workspace default) comes along, as at any sign-in.
+  setDarkStyleCookie(res, { dark_style: "workspace" }, secure);
   return res;
 }

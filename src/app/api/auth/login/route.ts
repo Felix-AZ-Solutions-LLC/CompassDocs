@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { login, resolveSignInAccount, IDENTIFIER_MAX, SESSION_COOKIE, cookieOptions, SESSION_MAX_AGE, secureCookie } from "@/lib/auth";
+import { login, resolveSignInAccount, setDarkStyleCookie, IDENTIFIER_MAX, SESSION_COOKIE, cookieOptions, SESSION_MAX_AGE, secureCookie } from "@/lib/auth";
 import { knownSignInAddress } from "@/lib/db";
 import { PasswordBusyError } from "@/lib/password";
 import { audit, ipFrom } from "@/lib/audit";
@@ -171,6 +171,10 @@ export async function POST(req: Request) {
     ok: true,
     must_change_password: result.user.must_change_password === 1,
   });
-  res.cookies.set(SESSION_COOKIE, result.token, cookieOptions(SESSION_MAX_AGE, await secureCookie(req)));
+  const secure = await secureCookie(req);
+  res.cookies.set(SESSION_COOKIE, result.token, cookieOptions(SESSION_MAX_AGE, secure));
+  // 1.20.35: the account's dark style comes along, so the first page after
+  // signing in on a new browser is already in it (lib/dark-style).
+  setDarkStyleCookie(res, result.user, secure);
   return res;
 }

@@ -13,7 +13,9 @@ import {
   consumeRecoveryCode,
   recordTotpStep,
   rehashUserPassword,
+  sessionDarkStyle,
 } from "./db";
+import type { NextResponse } from "next/server";
 import { verifyTotpStep } from "./totp";
 import { openSecret } from "./secretbox";
 import { verifyPassword, verifyNothing, newToken, needsRehash, hashPassword } from "./password";
@@ -22,6 +24,7 @@ import type { PendingStep } from "./sign-in-security-shared";
 import { getSessionTimeoutMinutes, getSecureCookieMode, sessionTimeoutFrom } from "./settings-store";
 import { DUO_NOTHING_OWED, DUO_NO_STANDING, duoStepHref, duoSwitchedOn, isDeskPath, type DuoStanding, type DuoVerdict } from "./duo-policy";
 import { SESSION_TIMEOUT_MAX } from "./settings";
+import { DARK_STYLE_COOKIE, DARK_STYLE_COOKIE_MAX_AGE, sanitizeDarkStylePref } from "./dark-style";
 import { roleAtLeast } from "./types";
 import type { Role, SessionUser, User } from "./types";
 
@@ -44,6 +47,57 @@ export function cookieOptions(maxAgeSeconds: number, secure: boolean) {
     path: "/",
     maxAge: maxAgeSeconds,
   };
+}
+
+// --- The dark-style cookie (1.20.35, lib/dark-style) ------------------------
+// One place writes it. It carries a person's choice (workspace | slate |
+// graphite | black) so a page this browser opens is rendered in it; it is a
+// display preference, not a credential, so it is readable by the page
+// (DarkStyleSync keeps it in step with the account). Set at every sign-in
+// that opens a session (password, setup, and single sign-on through
+// darkStyleSetCookieHeader), cleared at sign-out so the next person on a
+// shared browser never inherits it. While a session exists the root layout
+// reads the account itself (requestDarkStylePref), so the cookie only ever
+// decides for a browser with no session.
+
+function darkStyleCookieAttrs(secure: boolean, maxAge: number) {
+  return { path: "/", sameSite: "lax" as const, secure, maxAge, httpOnly: false };
+}
+
+/** Write the account's dark style to the response's cookie (a sign-in, or a saved preference). */
+export function setDarkStyleCookie(res: NextResponse, user: { dark_style?: string | null }, secure: boolean): void {
+  res.cookies.set(DARK_STYLE_COOKIE, sanitizeDarkStylePref(user.dark_style) ?? "workspace", darkStyleCookieAttrs(secure, DARK_STYLE_COOKIE_MAX_AGE));
+}
+
+/** Remove it (sign-out). */
+export function clearDarkStyleCookie(res: NextResponse, secure: boolean): void {
+  res.cookies.set(DARK_STYLE_COOKIE, "", darkStyleCookieAttrs(secure, 0));
+}
+
+/** The same cookie as one Set-Cookie line, for a response that writes its headers itself (the enterprise single sign-on callbacks). */
+export function darkStyleSetCookieHeader(user: { dark_style?: string | null }, secure: boolean): string {
+  const pref = sanitizeDarkStylePref(user.dark_style) ?? "workspace";
+  return `${DARK_STYLE_COOKIE}=${pref}; Path=/; Max-Age=${DARK_STYLE_COOKIE_MAX_AGE}; SameSite=Lax${secure ? "; Secure" : ""}`;
+}
+
+/**
+ * The person's dark style choice for this request: the signed-in account's
+ * own (one read, only when a session cookie is present), else this
+ * browser's cookie. Takes the values the caller already read from the
+ * cookie jar, so a page that must not touch request data in a try block
+ * (the root layout) can call it there. A database error falls back to the
+ * cookie.
+ */
+export async function requestDarkStylePref(sessionToken: string | undefined, cookiePref: string | undefined): Promise<string | undefined> {
+  if (sessionToken) {
+    try {
+      const own = await sessionDarkStyle(sessionToken);
+      if (own) return own;
+    } catch {
+      /* no database: the cookie decides */
+    }
+  }
+  return cookiePref;
 }
 
 /** True if the incoming request reached us over HTTPS (honoring a proxy). */
@@ -90,6 +144,7 @@ export function toSessionUser(u: User): SessionUser {
         ? u.newsletter_role
         : "none",
     theme: u.theme === "light" || u.theme === "dark" ? u.theme : "system",
+    dark_style: sanitizeDarkStylePref(u.dark_style) ?? "workspace",
     timezone: u.timezone ?? "",
     date_format: (["medium", "long", "iso", "us", "eu"] as const).includes(u.date_format as never)
       ? (u.date_format as "medium" | "long" | "iso" | "us" | "eu")

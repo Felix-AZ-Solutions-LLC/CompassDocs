@@ -17,6 +17,7 @@ import {
   SECURE_COOKIE_MODES,
 } from "./settings";
 import type { SecureCookieMode } from "./settings";
+import { sanitizeDarkStyle } from "./dark-style";
 
 // DB-backed reads/writes for the appearance & workspace settings. Kept separate
 // from `settings.ts` (which stays import-safe for client components) because it
@@ -40,6 +41,10 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Ap
   }
   if (patch.accent_color !== undefined && /^#[0-9a-fA-F]{6}$/.test(patch.accent_color)) {
     await setSetting("accent_color", patch.accent_color.toLowerCase());
+  }
+  if (patch.dark_style !== undefined) {
+    const style = sanitizeDarkStyle(patch.dark_style);
+    if (style) await setSetting("dark_style", style);
   }
   if (patch.timezone !== undefined && isValidTimeZone(patch.timezone)) {
     await setSetting("timezone", patch.timezone);

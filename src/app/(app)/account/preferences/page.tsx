@@ -14,6 +14,8 @@ export default async function PreferencesPage() {
     <AccountPage href="/account/preferences">
       <PreferencesPanel
         initialTheme={user.theme}
+        initialDarkStyle={user.dark_style ?? "workspace"}
+        workspaceDarkStyle={settings.dark_style}
         initialScale={user.ui_scale}
         initialTimezone={user.timezone}
         initialDateFormat={user.date_format}
