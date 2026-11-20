@@ -18,6 +18,8 @@ import { railIconClass, railRowClass } from "@/components/RailLink";
 import type { HdAvailability, HdCounts } from "@/lib/helpdesk/types";
 import type { HdEmailView } from "@/lib/helpdesk/email-html-shared";
 import type { HdTicketOrder } from "@/lib/helpdesk/conversation-shared";
+import type { HdQueueSort } from "@/lib/helpdesk/queue-sort-shared";
+import { useQueueSortSync } from "./queue/queue-sort";
 import { DeskBell } from "./DeskBell";
 import { DeskSearch } from "./DeskSearch";
 import { WorkspaceAddressBanner } from "./WorkspaceAddressNotice";
@@ -123,6 +125,7 @@ export function DeskShell({
   availability,
   emailView = "formatted",
   ticketOrder = "newest",
+  queueSort = null,
   installSlot,
   role,
   roleCaps,
@@ -140,6 +143,8 @@ export function DeskShell({
   emailView?: HdEmailView;
   /** 1.20.28: the ticket pane's conversation order (the agent's desk preference, lib/helpdesk/conversation-shared). */
   ticketOrder?: HdTicketOrder;
+  /** 1.20.36: how the queue's list is sorted (the agent's desk preference; null for the default, queue/queue-sort). */
+  queueSort?: HdQueueSort | null;
   /** The desk app's install prompt (agent F's InstallDesk), shown in the user menu. */
   installSlot?: ReactNode;
   role: { key: string; label: string } | null;
@@ -165,6 +170,8 @@ export function DeskShell({
   const upcoming = useUpcomingEvents(caps.agent && !bare, live);
   // A reply sent from a pop-out is announced here, in the desk window (the pop-out closes as it sends).
   useReplyPopoutToasts(user.id, caps.agent && !bare);
+  // 1.20.36: the queue's sort follows the agent's other desk windows from every desk page, not only the queue.
+  useQueueSortSync(user.id, caps.agent);
   // 1.20.18 (security review): a shared computer keeps no one else's desk drafts or hand-offs. 1.20.16's drafts named
   // no one: the first agent to open the desk in this browser adopts them (once), so nobody loses a reply mid-upgrade.
   useEffect(() => {
@@ -181,7 +188,7 @@ export function DeskShell({
 
   if (bare) {
     return (
-      <DeskMeContext.Provider value={{ id: user.id, name: user.name, agent: caps.agent, admin: caps.admin, reports: caps.reports, role, caps: roleCaps, email_view: emailView, ticket_order: ticketOrder }}>
+      <DeskMeContext.Provider value={{ id: user.id, name: user.name, agent: caps.agent, admin: caps.admin, reports: caps.reports, role, caps: roleCaps, email_view: emailView, ticket_order: ticketOrder, queue_sort: queueSort }}>
         <DeskCountsContext.Provider value={{ counts, refresh }}>
           <div className="relative flex h-dvh flex-col overflow-clip bg-canvas print:h-auto print:overflow-visible">
             <main id="main" tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 outline-none">
@@ -194,7 +201,7 @@ export function DeskShell({
   }
 
   return (
-    <DeskMeContext.Provider value={{ id: user.id, name: user.name, agent: caps.agent, admin: caps.admin, reports: caps.reports, role, caps: roleCaps, email_view: emailView, ticket_order: ticketOrder }}>
+    <DeskMeContext.Provider value={{ id: user.id, name: user.name, agent: caps.agent, admin: caps.admin, reports: caps.reports, role, caps: roleCaps, email_view: emailView, ticket_order: ticketOrder, queue_sort: queueSort }}>
     <DeskCountsContext.Provider value={{ counts, refresh, live }}>
     <TeamStatusProvider enabled={caps.agent}>
     <ClaudeHost claude={claude}>

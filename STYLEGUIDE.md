@@ -3297,6 +3297,34 @@ open in its own tab beside CompassDocs. Components live in
   `tag`, `created_from`/`to`, `solved_from`/`to`, `breached`,
   `requester`, or `from=reports`) show a **Filtered from Reports · Clear**
   strip (the invitation strip's tint) over the list.
+- **The queue's Sort is the agent's** (1.20.36, `queue/queue-sort`,
+  `lib/helpdesk/queue-sort-shared`): the quiet pill at the list header's
+  right (`ArrowDownUp` under `sm`, the label from `sm`, `ChevronDown`) on a
+  `PickMenu` of Due first, Priority first, Recently updated, Newest first.
+  A pick shows at once and is saved as the agent's desk preference
+  (`queue_sort`, with `ticket_order`), so every view, device and window
+  follows it; a refused save puts back the last sort known to be saved,
+  with the server's sentence in an error toast. Each window saves one
+  change at a time, and the agent's other desk windows in the browser
+  (any desk page: DeskShell listens) take a saved change only when it is
+  newer than what they have. The server reads the preference for the
+  first paint, so the list never re-sorts as it loads; a change of sort
+  keeps the rows on screen until the reordered ones arrive (focus, place
+  and bulk selection stay). An explicit
+  `?sort=` in the address (a shared link) wins for that list, stays in its
+  links while tickets open beside it, and is never saved; a view or team
+  picked in the rail drops it, and picking a sort there replaces it. The
+  agent's own sort is never written into the address. **A view whose
+  definition fixes its order shows the control off, never hidden**: in
+  Parked (and any list of parked tickets: a filtered list or saved view
+  that starts from Parked, Reports' **Parked now**, `status_group=parked`) it is
+  a disabled trigger reading **Soonest to wake**, no chevron, inside a
+  `Tooltip` ("Parked tickets are always listed soonest to wake first."),
+  whose wrapper takes the tab stop. Saved views store no sort, so they
+  follow the agent's; while a saved view's filters load, the trigger is
+  shown disabled (no pick before the list is known). Settings → Notifications has the same choice as a
+  `Segmented` card, **Sorting the ticket list**, with a `ghost` `sm`
+  **Reset to default** (`RotateCcw`) once the agent has chosen.
 - **An empty view says what will appear in it** (1.20.27, `VIEW_EMPTY`):
   "Nothing in My open right now. Tickets assigned to you appear here.",
   never "New tickets appear here" on a view new tickets never reach.

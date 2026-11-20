@@ -13,16 +13,23 @@
 // the list at once, one request at a time; the reload animates (./motion)
 // and never moves the agent's place: tickets put in above it show as the
 // "N new tickets" pill. The saved views' counts follow, at most every 5 s.
+//
+// 1.20.36 (./queue-sort): the list's sort is the agent's desk preference,
+// read on the server so the first paint is already in their order; an
+// explicit ?sort= wins for its list and is never saved; the Parked view keeps
+// its wake order and shows the Sort control off.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ArrowDownUp, ArrowUp, ChevronDown, Filter, MessageSquareText, Plus } from "lucide-react";
 import { chipClass } from "@/components/Chip";
-import { useCan } from "../me";
+import { useCan, useDeskMe } from "../me";
 import { buttonClass, iconButtonClass } from "@/components/Button";
 import { railIconClass, railRowClass, RAIL_GROUP_TEXT } from "@/components/RailLink";
 import { Popover } from "@/components/Popover";
+import { Tooltip } from "@/components/Tooltip";
+import { PARKED_ORDER_LABEL, PARKED_ORDER_REASON, cleanQueueSort } from "@/lib/helpdesk/queue-sort-shared";
 import type { HdTicketListRow } from "@/lib/helpdesk/types";
 import { getJson, listOf } from "../api";
 import { useDeskCounts } from "../counts";
@@ -33,7 +40,8 @@ import { TicketList } from "./TicketList";
 import { BulkBar } from "../merge/BulkBar";
 import { useRowSelection } from "../merge/selection";
 import { NewTicketModal } from "./NewTicketModal";
-import { SORTS, VIEWS, VIEW_EMPTY, apiQs, readSel, selQs, type QueueSel } from "./views";
+import { SORTS, VIEWS, VIEW_EMPTY, apiQs, fixSavedOrder, fixedOrder, readSel, selQs, type QueueSel } from "./views";
+import { chooseQueueSort, useQueueSortPref } from "./queue-sort";
 import { savedApiQs, useSavedViews } from "../views/saved";
 import { SavedViewsNav } from "../views/SavedViewsNav";
 import { EditViewButton, SaveViewButton } from "../views/ViewControls";
@@ -64,7 +72,14 @@ export function QueueLayout({ children }: { children: ReactNode }) {
   const sp = useSearchParams();
   const params = useParams<{ number?: string }>();
   const router = useRouter();
-  const sel = useMemo(() => readSel(sp), [sp]);
+  const me = useDeskMe();
+  // 1.20.36: the agent's sort (their desk preference, then this window's picks); ?sort= and Parked come first.
+  const sortPref = useQueueSortPref({ refresh: true });
+  // 1.19.1 saved views (agent V4, ../views): ?saved=12 lists the view's own filters.
+  const sv = useSavedViews();
+  const addressSel = useMemo(() => readSel(sp, sortPref), [sp, sortPref]);
+  const savedView = addressSel.saved ? sv.list?.views.find((v) => v.id === addressSel.saved) : undefined;
+  const sel = useMemo(() => fixSavedOrder(addressSel, savedView?.filters), [addressSel, savedView]);
   const qs = selQs(sel);
   const selected = params?.number ? Number(params.number) : null;
   // 1.19.4 (C7): /desk/recycle-bin pages bring their own list; the queue's list column stays out.
@@ -83,9 +98,6 @@ export function QueueLayout({ children }: { children: ReactNode }) {
   const loading = useRef<Promise<void> | null>(null);
   const loadAgain = useRef(false);
 
-  // 1.19.1 saved views (agent V4, ../views): ?saved=12 lists the view's own filters.
-  const sv = useSavedViews();
-  const savedView = sel.saved ? sv.list?.views.find((v) => v.id === sel.saved) : undefined;
   const listQs = sel.saved ? savedApiQs(sel, sv.list?.views) : apiQs(sel);
   const savedGone = !!sel.saved && !!sv.list && !listQs;
   // 1.20.8: custom field conditions as chips under the filter strip.
@@ -128,8 +140,14 @@ export function QueueLayout({ children }: { children: ReactNode }) {
   const loadRef = useRef(load);
   loadRef.current = load;
 
+  // 1.20.36: a change of sort alone (a pick, or another window's) keeps the rows on screen until the reordered ones
+  // arrive: the list never blanks, and the place, focus and bulk selection (the same tickets) stay.
+  const listBase = listQs === null ? null : listQs.replace(/(^|&)sort=[^&]*/, "");
+  const shownBase = useRef<string | null>(null);
   useEffect(() => {
-    setRows(null);
+    const sortOnly = listBase !== null && shownBase.current === listBase;
+    shownBase.current = listBase;
+    if (!sortOnly) setRows(null);
     shownKey.current = null;
     loading.current = null;
     loadAgain.current = false;
@@ -137,7 +155,7 @@ export function QueueLayout({ children }: { children: ReactNode }) {
     load();
     const t = setInterval(() => document.visibilityState === "visible" && load(), 60_000);
     return () => clearInterval(t);
-  }, [load, resetMotion]);
+  }, [load, resetMotion, listBase]);
 
   const refreshViews = sv.refresh;
 
@@ -205,7 +223,7 @@ export function QueueLayout({ children }: { children: ReactNode }) {
         return (
           <Link
             key={v.key}
-            href={`/desk${selQs({ ...sel, drill: null, team: null, view: v.key })}`}
+            href={`/desk${selQs({ ...sel, drill: null, team: null, view: v.key, sortFrom: undefined })}`}
             onClick={onPick}
             role={asMenu ? "menuitem" : undefined}
             aria-current={on ? "page" : undefined}
@@ -252,7 +270,7 @@ export function QueueLayout({ children }: { children: ReactNode }) {
             return (
               <Link
                 key={t.team_id}
-                href={`/desk${selQs({ ...sel, drill: null, view: null, team: t.team_id })}`}
+                href={`/desk${selQs({ ...sel, drill: null, view: null, team: t.team_id, sortFrom: undefined })}`}
                 onClick={onPick}
                 role={asMenu ? "menuitem" : undefined}
                 aria-current={on ? "page" : undefined}
@@ -290,24 +308,41 @@ export function QueueLayout({ children }: { children: ReactNode }) {
             <div className="ml-auto flex items-center gap-1">
               <EditViewButton sv={sv} sel={sel} />
               <ExportCsvButton listQs={listQs} total={total} />
-              <PickMenu
-                label="Sort"
-                value={sel.sort}
-                options={SORTS}
-                onPick={(sort) => router.push(`${selected ? `/desk/tickets/${selected}` : "/desk"}${selQs({ ...sel, sort })}`)}
-                trigger={(p) => (
-                  <button
-                    {...p}
-                    type="button"
-                    aria-label={`Sort: ${SORTS.find((s) => s.value === sel.sort)?.label}`}
-                    className="inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 pointer-coarse:h-9 pointer-coarse:px-2"
-                  >
+              {sel.saved && !sv.list ? (
+                // 1.20.36: a saved view's filters (which may start from Parked) are still loading: no pick yet.
+                <button type="button" disabled aria-label={`Sort: ${SORTS.find((s) => s.value === sel.sort)?.label}`} className={`${SORT_TRIGGER} ${SORT_OFF}`}>
+                  <ArrowDownUp className="h-3.5 w-3.5 sm:hidden" aria-hidden />
+                  <span className="hidden sm:inline">{SORTS.find((s) => s.value === sel.sort)?.label}</span>
+                  <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+                </button>
+              ) : fixedOrder(sel) ? (
+                // 1.20.36: Parked lists soonest to wake first whatever the agent's sort; the control says so, off.
+                <Tooltip label={PARKED_ORDER_REASON}>
+                  <button type="button" disabled aria-label={`Sort: ${PARKED_ORDER_LABEL}`} className={`${SORT_TRIGGER} ${SORT_OFF}`}>
                     <ArrowDownUp className="h-3.5 w-3.5 sm:hidden" aria-hidden />
-                    <span className="hidden sm:inline">{SORTS.find((s) => s.value === sel.sort)?.label}</span>
-                    <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+                    <span className="hidden sm:inline">{PARKED_ORDER_LABEL}</span>
                   </button>
-                )}
-              />
+                </Tooltip>
+              ) : (
+                <PickMenu
+                  label="Sort"
+                  value={sel.sort}
+                  options={SORTS}
+                  onPick={(sort) => {
+                    // Saved as the agent's sort (optimistic; a refusal puts the last one back with a toast). A list
+                    // whose address named a sort drops it, so the agent's own choice is what the address now means.
+                    void chooseQueueSort(me.id, sort, cleanQueueSort(me.queue_sort));
+                    if (sel.sortFrom === "url") router.push(`${selected ? `/desk/tickets/${selected}` : "/desk"}${selQs({ ...sel, sort, sortFrom: undefined })}`);
+                  }}
+                  trigger={(p) => (
+                    <button {...p} type="button" aria-label={`Sort: ${SORTS.find((s) => s.value === sel.sort)?.label}`} className={SORT_TRIGGER}>
+                      <ArrowDownUp className="h-3.5 w-3.5 sm:hidden" aria-hidden />
+                      <span className="hidden sm:inline">{SORTS.find((s) => s.value === sel.sort)?.label}</span>
+                      <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+                    </button>
+                  )}
+                />
+              )}
               <button
                 type="button"
                 onClick={() => setNewOpen(true)}
@@ -374,6 +409,11 @@ export function QueueLayout({ children }: { children: ReactNode }) {
     </Ctx.Provider>
   );
 }
+
+/** The Sort pill's quiet trigger (STYLEGUIDE §Buttons: pointer-coarse:h-9 beside the sm icon buttons). */
+const SORT_OFF = "disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-slate-500";
+const SORT_TRIGGER =
+  "inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 pointer-coarse:h-9 pointer-coarse:px-2";
 
 /** 1.20.19: "3 new tickets ↑" over the list when tickets came in above the agent's place; a click goes up to them. */
 function NewAbovePill({ motion }: { motion: QueueMotion }) {

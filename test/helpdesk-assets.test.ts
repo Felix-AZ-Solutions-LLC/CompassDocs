@@ -564,8 +564,16 @@ describe("the Snipe-IT client and the cache", () => {
 
   test("not due within 30 minutes (the database's clock); one run at a time; the sweep only syncs when due", async () => {
     assert.deepEqual(await sync({}), { ran: false, skipped: "not_due" });
-    const [a, b] = await Promise.all([sync(), sync()]);
-    assert.equal([a, b].filter((x) => x.skipped === "running").length, 1, "the second waits its turn");
+    // The first run is held at its first page, so the second always arrives while it is live
+    // (racing two unheld runs let a fast machine finish the first before the second claimed).
+    const gate = holdNext(fake, "/api/v1/hardware");
+    const first = sync();
+    await gate.reached;
+    const second = await sync();
+    gate.release();
+    const a = await first;
+    assert.deepEqual(second, { ran: false, skipped: "running" }, "the second waits its turn");
+    assert.equal(a.ok, true, a.error);
     const rec = JSON.parse((await getSetting(SYNC_KEY))!);
     assert.ok(rec.at >= rec.started_at && rec.heartbeat_at >= rec.started_at, "every time from one clock: a finished run never looks live");
     assert.equal((await assets.syncState(PROVIDER)).running, false);

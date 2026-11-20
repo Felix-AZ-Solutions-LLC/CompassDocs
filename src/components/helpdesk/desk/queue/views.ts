@@ -3,9 +3,15 @@
 // open tickets, plus ?sort=due|updated|created|priority. Opening a ticket
 // keeps the query, so /desk/tickets/1047?view=overdue still shows the
 // Overdue list beside it.
+//
+// 1.20.36 (lib/helpdesk/queue-sort-shared): the sort is the agent's desk
+// preference. An explicit ?sort= still wins for the list it names (and
+// travels with it while tickets open beside it) but is never saved; moving
+// to another view drops it. The Parked view keeps its own order.
 
 import { CircleAlert, CircleCheck, CirclePause, Hourglass, Inbox, List, UserRound, Workflow, type LucideIcon } from "lucide-react";
-import type { HdNamedView, HdTicketSort } from "@/lib/helpdesk/types";
+import type { HdNamedView } from "@/lib/helpdesk/types";
+import { QUEUE_SORT_OPTIONS, resolveQueueSort, type HdQueueSort, type QueueSortSource } from "@/lib/helpdesk/queue-sort-shared";
 import { isCfFilterKey, CF_FILTER_MAX, CF_VALUE_MAX } from "@/lib/helpdesk/custom-field-filters-shared";
 
 export const VIEWS: { key: HdNamedView; label: string; icon: LucideIcon; alarm?: boolean }[] = [
@@ -32,12 +38,7 @@ export const VIEW_EMPTY: Record<HdNamedView, string> = {
   parked: "Tickets held until their event appear here, soonest to wake first.",
 };
 
-export const SORTS: { value: HdTicketSort; label: string }[] = [
-  { value: "due", label: "Due first" },
-  { value: "priority", label: "Priority first" },
-  { value: "updated", label: "Recently updated" },
-  { value: "created", label: "Newest first" },
-];
+export const SORTS = QUEUE_SORT_OPTIONS;
 
 /**
  * Report drill-down (agent K's report charts link into the queue): these
@@ -83,7 +84,12 @@ export const DRILL_KEYS = [
 export interface QueueSel {
   view: HdNamedView | null;
   team: number | null;
-  sort: HdTicketSort;
+  sort: HdQueueSort;
+  /**
+   * 1.20.36: where `sort` came from. Only "url" (an explicit ?sort=) is written back into the list's links; anything
+   * else (the agent's preference, the default, Parked's own order) is resolved afresh on each page.
+   */
+  sortFrom?: QueueSortSource;
   /** The drill-down filters, when the list came from Reports. */
   drill: Record<string, string> | null;
   /** 1.19.1: where the filters came from: Reports (default) or the desk's Filter dialog (from=filter). */
@@ -93,12 +99,20 @@ export interface QueueSel {
 }
 
 const VIEW_KEYS = new Set<string>(VIEWS.map((v) => v.key));
-const SORT_KEYS = new Set<string>(SORTS.map((s) => s.value));
 
-export function readSel(sp: URLSearchParams | null): QueueSel {
+/**
+ * The selection in the address. `pref` is the agent's saved sort (null or anything malformed: the default); an
+ * explicit ?sort= wins over it, and a list of parked tickets (the Parked view, a filtered list starting from it,
+ * status_group=parked) ignores both.
+ */
+export function readSel(sp: URLSearchParams | null, pref: unknown = null): QueueSel {
   const team = Number(sp?.get("team"));
   const view = sp?.get("view") ?? "";
-  const sort = sp?.get("sort") ?? "";
+  const url = sp?.get("sort") ?? null;
+  const sortOf = (fixed: boolean) => {
+    const r = resolveQueueSort({ url, pref, fixed });
+    return { sort: r.sort, sortFrom: r.from };
+  };
   const drill: Record<string, string> = {};
   for (const k of DRILL_KEYS) {
     const v = sp?.get(k);
@@ -113,38 +127,64 @@ export function readSel(sp: URLSearchParams | null): QueueSel {
   const origin = sp?.get("from") === "filter" ? "filter" : "reports";
   const saved = Number(sp?.get("saved"));
   if (Number.isSafeInteger(saved) && saved > 0) {
-    return { drill: null, team: null, view: null, saved, sort: SORT_KEYS.has(sort) ? (sort as HdTicketSort) : "due" };
+    // A saved view's own filters may start from Parked: fixSavedOrder, once the views are known.
+    return { drill: null, team: null, view: null, saved, ...sortOf(false) };
   }
   const isDrill = sp?.get("from") === "reports" || origin === "filter" || Object.keys(drill).some((k) => k !== "team" && k !== "view");
   if (isDrill && origin === "filter") {
-    return { drill, origin, team: null, view: null, sort: SORT_KEYS.has(sort) ? (sort as HdTicketSort) : "due" };
+    return { drill, origin, team: null, view: null, ...sortOf(startsFromParked(drill)) };
   }
+  const teamSel = Number.isSafeInteger(team) && team > 0 ? team : null;
+  const named = teamSel ? null : VIEW_KEYS.has(view) ? (view as HdNamedView) : "mine";
   return {
     drill: isDrill ? drill : null,
-    team: Number.isSafeInteger(team) && team > 0 ? team : null,
-    view: Number.isSafeInteger(team) && team > 0 ? null : VIEW_KEYS.has(view) ? (view as HdNamedView) : "mine",
-    sort: SORT_KEYS.has(sort) ? (sort as HdTicketSort) : "due",
+    team: teamSel,
+    view: named,
+    ...sortOf(isDrill ? startsFromParked(drill) : named === "parked"),
   };
 }
 
-/** The query string for a selection ("" for the default My open, due first). */
+/**
+ * Filters that list only parked tickets: the Parked view, or status_group=parked (Reports' "Parked now" drill-down,
+ * a saved view). Such a list keeps Parked's own order (the server lists it soonest to wake first).
+ */
+export function startsFromParked(filters: Record<string, string> | null | undefined): boolean {
+  return filters?.view === "parked" || filters?.status_group === "parked";
+}
+
+/** A saved view whose filters list parked tickets keeps Parked's order (its filters load after the address is read). */
+export function fixSavedOrder(sel: QueueSel, filters: Record<string, string> | undefined): QueueSel {
+  if (!sel.saved || !startsFromParked(filters) || sel.sortFrom === "fixed") return sel;
+  return { ...sel, sort: "due", sortFrom: "fixed" };
+}
+
+/** True when the list's own definition fixes its order (the Sort control is shown off). */
+export const fixedOrder = (sel: QueueSel): boolean => sel.sortFrom === "fixed";
+
+/**
+ * The query string for a selection ("" for the default My open). The sort is written only when it came from the
+ * address (1.20.36): an explicit ?sort= stays with its list; the agent's own sort needs no parameter.
+ */
 export function selQs(sel: QueueSel): string {
   const p = new URLSearchParams();
+  const sort = () => {
+    if (sel.sortFrom === "url") p.set("sort", sel.sort);
+  };
   if (sel.drill) {
     p.set("from", sel.origin ?? "reports");
     for (const [k, v] of Object.entries(sel.drill)) p.set(k, v);
-    if (sel.sort !== "due") p.set("sort", sel.sort);
+    sort();
     return `?${p.toString()}`;
   }
   // A saved view (1.19.1) unless a built-in view or a team was picked.
   if (sel.saved && !sel.team && !sel.view) {
     p.set("saved", String(sel.saved));
-    if (sel.sort !== "due") p.set("sort", sel.sort);
+    sort();
     return `?${p.toString()}`;
   }
   if (sel.team) p.set("team", String(sel.team));
   else if (sel.view && sel.view !== "mine") p.set("view", sel.view);
-  if (sel.sort !== "due") p.set("sort", sel.sort);
+  sort();
   const s = p.toString();
   return s ? `?${s}` : "";
 }

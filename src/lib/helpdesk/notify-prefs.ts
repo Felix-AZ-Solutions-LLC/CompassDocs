@@ -74,6 +74,7 @@ export async function saveNotifyPrefs(userId: number, patch: unknown, now = new 
     auto_follow?: boolean;
     email_view?: HdNotifyPrefs["email_view"];
     ticket_order?: HdNotifyPrefs["ticket_order"];
+    queue_sort?: HdNotifyPrefs["queue_sort"];
   };
   const raw = await storedPrefs(userId);
   const next: HdNotifyPrefs = resolvePrefs(raw);
@@ -100,6 +101,7 @@ export async function saveNotifyPrefs(userId: number, patch: unknown, now = new 
   if (p.auto_follow !== undefined) next.auto_follow = p.auto_follow;
   if (p.email_view !== undefined) next.email_view = p.email_view; // 1.20.11
   if (p.ticket_order !== undefined) next.ticket_order = p.ticket_order; // 1.20.28
+  if (p.queue_sort !== undefined) next.queue_sort = p.queue_sort; // 1.20.36: null is back to the default
   if (p.pause) next.pause = pauseFor(p.pause, now, await userTimeZone(userId));
   const resolved = resolvePrefs(next);
   const toStore: Record<string, unknown> = { ...resolved, matrix: sparse };

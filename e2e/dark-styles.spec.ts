@@ -236,7 +236,8 @@ test.describe("dark styles", () => {
       route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Couldn't save just now." }) })
     );
     const group = page.getByRole("radiogroup", { name: "Dark style" });
-    await group.getByRole("radio", { name: "Graphite" }).check();
+    // click, not check: the refused save puts Black back at once, and check() would fail on that very rollback.
+    await group.getByRole("radio", { name: "Graphite" }).click();
     await expect(page.getByText("Couldn't save just now.")).toBeVisible();
     await expect(group.getByRole("radio", { name: "Black" })).toBeChecked();
     expect(await htmlStyle(page)).toBe("black");

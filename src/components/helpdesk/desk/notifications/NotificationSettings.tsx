@@ -6,13 +6,15 @@
 // new tickets per team; quiet hours; preview and sound; Install Desk.
 // 1.20.11: Emails in the conversation (formatted or plain text, the same
 // default the conversation's Plain text switch remembers).
+// 1.20.36: Sorting the ticket list (the queue's Sort, remembered per agent),
+// with Reset to default.
 // The header's Pause menu holds push and email for an hour, until 08:00
 // tomorrow or until resumed. Every switch saves at once through PUT
 // /api/helpdesk/me/notification-prefs (like Account → Notifications) and
 // rolls back with the server's sentence when refused.
 
 import { useCallback, useRef, useState } from "react";
-import { BellOff, BellRing, Clock, Eye, MailOpen, Moon, Pause, Play, Users, Volume2 } from "lucide-react";
+import { ArrowDownUp, BellOff, BellRing, Clock, Eye, MailOpen, Moon, Pause, Play, RotateCcw, Users, Volume2 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
@@ -35,9 +37,12 @@ import {
   type HdPauseRequest,
 } from "@/lib/helpdesk/notify-prefs-shared";
 import type { HdPushDevice } from "@/lib/helpdesk/push-shared";
+import { QUEUE_SORT_DEFAULT, QUEUE_SORT_OPTIONS, cleanQueueSort, queueSortLabel } from "@/lib/helpdesk/queue-sort-shared";
 import type { HdEffectiveMatrix, HdNotifyView as NotificationView } from "@/lib/helpdesk/notify-prefs";
 import { sendJson } from "../api";
 import { rememberEmailView } from "../ticket/email-view";
+import { chooseQueueSort, useQueueSortPref } from "../queue/queue-sort";
+import { useDeskMe } from "../me";
 import { InstallDeskCard } from "../pwa/InstallDesk";
 import { DevicesCard } from "./DevicesCard";
 
@@ -125,6 +130,7 @@ export function NotificationSettings({ initial, devices: initialDevices }: { ini
           rememberEmailView(v, false);
           void save({ email_view: v }, (cur) => ({ ...cur, prefs: { ...cur.prefs, email_view: v } }));
         }} />
+        <QueueSortCard />
         <QuietHoursCard prefs={prefs} timezone={view.timezone} onChange={(q) =>
           save({ quiet: q }, (v) => {
             v.prefs.quiet = { ...v.prefs.quiet, ...q };
@@ -442,6 +448,43 @@ function EmailViewCard({ prefs, onChange }: { prefs: HdNotifyPrefs; onChange: (v
       />
       <p className="mt-1 text-xs text-slate-500">
         Formatted shows each email as it was sent. Switching one message on a ticket changes this too.
+      </p>
+    </Card>
+  );
+}
+
+// --- Sorting the ticket list (1.20.36) -----------------------------------------------
+
+/**
+ * The same store the queue reads (../queue/queue-sort): a change here shows in the queue at once, joins the same
+ * save queue (a refusal puts the last saved sort back with a toast), and another desk window's change shows here.
+ */
+function QueueSortCard() {
+  const me = useDeskMe();
+  const chosen = useQueueSortPref({ refresh: true });
+  const onChange = (v: typeof chosen) => void chooseQueueSort(me.id, v, cleanQueueSort(me.queue_sort));
+  return (
+    <Card
+      id="queue-sort"
+      className="scroll-mt-6"
+      title="Sorting the ticket list"
+      icon={<ArrowDownUp />}
+      description="How the queue sorts tickets in every view, on every device."
+    >
+      <p aria-hidden className="mb-1 text-xs font-medium text-slate-500">
+        Sort tickets
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Segmented label="Sort tickets" value={chosen ?? QUEUE_SORT_DEFAULT} onChange={(v) => onChange(v)} options={QUEUE_SORT_OPTIONS} className="flex-wrap" />
+        {chosen !== null && (
+          <Button variant="ghost" size="sm" icon={<RotateCcw />} onClick={() => onChange(null)}>
+            Reset to default
+          </Button>
+        )}
+      </div>
+      <p className="mt-1 text-xs text-slate-500">
+        {chosen === null ? `${queueSortLabel(QUEUE_SORT_DEFAULT)}, the default.` : `The default is ${queueSortLabel(QUEUE_SORT_DEFAULT)}.`} Picking a sort
+        in the list changes this too. A link that names a sort, and the Parked view, keep their own.
       </p>
     </Card>
   );

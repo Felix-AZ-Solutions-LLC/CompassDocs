@@ -97,7 +97,8 @@ export default async function DeskLayout({ children }: { children: React.ReactNo
       deskLookFor(user.id),
       // Claude in the desk (1.20.0): null unless it is on for this agent.
       claudeDeskClientProps(user),
-      // 1.20.11: emails formatted or as plain text in the conversation; 1.20.28: the conversation's order (desk preferences).
+      // 1.20.11: emails formatted or as plain text in the conversation; 1.20.28: the conversation's order;
+      // 1.20.36: the queue's sort (desk preferences).
       agentReadingPrefs(user.id),
     ]);
     const reports = access.reports || role.can("reports.own") || role.can("reports.team") || role.can("reports.all");
@@ -124,6 +125,7 @@ export default async function DeskLayout({ children }: { children: React.ReactNo
         availability={availability}
         emailView={reading.emailView}
         ticketOrder={reading.ticketOrder}
+        queueSort={reading.queueSort}
         installSlot={<InstallDeskMenuItem />}
         look={look.look}
         lookMenu={look.menu}

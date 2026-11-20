@@ -974,12 +974,23 @@ export const SORT_SQL: Record<HdTicketSort, string> = {
   updated: "t.updated_at DESC, t.id DESC",
   created: "t.created_at DESC, t.id DESC",
   number: "t.number DESC",
-  priority: "array_position(ARRAY['urgent','high','normal','low'], t.priority), t.updated_at DESC",
+  // 1.20.36: every order ends on a unique key, so equal tickets never swap places between pages or reloads.
+  priority: "array_position(ARRAY['urgent','high','normal','low'], t.priority), t.updated_at DESC, t.id DESC",
   due: "(CASE WHEN t.first_replied_at IS NULL AND t.first_reply_due IS NOT NULL THEN t.first_reply_due ELSE t.resolve_due END) ASC NULLS LAST, t.id",
 };
 
 /** 1.20.34: the Parked view's order: soonest to wake first (its clocks are paused, so "due" means nothing there). */
 const WAKE_SORT_SQL = "t.parked_until ASC NULLS LAST, t.id";
+
+/**
+ * The ORDER BY for a list (listTickets and the CSV export, lib/helpdesk/ticket-export, so an export comes out in the
+ * list's order). A list of parked tickets (view=parked, or status_group=parked since 1.20.36) asked for no sort or
+ * "due" is soonest to wake first; any other sort is honoured as asked.
+ */
+export function sortSqlFor(f: Pick<TicketListFilters, "view" | "status_group" | "sort">): string {
+  const parked = f.view === "parked" || f.status_group === "parked";
+  return parked && (!f.sort || f.sort === "due") ? WAKE_SORT_SQL : SORT_SQL[f.sort ?? "updated"];
+}
 
 /** A channel name (Reports' channels) or a raw source → the sources it covers; null when unknown. */
 export function channelSources(raw: string): HdSource[] | null {
@@ -1111,7 +1122,7 @@ export async function listTickets(
   const total = (await hqOne<{ n: number }>(`SELECT count(*)::int AS n FROM hd_tickets t WHERE ${whereSql}`, params))?.n ?? 0;
   if (f.countOnly) return { rows: [], total }; // saved views' counts (1.19.1, lib/helpdesk/saved-views)
   params.push(limit, offset);
-  const sortSql = f.view === "parked" && (!f.sort || f.sort === "due") ? WAKE_SORT_SQL : SORT_SQL[f.sort ?? "updated"];
+  const sortSql = sortSqlFor(f);
   const rows = await hq<JoinedRow>(`${TICKET_SELECT} WHERE ${whereSql} ORDER BY ${sortSql} LIMIT $${params.length - 1} OFFSET $${params.length}`, params);
   const now = Date.now();
   const tz = await teamTimezones(rows);

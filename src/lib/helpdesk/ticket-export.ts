@@ -37,7 +37,7 @@
 import "server-only";
 import { hq, hqOne } from "./db-core";
 import { csvCell } from "../csv";
-import { SORT_SQL, ticketListWhere, type TicketListFilters } from "./tickets";
+import { sortSqlFor, ticketListWhere, type TicketListFilters } from "./tickets";
 import { customFieldApplies, customValueText, listCustomFields, type HdCustomField } from "./custom-fields";
 import { HD_PRIORITY_LABEL, HD_SOURCE_LABEL, HD_STATUS_LABEL, type HdPriority, type HdSource, type HdStatus } from "./types";
 import type { Role } from "../types";
@@ -61,7 +61,7 @@ export async function planTicketExport(user: { id: number; role: Role }, f: Tick
   const total = (await hqOne<{ n: number }>(`SELECT count(*)::int AS n FROM hd_tickets t WHERE ${whereSql}`, params))?.n ?? 0;
   if (!total) return { ids: [], total: 0, capped: false };
   const rows = await hq<{ id: number }>(
-    `SELECT t.id FROM hd_tickets t WHERE ${whereSql} ORDER BY ${SORT_SQL[f.sort ?? "updated"]} LIMIT ${TICKET_EXPORT_MAX_ROWS}`,
+    `SELECT t.id FROM hd_tickets t WHERE ${whereSql} ORDER BY ${sortSqlFor(f)} LIMIT ${TICKET_EXPORT_MAX_ROWS}`,
     params
   );
   return { ids: rows.map((r) => Number(r.id)), total, capped: total > rows.length };
