@@ -164,7 +164,19 @@ export async function ticketDetail(user: { id: number; role: Role }, t: HdTicket
     ...(await solveFields(t)),
     // Custom fields (1.20.6, lib/helpdesk/custom-fields): the fields of the ticket's team with their values. None defined: one cached lookup.
     ...(await customFields(t)),
+    // 1.20.34 (lib/helpdesk/desk-calendar-park): its parking and prep window (the header's Parked chip reads it).
+    ...(await parkingFields(t)),
   };
+}
+
+async function parkingFields(t: HdTicket): Promise<Pick<HdTicketDetail, "parking">> {
+  try {
+    const parking = await (await import("./desk-calendar-park")).parkingOf(t.id);
+    return parking ? { parking } : {};
+  } catch (e) {
+    console.error("[helpdesk] ticket parking:", e);
+    return {};
+  }
 }
 
 /** 1.20.6 (lib/helpdesk/desk-calendar): the ticket's event, and whether its setup still holds a solve. */
@@ -273,6 +285,8 @@ export async function requestDetail(
     my_approval: myApproval,
     // 1.20.6: the Public custom fields with a value (lib/helpdesk/custom-fields); agent-only fields are never read here.
     ...(await publicDetails(t)),
+    // 1.20.34: a parked request is "Scheduled" with its event's day, time and place (lib/helpdesk/desk-calendar-park).
+    ...(t.parked_until && t.status === "on_hold" ? { scheduled: (await (await import("./desk-calendar-park")).scheduledFor([t.id])).get(t.id) ?? null } : {}),
   };
 }
 

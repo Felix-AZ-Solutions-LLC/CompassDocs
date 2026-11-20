@@ -190,7 +190,7 @@ export function EventDialog({
               </Field>
             </div>
           )}
-          <Field label="Place (optional)" help="A room, a site or an address. Two events at the same place at the same time get a warning.">
+          <Field label="Place (optional)" help="A room, a site or an address. Two events at the same place at the same time get a warning. Requesters see the place on their request.">
             <TextInput value={place} onChange={(e) => setPlace(e.target.value)} maxLength={EVENT_LIMITS.place} list={listId} autoComplete="off" data-testid="event-place" />
           </Field>
           <datalist id={listId}>

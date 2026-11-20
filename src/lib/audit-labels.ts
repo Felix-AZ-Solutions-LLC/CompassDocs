@@ -349,6 +349,10 @@ export const AUDIT_LABELS: Record<string, string> = {
   // The event calendar (1.20.6, lib/helpdesk/desk-calendar): reminder settings and private feed links. Details name the
   // link's owner and scope, never its address.
   "helpdesk.calendar.settings_updated": "Changed the event calendar settings",
+  // 1.20.34 (lib/helpdesk/desk-calendar-park): Hold until the event.
+  "helpdesk.ticket.parked": "Parked a ticket until its event",
+  "helpdesk.ticket.woke": "Woke a parked ticket",
+  "helpdesk.ticket.park_changed": "Changed a ticket's prep window",
   "helpdesk.calendar_feed.created": "Created a calendar feed link",
   "helpdesk.calendar_feed.regenerated": "Replaced a calendar feed link",
   "helpdesk.calendar_feed.revoked": "Revoked a calendar feed link",

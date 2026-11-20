@@ -1,6 +1,6 @@
 // GET  /api/helpdesk/tickets?view=&team=&priority=&assignee=&status=&q=&sort=&limit=&offset=
 //        the desk's queue in the caller's scope → { tickets: HdTicketListRow[], total }
-//        view: mine|unassigned|open|overdue|workflow|waiting|solved_week|team:<id>|all
+//        view: mine|unassigned|open|overdue|workflow|waiting|solved_week|parked|team:<id>|all
 //          (default open; a search, q, without a view looks through every status)
 //        assignee: <user id>|me|none · requester: <user id> · requester_email
 //        sort: updated|created|due|priority|number

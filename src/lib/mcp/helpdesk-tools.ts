@@ -186,7 +186,7 @@ export const HELPDESK_TOOL_DEFS: HdToolDef[] = [
     description:
       "Helpdesk desk: tickets in the person's queues (their teams' and those assigned to them; every team with See every team's tickets). Filter by view, team, status, priority, assignee, requester, tag, category, sub-category, custom field, missed target or text. Also lists the teams they work, with ids, the categories tickets can be given and the custom fields that can be filtered on.",
     inputSchema: obj({
-      view: { type: "string", description: "mine | unassigned | open (default) | overdue | workflow | waiting | solved_week | all | team:<id>" },
+      view: { type: "string", description: "mine | unassigned | open (default) | overdue | workflow | waiting | solved_week | parked (on hold until their event) | all | team:<id>" },
       team: { type: "number", description: "Team id." },
       status: { type: "string", enum: ["new", "open", "pending", "on_hold", "solved", "closed"] },
       priority: { type: "string", enum: ["low", "normal", "high", "urgent"] },
@@ -270,7 +270,7 @@ export const HELPDESK_TOOL_DEFS: HdToolDef[] = [
         event: {
           type: ["object", "null"],
           description:
-            "The ticket's event on the desk's Calendar (hd_read_ticket shows it as event). An object sets or changes it: starts_at and ends_at as date-times with their zone (2026-11-20T14:00:00Z or with an offset), or all_day true with start_date and end_date (YYYY-MM-DD, the last day inclusive); place; setup_minutes (how long before the start setup must be ready). setup_complete true marks the setup done: only after the person confirms it is, because the ticket can't be solved until then. null removes the event.",
+            "The ticket's event on the desk's Calendar (hd_read_ticket shows it as event). An object sets or changes it: starts_at and ends_at as date-times with their zone (2026-11-20T14:00:00Z or with an offset), or all_day true with start_date and end_date (YYYY-MM-DD, the last day inclusive); place; setup_minutes (how long before the start setup must be ready). setup_complete true marks the setup done: only after the person confirms it is, because the ticket can't be solved until then. null removes the event. park \"park\" holds the ticket until the event (on hold, out of the queue, targets paused; it wakes prep_days working days before setup is due, or the desk's window; refused with a sentence when the event is too close), park \"wake\" brings a parked ticket back now; prep_days alone (0 to 60, or null for the desk's) changes its window. Parking needs the person's Change status permission and their say-so; hd_read_ticket shows it as parking.",
         },
       },
       ["number"]
@@ -1012,7 +1012,7 @@ async function queue(user: User, a: Args, ctx: Ctx) {
   const f: TicketListFilters = {};
   if (a.view !== undefined && a.view !== null && a.view !== "") {
     const view = parseView(String(a.view));
-    if (!view) return refuse("Unknown view. Use mine, unassigned, open, overdue, workflow, waiting, solved_week, all or team:<id>.");
+    if (!view) return refuse("Unknown view. Use mine, unassigned, open, overdue, workflow, waiting, solved_week, parked, all or team:<id>.");
     f.view = view;
   }
   if (a.team !== undefined && a.team !== null) {
@@ -1147,6 +1147,9 @@ async function readTicket(user: User, a: Args, ctx: Ctx) {
     ...(await (await import("../helpdesk/solve-requirements")).solveRequirementsForMcp(t)),
     // 1.20.6: the ticket's event on the desk's Calendar, or null (lib/helpdesk/desk-calendar). While its setup is not complete the ticket can't be solved.
     event: await (await import("../helpdesk/desk-calendar")).ticketEventOut(t.id),
+    // 1.20.34: parked until its event (on hold, out of the queue, its targets paused): when it wakes and its prep window; null when
+    // it has no event and isn't parked (lib/helpdesk/desk-calendar-park). Park or wake it with hd_update_ticket's event.park.
+    parking: await (await import("../helpdesk/desk-calendar-park")).parkingOf(t.id),
     // 1.20.6: the custom fields of the ticket's team, each with its key, kind, options and value (agents only; lib/helpdesk/custom-fields).
     custom_fields: await (await import("../helpdesk/custom-fields")).customFieldsForMcp(t),
     // 1.19.3: linked assets from Snipe-IT (agents only; lib/helpdesk/assets).
@@ -1259,7 +1262,9 @@ async function updateTicketTool(user: User, a: Args, ctx: Ctx) {
   if (hasEvent) {
     const cal = await import("../helpdesk/desk-calendar");
     try {
-      const done = await cal.applyEventPatch(t, a.event, { id: user.id, name: user.name || user.username, via: "mcp" }, { origin: ctx.origin, deferSetup: patch.status === "solved" || patch.status === "closed" });
+      // 1.20.34: event.park / event.prep_days need the person's Change status permission, as the desk's status menu.
+      const mayPark = await hdCan(user, "tickets.change_status", { teamId: t.team_id });
+      const done = await cal.applyEventPatch(t, a.event, { id: user.id, name: user.name || user.username, role: user.role, via: "mcp" }, { origin: ctx.origin, deferSetup: patch.status === "solved" || patch.status === "closed", mayPark });
       eventChanged = done.changed;
       setupComplete = done.setupDeferred;
     } catch (e) {
@@ -1306,7 +1311,8 @@ async function updateTicketTool(user: User, a: Args, ctx: Ctx) {
     number: r.ticket.number,
     changed: [...r.changed, ...(eventChanged || setupComplete ? ["event"] : [])],
     event: await (await import("../helpdesk/desk-calendar")).ticketEventOut(r.ticket.id),
-    status: r.ticket.status,
+    parking: await (await import("../helpdesk/desk-calendar-park")).parkingOf(r.ticket.id),
+    status: (await getTicketByNumber(r.ticket.number))?.status ?? r.ticket.status,
     priority: r.ticket.priority,
     team: r.ticket.team_name,
     assignee: r.ticket.assignee_name,

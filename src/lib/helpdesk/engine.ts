@@ -279,10 +279,14 @@ async function solveRequest(c: Ctx): Promise<boolean> {
     `UPDATE hd_tickets SET status = 'solved', solved_at = coalesce(solved_at, $2), updated_at = now(),
             sla_paused_ms = sla_paused_ms + CASE WHEN sla_paused_at IS NULL THEN 0
                               ELSE greatest(0, floor(extract(epoch FROM ($2::timestamptz - sla_paused_at)) * 1000))::bigint END,
-            sla_paused_at = NULL
+            sla_paused_at = NULL,
+            -- 1.20.34 (lib/helpdesk/desk-calendar-park): a solve ends any parking.
+            parked_until = NULL, parked_at = NULL, park_reason = ''
       WHERE id = $1 AND status NOT IN ('solved', 'closed')`,
     [c.ticket.id, c.now]
   );
+  // 1.20.34: its parking entry ends (lib/helpdesk/desk-calendar-park).
+  if (r.rowCount) await c.client.query("UPDATE hd_ticket_parkings SET woke_at = $2 WHERE ticket_id = $1 AND woke_at IS NULL", [c.ticket.id, c.now]);
   return (r.rowCount ?? 0) > 0;
 }
 

@@ -110,7 +110,8 @@ export interface EventActor {
 
 const COLS = `e.ticket_id, e.starts_at, e.ends_at, e.all_day, to_char(e.start_date, 'YYYY-MM-DD') AS start_date,
   to_char(e.end_date, 'YYYY-MM-DD') AS end_date, e.timezone, e.place, e.place_key, e.setup_minutes, e.ready_at, e.setup_done_at,
-  e.setup_done_by, e.setup_done_by_name, e.cancelled_at, e.source, e.ics_uid, e.ics_sequence, e.repeats, e.time_rev, e.updated_at`;
+  e.setup_done_by, e.setup_done_by_name, e.cancelled_at, e.source, e.ics_uid, e.ics_sequence, e.repeats, e.time_rev, e.updated_at,
+  e.ics_dtstamp, e.ics_organizer`;
 
 export interface EventRow {
   ticket_id: number;
@@ -134,6 +135,9 @@ export interface EventRow {
   repeats: number;
   time_rev: number;
   updated_at: string;
+  /** 1.20.34: the invite's DTSTAMP and ORGANIZER address (lower case), so a later update is told from an older one. */
+  ics_dtstamp?: string | null;
+  ics_organizer?: string;
 }
 
 export function toEvent(r: EventRow): HdTicketEvent {
@@ -249,8 +253,8 @@ export interface SetEventOptions {
   source?: HdEventSource;
   /** The zone whole days are counted in when the caller names none; default the ticket's team calendar's. */
   zone?: string;
-  /** The meeting invite it came from (lib/helpdesk/inbound). */
-  ics?: { uid: string; sequence: number; repeats: boolean };
+  /** The meeting invite it came from (lib/helpdesk/inbound). 1.20.34: with its DTSTAMP and organiser. */
+  ics?: { uid: string; sequence: number; repeats: boolean; dtstamp?: number | null; organizer?: string };
   /** A sentence that opens the timeline line instead of "Ana added an event" ("Event added from the request"). */
   lead?: { added: string; changed: string };
   origin?: string;
@@ -269,7 +273,7 @@ export async function setTicketEvent(
   raw: unknown,
   actor: EventActor,
   opts: SetEventOptions = {}
-): Promise<{ event: HdTicketEvent; created: boolean; changed: boolean }> {
+): Promise<{ event: HdTicketEvent; created: boolean; changed: boolean; moved: boolean }> {
   const now = opts.now ?? new Date();
   const tz = await lineZone(ticket.team_id);
   const zone = opts.zone && validZone(opts.zone) ? opts.zone : tz;
@@ -290,14 +294,15 @@ export async function setTicketEvent(
     if (!before) {
       await client.query(
         `INSERT INTO hd_ticket_events (ticket_id, starts_at, ends_at, all_day, start_date, end_date, timezone, place, place_key, setup_minutes, ready_at,
-                                       source, ics_uid, ics_sequence, repeats, created_by, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17)`,
+                                       source, ics_uid, ics_sequence, repeats, created_by, created_at, updated_at, ics_dtstamp, ics_organizer)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17, $18, $19)`,
         [ticket.id, v.starts_at, v.ends_at, v.all_day ? 1 : 0, v.start_date, v.end_date, v.timezone, v.place, placeKey(v.place), v.setup_minutes, ready,
-         opts.source ?? "agent", opts.ics?.uid ?? "", opts.ics?.sequence ?? 0, opts.ics?.repeats ? 1 : 0, actor.id, now]
+         opts.source ?? "agent", opts.ics?.uid ?? "", opts.ics?.sequence ?? 0, opts.ics?.repeats ? 1 : 0, actor.id, now,
+         opts.ics?.dtstamp ? new Date(opts.ics.dtstamp) : null, (opts.ics?.organizer ?? "").slice(0, 320)]
       );
       const row = (await eventRow(ticket.id, client))!;
       await line(client, ticket.id, actor, `${opts.lead?.added ?? `${who} added an event`}: ${describe(toEvent(row), tz)}`, now, true);
-      return { row, created: true, changed: true };
+      return { row, created: true, changed: true, moved: false };
     }
     const timeMoved =
       before.starts_at !== v.starts_at.toISOString() ||
@@ -308,25 +313,29 @@ export async function setTicketEvent(
     const placeMoved = before.place !== v.place;
     const icsMoved = !!opts.ics && (before.ics_uid !== opts.ics.uid || before.ics_sequence !== opts.ics.sequence || (before.repeats === 1) !== opts.ics.repeats);
     const revived = before.cancelled_at !== null && (timeMoved || placeMoved || !!opts.ics);
-    if (!timeMoved && !placeMoved && !icsMoved && !revived) return { row: before, created: false, changed: false };
+    if (!timeMoved && !placeMoved && !icsMoved && !revived) return { row: before, created: false, changed: false, moved: false };
     await client.query(
       `UPDATE hd_ticket_events
           SET starts_at = $2, ends_at = $3, all_day = $4, start_date = $5, end_date = $6, timezone = $7, place = $8, place_key = $9,
               setup_minutes = $10, ready_at = $11, time_rev = time_rev + $12, updated_at = $13,
               cancelled_at = CASE WHEN $14 THEN NULL ELSE cancelled_at END,
-              ics_uid = COALESCE($15, ics_uid), ics_sequence = COALESCE($16, ics_sequence), repeats = COALESCE($17, repeats)
+              ics_uid = COALESCE($15, ics_uid), ics_sequence = COALESCE($16, ics_sequence), repeats = COALESCE($17, repeats),
+              ics_dtstamp = COALESCE($18, ics_dtstamp), ics_organizer = CASE WHEN ics_organizer = '' THEN COALESCE($19, '') ELSE ics_organizer END
         WHERE ticket_id = $1`,
       [ticket.id, v.starts_at, v.ends_at, v.all_day ? 1 : 0, v.start_date, v.end_date, v.timezone, v.place, placeKey(v.place), v.setup_minutes, ready,
-       timeMoved || revived ? 1 : 0, now, revived, opts.ics?.uid ?? null, opts.ics?.sequence ?? null, opts.ics ? (opts.ics.repeats ? 1 : 0) : null]
+       timeMoved || revived ? 1 : 0, now, revived, opts.ics?.uid ?? null, opts.ics?.sequence ?? null, opts.ics ? (opts.ics.repeats ? 1 : 0) : null,
+       opts.ics?.dtstamp ? new Date(opts.ics.dtstamp) : null, opts.ics?.organizer ? opts.ics.organizer.slice(0, 320) : null]
     );
     const row = (await eventRow(ticket.id, client))!;
     if (timeMoved || placeMoved || revived) {
       await line(client, ticket.id, actor, `${opts.lead?.changed ?? `${who} changed the event`}: ${describe(toEvent(row), tz)}`, now, true);
     }
-    return { row, created: false, changed: true };
+    return { row, created: false, changed: true, moved: !!timeMoved };
   });
   if (res.changed) await afterEventChange(ticket.id, actor, opts.origin);
-  return { event: toEvent(res.row), created: res.created, changed: res.changed };
+  // 1.20.34: a parked ticket follows its event (lib/helpdesk/desk-calendar-park; never throws).
+  if (res.moved) await (await import("./desk-calendar-park")).followEventChange(ticket.id, "moved", { origin: opts.origin, now });
+  return { event: toEvent(res.row), created: res.created, changed: res.changed, moved: res.moved };
 }
 
 /** Take the event off the ticket. Its reminders' records go with it. False when there was none. */
@@ -345,6 +354,8 @@ export async function removeTicketEvent(ticket: TicketRef, actor: EventActor, op
     return true;
   });
   if (removed) await afterEventChange(ticket.id, actor, opts.origin);
+  // 1.20.34: a ticket parked for it wakes (lib/helpdesk/desk-calendar-park).
+  if (removed) await (await import("./desk-calendar-park")).followEventChange(ticket.id, "removed", { origin: opts.origin, now });
   return removed;
 }
 
@@ -390,16 +401,22 @@ export async function setSetupComplete(
  * is reminded of no more. `note` is the agents-only timeline line. False when
  * there is no event or it already was.
  */
-export async function cancelTicketEvent(ticketId: number, actor: EventActor, note: string, opts: { origin?: string; now?: Date; ics?: { sequence: number } } = {}): Promise<boolean> {
+export async function cancelTicketEvent(ticketId: number, actor: EventActor, note: string, opts: { origin?: string; now?: Date; ics?: { sequence: number; dtstamp?: number | null } } = {}): Promise<boolean> {
   const now = opts.now ?? new Date();
   const done = await withTx(async (client) => {
     const before = await eventRow(ticketId, client, true);
     if (!before || before.cancelled_at) return false;
-    await client.query("UPDATE hd_ticket_events SET cancelled_at = $2, updated_at = $2, ics_sequence = COALESCE($3, ics_sequence) WHERE ticket_id = $1", [ticketId, now, opts.ics?.sequence ?? null]);
+    // 1.20.34: with the CANCEL's DTSTAMP, so a late REQUEST of the same SEQUENCE and an older DTSTAMP can't bring it back.
+    await client.query(
+      "UPDATE hd_ticket_events SET cancelled_at = $2, updated_at = $2, ics_sequence = COALESCE($3, ics_sequence), ics_dtstamp = COALESCE($4, ics_dtstamp) WHERE ticket_id = $1",
+      [ticketId, now, opts.ics?.sequence ?? null, opts.ics?.dtstamp ? new Date(opts.ics.dtstamp) : null]
+    );
     await line(client, ticketId, actor, note, now);
     return true;
   });
   if (done) await afterEventChange(ticketId, actor, opts.origin);
+  // 1.20.34: a ticket parked for it wakes, with "The event was cancelled. Close this ticket if nothing else is needed."
+  if (done) await (await import("./desk-calendar-park")).followEventChange(ticketId, "cancelled", { origin: opts.origin, now });
   return done;
 }
 
@@ -479,7 +496,7 @@ export async function moveEventOnMergeTx(client: HdQueryable, fromId: number, to
 
 /** lib/helpdesk/retention anonymiseTicketTx: a place is free text and may name a person; the invite's id goes too. The times stay. */
 export async function anonymiseEventTx(client: HdQueryable, ticketId: number): Promise<void> {
-  await client.query("UPDATE hd_ticket_events SET place = '', place_key = '', ics_uid = '' WHERE ticket_id = $1", [ticketId]);
+  await client.query("UPDATE hd_ticket_events SET place = '', place_key = '', ics_uid = '', ics_organizer = '' WHERE ticket_id = $1", [ticketId]);
 }
 
 // --- Overlap ------------------------------------------------------------------------
@@ -522,10 +539,16 @@ export async function eventConflicts(user: U, ticketId: number): Promise<HdEvent
   });
 }
 
-/** GET /api/helpdesk/tickets/[number]/event. */
+/** GET /api/helpdesk/tickets/[number]/event. 1.20.34: with the ticket's parking (Hold until the event). */
 export async function ticketEventView(user: U, ticket: TicketRef, canWork: boolean): Promise<HdTicketEventView> {
   const [event, conflicts, settings] = await Promise.all([getTicketEvent(ticket.id), eventConflicts(user, ticket.id), getCalendarSettings()]);
-  return { event, conflicts, can_edit: canWork && eventEditable(ticket), default_setup_minutes: settings.default_setup_minutes };
+  let parking: HdTicketEventView["parking"] = null;
+  if (canWork) {
+    const { hdCan } = await import("./roles");
+    const may = await hdCan(user as never, "tickets.change_status", { teamId: ticket.team_id });
+    parking = await (await import("./desk-calendar-park")).parkingView(ticket.id, may);
+  }
+  return { event, conflicts, can_edit: canWork && eventEditable(ticket), default_setup_minutes: settings.default_setup_minutes, parking };
 }
 
 /** Places used before on tickets the person may see, most recent first (the Event block's suggestions). */
@@ -549,7 +572,19 @@ export async function placeSuggestions(user: U, q: string): Promise<string[]> {
 
 export const HD_CALENDAR_SETTINGS_KEY = "helpdesk_calendar";
 
+let settingsOverride: Partial<HdCalendarSettings> | null = null;
+
+/** Tests: this process reads these settings over the stored ones (the stored row is shared by every test file). Null restores. */
+export function setCalendarSettingsForTests(over: Partial<HdCalendarSettings> | null): void {
+  settingsOverride = over;
+}
+
 export async function getCalendarSettings(): Promise<HdCalendarSettings> {
+  if (settingsOverride) return resolveCalendarSettings({ ...(await storedCalendarSettings()), ...settingsOverride });
+  return storedCalendarSettings();
+}
+
+async function storedCalendarSettings(): Promise<HdCalendarSettings> {
   const raw = await getSetting(HD_CALENDAR_SETTINGS_KEY);
   let stored: unknown = null;
   if (raw) {
@@ -569,6 +604,8 @@ export async function saveCalendarSettings(raw: unknown): Promise<{ settings: Hd
   if (!c.ok) throw new EventError(c.error);
   const changed = (Object.keys(c.value) as (keyof HdCalendarSettings)[]).filter((k) => JSON.stringify(before[k]) !== JSON.stringify(c.value[k]));
   if (changed.length) await setSetting(HD_CALENDAR_SETTINGS_KEY, JSON.stringify(c.value));
+  // 1.20.34: a new desk prep window moves the wake time of parked tickets that have none of their own (lib/helpdesk/desk-calendar-park).
+  if (changed.includes("park_prep_days")) await (await import("./desk-calendar-park")).recomputeParked({ kind: "desk_prep" });
   return { settings: c.value, changed };
 }
 
@@ -940,17 +977,60 @@ export async function inviteFromEmail(email: { files: { name: string; type: stri
   }
 }
 
-/** The open ticket whose event came from the invite with this UID and whose requester is this sender; null when there is none. */
-export async function ticketForInviteUid(uid: string, sender: { id: number | null; email: string }): Promise<number | null> {
+/**
+ * The open ticket whose event came from the invite with this UID, for a
+ * verified sender who is that ticket's requester (the newest such ticket, as
+ * before), or else (1.20.34) the meeting's organiser: the ORGANIZER recorded
+ * from the first invite, which is recorded only when that invite came from
+ * the organiser's own verified address. Organiser matches count only when
+ * `organiserOk` (the sender passed the sender check itself) and only when
+ * exactly one live ticket has that UID and organiser: two or more, and none
+ * is picked, so the mail opens a ticket of its own. Scoped to the help
+ * address the mail came in on (`mailboxId`; undefined: any). Null when there
+ * is none: a stranger's invite with the same UID never reaches someone
+ * else's ticket.
+ */
+export async function ticketForInviteUid(
+  uid: string,
+  sender: { id: number | null; email: string },
+  opts: { mailboxId?: number | null; organiserOk?: boolean } = {}
+): Promise<number | null> {
   if (!uid) return null;
-  const r = await hqOne<{ id: number }>(
-    `SELECT t.id FROM hd_ticket_events e JOIN hd_tickets t ON t.id = e.ticket_id
+  const scoped = opts.mailboxId !== undefined;
+  const base = `FROM hd_ticket_events e JOIN hd_tickets t ON t.id = e.ticket_id
       WHERE e.ics_uid = $1 AND t.deleted_at IS NULL AND t.merged_into IS NULL AND t.status <> 'closed'
+        AND (NOT $4::boolean OR t.mailbox_id IS NOT DISTINCT FROM $5::int)`;
+  const params = [uid.slice(0, 255), sender.id, sender.email, scoped, scoped ? opts.mailboxId ?? null : null];
+  const own = await hqOne<{ id: number }>(
+    `SELECT t.id ${base}
         AND (($2::int IS NOT NULL AND t.requester_id = $2) OR ($2::int IS NULL AND t.requester_id IS NULL AND lower(t.requester_email) = lower($3)))
       ORDER BY t.id DESC LIMIT 1`,
-    [uid.slice(0, 255), sender.id, sender.email]
+    params
   );
-  return r?.id ?? null;
+  if (own) return own.id;
+  if (opts.organiserOk !== true) return null;
+  // ($2, the sender's account, plays no part here; it is typed so the one parameter list serves both reads.)
+  const org = await hq<{ id: number }>(`SELECT t.id ${base} AND $2::int IS NOT DISTINCT FROM $2::int AND e.ics_organizer <> '' AND e.ics_organizer = lower($3) ORDER BY t.id LIMIT 2`, params);
+  return org.length === 1 ? org[0].id : null;
+}
+
+/** 1.20.34: is this sender the organiser of the meeting the ticket's event came from (the same UID)? */
+export async function isInviteOrganiser(ticketId: number, uid: string, email: string): Promise<boolean> {
+  if (!uid || !email) return false;
+  // As ticketForInviteUid: an organiser of two live tickets with this UID is the organiser of neither.
+  const n = await hqOne<{ n: number }>(
+    `SELECT count(*)::int AS n FROM hd_ticket_events e JOIN hd_tickets t ON t.id = e.ticket_id
+      WHERE e.ics_uid = $1 AND e.ics_organizer <> '' AND e.ics_organizer = lower($2) AND t.deleted_at IS NULL AND t.merged_into IS NULL AND t.status <> 'closed'`,
+    [uid.slice(0, 255), email]
+  );
+  if ((n?.n ?? 0) > 1) return false;
+  return !!(await hqOne("SELECT 1 AS x FROM hd_ticket_events WHERE ticket_id = $1 AND ics_uid = $2 AND ics_organizer <> '' AND ics_organizer = lower($3)", [ticketId, uid.slice(0, 255), email]));
+}
+
+/** 1.20.34: does the ticket's event come from this meeting (the same UID)? */
+export async function ticketHasInvite(ticketId: number, uid: string): Promise<boolean> {
+  if (!uid) return false;
+  return !!(await hqOne("SELECT 1 AS x FROM hd_ticket_events WHERE ticket_id = $1 AND ics_uid = $2", [ticketId, uid.slice(0, 255)]));
 }
 
 /**
@@ -964,9 +1044,20 @@ export async function ticketForInviteUid(uid: string, sender: { id: number | nul
  *   cancel    the same meeting's event is marked cancelled with an
  *             agents-only note; the ticket stays open. A cancellation for
  *             another meeting changes nothing.
+ * 1.20.34: an update or cancellation of the same meeting is applied only when
+ * `from.trusted` (the caller found the sender to be the ticket's requester,
+ * the meeting's organiser or an agent of it); from anyone else (someone
+ * copied) the email is kept on the ticket and a note says the event was not
+ * changed. A revision older than what the ticket has (a lower SEQUENCE, or
+ * the same SEQUENCE with an earlier DTSTAMP) changes nothing.
  * Never throws: a failing invite must not fail the email.
  */
-export async function applyInviteToTicket(ticketId: number, invite: ParsedInvite, from: { name: string }, ctx: { origin?: string } = {}): Promise<"added" | "updated" | "cancelled" | "ignored"> {
+export async function applyInviteToTicket(
+  ticketId: number,
+  invite: ParsedInvite,
+  from: { name: string; email?: string; trusted?: boolean; verified?: boolean },
+  ctx: { origin?: string } = {}
+): Promise<"added" | "updated" | "cancelled" | "ignored"> {
   try {
     const t = await hqOne<TicketRef & { deleted_at: string | null }>("SELECT id, number, team_id, status, merged_into, deleted_at FROM hd_tickets WHERE id = $1", [ticketId]);
     if (!t || t.deleted_at || !eventEditable(t)) return "ignored";
@@ -975,17 +1066,32 @@ export async function applyInviteToTicket(ticketId: number, invite: ParsedInvite
     const before = await eventRow(ticketId);
     const sameMeeting = !!before && !!invite.uid && before.ics_uid === invite.uid;
     const sender = mdInline(from.name) || "the sender";
+    // Someone copied (not the requester, the organiser or an agent): an invite in their mail never adds, moves or cancels
+    // an event on this ticket, whatever meeting it is for; the email stays on the ticket.
+    if (from.trusted === false) {
+      await addSystemMessage(
+        ticketId,
+        sameMeeting
+          ? "This email carried an update to the meeting, but it isn't from the meeting's organiser or the requester, so the event was not changed."
+          : "This email carried a meeting invite, but it isn't from the requester, so it wasn't put on the ticket. An agent can add the event by hand.",
+        { internal: true }
+      );
+      return "ignored";
+    }
+    const olderThan = (b: EventRow) =>
+      invite.sequence < b.ics_sequence ||
+      (invite.sequence === b.ics_sequence && invite.dtstamp !== null && !!b.ics_dtstamp && invite.dtstamp < Date.parse(b.ics_dtstamp));
     if (invite.method === "cancel") {
       if (!before || !sameMeeting) return "ignored";
-      if (invite.sequence < before.ics_sequence) return "ignored";
-      const done = await cancelTicketEvent(ticketId, system, `The meeting was cancelled by ${sender} (a cancellation came by email). The event is marked cancelled and no longer holds this ticket open. The ticket was not closed.`, { origin: ctx.origin, ics: { sequence: invite.sequence } });
+      if (olderThan(before)) return "ignored";
+      const done = await cancelTicketEvent(ticketId, system, `The meeting was cancelled by ${sender} (a cancellation came by email). The event is marked cancelled and no longer holds this ticket open. The ticket was not closed.`, { origin: ctx.origin, ics: { sequence: invite.sequence, dtstamp: invite.dtstamp } });
       return done ? "cancelled" : "ignored";
     }
     if (before && !sameMeeting) {
       await addSystemMessage(ticketId, "This email carried a meeting invite for a different meeting. The ticket's event was not changed.", { internal: true });
       return "ignored";
     }
-    if (before && invite.sequence < before.ics_sequence) return "ignored";
+    if (before && olderThan(before)) return "ignored";
     const input = invite.all_day
       ? { all_day: true, start_date: invite.start_date, end_date: invite.end_date, timezone: invite.timezone, place: invite.location }
       : { starts_at: new Date(invite.starts_at).toISOString(), ends_at: new Date(invite.ends_at).toISOString(), timezone: invite.timezone, place: invite.location };
@@ -993,7 +1099,15 @@ export async function applyInviteToTicket(ticketId: number, invite: ParsedInvite
     const r = await setTicketEvent(t, settings ? { ...input, setup_minutes: settings.default_setup_minutes } : input, system, {
       source: "invite",
       zone: invite.timezone,
-      ics: { uid: invite.uid, sequence: invite.sequence, repeats: invite.repeats },
+      // The organiser is recorded only when the invite came from the organiser's own address, verified: an attendee (or
+      // anyone) forwarding an invite that names someone else must never draw that person's later updates to this ticket.
+      ics: {
+        uid: invite.uid,
+        sequence: invite.sequence,
+        repeats: invite.repeats,
+        dtstamp: invite.dtstamp,
+        organizer: from.verified && !!invite.organizer && !!from.email && invite.organizer.toLowerCase() === from.email.trim().toLowerCase() ? invite.organizer.toLowerCase() : "",
+      },
       origin: ctx.origin,
       lead: { added: `Event added from the meeting invite ${sender} sent`, changed: `Event updated from the meeting invite ${sender} sent` },
     });
@@ -1048,25 +1162,75 @@ export async function ticketEventOut(ticketId: number): Promise<ReturnType<typeo
 export async function applyEventPatch(
   ticket: TicketRef,
   raw: unknown,
-  actor: EventActor,
-  opts: { origin?: string; deferSetup?: boolean } = {}
-): Promise<{ changed: boolean; setupDeferred: boolean }> {
+  actor: EventActor & { role?: string | null },
+  opts: { origin?: string; deferSetup?: boolean; mayPark?: boolean } = {}
+): Promise<{ changed: boolean; setupDeferred: boolean; parked?: boolean; woke?: boolean }> {
   if (raw === null) return { changed: await removeTicketEvent(ticket, actor, opts), setupDeferred: false };
   if (typeof raw !== "object" || Array.isArray(raw)) throw new EventError("Send event as an object, or null to remove it.");
-  const { setup_complete: setup, ...rest } = raw as Record<string, unknown>;
+  const { setup_complete: setup, park, prep_days: prepDays, ...rest } = raw as Record<string, unknown>;
   if (setup !== undefined && typeof setup !== "boolean") throw new EventError("setup_complete is true or false.");
+  // 1.20.34 (lib/helpdesk/desk-calendar-park): park "park" holds the ticket until its event, "wake" brings it back;
+  // prep_days (0 to 60, or null for the desk's) is the ticket's own prep window. They need the right to change its status.
+  if (park !== undefined && park !== "park" && park !== "wake") throw new EventError('park is "park" or "wake".');
+  // Only an explicit yes from the caller (it checked tickets.change_status) lets parking through.
+  if ((park !== undefined || prepDays !== undefined) && opts.mayPark !== true) throw new EventError("Parking a ticket needs permission to change its status.", 403);
+  if (park === "wake" && prepDays !== undefined) throw new EventError("Send prep_days with park: \"park\", or on its own.");
   const allowed = new Set(["starts_at", "ends_at", "all_day", "start_date", "end_date", "timezone", "place", "setup_minutes"]);
   const unknown = Object.keys(rest).filter((k) => !allowed.has(k));
-  if (unknown.length) throw new EventError(`An event has starts_at, ends_at, all_day, start_date, end_date, timezone, place, setup_minutes and setup_complete (not ${unknown.join(", ")}).`);
+  if (unknown.length) throw new EventError(`An event has starts_at, ends_at, all_day, start_date, end_date, timezone, place, setup_minutes and setup_complete, and park and prep_days (not ${unknown.join(", ")}).`);
+  // 1.20.34: a park that would be refused is refused before anything is saved, so the event fields sent with it are not
+  // half-applied: the prep window, the ticket and the wake time the new event fields would give are checked first.
+  if (park !== undefined || prepDays !== undefined) {
+    const pk = await import("./desk-calendar-park");
+    if (prepDays !== undefined) {
+      const c = pk.checkPrepDays(prepDays);
+      if (!c.ok) throw new EventError(c.error);
+    }
+    if (park === "wake") {
+      const p = await hqOne("SELECT 1 AS x FROM hd_tickets WHERE id = $1 AND parked_until IS NOT NULL", [ticket.id]);
+      if (!p) throw new EventError("This ticket isn't parked.", 409);
+    }
+    if (park === "park") {
+      let times: HdEventTimes | null = null;
+      if (Object.keys(rest).length) {
+        const before = await eventRow(ticket.id);
+        const zone = await lineZone(ticket.team_id);
+        const c = checkEventInput(rest, before ? timesOf(before) : null, zone);
+        if (!c.ok) throw new EventError(c.error);
+        times = c.value;
+      }
+      const refused = await pk.parkRefusal(ticket.id, { times, prepDays: prepDays as number | null | undefined });
+      if (refused) throw new EventError(refused, 409);
+    }
+  }
   let changed = false;
   if (Object.keys(rest).length) changed = (await setTicketEvent(ticket, rest, actor, { origin: opts.origin, source: actor.via === "api" || actor.via === "mcp" ? "api" : "agent" })).changed;
-  else if (setup === undefined) throw new EventError("Say what to change on the event.");
+  else if (setup === undefined && park === undefined && prepDays === undefined) throw new EventError("Say what to change on the event.");
+  let parked: boolean | undefined;
+  let woke: boolean | undefined;
+  if (park !== undefined || prepDays !== undefined) {
+    const pk = await import("./desk-calendar-park");
+    try {
+      if (park === "park") {
+        parked = (await pk.parkTicket(ticket.id, actor, { prepDays: prepDays as number | null | undefined, reason: "agent", origin: opts.origin })).parked;
+      } else if (park === "wake") {
+        woke = !!(await pk.wakeTicket(ticket.id, actor, { why: "manual", origin: opts.origin }));
+        if (!woke) throw new EventError("This ticket isn't parked.", 409);
+      } else {
+        await pk.setPrepDays(ticket.id, prepDays, actor, { origin: opts.origin });
+      }
+    } catch (e) {
+      if (e instanceof pk.ParkError) throw new EventError(e.message, e.status);
+      throw e;
+    }
+    changed = true;
+  }
   if (setup === true && opts.deferSetup) {
     if (!(await eventRow(ticket.id))) throw new EventError("This ticket has no event.", 404);
-    return { changed, setupDeferred: true };
+    return { changed, setupDeferred: true, ...(parked !== undefined ? { parked } : {}), ...(woke !== undefined ? { woke } : {}) };
   }
   if (setup !== undefined) changed = (await setSetupComplete(ticket, setup, actor, opts)).changed || changed;
-  return { changed, setupDeferred: false };
+  return { changed, setupDeferred: false, ...(parked !== undefined ? { parked } : {}), ...(woke !== undefined ? { woke } : {}) };
 }
 
 /** Audit a settings change (Desk settings → Event calendar). */
@@ -1076,7 +1240,20 @@ export async function auditCalendarSettings(actor: AuditActor, changed: string[]
     action: "helpdesk.calendar.settings_updated",
     targetType: "helpdesk_settings",
     targetLabel: "Event calendar",
-    details: { changed, reminder_minutes: settings.reminder_minutes, late_reminder: settings.late_reminder, recipients: settings.recipients, chat: settings.chat, default_setup_minutes: settings.default_setup_minutes },
+    details: {
+      changed,
+      reminder_minutes: settings.reminder_minutes,
+      late_reminder: settings.late_reminder,
+      recipients: settings.recipients,
+      chat: settings.chat,
+      default_setup_minutes: settings.default_setup_minutes,
+      // 1.20.34 (lib/helpdesk/desk-calendar-park).
+      park_prep_days: settings.park_prep_days,
+      park_invites: settings.park_invites,
+      park_request_types: settings.park_request_types,
+      remind_requester: settings.remind_requester,
+      remind_requester_days: settings.remind_requester_days,
+    },
     ip,
   });
 }

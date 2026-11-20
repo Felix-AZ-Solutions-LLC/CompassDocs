@@ -21,6 +21,8 @@ import { AutomatedChip } from "../intake/AutomatedChip";
 import { OutsideCustomerChip } from "../OutsideCustomerChip";
 import { ContactHoverCard } from "@/components/helpdesk/contacts/ContactHoverCard";
 import { PRIORITY_DOT, compactDue, priorityLabel, slaInk, statusChip, ticketHref } from "../ui";
+import { useAppSettings } from "@/components/SettingsProvider";
+import { eventDay, wakeDay } from "@/lib/helpdesk/desk-calendar-park-shared";
 import type { RowSelection } from "../merge/selection";
 import { IncidentChip } from "../incidents/IncidentChip";
 import { useDeskMailboxes } from "../mailboxes";
@@ -73,6 +75,7 @@ export function TicketList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows]);
   const locks = useQueueReplyLocks((rows ?? []).map((r) => r.number));
+  const { timezone: tz } = useAppSettings();
   if (error && !rows) {
     return (
       <div className="px-4 py-6 text-sm">
@@ -97,9 +100,11 @@ export function TicketList({
       {withGhosts(rows, ghosts).map((t) => {
         const on = t.number === selected;
         const leaving = !!t.leaving;
-        const chip = statusChip(t, true);
+        const chip = statusChip(t, true, { parked: true });
         // Agent L's calendars: "Paused for Christmas Day, resumes Mon 09:00".
-        const clock = t.clock_note ?? null;
+        // 1.20.34: a parked ticket shows when it wakes and when its event is, in place of the (paused) due.
+        const parked = t.parked_until && t.status === "on_hold" ? `Wakes ${wakeDay(t.parked_until, tz)}${t.parked_event ? ` · event ${eventDay(t.parked_event, tz)}` : ""}` : null;
+        const clock = parked ?? t.clock_note ?? null;
         const due = compactDue(t.due_label);
         // Agent O's contact cards: the requester is on the VIP list.
         const vip = t;
@@ -153,7 +158,7 @@ export function TicketList({
                   )}
                 </span>
                 {clock ? (
-                  <span className="min-w-0 max-w-[55%] truncate text-slate-500" data-tt={clock}>
+                  <span className="min-w-0 max-w-[55%] truncate text-slate-500" data-tt={clock} data-testid={parked ? "parked-row-when" : undefined}>
                     {clock}
                   </span>
                 ) : (

@@ -240,7 +240,7 @@ function RenameViewDialog({ sv, view, onClose }: { sv: SavedViews; view: HdSaved
 
 // --- The filter form --------------------------------------------------------------
 
-const FORM_KEYS = new Set(["view", "q", "status", "status_group", "priority", "team", "assignee", "tag", "created_within", "mailbox", "category", "subcategory"]);
+const FORM_KEYS = new Set(["view", "q", "status", "status_group", "include_parked", "priority", "team", "assignee", "tag", "created_within", "mailbox", "category", "subcategory"]);
 const CREATED = [
   { value: "", label: "Any time" },
   { value: "1", label: "Today" },
@@ -263,6 +263,8 @@ interface Form {
   /** 1.20.6: a category and a sub-category from the admin's list (lib/helpdesk/categories); '' = any. */
   category: string;
   subcategory: string;
+  /** 1.20.34: with Not solved, the tickets parked until their event too. Off by default (as views saved before it). */
+  parked: boolean;
 }
 
 function categoryOf(f: HdViewFilters): { category: string; subcategory: string } {
@@ -290,6 +292,7 @@ function formFrom(f: HdViewFilters): Form {
     tag: f.tag ?? "",
     created: f.created_within ?? "",
     mailbox: f.mailbox ?? "",
+    parked: f.status_group === "open" && f.include_parked === "1",
     // A report's drill-down may carry "Category › Sub-category" as one value.
     ...categoryOf(f),
   };
@@ -298,8 +301,10 @@ function formFrom(f: HdViewFilters): Form {
 function filtersFrom(form: Form, extra: HdViewFilters): HdViewFilters {
   const out: HdViewFilters = { ...extra, view: form.start || "all" };
   if (form.q.trim()) out.q = form.q.trim();
-  if (form.status === "group:open") out.status_group = "open";
-  else if (form.status) out.status = form.status;
+  if (form.status === "group:open") {
+    out.status_group = "open";
+    if (form.parked) out.include_parked = "1";
+  } else if (form.status) out.status = form.status;
   if (form.priority) out.priority = form.priority;
   if (form.team) out.team = form.team;
   if (form.assignee) out.assignee = form.assignee;
@@ -394,7 +399,7 @@ function FilterDialog({
           <Field label="Status">
             <Select value={form.status} onChange={set("status")}>
               <option value="">Any status</option>
-              <option value="group:open">Not solved</option>
+              <option value="group:open">Not solved (parked left out)</option>
               {HD_STATUSES.map((s) => (
                 <option key={s} value={s}>
                   {HD_STATUS_LABEL[s]}
@@ -402,6 +407,13 @@ function FilterDialog({
               ))}
             </Select>
           </Field>
+          {/* 1.20.34: tickets parked until their event (lib/helpdesk/desk-calendar-park) are not open work; ask to see them. */}
+          {form.status === "group:open" && (
+            <label className="inline-flex items-center gap-2 text-sm text-slate-700 sm:col-span-2">
+              <input type="checkbox" className="h-4 w-4" checked={form.parked} onChange={(e) => setForm((f) => ({ ...f, parked: e.target.checked }))} data-testid="view-include-parked" />
+              Include parked tickets
+            </label>
+          )}
           <Field label="Priority">
             <Select value={form.priority} onChange={set("priority")}>
               <option value="">Any priority</option>

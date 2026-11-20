@@ -253,6 +253,13 @@ export interface HdTicketRow {
   requester_set_by_agent_at?: string | null;
   /** 1.20.33: the acknowledgement to a requester a rule took from the message was held for the rate limit. */
   requester_ack_held_at?: string | null;
+  /** 1.20.34 (lib/helpdesk/desk-calendar-park): parked (on hold) until then, for its event; NULL = not parked. */
+  parked_until?: string | null;
+  parked_at?: string | null;
+  /** 'agent' | 'invite' | 'request_type'; '' when not parked. */
+  park_reason?: string;
+  /** The ticket's own prep window in working days; NULL = the desk's. */
+  park_prep_days?: number | null;
 }
 
 /** A ticket as the desk reads it: the row plus joins and the derived SLA fields. */
@@ -816,7 +823,7 @@ export interface HdWorkflowProgress {
 
 // --- Views and lists -----------------------------------------------------------
 
-export type HdNamedView = "mine" | "unassigned" | "open" | "overdue" | "workflow" | "waiting" | "solved_week";
+export type HdNamedView = "mine" | "unassigned" | "open" | "overdue" | "workflow" | "waiting" | "solved_week" | "parked";
 export type HdView = HdNamedView | { team_id: number };
 export const HD_VIEW_LABEL: Record<HdNamedView, string> = {
   mine: "My open",
@@ -826,6 +833,8 @@ export const HD_VIEW_LABEL: Record<HdNamedView, string> = {
   workflow: "In workflow",
   waiting: "Waiting",
   solved_week: "Solved this week",
+  // 1.20.34 (lib/helpdesk/desk-calendar-park): tickets on hold until their event, soonest to wake first.
+  parked: "Parked",
 };
 
 export type HdTicketSort = "updated" | "created" | "due" | "priority" | "number";
@@ -871,6 +880,9 @@ export interface HdTicketListRow {
   mailbox_id?: number | null;
   mailbox_address?: string | null;
   mailbox_name?: string | null;
+  /** 1.20.34 (lib/helpdesk/desk-calendar-park): parked until then (the Parked view shows it), and its event's start. */
+  parked_until?: string | null;
+  parked_event?: { starts_at: string; all_day: boolean; start_date: string | null } | null;
 }
 
 export interface HdCounts {
@@ -884,6 +896,8 @@ export interface HdCounts {
     first_reply_median_minutes: number | null;
     /** Percentage 0–100 of good CSAT answers (4–5) over the last 30 days; null = none. */
     csat_percent: number | null;
+    /** 1.20.34: tickets parked until their event (not counted in `open`). */
+    parked: number;
   };
   /** Approvals waiting for the caller (B's data; 0 when B's module is absent). */
   approvals_waiting: number;
@@ -965,6 +979,8 @@ export interface HdTicketDetail {
   before_solve?: boolean;
   /** 1.20.6 (lib/helpdesk/desk-calendar): the ticket's event; absent when it has none. */
   event?: import("./desk-calendar-shared").HdTicketEvent;
+  /** 1.20.34 (lib/helpdesk/desk-calendar-park): the ticket's parking and prep window; absent when it has no event and isn't parked. */
+  parking?: import("./desk-calendar-park-shared").HdParking;
   /** 1.20.6 (lib/helpdesk/custom-fields): the custom fields assigned to the ticket's team, each with its value; absent when none applies. */
   custom_fields?: import("./custom-fields-shared").HdTicketCustomField[];
 }
@@ -989,6 +1005,16 @@ export interface HdRequestSummary {
   last_public_at: string | null;
   /** The active workflow step: "step 3 of 4: IT is setting it up" (null when not in a workflow). */
   current_step?: { index: number; total: number; title: string; team_name?: string | null } | null;
+  /** 1.20.34 (lib/helpdesk/desk-calendar-park): a parked ticket's event, so the requester reads "Scheduled · Sun 15 Mar, 10:00 · Room 4" instead of "On hold". */
+  scheduled?: HdScheduled | null;
+}
+
+/** What the requester is told about a parked ticket's event: when and where, nothing else. */
+export interface HdScheduled {
+  starts_at: string;
+  all_day: boolean;
+  start_date: string | null;
+  place: string;
 }
 
 /** Extra hints on a requester's list row (merged into HdRequestSummary; kept as an alias for agent E). */

@@ -295,6 +295,11 @@ export function KpiTile({ result, target, spark, live }: { result: HdQueryResult
       <p className="text-3xl font-semibold tracking-tight text-slate-900">{formatValue(result.total.value, result.unit, { compact: true })}</p>
       <div className="mt-1 flex min-h-5 flex-wrap items-center gap-x-3 gap-y-1">
         {live ? <span className="text-xs text-slate-500">Right now · refreshes every minute</span> : <Delta result={result} />}
+        {result.aside && (
+          <span className="text-xs font-medium text-slate-600" data-testid="kpi-aside">
+            {result.aside.label}: {result.aside.value.toLocaleString("en-GB")}
+          </span>
+        )}
         {result.low_sample && (
           <span className="text-xs text-slate-500">
             Based on {result.total.n} {result.total.n === 1 ? "ticket" : "tickets"}

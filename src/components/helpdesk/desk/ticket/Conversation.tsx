@@ -24,6 +24,7 @@ import { Component, useEffect, useRef, useState, type ReactNode, type RefObject 
 import {
   Bot,
   CalendarCheck,
+  Hourglass,
   ChevronDown,
   ClipboardCheck,
   Flag,
@@ -86,6 +87,7 @@ const ACTIVITY_ICON: Record<HdActivityIcon, LucideIcon> = {
   priority: Flag,
   field: SlidersHorizontal,
   event: CalendarCheck,
+  park: Hourglass,
   language: Languages,
   solve: ClipboardCheck,
   "cc-add": UserPlus,

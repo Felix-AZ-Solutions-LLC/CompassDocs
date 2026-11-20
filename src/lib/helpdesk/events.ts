@@ -97,6 +97,12 @@ export async function afterTicketCreated(
   if (!ctx.silent && ticket.source !== "workflow") {
     await safely("incidents.autoLink", async () => (await import("./incidents")).autoLinkNewTicket(ticket.id, { origin: ctx.origin }));
   }
+  // 1.20.34 (lib/helpdesk/desk-calendar-park): a request from a type that goes on the calendar parks itself until its
+  // event is due, last: after the ticket_created rules (they may set its team or owner), the workflow start and the
+  // acknowledgement. Too close to its event: it stays open. A meeting invite's ticket parks from lib/helpdesk/inbound.
+  if (ticket.request_type_id && ticket.parent_ticket_id === null) {
+    await safely("calendar.autoPark", async () => (await import("./desk-calendar-park")).autoPark(ticket.id, "request_type", { origin: ctx.origin }));
+  }
 }
 
 export async function afterMessageAdded(

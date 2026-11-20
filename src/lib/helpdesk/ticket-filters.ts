@@ -4,8 +4,8 @@
 // hold exactly what a queue address can, and nothing else.
 //
 // Parameters (all strings, as in a query string):
-//   view        mine|unassigned|open|overdue|workflow|waiting|solved_week|team:<id>|all
-//   team        <team id> · priority · status · status_group=open
+//   view        mine|unassigned|open|overdue|workflow|waiting|solved_week|parked|team:<id>|all
+//   team        <team id> · priority · status · status_group=open|parked
 //   assignee    <user id>|me|none · requester <user id> · requester_email
 //   request_type <id> · channel <channel or source> · mailbox <a help
 //               address, 1.20.2> · tag · category · subcategory <1.20.6> ·
@@ -37,6 +37,8 @@ export const TICKET_FILTER_KEYS = [
   "priority",
   "status",
   "status_group",
+  // 1.20.34: with status_group=open, the tickets parked until their event too (left out unless asked).
+  "include_parked",
   "assignee",
   "requester",
   "requester_email",
@@ -172,8 +174,14 @@ export async function parseTicketFilters(p: URLSearchParams): Promise<ParsedTick
   }
   const sg = p.get("status_group");
   if (sg) {
-    if (sg !== "open") return bad("Unknown status group.");
-    f.status_group = "open";
+    // 1.20.34: "parked", the tickets parked until their event (Reports' Parked now drills here).
+    if (sg !== "open" && sg !== "parked") return bad("Unknown status group.");
+    f.status_group = sg;
+  }
+  const ip = p.get("include_parked");
+  if (ip) {
+    if (ip !== "1") return bad("include_parked is 1.");
+    f.include_parked = true;
   }
   const br = p.get("breached");
   if (br) {

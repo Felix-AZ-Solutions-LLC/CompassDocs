@@ -638,6 +638,8 @@ export interface PortalRequestRow {
   updated_at: string;
   /** The request was joined with (merged into) this one; null when not. */
   joined_into: number | null;
+  /** 1.20.34 (lib/helpdesk/desk-calendar-park): parked until its event: shown as "Scheduled · Sun 15 Mar, 10:00 · Room 4" instead of the status. */
+  scheduled?: import("./types").HdScheduled | null;
 }
 
 function portalStatus(status: HdStatus, inWorkflow: boolean, joinedInto: number | null = null): { label: string; tone: PortalRequestRow["tone"] } {
@@ -650,8 +652,8 @@ function portalStatus(status: HdStatus, inWorkflow: boolean, joinedInto: number 
 
 /** A contact's own requests (and those theirs were joined with), newest activity first. */
 export async function listContactRequests(contactId: number): Promise<PortalRequestRow[]> {
-  const rows = await hq<{ number: number; subject: string; status: HdStatus; request_type_title: string | null; created_at: string; updated_at: string; run_state: string | null; joined_into: number | null }>(
-    `SELECT t.number, t.subject, t.status, rt.title AS request_type_title, t.created_at, t.updated_at, r.state AS run_state,
+  const rows = await hq<{ id: number; number: number; subject: string; status: HdStatus; request_type_title: string | null; created_at: string; updated_at: string; run_state: string | null; joined_into: number | null }>(
+    `SELECT t.id, t.number, t.subject, t.status, rt.title AS request_type_title, t.created_at, t.updated_at, r.state AS run_state,
             (SELECT p.number FROM hd_tickets p WHERE p.id = t.merged_into AND p.deleted_at IS NULL) AS joined_into
        FROM hd_tickets t
        LEFT JOIN hd_request_types rt ON rt.id = t.request_type_id
@@ -660,9 +662,11 @@ export async function listContactRequests(contactId: number): Promise<PortalRequ
       ORDER BY t.updated_at DESC, t.id DESC LIMIT 200`,
     [contactId]
   );
+  const scheduled = await (await import("./desk-calendar-park")).scheduledFor(rows.filter((r) => r.status === "on_hold").map((r) => r.id));
   return rows.map((r) => {
     const st = portalStatus(r.status, !!r.run_state && (HD_ACTIVE_RUN_STATES as readonly string[]).includes(r.run_state), r.joined_into);
     return {
+      scheduled: scheduled.get(r.id) ?? null,
       number: r.number,
       subject: r.subject,
       status: r.status,
@@ -780,6 +784,7 @@ export async function contactRequestDetail(contact: Pick<PortalContact, "id" | "
     created_at: t.created_at,
     updated_at: t.updated_at,
     joined_into: t.joined_into,
+    scheduled: t.status === "on_hold" ? (await (await import("./desk-calendar-park")).scheduledFor([t.id])).get(t.id) ?? null : null,
     can_reply: t.status !== "closed" && !t.joined_into,
     answers: form
       .map((f) => ({ label: f.label, value: answerLine(f, (t.form_answers ?? {})[f.key]) }))

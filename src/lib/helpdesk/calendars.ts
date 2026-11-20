@@ -702,6 +702,10 @@ async function recompute(scope: Scope, before: CalendarSnapshot | null, now = Da
   await import("./recurring-recalc")
     .then((m) => m.recomputeRecurringForTeams(scope.teamIds, now))
     .catch(() => 0);
+  // 1.20.34 (lib/helpdesk/desk-calendar-park): the same teams' parked tickets wake by these hours and holidays now.
+  await import("./desk-calendar-park")
+    .then((m) => m.recomputeParked({ kind: "calendar", teamIds: scope.teamIds, noTeam: scope.noTeam }, { now: new Date(now) }))
+    .catch(() => null);
   return moved;
 }
 

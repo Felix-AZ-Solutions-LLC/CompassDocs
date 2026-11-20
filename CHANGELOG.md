@@ -4,6 +4,167 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.34] - 2026-11-20
+
+Helpdesk tickets for events months away can wait out of the queue until it's
+time to prepare.
+
+### Added
+- **Hold until the event.** A ticket with an event can be parked from its
+  Event block. It goes on hold, leaves the queue, and its reply and
+  resolution targets pause. It comes back by itself the prep window's
+  working days before the event's setup is due, at the start of that
+  working day in the ticket's team calendar. Weekends and holidays don't
+  count. An all-day event counts from the start of its first day in the
+  desk's time zone. It needs the same permission as changing the ticket's
+  status.
+- **The prep window.** 10 working days out of the box. Desk settings →
+  Event calendar sets it for the desk (0 to 60), and a ticket can have
+  its own, set when it is parked or with **Change prep window**.
+- **Too close to park.** When the wake date is past or less than an hour
+  away, parking is refused with one sentence ("This event is too close to
+  park: it would wake today.") and the ticket stays as it is.
+- **The Parked chip.** A parked ticket shows "Parked until Tue 3 Mar · for
+  the event on Sun 15 Mar" under its subject, with **Wake now** and
+  **Change prep window** beside it.
+- **The Parked view.** It lists every parked ticket, soonest to wake
+  first, with when it wakes and when its event is, and its count beside
+  it like the other views.
+- **Waking up.** A minute sweep wakes each due ticket once, even with
+  several app instances running. The ticket goes back to Open, whatever
+  its status was before it was parked (a New ticket wakes as Open), with
+  its targets running again and the line "Woke for the event on Sun 15
+  Mar". Its owner, or its team when nobody owns it, is told through their
+  Event reminders notification settings. The ticket.updated webhook is
+  sent. A woken ticket nobody owns goes back to auto-assignment.
+- **A wake that fails is retried, then forced.** The sweep tries a ticket
+  it couldn't wake again after 2, 4, 8 and 16 minutes, so one ticket never
+  holds up the rest. After 5 failed attempts it wakes the ticket with a
+  plain status change (back to Open, parking cleared) and an agents-only
+  line: "Woke without its usual steps after 5 failed attempts (…). Check
+  its targets and its owner."
+- **It also wakes at once** when the requester or someone copied writes
+  (an updated invite counts only when the person wrote something in it;
+  the calendar app's own text doesn't), when the event is cancelled ("The
+event was cancelled. Close this ticket
+  if nothing else is needed."), when the event is removed, or when the
+  event moves so close that its wake date has passed. An agent's reply,
+  internal note or field change leaves it parked. A status change ends
+  the parking.
+- **It follows the event.** Moving the event, or changing whether it is
+  all day or its setup time, moves the wake date, with a line on the
+  ticket. That includes changes from the API, the Claude connector and an
+  updated meeting invite. The wake date is also worked out again when the
+  ticket moves to another team, when the desk's prep window changes, and
+  when a team's working hours or holidays change. A wake date that is now
+  past wakes the ticket on the next sweep. If an event change can't wake a
+  ticket that should wake (a cancel or a removed event), the ticket is
+  made due at once so the sweep wakes it.
+- **Tickets that park themselves.** Desk settings → Event calendar gets
+  "Park tickets from meeting invites until they're due" and "Park tickets
+  from calendar request types until they're due", both on. The
+  acknowledgement goes out first, exactly as before, and the new-ticket
+  automations run. That acknowledgement is the ticket's "first reply"
+  before it parks; it is the automatic email, so it doesn't meet the first
+  reply target, which pauses while the ticket is parked and runs again
+  when it wakes. Then the ticket parks itself if its wake date is still
+  ahead. If the event is too close, the ticket stays open.
+  A meeting invite parks its ticket only when the sender passed the sender
+  check or is a known workspace account, and only for an event within 400
+  days. Otherwise the ticket stays in the queue, with one line saying why
+  for a far-off event ("Not parked: the event is more than 400 days away,
+  …"). Parking by hand has no such limit.
+- **Scheduled, for the requester.** Get help and the customer portal show
+  a parked request as "Scheduled · Sun 15 Mar, 10:00 · Room 4" instead of
+  On hold, in the reader's own time and clock style. The Event dialog's
+  Place help now says "Requesters see the place on their request." Parking
+and waking
+  send the requester nothing.
+- **A reminder for the requester.** "Remind the requester before the
+  event" (off out of the box, 2 days before) sends one short email with
+  the date, time and place and a link to the request. It goes once per
+  event date, and again if the event moves. It is a new email template,
+  "Helpdesk: reminder before an event", and a new requester notification,
+  "Event reminders". Through Microsoft 365 it waits in the outbox as
+  ordinary mail.
+- **Reports.** The new live measure **Parked now** counts parked tickets.
+  The **Open now** tile shows "Parked: N" beside it.
+- **Saved views.** A view on Not solved gets **Include parked tickets**,
+  off by default. The status option reads "Not solved (parked left out)"
+  and the view's summary says "parked left out" or "parked included".
+- **The API and Claude.** A ticket in the REST API carries
+  `parked_until`, `park_reason`, `park_prep_days` (the prep window that
+  applies) and `park_prep_days_own`. `event` in a PATCH, and in the Claude
+  connector's hd_update_ticket, takes `park: "park"` or `park: "wake"` and
+  `prep_days`. These are refused without the permission to change the
+  ticket's status. A request whose parking part would be refused (too
+  close, already parked, a bad prep window) is refused as a whole, before
+  anything in it is saved. hd_read_ticket shows `parking`. Claude in the
+desk sees
+  when a parked ticket wakes. `view=parked` lists parked tickets in the
+  desk, the API and hd_queue.
+- Every park, wake and prep window change is one agents-only line on the
+  ticket and an audit entry (Parked a ticket until its event, Woke a
+  parked ticket, Changed a ticket's prep window).
+
+### Changed
+- **Open work leaves parked tickets out.** My open, Unassigned, All open,
+  Waiting, In a workflow, Overdue and each team's view and count leave
+  them out. So do the Open now, Unassigned now, Breaching now and agent
+  workload measures in Reports, and drill-downs into them. The Backlog
+  measure leaves a ticket out for each time it was parked, from a new
+  parking history, so past days keep their counts after a ticket wakes.
+  Auto-assignment leaves parked tickets out of each agent's load, never
+  assigns one, and drops one from its waiting queue.
+- A parked ticket's status pill in its header still reads **On hold**,
+  with the Parked chip beside it. Only the queue row's chip reads Parked.
+- **Updated meeting invites.** An update for the same meeting threads into
+  the same ticket when it comes from the ticket's requester or, now, from
+  the meeting's organiser. The organiser is recorded only when the
+  invite's ORGANIZER is the sender's own address and the sender passed the
+  sender check, so an attendee or a forwarder can't name themselves (or
+  anyone) as the organiser. An organiser's update is matched only when
+  exactly one open ticket has that meeting and organiser; with two or
+  more, it opens a new ticket. When the organiser isn't the requester,
+  their mail goes on the ticket as an agents-only note and the update is
+  applied. It is matched on the help address it was sent to when that
+  address is listed. Between two copies with the same SEQUENCE, the one
+  with the later DTSTAMP (to the second) wins, and a cancellation records
+  its DTSTAMP too. An invite from someone copied on the ticket never adds
+  or changes its event and never records an organiser; it is added to the
+  ticket as a note. An invite that only changes the guest list or the
+  description is added to the ticket and changes nothing else.
+- Event setup reminders to agents wait while a ticket is parked. When it
+  wakes, the nearest reminder that is due goes out.
+
+### Upgrading
+Nothing to run. On start, new columns record each ticket's parking
+(`parked_until`, `parked_at`, `park_reason`, `park_prep_days`, and
+`park_wake_failures`, `park_wake_error`, `park_wake_retry_at` for wakes
+that fail), with an index for the wake sweep. A new table,
+`hd_ticket_parkings`, keeps each time a ticket was parked for the Backlog
+measure; on start it gets a row for any ticket already parked, once.
+Each event also keeps its invite's DTSTAMP and organiser. The indexes are
+built in the ordinary way, as every index in the schema is; the wake
+index covers only parked tickets, so it is small and quick to build. The new
+settings and their defaults, under Desk settings →
+Event calendar → Holding tickets until the event:
+
+- prep window: 10 working days;
+- park tickets from meeting invites: on;
+- park tickets from calendar request types: on;
+- remind the requester before the event: off, 2 days before when turned on.
+
+**Tickets that already have an event in the future are not parked
+automatically.** Agents can park each one from its Event block, and the
+Parked view lists them once they are parked. Only tickets opened after the
+upgrade by a meeting invite (from a sender who passed the sender check or
+a workspace account, for an event within 400 days) or a calendar request
+type park themselves.
+Turn those two settings off to keep every ticket in the queue as before.
+Events from invites before the upgrade have no organiser on record, so
+updates to them are matched to the requester only, as in 1.20.33.
+
 ## [1.20.33] - 2026-11-18
 
 Helpdesk automations can read what a ticket says and change who asked.

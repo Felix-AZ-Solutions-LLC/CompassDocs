@@ -88,6 +88,8 @@ export interface HdTicketEventView {
   can_edit: boolean;
   /** Minutes offered when an event is added by hand. */
   default_setup_minutes: number;
+  /** 1.20.34 (lib/helpdesk/desk-calendar-park): Hold until the event; null when the viewer doesn't work the ticket. */
+  parking?: import("./desk-calendar-park-shared").HdParkingView | null;
 }
 
 /** What a caller sends to set or change an event. Left-out fields keep what the ticket has. */
@@ -141,6 +143,19 @@ export interface HdCalendarSettings {
   chat: boolean;
   /** The lead time offered when an agent adds an event by hand. */
   default_setup_minutes: number;
+  /**
+   * 1.20.34 (lib/helpdesk/desk-calendar-park): "Hold until the event". A parked ticket wakes this many working days
+   * (the ticket's team calendar) before its event's setup must be ready; a ticket may set its own (0 to 60).
+   */
+  park_prep_days: number;
+  /** Tickets opened by a meeting invite park themselves after the acknowledgement, until they are due. */
+  park_invites: boolean;
+  /** Tickets from request types that go on the calendar park themselves the same way. */
+  park_request_types: boolean;
+  /** One short email to the requester before the event (once per event date; a moved event re-arms it). */
+  remind_requester: boolean;
+  /** How many days before the event that email goes (1 to 30). */
+  remind_requester_days: number;
 }
 
 export const CALENDAR_SETTINGS_DEFAULTS: HdCalendarSettings = {
@@ -149,7 +164,15 @@ export const CALENDAR_SETTINGS_DEFAULTS: HdCalendarSettings = {
   recipients: "owner_else_team",
   chat: false,
   default_setup_minutes: 30,
+  park_prep_days: 10,
+  park_invites: true,
+  park_request_types: true,
+  remind_requester: false,
+  remind_requester_days: 2,
 };
+
+/** 1.20.34: the bounds of the parking settings (lib/helpdesk/desk-calendar-park). */
+export const PARK_SETTING_LIMITS = { prepDaysMax: 60, remindDaysMin: 1, remindDaysMax: 30 } as const;
 
 // --- The Calendar page --------------------------------------------------------------
 
@@ -624,7 +647,19 @@ export function resolveCalendarSettings(raw: unknown): HdCalendarSettings {
     recipients: v.recipients === "owner_and_team" ? "owner_and_team" : "owner_else_team",
     chat: v.chat === true,
     default_setup_minutes: Number.isInteger(setup) && setup >= 0 && setup <= EVENT_LIMITS.setupMinutes ? setup : d.default_setup_minutes,
+    park_prep_days: intIn(v.park_prep_days, 0, PARK_SETTING_LIMITS.prepDaysMax) ?? d.park_prep_days,
+    park_invites: typeof v.park_invites === "boolean" ? v.park_invites : d.park_invites,
+    park_request_types: typeof v.park_request_types === "boolean" ? v.park_request_types : d.park_request_types,
+    remind_requester: v.remind_requester === true,
+    remind_requester_days: intIn(v.remind_requester_days, PARK_SETTING_LIMITS.remindDaysMin, PARK_SETTING_LIMITS.remindDaysMax) ?? d.remind_requester_days,
   };
+}
+
+/** A whole number in [min, max], or null. */
+function intIn(raw: unknown, min: number, max: number): number | null {
+  if (raw === undefined || raw === null || raw === "" || typeof raw === "boolean") return null;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= min && n <= max ? n : null;
 }
 
 function cleanLeads(raw: unknown[]): number[] | null {
@@ -664,6 +699,22 @@ export function checkCalendarSettings(raw: unknown, base: HdCalendarSettings): C
     const n = Number(raw.default_setup_minutes);
     if (!Number.isInteger(n) || n < 0 || n > EVENT_LIMITS.setupMinutes) return { ok: false, error: `The setup time is 0 to ${EVENT_LIMITS.setupMinutes} minutes (a week).` };
     out.default_setup_minutes = n;
+  }
+  // 1.20.34: parking (lib/helpdesk/desk-calendar-park).
+  if (raw.park_prep_days !== undefined) {
+    const n = intIn(raw.park_prep_days, 0, PARK_SETTING_LIMITS.prepDaysMax);
+    if (n === null) return { ok: false, error: `The prep window is 0 to ${PARK_SETTING_LIMITS.prepDaysMax} working days.` };
+    out.park_prep_days = n;
+  }
+  for (const k of ["park_invites", "park_request_types", "remind_requester"] as const) {
+    if (raw[k] === undefined) continue;
+    if (typeof raw[k] !== "boolean") return { ok: false, error: "Each parking choice is on or off." };
+    out[k] = raw[k] as boolean;
+  }
+  if (raw.remind_requester_days !== undefined) {
+    const n = intIn(raw.remind_requester_days, PARK_SETTING_LIMITS.remindDaysMin, PARK_SETTING_LIMITS.remindDaysMax);
+    if (n === null) return { ok: false, error: `The requester's reminder goes ${PARK_SETTING_LIMITS.remindDaysMin} to ${PARK_SETTING_LIMITS.remindDaysMax} days before the event.` };
+    out.remind_requester_days = n;
   }
   return { ok: true, value: out };
 }

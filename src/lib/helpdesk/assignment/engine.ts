@@ -450,6 +450,8 @@ async function assignTicketInner(ticketId: number, opts: AssignOptions): Promise
   let t = await loadTicket(ticketId);
   if (!t) return { outcome: "skipped", reason: "No such ticket." };
   if (!OPEN_STATUSES.includes(t.status)) return { outcome: "skipped", reason: "The ticket is solved or closed." };
+  // 1.20.34 (lib/helpdesk/desk-calendar-park): parked until its event: it joins the queue again when it wakes.
+  if (t.parked_until) return { outcome: "skipped", reason: "The ticket is parked until its event." };
   const reassign = opts.trigger === "agent_away" || opts.trigger === "unanswered";
   if (reassign && !t.assignee_id) return { outcome: "skipped", reason: "Nobody owns it." };
   if (!reassign && opts.trigger !== "manual_request" && t.assignee_id) return { outcome: "skipped", reason: "Someone already owns it." };
@@ -827,16 +829,16 @@ async function sweepOnce(now: Date, teamIds: number[] | null, res: SweepResult):
   const scope = teamIds ? "AND t.team_id = ANY($2::int[])" : "";
   const p = (extra: unknown[] = []) => (teamIds ? [now, teamIds, ...extra] : [now, ...extra]);
 
-  // Queued tickets someone took meanwhile, or that closed, leave the queue.
+  // Queued tickets someone took meanwhile, or that closed, leave the queue. 1.20.34: so do parked ones (they come back on waking).
   await hq(
     `UPDATE hd_assignment_ticket s SET queued_since = NULL, queued_reason = '', updated_at = $1
        FROM hd_tickets t WHERE t.id = s.ticket_id AND s.queued_since IS NOT NULL
-        AND (t.assignee_id IS NOT NULL OR t.status NOT IN ('new', 'open', 'pending', 'on_hold')) ${scope}`,
+        AND (t.assignee_id IS NOT NULL OR t.status NOT IN ('new', 'open', 'pending', 'on_hold') OR t.parked_until IS NOT NULL) ${scope}`,
     p()
   );
   const queued = await hq<{ ticket_id: number }>(
     `SELECT s.ticket_id FROM hd_assignment_ticket s JOIN hd_tickets t ON t.id = s.ticket_id
-      WHERE s.queued_since IS NOT NULL AND s.queued_since <= $1 AND t.assignee_id IS NULL AND t.deleted_at IS NULL ${scope}
+      WHERE s.queued_since IS NOT NULL AND s.queued_since <= $1 AND t.assignee_id IS NULL AND t.parked_until IS NULL AND t.deleted_at IS NULL ${scope}
       ORDER BY s.queued_since, s.ticket_id LIMIT ${SWEEP_BATCH}`,
     p()
   );
@@ -939,7 +941,7 @@ export async function teamAssignmentView(teamId: number, now: Date = new Date())
   }
   const q = await hqOne<{ n: number }>(
     `SELECT count(*)::int AS n FROM hd_assignment_ticket s JOIN hd_tickets t ON t.id = s.ticket_id
-      WHERE s.queued_since IS NOT NULL AND t.team_id = $1 AND t.assignee_id IS NULL AND t.status IN ('new', 'open', 'pending', 'on_hold') AND t.deleted_at IS NULL`,
+      WHERE s.queued_since IS NOT NULL AND t.team_id = $1 AND t.assignee_id IS NULL AND t.status IN ('new', 'open', 'pending', 'on_hold') AND t.parked_until IS NULL AND t.deleted_at IS NULL`,
     [teamId]
   );
   return { settings, members, next, open, queued: q?.n ?? 0 };

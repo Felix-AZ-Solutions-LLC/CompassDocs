@@ -4,7 +4,7 @@
 // keeps the query, so /desk/tickets/1047?view=overdue still shows the
 // Overdue list beside it.
 
-import { CircleAlert, CircleCheck, CirclePause, Inbox, List, UserRound, Workflow, type LucideIcon } from "lucide-react";
+import { CircleAlert, CircleCheck, CirclePause, Hourglass, Inbox, List, UserRound, Workflow, type LucideIcon } from "lucide-react";
 import type { HdNamedView, HdTicketSort } from "@/lib/helpdesk/types";
 import { isCfFilterKey, CF_FILTER_MAX, CF_VALUE_MAX } from "@/lib/helpdesk/custom-field-filters-shared";
 
@@ -16,6 +16,8 @@ export const VIEWS: { key: HdNamedView; label: string; icon: LucideIcon; alarm?:
   { key: "workflow", label: "In a workflow", icon: Workflow },
   { key: "waiting", label: "Waiting", icon: CirclePause },
   { key: "solved_week", label: "Solved this week", icon: CircleCheck },
+  // 1.20.34 (lib/helpdesk/desk-calendar-park): tickets on hold until their event, soonest to wake first.
+  { key: "parked", label: "Parked", icon: Hourglass },
 ];
 
 /** 1.20.27: what will appear in an empty view (My open only ever holds the agent's own tickets). */
@@ -27,6 +29,7 @@ export const VIEW_EMPTY: Record<HdNamedView, string> = {
   workflow: "Requests with a workflow running appear here.",
   waiting: "Tickets waiting on the requester or on hold appear here.",
   solved_week: "Tickets solved this week appear here.",
+  parked: "Tickets held until their event appear here, soonest to wake first.",
 };
 
 export const SORTS: { value: HdTicketSort; label: string }[] = [
@@ -66,6 +69,8 @@ export const DRILL_KEYS = [
   "office",
   "origin",
   "status_group",
+  // 1.20.34: a saved view's "Include parked tickets" (with status_group=open).
+  "include_parked",
   "vip",
   "integration",
   // 1.19.1 saved views (agent V4): the desk's own Filter dialog adds these.

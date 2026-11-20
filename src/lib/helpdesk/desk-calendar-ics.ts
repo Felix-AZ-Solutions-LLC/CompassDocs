@@ -18,7 +18,9 @@
 // What it reads: METHOD (REQUEST, or none, is an invite; CANCEL cancels;
 // anything else, such as an attendee's REPLY, is not an invite), and from the
 // first VEVENT: UID, SEQUENCE, SUMMARY, LOCATION, STATUS, DTSTART, DTEND or
-// DURATION, RRULE. Times: UTC ("…Z"), a named zone (TZID, an IANA name or one
+// DURATION, RRULE; 1.20.34: DTSTAMP (a later update of the same SEQUENCE is
+// the newer one) and ORGANIZER's mailto address (only the organiser, or the
+// ticket's own requester, moves or cancels the event). Times: UTC ("…Z"), a named zone (TZID, an IANA name or one
 // of the common Windows names Outlook writes), a floating time (read in the
 // desk's zone, with a note) or whole days (VALUE=DATE; DTEND is the day after
 // the last, as iCalendar has it).
@@ -57,6 +59,10 @@ export interface ParsedInvite {
   repeats: boolean;
   /** Sentences for the agents (a zone that was not known, an end that was cut). */
   notes: string[];
+  /** 1.20.34: DTSTAMP as an instant (ms), or null when missing or not a UTC time. */
+  dtstamp: number | null;
+  /** 1.20.34: ORGANIZER's address (lower case), or '' when there is none we can read. */
+  organizer: string;
 }
 
 // Outlook writes Windows zone names in TZID. The common ones, mapped to the
@@ -225,7 +231,26 @@ function readDuration(value: string): number | null {
   return ms > 0 ? ms : null;
 }
 
-const WANTED = new Set(["UID", "SEQUENCE", "SUMMARY", "LOCATION", "STATUS", "DTSTART", "DTEND", "DURATION", "RRULE"]);
+const WANTED = new Set(["UID", "SEQUENCE", "SUMMARY", "LOCATION", "STATUS", "DTSTART", "DTEND", "DURATION", "RRULE", "DTSTAMP", "ORGANIZER"]);
+
+/** ORGANIZER's value ("mailto:Jane@Example.com") → "jane@example.com", or '' when it isn't a plain address. */
+function organizerOf(value: string): string {
+  const v = value.trim().slice(0, 400);
+  const m = /^mailto:(.+)$/i.exec(v);
+  const addr = (m ? m[1] : v).trim().toLowerCase();
+  return addr.length <= 254 && /^[^\s@<>()",;:]+@[^\s@<>()",;:]+\.[^\s@<>()",;:]+$/.test(addr) ? addr : "";
+}
+
+/** DTSTAMP (always UTC by the standard) → ms to the second, or null. */
+export function stampOf(value: string | undefined): number | null {
+  if (!value) return null;
+  const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/i.exec(value.trim().slice(0, 20));
+  if (!m) return null;
+  const d = parseDay(`${m[1]}-${m[2]}-${m[3]}`);
+  const [h, min, sec] = [Number(m[4]), Number(m[5]), Number(m[6])];
+  if (!d || h > 23 || min > 59 || sec > 60) return null;
+  return Date.UTC(d.y, d.m - 1, d.d, h, min, Math.min(sec, 59));
+}
 
 /**
  * Read a meeting invite. `fallbackZone` is the zone a time with no zone of
@@ -318,6 +343,8 @@ function parse(input: string | Uint8Array, fallbackZone: string): ParsedInvite |
   const location = text(props.get("LOCATION")?.value ?? "", ICS_LIMITS.location);
   const repeats = props.has("RRULE");
   const notes: string[] = [];
+  const dtstamp = stampOf(props.get("DTSTAMP")?.value);
+  const organizer = organizerOf(props.get("ORGANIZER")?.value ?? "");
 
   const ds = props.get("DTSTART");
   const start = ds ? readWhen(ds.value) : null;
@@ -351,6 +378,8 @@ function parse(input: string | Uint8Array, fallbackZone: string): ParsedInvite |
       timezone: fallbackZone,
       repeats,
       notes,
+      dtstamp,
+      organizer,
     };
   }
 
@@ -386,7 +415,7 @@ function parse(input: string | Uint8Array, fallbackZone: string): ParsedInvite |
     endsAt = startsAt + EVENT_LIMITS.maxDays * 86_400_000;
     notes.push(`The invite runs for longer than ${EVENT_LIMITS.maxDays} days. Only its first ${EVENT_LIMITS.maxDays} days are on the calendar.`);
   }
-  return { method: kind, uid, sequence, summary, location, all_day: false, start_date: null, end_date: null, starts_at: startsAt, ends_at: endsAt, timezone: zone, repeats, notes };
+  return { method: kind, uid, sequence, summary, location, all_day: false, start_date: null, end_date: null, starts_at: startsAt, ends_at: endsAt, timezone: zone, repeats, notes, dtstamp, organizer };
 }
 
 /** Does this attachment look like a calendar file? By its claimed type or its name. */
@@ -475,4 +504,74 @@ export function buildCalendar(name: string, events: FeedEvent[], now: Date = new
   }
   lines.push("END:VCALENDAR");
   return lines.map(foldLine).join("\r\n") + "\r\n";
+}
+
+// --- What a person wrote around an invite -----------------------------------------------
+
+/** Lines calendar apps put in an invite's email by themselves (Outlook, Teams, Google, Zoom, Apple). Lower case. */
+const INVITE_BOILERPLATE = [
+  "microsoft teams",
+  "join on your computer",
+  "join the meeting",
+  "join with google meet",
+  "join zoom meeting",
+  "click here to join",
+  "meeting id",
+  "passcode",
+  "dial in",
+  "dial-in",
+  "meeting options",
+  "learn more",
+  "need help?",
+  "invitation from google calendar",
+  "you are receiving this",
+  "forwarding this invitation",
+  "reply for ",
+  "view all guest info",
+  "more phone numbers",
+  "this event has been",
+  "this meeting has been",
+  "has been updated",
+  "has been canceled",
+  "has been cancelled",
+  "updated invitation",
+  "invitation:",
+  "accept",
+  "decline",
+  "tentative",
+  "when:",
+  "where:",
+  "organizer:",
+  "organiser:",
+  "who:",
+  "attendees:",
+  "joining info",
+];
+
+/**
+ * 1.20.34: what a person wrote in an email that carries a meeting invite,
+ * with the calendar app's own text taken out: quoted history (the caller
+ * passes the reply body, quotes already stripped), separator rules, links on
+ * their own, the meeting's title, place and time lines, and the usual
+ * "Join Microsoft Teams meeting" lines. '' when nothing a person wrote is
+ * left: an update with no message keeps a parked ticket parked; one with a
+ * message wakes it so the message is seen. Pure.
+ */
+export function inviteMessageText(body: string, invite: Pick<ParsedInvite, "summary" | "location">, subject = ""): string {
+  const drop = new Set([invite.summary, invite.location, subject].map((x) => x.trim().toLowerCase()).filter(Boolean));
+  const kept: string[] = [];
+  for (const raw of body.slice(0, 20_000).split(/\r?\n/)) {
+    const line = raw.replace(/\\([\\`*_[\]{}()#+\-.!>|~:])/g, "$1").replace(/[*_`>#]/g, " ").replace(/\s+/g, " ").trim();
+    const low = line.toLowerCase();
+    if (!line || /^[-_=~.*·•]{3,}$/.test(line) || /^\(?(empty (email|reply))\)?$/i.test(line.replace(/[()_]/g, ""))) continue;
+    if (/^(<?https?:\/\/\S+>?|\[[^\]]*\]\(https?:\/\/[^)]*\))$/i.test(line)) continue;
+    if (drop.has(low) || [...drop].some((d) => low.startsWith(`${d} `) || low === `${d}:`)) continue;
+    // A calendar app's line is short; a sentence a person wrote that happens to start the same way is kept.
+    if (INVITE_BOILERPLATE.some((b) => (low.startsWith(b) && low.length <= b.length + 60) || (b.length > 10 && low.includes(b) && low.length <= 120))) continue;
+    if (/^[+()\d\s#,.-]{7,}$/.test(line)) continue; // phone numbers and conference ids
+    kept.push(line);
+  }
+  const text = kept.join("\n").trim();
+  // A word or two ("Thanks", "Hi") is not a message anyone needs to see before the event.
+  return (text.match(/[\p{L}\p{N}]+/gu) ?? []).length >= 3 ? text : "";
 }

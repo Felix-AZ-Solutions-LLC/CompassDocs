@@ -43,7 +43,7 @@ import { emailAllowed, firstName, PORTAL_PATH } from "./portal-shared";
 
 /** The requester templates a portal contact receives. */
 // 1.19.2 (agent W1): hd_incident_update, a major incident's update on a linked portal request.
-const PORTAL_TEMPLATES = new Set(["hd_request_received", "hd_reply", "hd_solved_csat", "hd_workflow_notify", "hd_merged", "hd_incident_update"]);
+const PORTAL_TEMPLATES = new Set(["hd_request_received", "hd_reply", "hd_solved_csat", "hd_workflow_notify", "hd_merged", "hd_incident_update", "hd_event_requester_reminder"]);
 
 export interface ContactRow {
   id: number;

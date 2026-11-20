@@ -14,7 +14,7 @@
 //         1.20.23: desk_departments is [{id,name}] or "all": a team-limited token's teams' desk
 //         departments (within its account's), else its account's ("all" when it sees every team).
 //   GET   /tickets?view=&status=&priority=&team=&assignee=&tag=&category=&subcategory=&q=&created_from=&created_to=&sort=&limit=&cursor=
-//         view: open (default; a q without a view searches every status) | all | mine | unassigned | overdue | waiting | workflow | solved_week | team:<id>
+//         view: open (default; a q without a view searches every status) | all | mine | unassigned | overdue | waiting | workflow | solved_week | parked (1.20.34: parked until their event, soonest to wake first) | team:<id>
 //         assignee: <user id> | none.  sort: updated (default) | created | number.  limit 1..100 (25).
 //         created_from / created_to: YYYY-MM-DD (the default calendar's zone).
 //         1.20.6: category / subcategory: a name from GET /categories; none = tickets without one.
@@ -435,7 +435,7 @@ export async function listTicketsRoute(ctx: ApiCtx): Promise<ApiOut> {
   const view = sp.get("view");
   if (view) {
     const v = parseView(view);
-    if (!v) return json(400, "Unknown view. Use open, all, mine, unassigned, overdue, waiting, workflow, solved_week or team:<id>.");
+    if (!v) return json(400, "Unknown view. Use open, all, mine, unassigned, overdue, waiting, workflow, solved_week, parked or team:<id>.");
     f.view = v;
   }
   const status = sp.get("status");
@@ -517,6 +517,8 @@ export async function getTicketRoute(ctx: ApiCtx, number: string): Promise<ApiOu
       ...ticketFull(t, ctx.origin),
       solve_details: await solveDetails(t.id),
       event: await eventOf(t.id),
+      // 1.20.34 (additive): parked_until, park_reason, park_prep_days (the prep window that applies) and park_prep_days_own.
+      ...(await parkingOf(t.id)),
       custom_fields: await customFields(t),
       internal_notes_included: notes,
       messages: messages.map((m) => messageOut(m, notes)),
@@ -532,6 +534,11 @@ async function solveDetails(ticketId: number) {
 /** 1.20.6 (additive): the ticket's event (lib/helpdesk/desk-calendar eventOut); null when it has none. */
 async function eventOf(ticketId: number) {
   return (await import("./desk-calendar")).ticketEventOut(ticketId);
+}
+
+/** 1.20.34 (additive): the ticket's parking (lib/helpdesk/desk-calendar-park parkingApiFields). */
+async function parkingOf(ticketId: number) {
+  return (await import("./desk-calendar-park")).parkingApiFields(ticketId);
 }
 
 /** 1.20.6 (additive): the custom fields of the ticket's team, { "<key>": value | null }; {} when none applies (lib/helpdesk/custom-fields). */
@@ -551,6 +558,8 @@ export async function patchTicketRoute(ctx: ApiCtx, number: string): Promise<Api
   const solveAnswers = b.solve_answers;
   delete b.solve_answers;
   // 1.20.6: `event` sets, changes or (null) removes the ticket's event; it needs only that the token works the ticket.
+  // 1.20.34: `event.park` "park" | "wake" and `event.prep_days` hold the ticket until its event (or wake it), and need the
+  // right to change its status (tickets.change_status), as the desk's status menu.
   const hasEvent = Object.prototype.hasOwnProperty.call(b, "event");
   const eventPatch = b.event;
   delete b.event;
@@ -576,7 +585,8 @@ export async function patchTicketRoute(ctx: ApiCtx, number: string): Promise<Api
   if (hasEvent) {
     const cal = await import("./desk-calendar");
     try {
-      const done = await cal.applyEventPatch(t, eventPatch, { id: ctx.user.id, name: ctx.user.name, via: "api" }, { origin: ctx.origin, deferSetup: patch.status === "solved" || patch.status === "closed" });
+      const mayPark = await hdCan(ctx.user, "tickets.change_status", { teamId: t.team_id });
+      const done = await cal.applyEventPatch(t, eventPatch, { id: ctx.user.id, name: ctx.user.name, role: ctx.user.role, via: "api" }, { origin: ctx.origin, deferSetup: patch.status === "solved" || patch.status === "closed", mayPark });
       eventChanged = done.changed;
       setupComplete = done.setupDeferred;
     } catch (e) {
@@ -596,7 +606,7 @@ export async function patchTicketRoute(ctx: ApiCtx, number: string): Promise<Api
   return {
     status: 200,
     ticket: ref(r.ticket),
-    body: { ticket: { ...ticketFull(r.ticket, ctx.origin), solve_details: await solveDetails(r.ticket.id), event: await eventOf(r.ticket.id), custom_fields: await customFields(r.ticket) }, changed },
+    body: { ticket: { ...ticketFull(r.ticket, ctx.origin), solve_details: await solveDetails(r.ticket.id), event: await eventOf(r.ticket.id), ...(await parkingOf(r.ticket.id)), custom_fields: await customFields(r.ticket) }, changed },
     audit: { action: "helpdesk.ticket.updated", details: { number: t.number, changed } },
   };
 }

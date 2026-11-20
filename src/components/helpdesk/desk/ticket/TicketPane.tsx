@@ -61,6 +61,7 @@ import { MergeDialog, type MergeCandidate } from "../merge/MergeDialog";
 import { MergedComposerLock, MergedNotice } from "../merge/MergeCards";
 import { askTimeOnSolve } from "../time/TimeCard";
 import { IncidentBanner } from "../incidents/IncidentBanner";
+import { ParkedChip } from "../calendar/ParkedChip";
 import { IncidentPanel } from "../incidents/IncidentPanel";
 import { useIncidentMenu } from "../incidents/IncidentActions";
 // 1.19.4 (area C6): Share with an agent…, Copy link, Print or save as PDF… and Ctrl/Cmd+P.
@@ -403,6 +404,16 @@ export function TicketPane({ number }: { number: number }) {
               <span className="mt-1.5 inline-flex">
                 <span className={chipClass("accent")}>{HD_IN_WORKFLOW_LABEL}</span>
               </span>
+            )}
+            {/* 1.20.34: parked until its event (lib/helpdesk/desk-calendar-park): the chip, with Wake now and Change prep window beside it. */}
+            {t.parked_until && t.status === "on_hold" && (
+              <ParkedChip
+                number={t.number}
+                parkedUntil={t.parked_until}
+                event={d.event}
+                canChange={can && can$("tickets.change_status") && !merged}
+                onChanged={() => void load(true).then(refreshQueue)}
+              />
             )}
             {can && <TicketPresence number={t.number} className="mt-1.5" />}
             {vip?.vip &&<VipChip size="md" reason={vip.reason} className="mt-1.5" />}

@@ -172,6 +172,8 @@ export const HD_REQUESTER_EVENTS = [
   "hd_workflow_message",
   "hd_merged",
   "hd_incident_update",
+  // 1.20.34 (lib/helpdesk/desk-calendar-park): the reminder before a request's event, when the desk turns it on.
+  "hd_event_coming_up",
 ] as const;
 
 /** The catalog id of one of the desk's agent events (agent F's names). */
@@ -272,6 +274,8 @@ export const NOTIFY_EVENTS: readonly NotifyEventDef[] = [
   { id: "hd_workflow_message", section: "helpdesk", label: "Workflow messages", hint: "A step in your request's workflow sends you a message", channels: BWE, digest: true, templates: ["hd_workflow_notify"] },
   { id: "hd_merged", section: "helpdesk", label: "Requests joined", hint: "The desk joins your request with another one about the same thing", channels: BWE, digest: true, templates: ["hd_merged"] },
   // 1.19.2 (agent W1, lib/helpdesk/incidents): an outage's updates are urgent, so never held for a digest.
+  // 1.20.34 (lib/helpdesk/desk-calendar-park): sent only when Desk settings → Event calendar turns it on.
+  { id: "hd_event_coming_up", section: "helpdesk", label: "Event reminders", hint: "A reminder a few days before the event your request is for", channels: BWE, digest: false, templates: ["hd_event_requester_reminder"] },
   { id: "hd_incident_update", section: "helpdesk", label: "Major incident updates", hint: "The desk posts an update on an outage your request is part of, or that you said affects you", channels: { bell: true, email: true }, digest: false, templates: ["hd_incident_update"] },
   // Approvals
   { id: "hd_approval_needed", section: "approvals", label: "Approval needed", hint: "A request waits for your approval, and its reminders", channels: { ...BWE, push: true }, digest: true, audience: "Approvers", templates: ["hd_approval_needed"] },

@@ -114,6 +114,11 @@ const P = { tz: "$1", now: "$2", lo: "$3", hi: "$4" } as const;
 const FIXED_PARAMS = 4;
 
 const OPEN = `t.status IN (${HD_OPEN_STATUSES.map((s) => `'${s}'`).join(", ")})`;
+// 1.20.34 (lib/helpdesk/desk-calendar-park): open work leaves out the tickets parked until their event; they are counted
+// on their own (parked_now). The backlog leaves a ticket out while it was parked at that moment, read from the parking
+// history (hd_ticket_parkings), so past figures stay as they were when tickets wake.
+const OPEN_WORK = `(${OPEN} AND t.parked_until IS NULL)`;
+const NOT_PARKED_AT = "NOT EXISTS (SELECT 1 FROM hd_ticket_parkings pk WHERE pk.ticket_id = t.id AND pk.parked_at <= b.at AND (pk.woke_at IS NULL OR pk.woke_at > b.at))";
 const TICKET_WORKFLOW = `(SELECT r0.workflow_id FROM hd_workflow_runs r0 WHERE r0.id = t.workflow_run_id)`;
 const T = { from: "hd_tickets t", team: "t.team_id", person: "t.assignee_id", workflow: TICKET_WORKFLOW };
 // 1.19.1 (merge): a ticket merged into another is closed with solved_at
@@ -184,14 +189,14 @@ function measureSrc(m: HdMeasureKey, extra: unknown[]): Src {
     case "backlog":
       return {
         ...T,
-        openAt: "t.created_at < b.at AND (t.solved_at IS NULL OR t.solved_at >= b.at) AND (t.closed_at IS NULL OR t.closed_at >= b.at)",
+        openAt: `t.created_at < b.at AND (t.solved_at IS NULL OR t.solved_at >= b.at) AND (t.closed_at IS NULL OR t.closed_at >= b.at) AND ${NOT_PARKED_AT}`,
         where: [],
         agg: { kind: "count" },
       };
     case "unassigned":
       return {
         ...T,
-        openAt: "t.created_at < b.at AND (t.solved_at IS NULL OR t.solved_at >= b.at) AND (t.closed_at IS NULL OR t.closed_at >= b.at)",
+        openAt: `t.created_at < b.at AND (t.solved_at IS NULL OR t.solved_at >= b.at) AND (t.closed_at IS NULL OR t.closed_at >= b.at) AND ${NOT_PARKED_AT}`,
         where: ["t.assignee_id IS NULL"],
         agg: { kind: "count" },
       };
@@ -317,15 +322,17 @@ function measureSrc(m: HdMeasureKey, extra: unknown[]): Src {
     case "steps_skipped":
       return { ...STEP, ts: "COALESCE(s.finished_at, s.started_at)", where: [`${STEP_OUTCOME} = 'skipped'`], agg: { kind: "count" } };
     case "agent_workload":
-      return { ...T, where: [OPEN, "t.assignee_id IS NOT NULL"], agg: { kind: "count" } };
+      return { ...T, where: [OPEN_WORK, "t.assignee_id IS NOT NULL"], agg: { kind: "count" } };
     case "open_now":
-      return { ...T, where: [OPEN], agg: { kind: "count" } };
+      return { ...T, where: [OPEN_WORK], agg: { kind: "count" } };
+    case "parked_now":
+      return { ...T, where: [OPEN, "t.parked_until IS NOT NULL"], agg: { kind: "count" } };
     case "unassigned_now":
-      return { ...T, where: [OPEN, "t.assignee_id IS NULL"], agg: { kind: "count" } };
+      return { ...T, where: [OPEN_WORK, "t.assignee_id IS NULL"], agg: { kind: "count" } };
     case "breaching_now":
       return {
         ...T,
-        where: [OPEN, `t.sla_paused_at IS NULL AND ((t.first_replied_at IS NULL AND t.first_reply_due < ${P.now}) OR t.resolve_due < ${P.now})`],
+        where: [OPEN_WORK, `t.sla_paused_at IS NULL AND ((t.first_replied_at IS NULL AND t.first_reply_due < ${P.now}) OR t.resolve_due < ${P.now})`],
         agg: { kind: "count" },
       };
     case "reviews_done":
@@ -1006,6 +1013,15 @@ export async function runQuery(
     return out;
   });
 
+  // 1.20.34: "Open now" shows the parked tickets beside it ("Parked: N"), counted with the same filters and scope.
+  if (q.measure === "open_now" && !dims.length) {
+    try {
+      const parked = await runQuery({ ...q, measure: "parked_now" }, viewer, { ...opts, scope });
+      result.aside = { label: "Parked", value: parked.total.value ?? 0 };
+    } catch {
+      /* the open count stands alone */
+    }
+  }
   if (cache.size >= ENGINE_LIMITS.cacheEntries) {
     for (const [k, v] of cache) if (now - v.at >= v.ttl) cache.delete(k);
     if (cache.size >= ENGINE_LIMITS.cacheEntries) cache.delete(cache.keys().next().value as string);
