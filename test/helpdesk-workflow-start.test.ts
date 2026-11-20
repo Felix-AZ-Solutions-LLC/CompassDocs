@@ -38,6 +38,9 @@
 //
 // Parallel-safe: every account, group, team, request type, workflow and ticket
 // is this file's own (STAMP); the role matrix is set for this process only.
+// The requester without Get help is only that until another file boots and
+// the ladder backfill gives Viewer back, so the checks on them run under the
+// boot lock (support/ladder-lock).
 //
 // Run: DATABASE_URL=… npx tsx --tsconfig ./tsconfig.test.json --test test/helpdesk-workflow-start.test.ts
 
@@ -50,6 +53,7 @@ import { pool, getSetting, createSession } from "../src/lib/db";
 import { newToken } from "../src/lib/password";
 import { fixtureQuery } from "./support/retry";
 import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
+import { withoutLadderRole } from "./support/ladder-lock";
 
 let currentRequest: Request | null = null;
 function cookieJar(): Map<string, string> {
@@ -428,12 +432,16 @@ describe("the request types offered", () => {
     } finally {
       await pool().query("UPDATE users SET status = 'active' WHERE id = $1", [P.req2.id]);
     }
-    // Active, but no helpdesk.request (their only role taken away).
-    await pool().query("DELETE FROM role_assignments WHERE user_id = $1", [P.req2.id]);
+    // Active, but no helpdesk.request (their roles taken away: the Viewer rung too, which another file's
+    // boot gives back, so the three checks run under the boot lock).
     try {
-      assert.equal((await options("sam", t.number)).body.eligible, false);
-      assert.equal((await call(typesRoute.GET, "sam", `/tickets/request-types?requester_id=${P.req2.id}`)).status, 400);
-      const nt = await call(ticketsRoute.POST, "sam", "/tickets", "POST", { requester_id: P.req2.id, subject: `${STAMP} x`, request_type_id: RT.Laptop, answers: { model: "x" } });
+      const [eligible, types, nt] = await withoutLadderRole([P.req2.id], async () => [
+        (await options("sam", t.number)).body.eligible,
+        (await call(typesRoute.GET, "sam", `/tickets/request-types?requester_id=${P.req2.id}`)).status,
+        await call(ticketsRoute.POST, "sam", "/tickets", "POST", { requester_id: P.req2.id, subject: `${STAMP} x`, request_type_id: RT.Laptop, answers: { model: "x" } }),
+      ] as const);
+      assert.equal(eligible, false);
+      assert.equal(types, 400);
       assert.equal(nt.status, 400);
       assert.match(nt.body.error, /can't use Get help/);
     } finally {

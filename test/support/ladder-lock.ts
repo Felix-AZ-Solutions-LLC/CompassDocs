@@ -18,6 +18,15 @@
 // The lock is taken on a connection of its own, outside lib/db's pool, so
 // the body keeps all of the pool's connections; ending that connection
 // frees the lock, whichever way the body finishes.
+//
+// When the role-less state has to last longer than a lock should be held —
+// a whole describe, or checks that poll a mailbox and send mail — use
+// noLadderRung instead: it points users.role at a key no built-in role has,
+// so the ladder trigger drops the user's rung assignment and the backfill
+// (which only restores the built-in role users.role names) has nothing to
+// give back. No lock, so nothing waits on it. The user must be one the test
+// made, and deleted or reset afterwards (helpdesk-status-teams does the same
+// for Nat Nostatus).
 
 import { Client } from "pg";
 
@@ -32,6 +41,21 @@ export async function withoutLadderRole<T>(userIds: number[], body: () => Promis
     await client.query("SELECT pg_advisory_lock($1)", [BOOT_LOCK]);
     await client.query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [userIds]);
     return await body();
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/** A users.role value that names no built-in role: the ladder backfill has nothing to restore. */
+export const NO_RUNG = "test-no-rung";
+
+/** Take these users' role assignments away for good: their rung names no built-in role, so no boot gives one back. */
+export async function noLadderRung(userIds: number[]): Promise<void> {
+  const client = new Client({ connectionString: process.env.DATABASE_URL, application_name: `ladder-lock:no-rung:${process.pid}` });
+  await client.connect();
+  try {
+    await client.query("UPDATE users SET role = $2 WHERE id = ANY($1)", [userIds, NO_RUNG]);
+    await client.query("DELETE FROM role_assignments WHERE user_id = ANY($1)", [userIds]);
   } finally {
     await client.end().catch(() => {});
   }

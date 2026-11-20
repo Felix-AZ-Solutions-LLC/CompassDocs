@@ -40,13 +40,18 @@
 // hd_mailboxes and the email settings are workspace-wide: the whole file
 // holds the workspace mail lock exclusively (test/support/mail-lock), so no
 // other file sends or receives helpdesk mail meanwhile, and puts back what
-// it changed.
+// it changed. The two accounts that can't use Get help (Sam Lee, and the
+// agent who replies into Sam's ticket) have a rung that names no built-in
+// role (support/ladder-lock noLadderRung): deleting their assignments alone
+// lasted only until another file booted and the ladder backfill gave Viewer
+// back.
 //
 // Run: DATABASE_URL=… npx tsx --tsconfig ./tsconfig.test.json --test test/helpdesk-m365-mail.test.ts
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
 import { lockWorkspaceMail, type WorkspaceMailLock } from "./support/mail-lock";
+import { noLadderRung } from "./support/ladder-lock";
 import Module from "node:module";
 import http from "node:http";
 import fs from "node:fs";
@@ -2527,10 +2532,11 @@ describe("1.20.25: why a message was dropped or waits, and what an admin can do 
   before(async () => {
     fresh();
     // Sam Lee: a colleague with an account whose role can't use Get help (no role at all: the ladder role taken away).
+    // For the whole describe, which polls and sends mail, so not under the boot lock: a rung no boot restores.
     sam.email = `${STAMP}-sam@example.test`;
     sam.name = `Sam Lee ${STAMP.slice(-4)}`;
     sam.id = (await fixtureQuery("INSERT INTO users (username, name, email, role, status, timezone) VALUES ($1, $2, $3, 'viewer', 'active', 'UTC') RETURNING id", [`${STAMP}-sam`, sam.name, sam.email])).rows[0].id;
-    await pool().query("DELETE FROM role_assignments WHERE user_id = $1", [sam.id]);
+    await noLadderRung([sam.id]);
   });
   after(async () => {
     fresh();
@@ -2688,7 +2694,7 @@ describe("1.20.25: why a message was dropped or waits, and what an admin can do 
     const agentEmail = `${STAMP}-agent2@example.test`;
     const agentId = (await fixtureQuery("INSERT INTO users (username, name, email, role, status, timezone) VALUES ($1, $2, $3, 'viewer', 'active', 'UTC') RETURNING id", [`${STAMP}-agent2`, `Desk Agent ${STAMP.slice(-4)}`, agentEmail])).rows[0].id;
     try {
-      await pool().query("DELETE FROM role_assignments WHERE user_id = $1", [agentId]);
+      await noLadderRung([agentId]);
       await fixtureQuery("INSERT INTO hd_agent_roles (user_id, role) VALUES ($1, 'agent')", [agentId]);
       await pool().query("INSERT INTO hd_team_members (team_id, user_id, role) VALUES ($1, $2, 'agent')", [teamA, agentId]);
       // Sam's own ticket (an account requester), made before his role lost Get help.
