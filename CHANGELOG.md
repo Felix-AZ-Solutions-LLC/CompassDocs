@@ -4,6 +4,62 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.36] - 2026-11-20
+
+The desk queue remembers each agent's sort.
+
+### Added
+- **Your sort stays put.** Pick **Newest first** (or Due first, Priority
+  first, Recently updated) from the Sort menu at the top of the ticket
+  list and the queue keeps it: in every view and team, after a reload,
+  the next day, on your other devices and in new desk windows. Desk
+  windows already open in the same browser switch to it at once, whichever
+  desk page they are on. There is no separate setting to save.
+- **No jump as the page loads.** Your sort is read on the server, so the
+  list is in your order from its first paint and never re-sorts as it
+  arrives. Live updates keep using the order on screen.
+- **Settings → Notifications** gets a **Sorting the ticket list** card
+  with the same four choices and **Reset to default** (Due first) once
+  you have chosen. Changing it there changes the queue too.
+- **A save that fails changes nothing.** If your choice can't be saved,
+  the list goes back to the last sort that was saved and a message says
+  so. Quick changes, and changes made in two windows at once, always end
+  on the newest one.
+- **The list doesn't blank when the sort changes.** The tickets stay on
+  screen until they come back in the new order, so your place and any
+  tickets you've selected stay.
+
+### Changed
+- **Links that name a sort still win.** A shared link or bookmark with
+  `?sort=` (for example `?sort=due`) shows that order, and keeps it while
+  you open tickets beside the list, without changing your saved choice.
+  Picking another view in the rail goes back to your sort; picking a sort
+  from the menu saves it and drops the one in the link.
+- **Report drill-downs** carry no sort in their links (as before), so they
+  now open in your sort rather than always Due first.
+- **The Parked view** keeps listing tickets soonest to wake first,
+  whatever your sort or the link says. Its Sort control is shown switched
+  off, reading **Soonest to wake**, with a tooltip saying why. A filtered
+  list or saved view that starts from Parked does the same, and so does
+  Reports' **Parked now** drill-down, which used to list them by due date.
+- **Export CSV** of parked tickets comes out soonest to wake first, as the
+  list shows them.
+- **Priority first** breaks ties between tickets of the same priority and
+  update time by ticket, newest first, so equal tickets never swap places
+  between reloads or pages. This applies to the tickets API too.
+- **Saved views** keep no sort of their own (they never did), so they
+  follow your sort.
+- The tickets API and Claude's `hd_queue` tool never read the agent's
+  preference. In the API, `status_group=parked` with no sort or
+  `sort=due` now lists soonest to wake first, as `view=parked` already
+  did; any other sort is honoured as asked.
+
+### Upgrading
+Nothing to run. The choice is stored with each agent's desk preferences
+(`queue_sort`, beside the conversation's order), and nobody has one until
+they pick a sort, so after the upgrade everyone starts on the existing
+default, **Due first**. Links with `?sort=` behave as before.
+
 ## [1.20.35] - 2026-11-20
 
 Dark mode comes in three styles: Slate, as it always was, Graphite and

@@ -4,6 +4,7 @@
 // "You" on their own notes), provided by DeskShell.
 
 import { createContext, useContext } from "react";
+import type { HdQueueSort } from "@/lib/helpdesk/queue-sort-shared";
 
 export interface DeskMe {
   id: number;
@@ -19,6 +20,8 @@ export interface DeskMe {
   email_view?: "formatted" | "plain";
   /** 1.20.28: the ticket pane's conversation order, as the page loaded (ticket/ticket-order keeps it after). */
   ticket_order?: "newest" | "oldest";
+  /** 1.20.36: the queue's sort, as the page loaded (null: the default; queue/queue-sort keeps it after). */
+  queue_sort?: HdQueueSort | null;
 }
 
 export const DeskMeContext = createContext<DeskMe>({ id: 0, name: "", agent: false, admin: false, reports: false, role: null, caps: [] });

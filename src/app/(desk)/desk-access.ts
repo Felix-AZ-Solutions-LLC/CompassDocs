@@ -18,6 +18,7 @@ import type { SessionUser } from "@/lib/types";
 import type { HdAvailability } from "@/lib/helpdesk/types";
 import type { HdEmailView } from "@/lib/helpdesk/email-html-shared";
 import type { HdTicketOrder } from "@/lib/helpdesk/conversation-shared";
+import type { HdQueueSort } from "@/lib/helpdesk/queue-sort-shared";
 
 export interface DeskAccess {
   licensed: boolean;
@@ -54,13 +55,14 @@ export async function agentAvailability(userId: number): Promise<HdAvailability>
 
 /**
  * How the agent reads a ticket (their desk preferences, lib/helpdesk/notify-prefs): emailed messages formatted or
- * as plain text (1.20.11), and the conversation newest first with the reply box on top or oldest first (1.20.28).
+ * as plain text (1.20.11), the conversation newest first with the reply box on top or oldest first (1.20.28), and
+ * how the queue's list is sorted (1.20.36, null for the default), so the first paint already shows their order.
  */
-export async function agentReadingPrefs(userId: number): Promise<{ emailView: HdEmailView; ticketOrder: HdTicketOrder }> {
+export async function agentReadingPrefs(userId: number): Promise<{ emailView: HdEmailView; ticketOrder: HdTicketOrder; queueSort: HdQueueSort | null }> {
   const { getNotifyPrefs } = await import("@/lib/helpdesk/notify-prefs");
   return getNotifyPrefs(userId)
-    .then((p) => ({ emailView: p.email_view, ticketOrder: p.ticket_order }))
-    .catch(() => ({ emailView: "formatted" as const, ticketOrder: "newest" as const }));
+    .then((p) => ({ emailView: p.email_view, ticketOrder: p.ticket_order, queueSort: p.queue_sort }))
+    .catch(() => ({ emailView: "formatted" as const, ticketOrder: "newest" as const, queueSort: null }));
 }
 
 /**

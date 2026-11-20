@@ -7,6 +7,8 @@
 // changed; `resolvePrefs()` lays it over the defaults, so a new event or
 // option added later reaches everyone with its default.
 
+import { cleanQueueSort, isQueueSort, type HdQueueSort } from "./queue-sort-shared";
+
 /** The agent-facing events, in the order the matrix shows them. */
 export const HD_NOTIFY_EVENTS = [
   "assigned_to_me",
@@ -185,6 +187,12 @@ export interface HdNotifyPrefs {
    * Set from the pane's Order control; follows the agent across devices.
    */
   ticket_order: "newest" | "oldest";
+  /**
+   * 1.20.36: how the desk queue's ticket list is sorted (lib/helpdesk/queue-sort-shared): "due", "priority",
+   * "updated" or "created", or null for the desk's default (Due first). Set from the queue's Sort control or the
+   * Notifications page; an explicit ?sort= in the address overrides it for that list and is never saved here.
+   */
+  queue_sort: HdQueueSort | null;
 }
 
 /** What the agent may send in a PUT: any part of the prefs, plus a pause request. */
@@ -201,7 +209,7 @@ export const DEFAULT_QUIET: HdQuietHours = {
 export function defaultPrefs(): HdNotifyPrefs {
   const matrix = {} as HdNotifyPrefs["matrix"];
   for (const ev of HD_NOTIFY_EVENTS) matrix[ev] = { ...HD_NOTIFY_EVENT_INFO[ev].defaults };
-  return { matrix, teams: {}, quiet: { ...DEFAULT_QUIET, days: [...DEFAULT_QUIET.days] }, preview: "full", sound: true, pause: null, auto_follow: true, email_view: "formatted", ticket_order: "newest" };
+  return { matrix, teams: {}, quiet: { ...DEFAULT_QUIET, days: [...DEFAULT_QUIET.days] }, preview: "full", sound: true, pause: null, auto_follow: true, email_view: "formatted", ticket_order: "newest", queue_sort: null };
 }
 
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -245,6 +253,7 @@ export function resolvePrefs(stored: unknown): HdNotifyPrefs {
   if (typeof stored.auto_follow === "boolean") out.auto_follow = stored.auto_follow;
   if (stored.email_view === "formatted" || stored.email_view === "plain") out.email_view = stored.email_view;
   if (stored.ticket_order === "newest" || stored.ticket_order === "oldest") out.ticket_order = stored.ticket_order;
+  out.queue_sort = cleanQueueSort(stored.queue_sort); // 1.20.36: anything else reads as the default
   if (isObj(stored.pause)) {
     const u = stored.pause.until;
     if (u === null) out.pause = { until: null };
@@ -260,7 +269,7 @@ export function resolvePrefs(stored: unknown): HdNotifyPrefs {
  */
 export function prefsPatchProblem(patch: unknown): string | null {
   if (!isObj(patch)) return "Send the preferences as an object.";
-  const known = new Set(["matrix", "teams", "quiet", "preview", "sound", "pause", "auto_follow", "email_view", "ticket_order"]);
+  const known = new Set(["matrix", "teams", "quiet", "preview", "sound", "pause", "auto_follow", "email_view", "ticket_order", "queue_sort"]);
   for (const k of Object.keys(patch)) if (!known.has(k)) return `Unknown preference "${k.slice(0, 40)}".`;
   if (patch.matrix !== undefined) {
     if (!isObj(patch.matrix)) return "The event matrix must be an object.";
@@ -305,6 +314,9 @@ export function prefsPatchProblem(patch: unknown): string | null {
   if (patch.auto_follow !== undefined && typeof patch.auto_follow !== "boolean") return "Following tickets you reply to is on or off.";
   if (patch.email_view !== undefined && patch.email_view !== "formatted" && patch.email_view !== "plain") return "Emails show formatted or as plain text.";
   if (patch.ticket_order !== undefined && patch.ticket_order !== "newest" && patch.ticket_order !== "oldest") return "Tickets show newest first or oldest first.";
+  if (patch.queue_sort !== undefined && patch.queue_sort !== null && !isQueueSort(patch.queue_sort)) {
+    return "Sort the queue due first, priority first, recently updated or newest first.";
+  }
   if (patch.pause !== undefined && !["1h", "tomorrow", "indefinite", "off"].includes(patch.pause as string)) {
     return "Pause for 1h, until tomorrow, indefinitely, or off.";
   }
