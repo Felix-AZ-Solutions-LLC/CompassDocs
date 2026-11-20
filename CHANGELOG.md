@@ -4,6 +4,41 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.38] - 2026-11-20
+
+A steadier test suite, and more time for the end-to-end run in CI.
+
+### Fixed
+- **The integration test suite no longer fails now and then on a fresh
+  database.** Two kinds of test failed only when other test files ran at
+  the same time:
+  - The tests that need an account without Get help stopped deleting the
+    account's built-in Viewer role and nothing else. Every test process
+    gives a missing built-in role back when it starts, as each start of
+    CompassDocs does, so a file starting in parallel could return Get help
+    to that account mid-test. These accounts now have no built-in role at
+    all, so there is nothing to give back.
+  - A compliance test that saves a policy's audience now names its own
+    people from the start. Before, the policy began by asking everyone in
+    a shared space, so the save closed other files' rows while those files
+    removed their accounts, and the database stopped one of the two.
+    CompassDocs removes accounts one at a time, so this can't happen on a
+    running instance.
+- **The reply pop-out's end-to-end test waits for the window to close.** It
+  held back the server's answer to a send until the pop-out was closed, but
+  it let the answer through before the window had actually gone. On a busy
+  machine the window could still get the answer, so it finished the send
+  itself, and the notice the test waits for never appeared. The pop-out
+  itself is unchanged: either way, the reply is sent once and nothing comes
+  back to send twice.
+- **The end-to-end job in CI has 40 minutes instead of 30.** Installing the
+  test browser once took 8 minutes, and the job ran out of time.
+
+No change for anyone running CompassDocs.
+
+### Upgrading
+- **Nothing to run.**
+
 ## [1.20.37] - 2026-11-20
 
 A richer Help Center home, and the product now speaks US English.

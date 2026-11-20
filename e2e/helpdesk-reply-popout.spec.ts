@@ -408,7 +408,13 @@ test.describe("reply pop-out (licensed)", () => {
     });
     await pop2.getByRole("button", { name: "Send", exact: true }).click();
     await isPosted;
+    // close({ runBeforeUnload: true }) runs the unload handlers but does not wait for the window to go. The held
+    // answer is let through only once it has gone (its pagehide marked the send as on its way and said "closed"):
+    // released earlier, under load it could reach the still-open window, which then finished the send itself and
+    // said "sent" (the desk's "Reply sent on #…"), so "This reply was sent." never came.
+    const gone2 = pop2.waitForEvent("close", { timeout: 120_000 });
     await pop2.close({ runBeforeUnload: true });
+    await gone2;
     finish();
     await see(page.getByText("This reply was sent.")).toBeVisible({ timeout: 60_000 });
     await see(page.getByRole("textbox", { name: "Reply", exact: true })).toHaveValue("");

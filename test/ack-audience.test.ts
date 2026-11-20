@@ -199,7 +199,12 @@ async function newPerson(tag: string, role = "viewer"): Promise<number> {
   return r.rows[0].id;
 }
 
-async function newPolicy(title: string, space = spaceA, author = "test"): Promise<{ id: number; title: string; v1: number }> {
+async function newPolicy(
+  title: string,
+  space = spaceA,
+  author = "test",
+  targeted?: ReturnType<typeof sanitizeRules>
+): Promise<{ id: number; title: string; v1: number }> {
   const full = `${STAMP} ${title}`;
   const doc = await createDocument({
     space_id: space,
@@ -211,6 +216,9 @@ async function newPolicy(title: string, space = spaceA, author = "test"): Promis
     tags: [],
     author,
   });
+  // A targeted audience saved before the switch-on (a policy not yet on
+  // reconciles nothing): the switch-on enrols only the people it names.
+  if (targeted) await saveAudienceRules(doc.id, { audience_mode: "targeted", rules: targeted });
   // editDefault / recertMonths null: never read the shared workspace setting.
   await switchOn(doc.id, { editDefault: null, recertMonths: null });
   docIds.push(doc.id);
@@ -539,7 +547,13 @@ describe("targeted mode: rules, exclusions and the ceiling", () => {
   });
 
   test("a save tells the people it adds: one 'request' row limited to them, none when nobody was added", async () => {
-    const { id } = await newPolicy("told");
+    // Targeted at alice and carol from the switch-on, so the policy never holds
+    // another file's account: a narrowing save over a space-mode policy in the
+    // internal space closed every other file's open row, and a file tearing its
+    // accounts down (one DELETE of several users, whose cascade takes their
+    // rows in another order) deadlocked with it (40P01). Carol's row still
+    // closes on the narrowing and re-opens on the widening, as before.
+    const { id } = await newPolicy("told", spaceA, "test", sanitizeRules([{ kind: "user", ref: people.alice }, { kind: "user", ref: people.carol }]));
     const narrowed = await saveAudienceRules(id, { audience_mode: "targeted", rules: sanitizeRules([{ kind: "user", ref: people.alice }]) });
     assert.equal(narrowed!.added + narrowed!.reopened, 0);
     assert.deepEqual(await requestRows(id), [], "nothing added, nobody told");

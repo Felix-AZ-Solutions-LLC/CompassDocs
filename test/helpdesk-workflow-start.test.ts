@@ -428,7 +428,10 @@ describe("the request types offered", () => {
     } finally {
       await pool().query("UPDATE users SET status = 'active' WHERE id = $1", [P.req2.id]);
     }
-    // Active, but no helpdesk.request (their only role taken away).
+    // Active, but no helpdesk.request (their only role taken away). The rung names no
+    // built-in role while it lasts: every process's schema bootstrap re-adds a missing
+    // ladder assignment (db.ts migrateLadderToAssignments), and the Viewer role holds Get help.
+    await pool().query("UPDATE users SET role = $2 WHERE id = $1", [P.req2.id, `${STAMP}-norung`]);
     await pool().query("DELETE FROM role_assignments WHERE user_id = $1", [P.req2.id]);
     try {
       assert.equal((await options("sam", t.number)).body.eligible, false);
@@ -439,6 +442,7 @@ describe("the request types offered", () => {
     } finally {
       const rid = roleIds[userIds.indexOf(P.req2.id)];
       await pool().query("INSERT INTO role_assignments (role_id, user_id, scope_type) VALUES ($1, $2, 'global')", [rid, P.req2.id]);
+      await pool().query("UPDATE users SET role = 'viewer' WHERE id = $1", [P.req2.id]); // the trigger restores the Viewer rung
     }
     assert.equal((await options("sam", t.number)).body.eligible, true, "back with access");
   });
