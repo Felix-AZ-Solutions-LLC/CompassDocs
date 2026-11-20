@@ -90,7 +90,7 @@ describe("cookies on subresources", () => {
   });
 });
 
-describe("the page header goes where it went before", () => {
+describe("the page header goes where it went before, and only the proxy writes it", () => {
   // The 1.20.5 matcher, as Next compiled it: pages (no _next/, no api/, no file extension) and everything under /desk.
   const before = (p: string) => /^\/(?!_next\/|api\/|.*\.[a-zA-Z0-9]+$).*$/.test(p) || p === "/desk" || p.startsWith("/desk/");
   const paths = ["/", "/doc/3", "/login", "/help/requests/9", "/desk", "/desk/tickets/42", "/desk/tickets/42.0", "/api/helpdesk/x", "/api", "/icon.png", "/favicon.ico", "/robots.txt", "/support", "/support/api/files/1", "/addin/taskpane"];
@@ -99,7 +99,8 @@ describe("the page header goes where it went before", () => {
       assert.equal(isPagePath(p), before(p));
       const h = forwarded(p, { [RETURN_PATH_HEADER]: "/client-wrote-this" });
       if (before(p)) assert.equal(h.get(RETURN_PATH_HEADER), p);
-      else assert.equal(h.get(RETURN_PATH_HEADER), "/client-wrote-this", "untouched, as before");
+      // 1.20.35: never the client's own value, on any path (the root layout decides the dark style from it).
+      else assert.equal(h.get(RETURN_PATH_HEADER), null, "a client-sent page header is dropped");
     });
   }
 

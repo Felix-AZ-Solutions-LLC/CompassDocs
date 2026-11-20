@@ -11,6 +11,8 @@ import { ToastHost } from "@/components/Toasts";
 import { DialogHost } from "@/components/Dialog";
 import { ReachableSettingsProvider } from "@/components/SettingsLink";
 import { UiScaleSync } from "@/components/UiScale";
+import { DarkStyleSync } from "@/components/DarkStyleSync";
+import { resolveDarkStyle } from "@/lib/dark-style";
 import { CommandPalette } from "@/components/palette/CommandPalette";
 import { navCapabilities } from "@/lib/nav-capabilities";
 import { spaceScopeFor } from "@/lib/access";
@@ -53,6 +55,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         Skip to content
       </a>
       <UiScaleSync accountPref={user.ui_scale} />
+      <DarkStyleSync style={resolveDarkStyle(user.dark_style, workspaceSettings.dark_style)} pref={user.dark_style ?? "workspace"} />
       <Sidebar user={user} caps={caps} reviewCount={reviewCount} trashCount={trashCount} />
       {/* tabIndex -1 so the skip link really lands here; outline-none because
           a focused scroll container would otherwise ring the whole content

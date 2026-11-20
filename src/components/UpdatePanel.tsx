@@ -177,7 +177,7 @@ export function UpdatePanel() {
                   </span>
                   <CopyButton text={status.upgradeCommand} label="Copy" variant="ghost" size="sm" />
                 </div>
-                <pre className="overflow-x-auto rounded-lg bg-[#0f172a] px-3 py-2.5 font-mono text-xs text-[#f1f5f9]">
+                <pre className="overflow-x-auto rounded-lg bg-dark-panel px-3 py-2.5 font-mono text-xs text-[#f1f5f9]">
                   {status.upgradeCommand}
                 </pre>
               </div>
@@ -193,7 +193,7 @@ export function UpdatePanel() {
                   <summary className="cursor-pointer text-xs font-medium text-slate-600">
                     Not running Docker? Update from the source tarball
                   </summary>
-                  <pre className="mt-2 overflow-x-auto rounded-lg bg-[#0f172a] px-3 py-2.5 font-mono text-xs text-[#f1f5f9]">
+                  <pre className="mt-2 overflow-x-auto rounded-lg bg-dark-panel px-3 py-2.5 font-mono text-xs text-[#f1f5f9]">
                     {status.sourceUpgradeCommand}
                   </pre>
                   <p className="mt-2 text-xs text-slate-500">

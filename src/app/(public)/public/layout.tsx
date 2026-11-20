@@ -13,6 +13,7 @@ import { TextInput } from "@/components/form";
 import { getPublicSiteConfig } from "@/lib/public-site";
 import { getAppSettings } from "@/lib/settings-store";
 import { listPublicSpaces } from "@/lib/db";
+import { DarkStyleSync } from "@/components/DarkStyleSync";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,8 @@ export default async function PublicLayout({ children }: { children: React.React
 
   return (
     <div className="min-h-screen bg-canvas">
+      {/* 1.20.35: the public site wears the workspace's default dark style. */}
+      <DarkStyleSync style={settings.dark_style} />
       <header className="border-b border-slate-200 bg-surface print:hidden">
         <div className="mx-auto flex max-w-standalone flex-wrap items-center gap-4 px-6 py-4">
           <Link href="/public" className="flex items-center gap-2.5">

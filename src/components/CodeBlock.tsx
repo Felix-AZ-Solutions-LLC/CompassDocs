@@ -53,9 +53,9 @@ export function CodeBlock({ language, code }: { language: string; code: string }
   const label = LANG_LABEL[lang] || language || "code";
 
   return (
-    <div className="doc-wide code-block group my-4 overflow-hidden rounded-lg ring-1 ring-[#1e293b]/60">
-      <div className="flex items-center justify-between bg-[#1e293b] px-3 py-1.5">
-        <span className="flex items-center gap-2 text-xs font-medium text-[#94a3b8]">
+    <div className="doc-wide code-block group my-4 overflow-hidden rounded-lg ring-1 ring-dark-panel-raised/60">
+      <div className="flex items-center justify-between bg-dark-panel-raised px-3 py-1.5">
+        <span className="flex items-center gap-2 text-xs font-medium text-dark-panel-muted">
           {isRun ? (
             <>
               <span className="flex gap-1" aria-hidden>
@@ -71,13 +71,14 @@ export function CodeBlock({ language, code }: { language: string; code: string }
           {label}
         </span>
         {/* The header is always dark, so the ghost ink is pinned to the
-            slate-on-navy values rather than the themed slate ramp. */}
+            dark-panel tokens (navy in light mode and Slate, neutral in
+            Graphite and Black) rather than the themed slate ramp. */}
         <CopyButton
           text={() => code.replace(/\n$/, "")}
           label={isRun ? "Copy commands" : "Copy"}
           variant="ghost"
           size="sm"
-          className="text-[#94a3b8]! hover:bg-[#334155]! hover:text-[#e2e8f0]!"
+          className="text-dark-panel-muted! hover:bg-dark-panel-hover! hover:text-dark-panel-ink!"
         />
       </div>
       <pre className="my-0! rounded-none!">

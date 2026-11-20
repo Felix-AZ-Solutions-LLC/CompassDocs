@@ -12,7 +12,8 @@
  *                      data).
  */
 
-const VERSION = "desk-sw-v1";
+// v2 (1.20.35): the offline page follows the dark style, so installed desks fetch it again.
+const VERSION = "desk-sw-v2";
 const OFFLINE_URL = "/desk-offline.html";
 const PRECACHE = [OFFLINE_URL, "/desk-192.png", "/desk-badge-96.png"];
 

@@ -7,8 +7,10 @@
 //
 //   export const metadata: Metadata = { …, ...deskPwaMetadata };
 //   export const viewport: Viewport = deskPwaViewport;
+//   (the desk layout uses generateViewport with deskPwaViewportFor(dark style), 1.20.35)
 
 import type { Metadata, Viewport } from "next";
+import type { DarkStyle } from "@/lib/dark-style";
 
 /** The house accent, as in public/desk.webmanifest. */
 export const DESK_THEME_COLOR = "#2e75bd";
@@ -26,12 +28,27 @@ export const deskPwaMetadata: Pick<Metadata, "manifest" | "icons" | "appleWebApp
   appleWebApp: { capable: true, title: "Desk", statusBarStyle: "default" },
 };
 
-export const deskPwaViewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: DESK_THEME_COLOR },
-    { media: "(prefers-color-scheme: dark)", color: "#0f172a" },
-  ],
-  width: "device-width",
-  initialScale: 1,
-  viewportFit: "cover",
+/**
+ * The installed desk's title bar on a dark device, per dark style (1.20.35,
+ * lib/dark-style): near the desk's top bar (bg-surface) in each. Slate keeps
+ * the colour it always had.
+ */
+export const DESK_DARK_THEME_COLOR: Record<DarkStyle, string> = {
+  slate: "#0f172a",
+  graphite: "#18181a",
+  black: "#0d0d0e",
 };
+
+export function deskPwaViewportFor(style: DarkStyle): Viewport {
+  return {
+    themeColor: [
+      { media: "(prefers-color-scheme: light)", color: DESK_THEME_COLOR },
+      { media: "(prefers-color-scheme: dark)", color: DESK_DARK_THEME_COLOR[style] },
+    ],
+    width: "device-width",
+    initialScale: 1,
+    viewportFit: "cover",
+  };
+}
+
+export const deskPwaViewport: Viewport = deskPwaViewportFor("slate");

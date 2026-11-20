@@ -4,6 +4,7 @@ import { getAppSettings, updateAppSettings } from "@/lib/settings-store";
 import type { AppSettings } from "@/lib/settings";
 import { apiGuard } from "@/lib/api-auth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
+import { sanitizeDarkStyle } from "@/lib/dark-style";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,12 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });
   }
 
+  // The default dark style (1.20.35) is refused out loud rather than dropped,
+  // before anything is written: it changes what everyone on Workspace default sees.
+  if (body?.dark_style !== undefined && !sanitizeDarkStyle(body.dark_style)) {
+    return NextResponse.json({ error: "dark_style must be slate, graphite or black." }, { status: 400 });
+  }
+
   if (body?.approval_mode !== undefined) {
     const mode = body.approval_mode === "open" ? "open" : "strict";
     await setSetting("approval_mode", mode);
@@ -40,6 +47,7 @@ export async function PATCH(req: Request) {
     "company_name",
     "logo_url",
     "accent_color",
+    "dark_style",
     "timezone",
     "date_format",
     "time_format",
@@ -58,6 +66,7 @@ export async function PATCH(req: Request) {
   for (const k of keys) {
     if (body?.[k] !== undefined) (patch as any)[k] = body[k];
   }
+  const darkStyleBefore = patch.dark_style !== undefined ? (await getAppSettings()).dark_style : null;
   const settings = Object.keys(patch).length ? await updateAppSettings(patch) : undefined;
   // Turning backlinks on backfills doc_links for content saved before the
   // feature existed (saves keep it fresh from then on). Fire-and-forget.
@@ -71,6 +80,14 @@ export async function PATCH(req: Request) {
       details: { fields: Object.keys(patch) },
       ip: ipFrom(req),
     });
+    if (darkStyleBefore !== null && darkStyleBefore !== settings.dark_style) {
+      await audit({
+        actor: actorFrom(gate),
+        action: "settings.dark_style",
+        details: { from: darkStyleBefore, to: settings.dark_style },
+        ip: ipFrom(req),
+      });
+    }
   }
 
   return NextResponse.json({ ok: true, settings });

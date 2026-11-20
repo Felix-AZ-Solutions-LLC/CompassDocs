@@ -120,7 +120,9 @@ export function rangeError(value: number | string, min: number, max: number): st
 // field under 16px, which in the installed desk left the reply box and the searches zoomed.
 const control = "w-full rounded-lg border bg-surface px-3 py-2 text-base sm:text-sm placeholder:text-slate-400 disabled:opacity-50";
 const controlDense = "w-full rounded-lg border bg-surface px-2.5 py-1.5 text-base sm:text-sm placeholder:text-slate-400 disabled:opacity-50";
-const controlOk = "border-slate-200 focus:border-compass-500";
+// 1.20.35: the edge is its own token (globals.css --control-edge): slate-200
+// in light mode and Slate, raised to 3:1 on the surface in Graphite and Black.
+const controlOk = "border-control-edge focus:border-compass-500";
 const controlErr = "border-red-300 focus:border-red-400";
 
 // A caller's own width, padding, radius, size or surface must win over the

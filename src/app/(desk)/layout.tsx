@@ -9,7 +9,7 @@
 
 import { redirect } from "next/navigation";
 import type { Metadata, Viewport } from "next";
-import { requireUser, currentPagePath, reachableSettingsSections } from "@/lib/auth";
+import { requireUser, currentPagePath, reachableSettingsSections, requestDarkStylePref, SESSION_COOKIE } from "@/lib/auth";
 import { safeReturnPath } from "@/lib/return-to";
 import { getAppSettings } from "@/lib/settings-store";
 import { settingsForUser } from "@/lib/format";
@@ -19,13 +19,16 @@ import { WidthProvider } from "@/components/PageWidth";
 import { ToastHost } from "@/components/Toasts";
 import { DialogHost } from "@/components/Dialog";
 import { UiScaleSync } from "@/components/UiScale";
+import { DarkStyleSync } from "@/components/DarkStyleSync";
+import { DARK_STYLE_COOKIE, resolveDarkStyle } from "@/lib/dark-style";
 import { DeskShell } from "@/components/helpdesk/desk/DeskShell";
 import { DuoDeskPrompt } from "@/components/helpdesk/desk/DuoDeskPrompt";
 import { DeskForbidden, DeskLicenceGate } from "@/components/helpdesk/desk/DeskGate";
 import { DeskKeysProvider } from "@/components/helpdesk/desk/DeskKeysProvider";
 import { PwaHead } from "@/components/helpdesk/desk/pwa/PwaHead";
 import { InstallDeskMenuItem } from "@/components/helpdesk/desk/pwa/InstallDesk";
-import { deskPwaMetadata, deskPwaViewport } from "@/components/helpdesk/desk/pwa/metadata";
+import { deskPwaMetadata, deskPwaViewportFor } from "@/components/helpdesk/desk/pwa/metadata";
+import { cookies } from "next/headers";
 import { firstSettingsHref } from "@/components/helpdesk/desk/settings/settings-nav";
 import { agentAvailability, agentReadingPrefs, deskAccess, deskRoleCaps } from "./desk-access";
 import { deskLookFor } from "@/lib/helpdesk/appearance";
@@ -40,7 +43,22 @@ export const metadata: Metadata = {
   ...deskPwaMetadata,
 };
 
-export const viewport: Viewport = deskPwaViewport;
+// The installed desk's title bar follows the person's dark style (1.20.35):
+// the signed-in account's, else this browser's cookie, else the workspace's.
+export async function generateViewport(): Promise<Viewport> {
+  const jar = await cookies();
+  const cookiePref = jar.get(DARK_STYLE_COOKIE)?.value;
+  const sessionToken = jar.get(SESSION_COOKIE)?.value;
+  let workspace: unknown;
+  let pref: string | undefined = cookiePref;
+  try {
+    workspace = (await getAppSettings()).dark_style;
+    pref = await requestDarkStylePref(sessionToken, cookiePref);
+  } catch {
+    /* no database: the cookie, else Slate */
+  }
+  return deskPwaViewportFor(resolveDarkStyle(pref, workspace));
+}
 
 /** A desk admin's workspace-address warning: null while an address is configured. */
 async function deskAddressWarning(user: Awaited<ReturnType<typeof requireUser>>): Promise<{ canSet: boolean } | null> {
@@ -120,6 +138,7 @@ export default async function DeskLayout({ children }: { children: React.ReactNo
       <WidthProvider initial={user.page_width}>
         <DeskKeysProvider singleKey={user.single_key_shortcuts}>
           <UiScaleSync accountPref={user.ui_scale} />
+          <DarkStyleSync style={resolveDarkStyle(user.dark_style, workspaceSettings.dark_style)} pref={user.dark_style ?? "workspace"} />
           {body}
           {access.licensed && access.any && <PwaHead />}
           <ToastHost />

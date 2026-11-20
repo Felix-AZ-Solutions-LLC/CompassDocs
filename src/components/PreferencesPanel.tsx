@@ -1,6 +1,6 @@
 "use client";
 
-// Account → Preferences: theme, page width, time zone, and date format.
+// Account → Preferences: theme, dark style, page width, time zone, and date format.
 // Everything saves immediately; time zone and date format override the
 // workspace defaults just for this user.
 
@@ -13,6 +13,17 @@ import { WidthPreference } from "./PageWidth";
 import { Segmented, type SegmentedOption } from "./Segmented";
 import { applyThemePref, storeThemePref, type Pref } from "./ThemeToggle";
 import { UI_SCALES, applyUiScale, storeUiScale, type UiScale } from "./UiScale";
+import { DarkStylePicker, type DarkStyleOption } from "./DarkStylePicker";
+import { applyDarkStyle, rememberDarkStyle } from "./DarkStyleSync";
+import { toast } from "./Toasts";
+import {
+  DARK_STYLES,
+  DARK_STYLE_DESCRIPTION,
+  DARK_STYLE_LABEL,
+  resolveDarkStyle,
+  type DarkStyle,
+  type DarkStylePref,
+} from "@/lib/dark-style";
 
 const THEMES: SegmentedOption<Pref>[] = [
   { value: "light", label: "Light", icon: Sun },
@@ -39,6 +50,8 @@ function dfExample(df: Df): string {
 
 export function PreferencesPanel({
   initialTheme,
+  initialDarkStyle = "workspace",
+  workspaceDarkStyle = "slate",
   initialScale = "default",
   initialTimezone,
   initialDateFormat,
@@ -46,6 +59,10 @@ export function PreferencesPanel({
   workspaceTimezone,
 }: {
   initialTheme: Pref;
+  /** The person's dark style choice (1.20.35, lib/dark-style). */
+  initialDarkStyle?: DarkStylePref;
+  /** What "Workspace default" means today (Settings → Workspace). */
+  workspaceDarkStyle?: DarkStyle;
   initialScale?: UiScale;
   initialTimezone: string;
   initialDateFormat: Df;
@@ -55,6 +72,7 @@ export function PreferencesPanel({
   const [singleKey, setSingleKey] = useState(initialSingleKey);
   const router = useRouter();
   const [theme, setTheme] = useState<Pref>(initialTheme);
+  const [darkStyle, setDarkStyle] = useState<DarkStylePref>(initialDarkStyle);
   const [scale, setScale] = useState<UiScale>(initialScale);
   const [timezone, setTimezone] = useState(initialTimezone);
   const [dateFormat, setDateFormat] = useState<Df>(initialDateFormat);
@@ -90,6 +108,44 @@ export function PreferencesPanel({
     await patch({ theme: next });
   }
 
+  // Shows at once (the attribute only matters while the page is dark) and
+  // saves to the account; only a saved choice reaches this browser's cookie
+  // (the response sets it). A refused save puts the choice and the page back.
+  async function pickDarkStyle(next: DarkStylePref) {
+    const before = darkStyle;
+    setDarkStyle(next);
+    applyDarkStyle(resolveDarkStyle(next, workspaceDarkStyle));
+    let error = "";
+    try {
+      const res = await fetch("/api/account/preferences", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dark_style: next }),
+      });
+      if (res.ok) {
+        rememberDarkStyle(resolveDarkStyle(next, workspaceDarkStyle));
+        router.refresh();
+        return;
+      }
+      error = (await res.json().catch(() => null))?.error || "";
+    } catch {
+      /* offline: said below */
+    }
+    setDarkStyle(before);
+    applyDarkStyle(resolveDarkStyle(before, workspaceDarkStyle));
+    toast("error", error || "Couldn't save your dark style. Nothing changed.");
+  }
+
+  const darkStyleOptions: DarkStyleOption<DarkStylePref>[] = [
+    {
+      value: "workspace",
+      label: "Workspace default",
+      description: `Currently ${DARK_STYLE_LABEL[workspaceDarkStyle]}, set by your administrator.`,
+      swatch: workspaceDarkStyle,
+    },
+    ...DARK_STYLES.map((s) => ({ value: s, label: DARK_STYLE_LABEL[s], description: DARK_STYLE_DESCRIPTION[s], swatch: s })),
+  ];
+
   async function pickScale(next: UiScale) {
     setScale(next);
     applyUiScale(next);
@@ -105,6 +161,22 @@ export function PreferencesPanel({
           Saved to your account, so it follows you to any browser you sign in from.
         </p>
         <Segmented options={THEMES} value={theme} onChange={pickTheme} label="Theme" />
+        <div className="mt-4 border-t border-slate-100 pt-4">
+          <span id="dark-style-help" className="mb-2 block text-xs font-medium text-slate-500">
+            Dark style — how dark mode looks whenever you see it: on Dark, or on Auto while your device is dark
+          </span>
+          <DarkStylePicker
+            label="Dark style"
+            name="dark-style"
+            value={darkStyle}
+            onChange={pickDarkStyle}
+            options={darkStyleOptions}
+            describedBy="dark-style-help"
+          />
+          {theme === "light" && (
+            <p className="mt-2 text-xs text-slate-500">You&apos;re on Light, so this shows the next time you switch to Dark or Auto.</p>
+          )}
+        </div>
         <div className="mt-4 border-t border-slate-100 pt-4">
           <span className="mb-2 block text-xs font-medium text-slate-500">
             Page width — how wide pages render across the whole app

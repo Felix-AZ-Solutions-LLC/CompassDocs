@@ -1632,6 +1632,9 @@ const SCHEMA_SQL = `
   -- on the fluid root size (globals.css --ui-scale).
   ALTER TABLE users ADD COLUMN IF NOT EXISTS ui_scale text NOT NULL DEFAULT 'default';
   ALTER TABLE users ADD COLUMN IF NOT EXISTS single_key_shortcuts boolean NOT NULL DEFAULT true;
+  -- Per-user dark style (1.20.35, lib/dark-style): workspace | slate | graphite | black.
+  -- 'workspace' follows Settings → Workspace's default dark style.
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS dark_style text NOT NULL DEFAULT 'workspace';
 
   -- Categories within a space: an optional grouping level for its documents.
   -- Deleting a category never deletes documents (they fall back to General).
@@ -4323,11 +4326,11 @@ export async function setPageWidth(userId: number, width: string): Promise<void>
 /** Per-user appearance / locale preferences; only provided keys change. */
 export async function setUserPrefs(
   userId: number,
-  prefs: { theme?: string; timezone?: string; date_format?: string; ui_scale?: string; single_key_shortcuts?: boolean }
+  prefs: { theme?: string; dark_style?: string; timezone?: string; date_format?: string; ui_scale?: string; single_key_shortcuts?: boolean }
 ): Promise<void> {
   const sets: string[] = [];
   const vals: unknown[] = [];
-  for (const key of ["theme", "timezone", "date_format", "ui_scale", "single_key_shortcuts"] as const) {
+  for (const key of ["theme", "dark_style", "timezone", "date_format", "ui_scale", "single_key_shortcuts"] as const) {
     if (prefs[key] !== undefined) {
       vals.push(prefs[key]);
       sets.push(`${key} = $${vals.length}`);
@@ -5385,7 +5388,7 @@ export async function getAllSettings(): Promise<Record<string, string>> {
 
 const USER_COLUMNS = `id, username, email, name, role, status, auth_provider, external_id,
   must_change_password, totp_enabled, directory_person_id, email_notifications,
-  notify_webhook_url, page_width, ui_scale, single_key_shortcuts, newsletter_role, theme, timezone, date_format,
+  notify_webhook_url, page_width, ui_scale, single_key_shortcuts, newsletter_role, theme, dark_style, timezone, date_format,
   avatar, notify_prefs, email_self_set, created_at, last_login_at`;
 
 export async function getUserById(id: number): Promise<User | undefined> {
@@ -16858,6 +16861,21 @@ export interface SessionFacts {
   session_created_at: string;
   /** sessions.auth_method (1.20.27). */
   session_auth_method: string | null;
+}
+
+/**
+ * The dark style (1.20.35, lib/dark-style) of the account behind a session
+ * token, or null when the token opens no live session. One indexed read, for
+ * the root layout's first paint; it neither slides the session nor asks
+ * anything else of it (that stays with currentSession).
+ */
+export async function sessionDarkStyle(token: string): Promise<string | null> {
+  const rows = await q<{ dark_style: string }>(
+    `SELECT u.dark_style FROM sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.token = $1 AND s.expires_at > now() AND u.status = 'active'`,
+    [sessionKey(token)]
+  );
+  return rows[0]?.dark_style ?? null;
 }
 
 export async function getSessionUser(

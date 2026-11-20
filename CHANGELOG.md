@@ -4,6 +4,90 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.35] - 2026-11-20
+
+Dark mode comes in three styles: Slate, as it always was, Graphite and
+Black.
+
+### Added
+- **Three dark styles.** **Slate** is the deep blue-grey dark mode has
+  always had, and stays the default. **Graphite** is neutral grey with no
+  blue tint (cards at 24 24 26). **Black** is a true black page (`#000`) for
+  OLED screens and dim rooms. Its cards, menus, fields and borders step up
+  from it in small neutral shades, so they stay easy to tell apart.
+- **Your own dark style.** Account → Preferences → Appearance gets **Dark
+  style** under the theme: **Workspace default** (where everyone starts,
+  saying which style that is today), Slate, Graphite or Black, each with a
+  small preview. It applies whenever you see dark mode: on **Dark**, or on
+  **Auto** while your device is dark. It is saved to your account, applies
+  at once, and covers everything you see while signed in, the desk and its
+  pop-out reply window included.
+- **The workspace default.** Settings → Workspace → Branding gets
+  **Default dark style**. It applies to everyone on Workspace default and
+  waits for **Save changes** with the rest of the page. Each change is in
+  the audit log as "Changed the default dark style", with the style before
+  and after.
+- **The portal, the help centre and sign-in follow the workspace.** The
+  customer portal, its help centre, the public site, share and upload
+  links, first-run setup, the app-connection (OAuth) consent screen and
+  the sign-in pages (with the forced password change and two-step set-up)
+  always use the workspace default, whoever is looking, since nobody
+  chooses there.
+- **No flash.** The style is decided on the server and is already on the
+  page when it first paints. While you're signed in it comes from your
+  account, however you signed in (password or single sign-on); a signed-out
+  browser uses a small `compass-dark-style` cookie, which every sign-in
+  sets and signing out clears, so the next person on a shared computer
+  starts from the workspace's style.
+- **A save that fails changes nothing.** If your choice can't be saved, the
+  page goes back to the style you had and says so; a preferences request
+  with any invalid field now saves none of its fields.
+- **Contrast, checked.** In all three styles body text, secondary text,
+  placeholders, links, red, amber and green text and focus rings meet WCAG
+  AA, and on Graphite and Black the edge of every form field reaches 3:1
+  against its card. A test works the ratios out from the stylesheet itself,
+  so a later change can't quietly drop one below its floor.
+
+### Changed
+- **Code blocks, the API token and update panels, and the media viewer's
+  controls** used a fixed navy that ignored the theme. They now take their
+  colour from the dark style: the same navy in light mode and on Slate,
+  neutral on Graphite and Black.
+- **Tooltips, shadows, the dimmed backdrop behind dialogs and the command
+  palette, and the select arrow** follow the dark style (a light neutral
+  tooltip, plain black shadows and backdrop on Graphite and Black). On
+  Slate and in light mode they are exactly as before.
+- **Accent tints follow the style.** The pale accent backgrounds (the
+  current page in a rail, a selected row) blend toward each style's own
+  page colour, so a custom accent never brings Slate's navy onto Graphite
+  or Black. The accent itself, its buttons, links and focus rings, and
+  light mode are unchanged.
+- **Desk backgrounds.** Secondary text over a desk background picture uses
+  the dark style's own colour instead of a fixed Slate value.
+- **The installed desk app** colours its title bar on a dark device to
+  match your dark style, and its offline page uses it too (the desk
+  refreshes its cached copy of that page once).
+- **Hardening.** The request proxy now drops a page-path header
+  (`x-compass-path`) that a client sends itself, on every path; only the
+  proxy writes it.
+- **Enterprise single sign-on** (OIDC and SAML) sets the dark-style cookie
+  at sign-in, as a password sign-in does. This needs the matching
+  Enterprise image; with an older overlay the account still decides while
+  signed in.
+
+### Upgrading
+Nothing to run, and nothing changes until someone chooses. On start, a new
+column, `users.dark_style`, records each person's choice and starts as
+`workspace` for everyone. The workspace default is a new setting,
+`dark_style`, which reads as **Slate** until an admin changes it. So after
+the upgrade every dark page is the Slate it was in 1.20.34, and light mode,
+the accent colour, printing and emails are untouched. Printing is always
+light, whatever the style on screen.
+
+Slate's form field edges are unchanged at 1.48:1 against a card, below the
+3:1 that Graphite and Black meet. Raising them would change every dark page
+for everyone, so it is left for a release of its own.
+
 ## [1.20.34] - 2026-11-20
 
 Helpdesk tickets for events months away can wait out of the queue until it's
