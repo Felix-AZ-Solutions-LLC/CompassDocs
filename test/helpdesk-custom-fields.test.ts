@@ -408,12 +408,12 @@ describe("settings (Desk settings → Custom fields)", () => {
     assert.equal(dup.body.error, `Another field already uses the key "${key("device")}".`);
 
     // Create: the key is made from the label, unique, and options get their values.
-    const made = await admin.post({ label: `Asset tag ${STAMP}`, type: "select", options: [{ label: "Green" }, { label: "Amber light" }], team_ids: [T.A, T.B], visibility: "public", help: " Colour of the tag " });
+    const made = await admin.post({ label: `Asset tag ${STAMP}`, type: "select", options: [{ label: "Green" }, { label: "Amber light" }], team_ids: [T.A, T.B], visibility: "public", help: " Color of the tag " });
     assert.equal(made.status, 201, JSON.stringify(made.body));
     const f = made.body.field;
     assert.match(f.key, /^asset_tag_hdcf_/);
     assert.deepEqual(f.options, [{ value: "green", label: "Green" }, { value: "amber_light", label: "Amber light" }]);
-    assert.deepEqual([f.type, f.visibility, f.all_teams, f.team_ids, f.help, f.archived], ["select", "public", false, [T.A, T.B], "Colour of the tag", false]);
+    assert.deepEqual([f.type, f.visibility, f.all_teams, f.team_ids, f.help, f.archived], ["select", "public", false, [T.A, T.B], "Color of the tag", false]);
     const twin = await admin.post({ label: `Asset tag ${STAMP}`, team_ids: [T.A] });
     assert.equal(twin.status, 201);
     assert.equal(twin.body.field.key, `${f.key}_2`, "the same label again takes the next free key");
@@ -433,7 +433,7 @@ describe("settings (Desk settings → Custom fields)", () => {
     assert.equal(put.status, 200, JSON.stringify(put.body));
     assert.equal(put.body.field.key, f.key);
     assert.deepEqual(put.body.field.options.map((o: { value: string }) => o.value), ["green", "amber_light", "red"]);
-    assert.deepEqual([put.body.field.visibility, put.body.field.team_ids, put.body.field.help], ["public", [T.A, T.B], "Colour of the tag"]);
+    assert.deepEqual([put.body.field.visibility, put.body.field.team_ids, put.body.field.help], ["public", [T.A, T.B], "Color of the tag"]);
     const rekey = await admin.put(f.id, { key: "something_else" });
     assert.equal(rekey.status, 400);
     assert.match(rekey.body.error, /^A field's key can't be changed/);

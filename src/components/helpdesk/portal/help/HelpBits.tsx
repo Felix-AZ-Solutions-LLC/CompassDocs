@@ -13,6 +13,8 @@ export function ArticleLink({ href, className, children, newTab = false }: { hre
     <Link
       href={href}
       className={className}
+      // 1.20.37: an article is opened, never prefetched: opening one counts a view (help-centre countArticleView).
+      prefetch={false}
       onClick={() => journeyStep("open")}
       {...(newTab ? { target: "_blank", rel: "noopener" } : {})}
     >

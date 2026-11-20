@@ -26,7 +26,24 @@ export const HC_LIMITS = {
   category: 300,
   /** Search results on the results page. */
   results: 30,
+  /** 1.20.37: the home's greeting. */
+  greeting: 120,
+  /** 1.20.37: rows in the home's Popular articles and Recently updated. */
+  home: 6,
+  /** 1.20.37: articles on a space card. */
+  spaceTop: 3,
+  /** 1.20.37: space cards on the home. */
+  homeSpaces: 24,
+  /** 1.20.37: "What do you need?" tiles before "More". */
+  tiles: 8,
+  /** 1.20.37: request types among the suggestions as you type (the rest are articles). */
+  suggestTypes: 2,
+  /** 1.20.37: the window Popular articles counts views over (days). */
+  popularDays: 90,
 } as const;
+
+/** 1.20.37: the home's greeting when the admin leaves it empty. */
+export const HC_DEFAULT_GREETING = "How can we help?";
 
 /** How long a journey may sit before "opened an article, raised nothing" counts as answered. */
 export const HC_ANSWERED_AFTER_MS = 30 * 60_000;
@@ -48,7 +65,18 @@ export interface HelpCentreSettings {
   hidden: string[];
   /** "Let search engines index the help centre" (default off: noindex). */
   indexing: boolean;
+  /** 1.20.37: the home's one-line greeting ("" = HC_DEFAULT_GREETING). */
+  greeting: string;
+  /** 1.20.37: the home's sections (all on by default). */
+  show_popular: boolean;
+  show_recent: boolean;
+  show_spaces: boolean;
+  show_tiles: boolean;
 }
+
+/** 1.20.37: the home's sections, in the order the home shows them. */
+export const HC_HOME_SECTIONS = ["show_tiles", "show_popular", "show_recent", "show_spaces"] as const;
+export type HelpHomeSection = (typeof HC_HOME_SECTIONS)[number];
 
 export const DEFAULT_HELP_CENTRE_SETTINGS: HelpCentreSettings = {
   enabled: false,
@@ -58,7 +86,27 @@ export const DEFAULT_HELP_CENTRE_SETTINGS: HelpCentreSettings = {
   order: [],
   hidden: [],
   indexing: false,
+  greeting: "",
+  show_popular: true,
+  show_recent: true,
+  show_spaces: true,
+  show_tiles: true,
 };
+
+/** One line of text: control characters and runs of spaces collapse, clamped. */
+export function cleanGreeting(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  return raw
+    .replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, HC_LIMITS.greeting);
+}
+
+/** The greeting the home shows. */
+export function helpGreeting(s: Pick<HelpCentreSettings, "greeting">): string {
+  return s.greeting || HC_DEFAULT_GREETING;
+}
 
 /**
  * A category key: "c<id>" is a folder (space_categories row), "s<id>" is
@@ -105,6 +153,12 @@ export function cleanHelpCentreSettings(raw: unknown): HelpCentreSettings {
     order: keyList(v.order, HC_LIMITS.categories),
     hidden: keyList(v.hidden, HC_LIMITS.categories),
     indexing: v.indexing === true,
+    greeting: cleanGreeting(v.greeting),
+    // Sections are on unless switched off (a value stored before 1.20.37 has none of them).
+    show_popular: v.show_popular !== false,
+    show_recent: v.show_recent !== false,
+    show_spaces: v.show_spaces !== false,
+    show_tiles: v.show_tiles !== false,
   };
 }
 
@@ -205,6 +259,23 @@ export function categoryHref(key: string): string {
   return `/support/categories/${key}`;
 }
 
+/** 1.20.37: a space's page in the Help Center (its public articles, by category). */
+export function spaceHref(id: number): string {
+  return `/support/spaces/${id}`;
+}
+
+/** The space id in "/support/spaces/<id>", or null. */
+export function spaceIdFrom(segment: string): number | null {
+  if (!/^[1-9]\d{0,9}$/.test(segment)) return null;
+  const n = Number(segment);
+  return n <= 2_147_483_647 ? n : null;
+}
+
+/** 1.20.37: the new-request form with this request type chosen. */
+export function newRequestHref(typeId: number): string {
+  return `/support/new?type=${typeId}`;
+}
+
 /** "1 article", "8 articles". */
 export function articleCount(n: number): string {
   return n === 1 ? "1 article" : `${n.toLocaleString("en")} articles`;
@@ -216,7 +287,36 @@ export interface HelpSuggestion {
   title: string;
   href: string;
   category: string;
+  /** 1.20.37: the space's name (the suggestions show "title · space"). */
+  space: string;
   summary: string;
+}
+
+/** 1.20.37: a request type among the suggestions as you type: only what the portal offers. */
+export interface HelpTypeSuggestion {
+  id: number;
+  title: string;
+  href: string;
+  icon: string;
+}
+
+/**
+ * 1.20.37: the request types whose title or description holds every word
+ * of the query as a word prefix ("pass" finds "Password reset"), titles
+ * first, in the given (configured) order otherwise. Pure: the caller hands
+ * in only the types the portal offers.
+ */
+export function matchRequestTypes<T extends { id: number; title: string; description: string }>(types: readonly T[], q: string, limit: number): T[] {
+  const clean = cleanHelpQuery(q);
+  const words = queryWords(clean);
+  if (clean.length < 2 || !words.length || limit <= 0) return [];
+  const has = (text: string) => {
+    const mine = text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+    return words.every((w) => mine.some((m) => m.startsWith(w)));
+  };
+  const inTitle = types.filter((t) => has(t.title));
+  const inBody = types.filter((t) => !inTitle.includes(t) && has(`${t.title} ${t.description}`));
+  return [...inTitle, ...inBody].slice(0, limit);
 }
 
 export interface HelpCentreStats {

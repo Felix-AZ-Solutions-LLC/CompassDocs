@@ -106,7 +106,7 @@ test("a handbook prints as a cover, contents, one page run per policy and a sign
     await expect(contentsSheet.getByText(`Security ${s}`)).toBeVisible();
     await expect(vpage.getByRole("heading", { level: 2, name: `Conduct ${s}` })).toBeVisible();
     await expect(vpage.getByText(`Marker-conduct-${s}.`), "a private-space policy prints through the handbook").toBeVisible();
-    await expect(vpage.getByRole("heading", { level: 2, name: "Acknowledgement" })).toBeVisible();
+    await expect(vpage.getByRole("heading", { level: 2, name: "Acknowledgment" })).toBeVisible();
     for (const label of ["Full name", "Signature", "Date", "Manager"]) {
       await expect(vpage.getByText(label, { exact: true })).toBeVisible();
     }

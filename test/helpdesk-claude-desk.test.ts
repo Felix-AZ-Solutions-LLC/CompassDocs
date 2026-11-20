@@ -459,7 +459,7 @@ describe("core AI features (SDK 1.x, current models)", () => {
 describe("Claude in the desk: what is sent", () => {
   test("frozen system prompt with a breakpoint, sorted strict tools, the ticket quoted after it, effort per task", async () => {
     fake.reset();
-    const r = await turn("agent", tk.vpn.number, "Summarise this ticket", "summary", { fresh: true });
+    const r = await turn("agent", tk.vpn.number, "Summarize this ticket", "summary", { fresh: true });
     assert.ok(r.prep.ok, JSON.stringify(r.prep));
     assert.match(r.text, /requester can't connect/);
     const b = lastDesk().body;
@@ -487,7 +487,7 @@ describe("Claude in the desk: what is sent", () => {
     assert.match(first, /<ticket number="\d+" source="CompassDocs Desk" trust="untrusted/);
     assert.match(first, /written_by="requester"/);
     assert.match(first, /written_by="agent \(internal note, agents only\)"/);
-    assert.equal(b.messages[b.messages.length - 1].content[1].text, "Summarise this ticket");
+    assert.equal(b.messages[b.messages.length - 1].content[1].text, "Summarize this ticket");
   });
 
   test("effort: drafts at medium, research at high, typed words by what they ask", async () => {
@@ -500,7 +500,7 @@ describe("Claude in the desk: what is sent", () => {
 
   test("injected text cannot close the ticket tag", async () => {
     fake.reset();
-    await turn("agent", tk.inject.number, "Summarise this ticket", "summary", { fresh: true });
+    await turn("agent", tk.inject.number, "Summarize this ticket", "summary", { fresh: true });
     const first = lastDesk().body.messages.at(-1).content[0].text as string;
     assert.equal((first.match(/<\/ticket>/g) ?? []).length, 1, "only our own closing tag");
     assert.match(first, /&lt;\/ticket&gt;/);
@@ -532,11 +532,11 @@ describe("Claude in the desk: tools run as the agent", () => {
     const req = await turn("req", null, "Hello");
     assert.equal(req.prep.ok, false);
     assert.equal((req.prep as any).status, 403);
-    const other = await turn("agent", tk.hr.number, "Summarise this ticket");
+    const other = await turn("agent", tk.hr.number, "Summarize this ticket");
     assert.equal((other.prep as any).status, 404);
-    const off = await turn("agent", tk.off.number, "Summarise this ticket");
+    const off = await turn("agent", tk.off.number, "Summarize this ticket");
     assert.equal((off.prep as any).status, 409);
-    const out = await turn("outsider", tk.vpn.number, "Summarise this ticket");
+    const out = await turn("outsider", tk.vpn.number, "Summarize this ticket");
     assert.equal((out.prep as any).status, 404);
   });
 
@@ -620,7 +620,7 @@ describe("Claude in the desk: proposals and drafts", () => {
       },
       { content: [{ type: "text", text: "Prepared." }] }
     );
-    const r = await turn("agent", tk.inject.number, "Summarise this ticket", "summary", { fresh: true });
+    const r = await turn("agent", tk.inject.number, "Summarize this ticket", "summary", { fresh: true });
     const cards = r.events.filter((e) => e.type === "card").map((e) => (e as any).card);
     assert.equal(cards.length, 2);
     assert.deepEqual(await ticketRow(tk.inject.id), before, "the ticket is unchanged");
@@ -680,7 +680,7 @@ describe("Claude in the desk: proposals and drafts", () => {
 describe("Claude in the desk: spending, caching, refusals, web search", () => {
   test("usage is recorded per turn, and the second turn reads the prompt cache", async () => {
     fake.reset();
-    await turn("agent2", tk.vpn.number, "Summarise this ticket", "summary", { fresh: true });
+    await turn("agent2", tk.vpn.number, "Summarize this ticket", "summary", { fresh: true });
     await turn("agent2", tk.vpn.number, "What should I do next?", "summary");
     const rows = (await pool().query("SELECT model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, requests FROM hd_claude_usage WHERE user_id = $1 ORDER BY id", [P.agent2.id])).rows;
     assert.equal(rows.length, 2);
@@ -707,14 +707,14 @@ describe("Claude in the desk: spending, caching, refusals, web search", () => {
     await pool().query("INSERT INTO hd_claude_usage (user_id, model, cost_usd) VALUES ($1, 'claude-opus-5-5', 30)", [P.agent2.id]);
     config.setClaudeDeskConfigForTests(CFG({ limit_agent_usd: 25 }));
     try {
-      const r = await turn("agent2", tk.vpn.number, "Summarise this ticket");
+      const r = await turn("agent2", tk.vpn.number, "Summarize this ticket");
       assert.equal((r.prep as any).status, 429);
       assert.match((r.prep as any).error, /your monthly limit/);
-      const other = await turn("agent", tk.vpn.number, "Summarise this ticket", "summary");
+      const other = await turn("agent", tk.vpn.number, "Summarize this ticket", "summary");
       assert.ok(other.prep.ok, "another agent under the limit carries on");
       const spend = await usageLib.monthSpend(P.agent2.id);
       config.setClaudeDeskConfigForTests(CFG({ limit_workspace_usd: Math.max(0, spend.workspace - 1) }));
-      const ws = await turn("agent", tk.vpn.number, "Summarise this ticket");
+      const ws = await turn("agent", tk.vpn.number, "Summarize this ticket");
       assert.equal((ws.prep as any).status, 429);
       assert.match((ws.prep as any).error, /This workspace has used its monthly limit/);
     } finally {
@@ -725,7 +725,7 @@ describe("Claude in the desk: spending, caching, refusals, web search", () => {
   test("the per-agent rate limit", async () => {
     turnLib.setClaudeTurnLimitsForTests({ minute: 0, hour: 1000 });
     try {
-      const r = await turn("newbie", tk.vpn.number, "Summarise this ticket");
+      const r = await turn("newbie", tk.vpn.number, "Summarize this ticket");
       assert.equal((r.prep as any).status, 429);
     } finally {
       turnLib.setClaudeTurnLimitsForTests({ minute: 1000, hour: 1000 });
@@ -765,7 +765,7 @@ describe("Claude in the desk: spending, caching, refusals, web search", () => {
 
   test("web search follows the toggle and the allowed sites; an error result is handled", async () => {
     fake.reset();
-    await turn("agent", tk.vpn.number, "Summarise this ticket", "summary", { fresh: true });
+    await turn("agent", tk.vpn.number, "Summarize this ticket", "summary", { fresh: true });
     assert.ok(!lastDesk().body.tools.some((t: any) => t.type === "web_search_20260209"));
     config.setClaudeDeskConfigForTests(CFG({ caps: { read: true, search: true, web: true, changes: true, drafts: true }, web_domains: ["support.microsoft.com"], web_max_uses: 2 }));
     try {
@@ -787,7 +787,7 @@ describe("Claude in the desk: spending, caching, refusals, web search", () => {
       // Web search on, but no sites listed: not offered.
       config.setClaudeDeskConfigForTests(CFG({ caps: { read: true, search: true, web: true, changes: true, drafts: true }, web_domains: [] }));
       fake.reset();
-      await turn("agent", tk.vpn.number, "Summarise this ticket", "summary", { fresh: true });
+      await turn("agent", tk.vpn.number, "Summarize this ticket", "summary", { fresh: true });
       assert.ok(!lastDesk().body.tools.some((t: any) => t.type === "web_search_20260209"));
       // Haiku 5.5: not documented for the dynamic-filtering tool, so not offered.
       assert.equal(config.webSearchAvailable("claude-haiku-5-5"), false);
@@ -804,7 +804,7 @@ describe("Claude in the desk: spending, caching, refusals, web search", () => {
       assert.match(r.target_label, /^#\d+$/);
       for (const k of ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "tools", "number", "model", "cost_estimate_usd"]) assert.ok(k in r.details, k);
       const text = JSON.stringify(r.details);
-      assert.doesNotMatch(text, /Summarise|VPN|Daniel|Authentication failed/, "no content in the audit");
+      assert.doesNotMatch(text, /Summarize|VPN|Daniel|Authentication failed/, "no content in the audit");
     }
   });
 });
@@ -814,7 +814,7 @@ describe("Claude in the desk: spending, caching, refusals, web search", () => {
 describe("Claude in the desk: routes, settings and privacy", () => {
   test("the chat route streams server-sent events; the history is the agent's own", async () => {
     fake.reset();
-    const r = await call(chatRoute.POST, "agent", "/api/helpdesk/claude/chat", "POST", { ticket: tk.vpn.number, text: "Summarise this ticket", intent: "summary", new_chat: true });
+    const r = await call(chatRoute.POST, "agent", "/api/helpdesk/claude/chat", "POST", { ticket: tk.vpn.number, text: "Summarize this ticket", intent: "summary", new_chat: true });
     assert.equal(r.status, 200);
     assert.match(r.type, /text\/event-stream/);
     const events = r.raw.split("\n\n").filter(Boolean).map((c) => JSON.parse(c.replace(/^data: /, "")));
@@ -823,7 +823,7 @@ describe("Claude in the desk: routes, settings and privacy", () => {
     assert.ok(events.some((e: any) => e.type === "text"));
     const h = await call(chatRoute.GET, "agent", `/api/helpdesk/claude/chat?ticket=${tk.vpn.number}`);
     assert.equal(h.status, 200);
-    assert.ok(h.body.turns.some((t: any) => t.role === "user" && t.text === "Summarise this ticket"));
+    assert.ok(h.body.turns.some((t: any) => t.role === "user" && t.text === "Summarize this ticket"));
     const theirs = await call(chatRoute.GET, "agent2", `/api/helpdesk/claude/chat?ticket=${tk.vpn.number}&chat=${h.body.chat_id}`);
     assert.notEqual(theirs.body.chat_id, h.body.chat_id, "another agent never sees this agent's chat");
     assert.equal((await call(chatRoute.GET, "outsider", `/api/helpdesk/claude/chat?ticket=${tk.vpn.number}`)).status, 404);
@@ -927,7 +927,7 @@ describe("Claude in the desk: review fixes", () => {
       assert.equal(await chatExists(chatOf(viaCc)), false, "the chat that read the copied person's words is gone");
     }
     // A hard delete through the desk's delete path.
-    const onA = await turn("agent", tk.eraseA.number, "Summarise this ticket", "summary", { fresh: true });
+    const onA = await turn("agent", tk.eraseA.number, "Summarize this ticket", "summary", { fresh: true });
     const { deleteTicket } = await import("../src/lib/helpdesk/tickets");
     await deleteTicket(tk.eraseA.id);
     assert.equal(await chatExists(chatOf(onA)), false);
@@ -1015,7 +1015,7 @@ describe("Claude in the desk: review fixes", () => {
 
   test("spending: turns at once are admitted under one lock (reservations count), at most two in flight, one per chat", async () => {
     const user = (await getUserById(P.agent2.id))!;
-    const base = { user, session: toSessionUser(user), origin: "http://localhost", ip: CLIENT_IP, chatId: null, intent: null, text: "Summarise this ticket" };
+    const base = { user, session: toSessionUser(user), origin: "http://localhost", ip: CLIENT_IP, chatId: null, intent: null, text: "Summarize this ticket" };
     const spent = await usageLib.monthSpend(P.agent2.id);
     config.setClaudeDeskConfigForTests(CFG({ limit_agent_usd: Math.round((spent.agent + 0.05) * 100) / 100 }));
     try {
@@ -1088,7 +1088,7 @@ describe("Claude in the desk: review fixes", () => {
 
   test("ticket updates: a reply after Claude last saw the ticket is sent next turn, even when the turn between was stopped", async () => {
     fake.reset();
-    await turn("agent", tk.upd.number, "Summarise this ticket", "summary", { fresh: true });
+    await turn("agent", tk.upd.number, "Summarize this ticket", "summary", { fresh: true });
     assert.match(lastDesk().body.messages.at(-1).content[0].text, /<ticket number=/);
     await pool().query("INSERT INTO hd_messages (ticket_id, author_id, author_name, author_email, kind, body, via, created_at) VALUES ($1, $2, $3, $4, 'public', 'UPDATE-WORDS it happened again', 'portal', now())", [
       tk.upd.id,
@@ -1184,7 +1184,7 @@ describe("Claude in the desk: the recycle bin", () => {
     assert.equal(await chatExists(chatOf(touched)), true);
 
     // No turn on it, and no history for it: like a ticket that is not there.
-    const refused = await turn("agent", t.number, "Summarise this ticket", "summary");
+    const refused = await turn("agent", t.number, "Summarize this ticket", "summary");
     assert.equal(refused.prep.ok, false);
     assert.equal((refused.prep as any).status, 404);
     assert.equal((await call(chatRoute.GET, "agent", `/api/helpdesk/claude/chat?ticket=${t.number}`)).status, 404);

@@ -241,7 +241,7 @@ export async function serveFeed(rawToken: string, ctx: { origin: string; ip: str
     const e = toEvent(r);
     const url = `${ctx.origin}/desk/tickets/${r.number}`;
     const setup = e.cancelled
-      ? "The event was cancelled."
+      ? "The event was canceled."
       : e.setup_minutes > 0
         ? `Setup ready by ${readyByLabel(e, tz)} (${zoneLabel(tz)}), ${leadLabel(e.setup_minutes)} before the start.`
         : "No setup time is planned before the start.";

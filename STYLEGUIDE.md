@@ -49,7 +49,7 @@ none of those pages writes an `<h1>` of its own.
   breaks the user's width preference. Narrow *content columns* inside a page
   (e.g. a reading column) are fine when deliberate. The presets themselves
   are `56rem` / `72rem` / `112rem` (Full is bounded, so on an ultrawide it is a
-  wide centred page rather than edge-to-edge) and grow with the interface
+  wide centered page rather than edge-to-edge) and grow with the interface
   scale.
 - On the document page the right rail sits beside the article at Wide and
   Full and stacks under it at Normal (`components/DocLayout`): a 56rem column
@@ -258,7 +258,7 @@ its own.
   `sm` chip for the reason (tone by severity: `error`, `warn`, `neutral`)
   and the actions as `secondary` `sm` Buttons with `data-tt`; policy-level
   rows lead; a `SectionEmpty` "Nothing needs attention."; after an action
-  removes a row, focus moves to the neighbouring row, else the card.
+  removes a row, focus moves to the neighboring row, else the card.
 - **An invitation strip** (1.14.0, the lead's banner on My policies): one
   sentence and one `link` in the bulk bar's tint (`rounded-lg border
   border-compass-200 bg-compass-50/70 px-3 py-2 text-sm text-slate-700`),
@@ -362,7 +362,7 @@ footer flush className>`.
 
 Two tiers, and both come from `components/form` — never hand-roll a "nothing
 here" box. (Sixteen pages once shipped eleven different ones: dashed and solid
-borders, four paddings, three greys, two of them with an emoji.)
+borders, four paddings, three grays, two of them with an emoji.)
 
 - **Page-level** (the whole page, or its whole content region, has no content
   yet): `<EmptyState icon title body action?>`.
@@ -437,7 +437,7 @@ the build on a primary recipe written outside the module.
   `rounded-md`, chips `rounded-full`.
 - **Icon-only controls** use `iconButtonClass("quiet" | "bordered", "sm" |
   "md")`: a square box of at least 28px (WCAG 2.5.8 and a 2560 panel), the
-  icon centred, `data-tt` plus `aria-label` from the caller. Never a bare
+  icon centered, `data-tt` plus `aria-label` from the caller. Never a bare
   `p-0.5` / `p-1` around a 14px glyph. The `Toggle` is 44×24 with a visible
   off track.
 - Prefer **icon buttons with tooltips** where the action is obvious from the
@@ -489,7 +489,7 @@ focus):
   (the open panel is the label), so a popup trigger keeps `data-tt` and
   sets `aria-expanded` rather than toggling the attribute.
 - **Placement is automatic** (1.20.2, `components/TooltipPlacer`, mounted
-  once in the root layout). The bubble opens above its control, centred.
+  once in the root layout). The bubble opens above its control, centered.
   Just before it shows, the placer measures the room inside the viewport
   and inside every ancestor that clips (a scrolling pane, an
   `overflow-hidden` card): with no room above and more below it opens
@@ -506,7 +506,7 @@ focus):
   app's page headers and fails on a bubble outside what can be seen.
 - **A control flush with a card's right edge** (a Contents row's Remove
   `X`, 1.18.0) keeps its tooltip to one word ("Remove"): the bubble is
-  centred on the control, so a long one hangs past the edge and, even
+  centered on the control, so a long one hangs past the edge and, even
   hidden, widens a 375px page into a sideways scroll. The `aria-label`
   keeps the whole sentence ("Remove {title} from the handbook"). There is
   no end-aligned variant; `data-tt-align="start"` is for the left edge.
@@ -598,7 +598,7 @@ focus):
   `components/SettingsJumpHighlight`, mounted once in each settings layout,
   sets `data-settings-flash`, a 2px `compass-500` outline 3px out that
   fades over 2.4s (globals.css); with reduced motion the outline stays
-  still until it goes. Never colour the card's background for this.
+  still until it goes. Never color the card's background for this.
 - **A tab inside a section's chrome** (1.20.13). Where a section's header
   and `SubNav` are drawn by a layout over pages that were written to stand
   alone, the layout wraps the page in `<SettingsSubPage>`: the page's
@@ -755,10 +755,10 @@ focus):
   names the administrators the rule keeps out (1.20.27 second review).
 - **A server emergency switch** (`COMPASSDOCS_DUO_DISABLED`, 1.20.5;
   `COMPASSDOCS_SSO_ONLY_DISABLED`, 1.20.27) is one `notice-warn` on every
-  settings page (the admin layout), above the licence notice, naming the
+  settings page (the admin layout), above the license notice, naming the
   variable in `font-mono text-xs` and saying how to undo it ("Remove it
   and restart…"), shown only while the rule it holds off is saved as on.
-- **Settings a lapsed licence still enforces** (Single sign-on, 1.20.27
+- **Settings a lapsed license still enforces** (Single sign-on, 1.20.27
   second review): the form stays, with a `notice-warn` (`ShieldAlert`)
   above it listing the only changes that save; every other control is
   `disabled` (a toggle that may only be turned off is disabled while
@@ -915,7 +915,7 @@ focus):
   device. The iframe is laid out at the preset's viewport in px (Laptop
   1440×900, Ultrawide 3440×1440, Phone 390×844; §Scaling allows it) and
   scaled with a `transform` to the card's width (a phone to at most 32rem
-  tall, centred), measured by a `ResizeObserver`. The wrapper is a leaf,
+  tall, centered), measured by a `ResizeObserver`. The wrapper is a leaf,
   `inert`, `overflow-hidden rounded-lg ring-1 ring-slate-200`, so nothing
   inside it takes focus or a click; the iframe has a `title`,
   `tabIndex={-1}` and `loading="lazy"`; its address carries the form's
@@ -1181,7 +1181,7 @@ mechanical and comes later.
   34vw, 38rem)` wide (416px at 1024, 490 at 1440, capped at 38rem), the
   form in it 24rem, text flush left and top-anchored (`clamp(5rem, 22vh,
   13rem)` from the top), so the h1 never moves between steps; below 64rem
-  the form is centred in the 16px gutter. The band is 6rem tall on a phone
+  the form is centered in the 16px gutter. The band is 6rem tall on a phone
   (the lockup only), 10rem from 40rem, and 4rem when the viewport is under
   34rem tall (a landscape phone, the Outlook dialog), which wins by source
   order; the 6rem and 4rem bands grow by 3.5rem when they carry the quick
@@ -1233,7 +1233,7 @@ mechanical and comes later.
   2560) and `sizes` written as a media list (`ART_SIZES`; never a
   `clamp()` in `sizes`), `alt=""` and `object-fit: cover`, preloaded from
   the server component with `fetchPriority="high"`. Under it, the
-  picture's mean colour (`--art-tone`) and a 20px blurred placeholder
+  picture's mean color (`--art-tone`) and a 20px blurred placeholder
   paint at once, and since band and cover heights never depend on the
   image nothing shifts and nothing fades. The **focus point** is one of
   nine positions (`FOCUS_POSITION`) that sets `object-position` and the
@@ -1326,7 +1326,7 @@ mechanical and comes later.
     `rgb(15 23 42 / .38)` with `blur(12px)` and a bottom hairline, the
     same buttons at 2.25rem (13px text), one row that scrolls sideways
     (scroll-snap, no visible scrollbar), inset by the band's own padding
-    and right-aligned when it fits. The lockup sits under it, centred in
+    and right-aligned when it fits. The lockup sits under it, centered in
     the band's own height: the 6rem (and 4rem) band grows by the strip,
     the 10rem band has room for both.
   - **Over a photo the glass is darker** (`rgb(2 6 23 / .7)`, buttons
@@ -1363,7 +1363,7 @@ otherwise it asks for the email or username first and `POST
 - **No plain form post.** The submit is server-rendered `disabled` until
   hydration (implicit submission is a no-op while the default button is
   disabled, and Playwright's click waits for it to be enabled), and the
-  form is `method="post"` as defence in depth, so credentials never reach a
+  form is `method="post"` as defense in depth, so credentials never reach a
   URL.
 - **Busy is `aria-disabled` plus `aria-busy`**, never `disabled`, so focus
   never falls to `<body>`. A ref ignores repeats, the label never changes,
@@ -1436,7 +1436,7 @@ otherwise it asks for the email or username first and `POST
 - **Two-factor codes are never auto-submitted**: a mistyped code spends
   one of the five attempts. The authenticator field is `inputMode="numeric"
   autoComplete="one-time-code"`, centred `font-mono`; the recovery field is
-  `inputMode="text"` with autocorrect and capitalisation off, because
+  `inputMode="text"` with autocorrect and capitalization off, because
   recovery codes have letters. The input is keyed by mode, so the right
   keyboard mounts. Back returns to the password step with the password
   kept.
@@ -1553,7 +1553,7 @@ and `py-1.5` (`dense`) in the settings and account rails. Group labels
   accent until white text reaches 4.5:1; the tints (50–500) keep the chosen
   hue. Accent *text* in dark mode comes from the `--compass-ink` /
   `--compass-ink-strong` tokens (`text-compass-ink` is a utility), which the
-  theme emits alongside the ramp — never hand-write a dark accent colour.
+  theme emits alongside the ramp — never hand-write a dark accent color.
 - **Semantic ink.** Free-standing red/amber/green *text* (not a chip, not a
   notice): `text-red-600` lifts to red-400 in dark mode automatically;
   amber and emerald use `ink-warn` / `ink-ok` (700 light, 300 dark). A
@@ -1565,27 +1565,27 @@ and `py-1.5` (`dense`) in the settings and account rails. Group labels
 
 Dark mode has three ramps (1.20.35, `lib/dark-style`): **Slate** (the
 blue-grey ramp dark mode always had, and the default), **Graphite**
-(neutral greys) and **Black** (a `#000` page with neutral surfaces stepping
+(neutral grays) and **Black** (a `#000` page with neutral surfaces stepping
 up from it). Each is a dark-only token override set on `<html
 data-dark-style="slate | graphite | black">`: `:root[data-theme="dark"]` is
 Slate, and `:root[data-theme="dark"][data-dark-style="graphite"]` /
 `"black"` (inside `@media screen`, so print stays light) re-declare every
 variable it sets.
 
-- **A new dark colour goes in all three ramps.** Add the token to `:root`
+- **A new dark color goes in all three ramps.** Add the token to `:root`
   (its light value), to the Slate block if dark mode needs a different one,
   and to both the Graphite and the Black blocks. `test/dark-style.test.ts`
   fails when a style leaves a Slate variable undeclared, when a Graphite or
   Black neutral leans blue, and when a pair drops below its floor.
 - **Never hard-code a dark background.** Not `bg-[#0f172a]`, not
   `dark:bg-zinc-900`, not a hex in a CSS rule under `[data-theme="dark"]`:
-  it is one colour in all three styles, so Graphite and Black keep a navy
+  it is one color in all three styles, so Graphite and Black keep a navy
   slab there. Use the themed tokens, or for something dark in **both**
   themes (code blocks, a token or command shown once, the media stage's
   controls) the always-dark panel: `bg-dark-panel`, `bg-dark-panel-raised`
   (its header bar), `hover:bg-dark-panel-hover`, `text-dark-panel-ink`,
   `text-dark-panel-muted` (navy in light mode and Slate, neutral in
-  Graphite and Black). `test/style-drift.test.ts` fails on a literal colour
+  Graphite and Black). `test/style-drift.test.ts` fails on a literal color
   on a background, ring or border, and on a `dark:` literal background. The
   modal and palette scrim is `rgb(var(--scrim-ink) / …)` (slate-950, plain
   black on Graphite and Black: the navy washed their whole page blue);
@@ -1625,7 +1625,7 @@ variable it sets.
   any bad field saves nothing). Sign-out clears it
   (`clearDarkStyleCookie`). Without a choice, the workspace default
   (Settings → Workspace → **Default dark style**, audited as
-  `settings.dark_style`). The customer portal, its help centre, the public
+  `settings.dark_style`). The customer portal, its Help Center, the public
   site, share and upload links, first-run setup, the OAuth consent screen
   and the sign-in surfaces always wear the workspace default
   (`workspaceOnlyPath`). Each shell mounts `DarkStyleSync` (those surfaces
@@ -1639,7 +1639,7 @@ variable it sets.
   (`DarkStyleSwatch`: the style's page, a card with its edge, a line of body
   and of muted text, an accent dot), in a `card-grid` with the house
   selected style. The previews read `DARK_STYLE_SWATCH`, the one place
-  outside `globals.css` that holds dark colours; the test keeps the two
+  outside `globals.css` that holds dark colors; the test keeps the two
   equal.
 
 ## Focus
@@ -1655,7 +1655,7 @@ the editor body (`.tiptap`). Form controls also tint their border on focus
 
 ## Motion
 
-Default `transition` (150ms) for hover and colour; `duration-200` for layout
+Default `transition` (150ms) for hover and color; `duration-200` for layout
 reveals (sidebar width, sticky bar); hand-written CSS uses 120ms. Spinners are
 the only looping animation. Reduced motion is handled globally — one
 `prefers-reduced-motion` rule collapses every transition and animation except
@@ -1691,7 +1691,7 @@ like this, and nothing else in the app invents its own way:
   scroll anchoring is off on such a list (`[overflow-anchor:none]`) so only
   one thing adjusts it.
 - **Above the place: a pill, not a jump.** New items put in above the
-  reader's place show "N new tickets" with lucide `ArrowUp`, centred over
+  reader's place show "N new tickets" with lucide `ArrowUp`, centered over
   the top of the list (`buttonClass("primary", "sm")` + `shadow-float`,
   inside an `aria-live="polite"` wrapper). A click scrolls up (smoothly
   unless reduced motion) and highlights them again; reaching the top
@@ -1716,11 +1716,11 @@ like this, and nothing else in the app invents its own way:
 
 ## Notices (persistent inline state banners)
 
-- **A licence gate is `<LicenseGate feature entitlement canManage>`**
+- **A license gate is `<LicenseGate feature entitlement canManage>`**
   (`components/LicenseGate`): one warning notice naming the feature and
   the entitlement, with an "Open License" button only when the viewer can
-  open that page. Never a grey box with no way forward.
-- **A licence about to lapse** (1.20.27): from 30 days before it expires,
+  open that page. Never a gray box with no way forward.
+- **A license about to lapse** (1.20.27): from 30 days before it expires,
   every settings page opens with one `notice-warn` line under the
   "Settings" eyebrow (`notice-error` once it has expired) for whoever can
   open License, saying what keeps being enforced (single sign-on, SSO
@@ -1791,7 +1791,7 @@ calendar", the merge and import explainers, the portal's "Customers only
 ever see their own requests"). They supply border-color, background and
 ink only — keep the element's own `border`, rounding, padding, `text-sm`
 and margins. The classes are unlayered, so a utility beside one cannot
-change its colours: an icon inside takes its own `text-compass-600`.
+change its colors: an icon inside takes its own `text-compass-600`.
 Invitation strips and bulk bars are not notes and keep their own recipe
 (§Sections and cards):
 
@@ -1809,7 +1809,7 @@ inherit. Toasts and per-field validation errors are unrelated (see Feedback).
 ## Usage meter
 
 A count against an allowance the workspace pays for (the helpdesk's
-agents on the licence): `<UsageMeter value max label>` from
+agents on the license): `<UsageMeter value max label>` from
 `components/UsageMeter`. Not for work in flight (that is a
 `role="progressbar"`, §Loading) and not for a dashboard percentage
 (a tile's gauge, §Dashboard tiles).
@@ -1822,13 +1822,13 @@ agents on the licence): `<UsageMeter value max label>` from
 - **Structure.** `rounded-xl border border-slate-200 bg-surface px-4 py-3
   shadow-xs`, a flex row that wraps: the thing's 16px icon in
   `text-slate-500`; the count in `font-semibold` ("5 of 6 agents") then
-  the source in muted text ("on your licence · 3 included, 3 bought",
+  the source in muted text ("on your license · 3 included, 3 bought",
   dropping a part that would read "0 bought"); the `h-1.5 max-w-md` bar
   under them; the way to raise the allowance as a link at the end ("Buy
   more agents", a 12px `ExternalLink`, a new tab with
   `rel="noopener noreferrer"` and an sr-only "(opens in a new tab)").
   No allowance (unlimited): no card and no bar, one muted line
-  ("Unlimited agents on your licence."; since 1.20.27 without a count,
+  ("Unlimited agents on your license."; since 1.20.27 without a count,
   which the list's filter states right under it).
 - **Over the allowance.** The bar fills to the end in `bg-amber-500`
   (within it, `bg-compass-600`), and a `notice-warn` sits above the card
@@ -1839,9 +1839,9 @@ agents on the licence): `<UsageMeter value max label>` from
   the count in `ink-warn` with "· over by N". The meter only reports: a create action that would
   go past the allowance says so in its own dialog (a `notice-warn` with
   the same link, and a disabled submit), never by hiding the action.
-- **Not enforced** (a licence in grace): the number is still the key's,
+- **Not enforced** (a license in grace): the number is still the key's,
   there is no warning and no amber, and the muted text adds "· not
-  enforced while the licence is in grace" (and "· over by N once
+  enforced while the license is in grace" (and "· over by N once
   renewed" when over). A Details row keeps "· over by N" muted and adds
   "· not enforced in grace".
 - **Accessibility.** `role="meter"`, an `aria-label` naming what is
@@ -1978,7 +1978,7 @@ a status chip; a status chip never has one.
 **Attribute chips** (a directory field shown as chips, a tag list) are not
 status: render them with `FieldChips`, which shows the option's **label**
 (never a raw code — "Phoenix", not `PHX1`) in **neutral slate by default**.
-The accent is opt-in per field (`highlight`) and a colour is opt-in per
+The accent is opt-in per field (`highlight`) and a color is opt-in per
 option; a certification or a team must never read as an alert. The one
 place the *field's name* belongs next to its chips is a card, where the
 chips would otherwise be a bare word: render `label` in `text-xs
@@ -2002,9 +2002,9 @@ text-slate-500` before them ("Notary · Phoenix").
   section, plain text otherwise. Never a hand-written "Settings → X".
 
 - The header row is `TABLE_HEAD_ROW` from `components/Table` (the eyebrow
-  tier at an AA grey, semibold, with a bottom hairline) on `<thead>` or the
+  tier at an AA gray, semibold, with a bottom hairline) on `<thead>` or the
   header `<tr>`; cells use `TH` / `TD`, body rows `TR`. A bare
-  `<thead><tr>` (bold, centred, sentence case) shipped twice in the desk,
+  `<thead><tr>` (bold, centered, sentence case) shipped twice in the desk,
   so `test/style-drift-desk.test.ts` fails on one there (1.20.27). Every table gets
   tabular numerals from `globals.css`, so dates, counts and versions line
   up without opting in. Wrap a table that can outgrow its card in
@@ -2022,7 +2022,7 @@ text-slate-500` before them ("Notary · Phoenix").
 - **A table that stacks on a phone** (1.20.28, Settings → Agents is the
   worked example): when each row is a person with a few short values, the
   same `<table>` stacks under `sm` instead of scrolling sideways. Cells are
-  `align-top` at every width (a row centred against a tall wrapped cell
+  `align-top` at every width (a row centered against a tall wrapped cell
   leaves a gap above the name); under `sm` the head row is `max-sm:hidden`,
   the table and body `max-sm:block` (and `max-sm:min-w-0` over `Table`'s
   minimum width), each row a `max-sm:grid
@@ -2051,7 +2051,7 @@ text-slate-500` before them ("Notary · Phoenix").
   word as §Tooltips asks of a control at a card's right edge) opening a `Popover role="menu"` of `MenuItem`s, each with its
   `data-tt` where it needs explaining, Delete… last after a separator
   (Users, 1.19.1: Email…, Reset password and Disable inline; Reset 2FA,
-  Compliance record, Anonymise, Download personal data and Delete… in the
+  Compliance record, Anonymize, Download personal data and Delete… in the
   menu).
 - **A measurement in a cell is ink, never a chip** (1.11.0, the Record
   tab's Read time in `doc/[id]/acknowledgements/page.tsx` is the worked
@@ -2081,7 +2081,7 @@ text-slate-500` before them ("Notary · Phoenix").
   per page: the header checkbox selects the rows on the page, and a
   successful action clears it. The portal's Policies list and People
   table (1.14.0) select everything the filter and the sort show, across
-  pages, labelled "Select all shown" and capped by the "Up to 200 ... at a
+  pages, labeled "Select all shown" and capped by the "Up to 200 ... at a
   time." tooltip; the roster keeps per-page selection.
 - **A stacked progress bar** (1.14.0, `PortalPolicies` is the worked
   example): a `role="img"` `div` carrying the numbers as its `aria-label`
@@ -2093,7 +2093,7 @@ text-slate-500` before them ("Notary · Phoenix").
   `repeating-linear-gradient(45deg, rgb(var(--slate-300)) 0 0.25rem,
   transparent 0.25rem 0.5rem)` so it reads in dark mode and on paper; the
   legend under it in `text-2xs text-slate-500` repeats the numbers for
-  anyone who cannot read the colours. Never a hue for the exempt segment.
+  anyone who cannot read the colors. Never a hue for the exempt segment.
 - **A hash in a cell** (1.14.0, `Evidence` is the worked example) is a
   12-character `code` prefix with an icon-only `CopyButton` ("Copy
   SHA-256") beside it, never the whole hash and never a tooltip holding it
@@ -2114,7 +2114,7 @@ text-slate-500` before them ("Notary · Phoenix").
   "Saving…" it needs no label; standing alone it carries one. A rotating
   `RefreshCw` on a Refresh button is the one other spinning glyph.
 - **One loading row**: `<LoadingRow>` for a list or table still loading
-  (centred, `role="status"`). A region that is *refreshing* keeps its
+  (centered, `role="status"`). A region that is *refreshing* keeps its
   content, dims with `busyClass(busy)` and carries `aria-busy`.
 - **Pending navigation**: sidebar and rail rows render `<LinkPending />`
   inside their `<Link>`; it shows a small spinner after 150 ms while the
@@ -2220,6 +2220,33 @@ One word per thing, everywhere a person can read it (labels, buttons,
 placeholders, toasts, empty states, dialog copy, audit rows). Code
 identifiers (`docs`, `doc_count`) keep their names.
 
+- **US English** (1.20.37). Every word a person reads is spelled the US
+  way: UI text, `data-tt`, `aria-label`, toasts, errors, emails and their
+  subjects, exports, MCP tool descriptions and answers, API error
+  sentences, seeded content and the public pages. *color*, *center*
+  (the customer portal's **Help Center** is a name: capital C, in a
+  label or a sentence), *organization*, *behavior*, *favorite*,
+  *license* (noun and verb), *-ize* / *-ization* (*recognize*,
+  *summarize*, *anonymize*, *authorize*), *canceled* / *canceling*,
+  *labeled*, *modeled*, *catalog*, *analyze*, *enroll* / *enrollment*,
+  *program*, *gray*, *judgment*, *acknowledgment*. Dates keep their
+  formats ("3 Mar"): only words changed. **What keeps its British
+  spelling** is what a rename would break: code identifiers, file names,
+  routes (`/desk/settings/portal/help-centre`), CSS classes, tables and
+  columns (`acknowledgements`, `anonymised_at`), stored setting keys
+  (`helpdesk_portal_hc`), JSON keys, enum and status values (the import
+  job's `cancelled`, the retention action `anonymise`: only their
+  display labels changed), event and audit action names
+  (`helpdesk.workflow_run.cancelled`), MCP tool and parameter names, the
+  API's `unauthorised` outcome, third-party text (an invite's "has been
+  cancelled"), quoted standards and the CHANGELOG's history. Settings
+  search keywords carry both spellings, so either finds the page.
+  `test/style-drift-us-english.test.ts` reads every string and JSX text
+  in `src` with the TypeScript parser and fails on the common British
+  spellings; keys, SQL, comparisons, one-word tokens and its short
+  ALLOW list (each entry with its reason) are left alone. Code comments
+  are not checked.
+
 - **Documents**, never "docs" in copy: "Export all documents", "12
   documents", "stale documents". "Doc" is fine only inside a proper noun
   that already has it (a URL, a DMS record label).
@@ -2259,11 +2286,11 @@ identifiers (`docs`, `doc_count`) keep their names.
     them is "the record" ("View record", "View your record").
   - One person's everything is their **compliance record** (1.14.0): the
     page title, the Users page's button ("Compliance record"), the
-    erasure ("Anonymise compliance record…"); the reader's own links are
+    erasure ("Anonymize compliance record…"); the reader's own links are
     "View your record" and "Your record".
   - Status chips read **Confirmed**, **Pending**, **Overdue** or
     **Exempt**, and nothing else (§Status chips has the tones).
-  - The erasure action is "Anonymise compliance record…" (C5). The cycle
+  - The erasure action is "Anonymize compliance record…" (C5). The cycle
     is **annual re-confirmation**.
   - The number is **version 12**, shown as **v12** in chips, meta lines
     and labels. Never "revision" in UI copy; the CSV column
@@ -2276,16 +2303,17 @@ identifiers (`docs`, `doc_count`) keep their names.
   - **People** wherever a count is shown ("42 of 50 people", "3 people
     notified"); **readers** only in prose without a number ("readers are
     notified").
-  - "Acknowledgement" survives only where a rename would break something:
+  - "Acknowledgement" (the British spelling; "acknowledgment" in copy
+    since 1.20.37) survives only where a rename would break something:
     API paths (`/api/documents/[id]/ack`, `…/acknowledgements`), audit keys
     (`document.acknowledge`, `ack.requested`), permission keys
-    (`document.ack_submit`) and the licence label ("Policy
-    acknowledgements"). Nowhere a person reads.
+    (`document.ack_submit`) and the license label ("Policy
+    acknowledgments"). Nowhere a person reads.
 - **The audit log never prints a raw key.** Action labels come from
   `lib/audit-labels` (`actionLabel("user.create")` → "Created user"); every
   `audit({ action })` the codebase emits has a verb-first label there, and
   `test/audit-labels.test.ts` fails when one is missing. The fallback
-  humanises ("Directory · Person updated") so an unmapped key is a dull
+  humanizes ("Directory · Person updated") so an unmapped key is a dull
   row, not a code identifier; detail keys and target types go through
   `humanise()` the same way.
 - **One primary create action per list page.** A settings page that lists
@@ -2321,7 +2349,7 @@ per-route variants:
   emoji that are content (space icons people chose) and the keycap map.
 - **The provider-mark exception** (1.16.0, `components/auth/ProviderMark`):
   on a single sign-on button, Microsoft's four squares and Google's
-  four-colour G are inline SVGs in their own literal colours, because
+  four-colour G are inline SVGs in their own literal colors, because
   people look for those marks. They are the only non-lucide icons in the
   product, always `aria-hidden` (the button's words name the provider) and
   drawn only for the vendor actually configured. A generic OIDC provider
@@ -2604,7 +2632,7 @@ one (§Print) and, with read confirmation licensed, confirmed as one
     What leads to the **next** document names the handbook's kind, not the
     current one's, since the next may differ: "Next policy", "Next SOP",
     "Next document" (`nextItemLabel`).
-  - **The printed acknowledgement** agrees to follow "the policies it
+  - **The printed acknowledgment** agrees to follow "the policies it
     contains" for policies only, however many (the 1.18.0 sentence);
     other contents are counted: "the SOP", "the SOPs", "the documents".
   - The statement is stored on attestation records, so a policy-only
@@ -2619,7 +2647,7 @@ one (§Print) and, with read confirmation licensed, confirmed as one
   `Pencil`, editors only), **Print or save as PDF** (`secondary`
   `Printer`, to `/handbooks/{id}/print?print=1`) and **Confirm handbook**
   (`primary` `ShieldCheck`, to `/handbooks/{id}/confirm`; published
-  handbooks that ask for it, under the licence), each `print:hidden`. A
+  handbooks that ask for it, under the license), each `print:hidden`. A
   draft shows one `notice-warn` line under the header ("This handbook is
   a draft…"). Under it, `lg:grid-cols-[16rem_minmax(0,1fr)]`: the
   contents rail and the pane. A handbook with an introduction opens on it
@@ -2637,7 +2665,7 @@ one (§Print) and, with read confirmation licensed, confirmed as one
   shows; following a link closes it. Inside, top to bottom: **Your
   progress** (a `RAIL_GROUP_TEXT` label, "x of y confirmed" and the
   percentage, a `role="progressbar"` `h-1.5` bar in `bg-compass-600`;
-  only when the licence is on and some policy asks this reader), the
+  only when the license is on and some policy asks this reader), the
   Introduction link, then each section as a group label ("1 · Working
   here", a `RAIL_GROUP_TEXT` div, not a heading — the policy's h2 owns
   the outline) over an `<ol>` of numbered policy links (`tabular-nums`
@@ -2759,7 +2787,7 @@ one (§Print) and, with read confirmation licensed, confirmed as one
   and dashboard rows), and every place that lists their policies says so
   instead of pointing at a space they can't open. On **My policies** the
   row is otherwise identical (the same status chip, the same groups):
-  the emoji slot holds a `BookOpen` in `text-compass-600`, centred in a
+  the emoji slot holds a `BookOpen` in `text-compass-600`, centered in a
   `w-7` slot so the titles line up; the subtitle reads "In **{handbook}**
   · Updated {RelativeTime}" with the handbook's title `font-semibold
   text-slate-700`; the title links to `handbookConfirmHref` —
@@ -2855,7 +2883,7 @@ app as a document — the directory, a report — render it on the server
 (`@react-pdf/renderer` for PDF, plain text for CSV) from an admin-defined
 preset, behind an **Export ▾** menu that lists the presets, "What I see"
 (the current filter/columns/grouping), and "Print…" as the fallback. The
-browser print path can't honour paper size, logos or footers reliably across
+browser print path can't honor paper size, logos or footers reliably across
 machines; a server-rendered file can. Route the values through the same
 display helpers the screen uses so a code that shows as a label on screen is
 a label on paper. The compliance portal's menu (Matrix CSV, Ledger CSV,
@@ -3216,9 +3244,9 @@ header** and **Standard footer** frame the body, with no signature.
 - **The frame (the mail itself).** `frameEmailHtml` lays out a framed mail
   as nested `role="presentation"` tables, inline styles only (no `class`,
   no `<style>`, no CSS variables: the accent is resolved to `#rrggbb` by
-  `accentHex`), a centred column `width="600"` with `max-width:600px`. No
-  background or text colour is painted, so a client's dark mode recolours
-  it like plain mail; the only fixed colours are the accent rule under the
+  `accentHex`), a centered column `width="600"` with `max-width:600px`. No
+  background or text color is painted, so a client's dark mode recolours
+  it like plain mail; the only fixed colors are the accent rule under the
   header, a `#e2e8f0` hairline over the footer and the footer's `#64748b`.
   The logo carries the workspace name as `alt`. With no header, signature
   or footer the body goes out alone, exactly as before 1.19.0. The text
@@ -3403,7 +3431,7 @@ open in its own tab beside CompassDocs. Components live in
   Shown: the newest requester message and the newest agent reply, and
   everything newer than the older of the two (`messageSide`: the requester's
   own messages, by account or from their address; the desk's are a system
-  send such as an automation's acknowledgement, a team member's or one
+  send such as an automation's acknowledgment, a team member's or one
   written in the desk; a CC's or a merged-in requester's anchor nothing);
   older history folds behind one
   full-width control, a hairline either side of "**Show N earlier
@@ -3456,7 +3484,7 @@ open in its own tab beside CompassDocs. Components live in
   header row (`MailOpen`, `iconButtonClass("quiet", "sm")`, `data-tt` and
   `aria-label` "View original"), in the ticket pane only. It opens a
   `Modal` (`max-w-4xl`), never an in-place expander: an email is laid out
-  for its own width and colours, and the thread stays as it was. The email
+  for its own width and colors, and the thread stays as it was. The email
   is a sandboxed `<iframe>` (no `allow-scripts`, no `allow-same-origin`)
   on a **white paper surface in both themes**: literal `bg-white` with a
   `border-slate-200` edge (`dark:border-white/15`, as the inline email's), like an email preview; the sender's email is
@@ -3490,7 +3518,7 @@ open in its own tab beside CompassDocs. Components live in
   safety line, not decoration: the email draws whatever it likes inside it,
   so it must never be able to pass a fake chip, note or badge off as the
   desk's (1.20.11 security review). Nothing of the desk's fonts or
-  colours reaches the email. The reply's quoted history folds under a slate
+  colors reaches the email. The reply's quoted history folds under a slate
   pill **Show quoted text** / **Hide quoted text** drawn inside the email
   (it works without script). Remote pictures: one `text-xs text-slate-500`
   line above the email, `ImageOff`, "Remote images are hidden · **Show
@@ -3536,7 +3564,7 @@ open in its own tab beside CompassDocs. Components live in
   allow nothing else), one named window per ticket, 720 × 780 like a mail
   compose window; a blocked window is a plain error toast and the composer
   stays. The page is a desk page in the `(desk)` group (same sign-in,
-  licence and Duo gates); `DeskShell` sees the path and draws **no top bar
+  license and Duo gates); `DeskShell` sees the path and draws **no top bar
   or rail**, only the providers. Inside: a compact header (`#n · team ·
   requester`, the subject as `h2 text-base`, the status chip `sm`, the
   presence line, the CC row, "Answering from" when there is a choice), a
@@ -3592,7 +3620,7 @@ open in its own tab beside CompassDocs. Components live in
 - **A list pane alone on a phone has no right border** (`lg:border-r`, the
   queue's list and the workflows rail).
 - **The workflow builder** (`/desk/workflows/[slug]`): the workflows rail,
-  a centred `max-w-[40rem]` column of step cards from the violet **Starts
+  a centered `max-w-[40rem]` column of step cards from the violet **Starts
   when** card to the emerald Finish, and a `xl:w-80` settings panel for the
   selected step (it stacks under the steps below `xl`). A step card is a
   `rounded-xl` card whose title is a `button` stretched over it
@@ -3847,7 +3875,7 @@ Personal and team queue views (1.19.1, mock-up #1). Components live in
 - **The list header** gains a quiet `Filter` icon button before Sort
   (`iconButtonClass("quiet", "sm")`, `data-tt` "Filter", or "Edit view" on
   a saved view you may change; the 23rem header has no room for a label). It opens the **filter dialog**, a `Modal`
-  with a two-column grid of labelled `Select`s and `TextInput`s (Start
+  with a two-column grid of labeled `Select`s and `TextInput`s (Start
   from, Contains, Status with "Not solved", Priority, Team, Owner, Tag,
   Created), report-only filters listed as "Also filtered by: ... Remove",
   and a live summary line. The primary says what happens: **Show list**,
@@ -3943,9 +3971,9 @@ when it can't do its task, and what it hands on. Components live in
   on** (`neutral`). They are status, never links.
 - **Step state words** are a closed set (`STEP_STATE_LABEL`): Not
   started (`neutral`), In progress (`accent`), Done (`ok`), Couldn't be
-  done (`error`), Declined (`error`), Skipped (`neutral`), Cancelled
+  done (`error`), Declined (`error`), Skipped (`neutral`), Canceled
   (`neutral`). A run is In progress, Waiting, **Stopped** (`warn`,
-  blocked), Finished, Cancelled or Declined.
+  blocked), Finished, Canceled or Declined.
 - **A task ticket's outcome bar** (`TaskOutcomeBar`) is a card above the
   conversation: a 32px `bg-compass-50` `Workflow` tile, "Workflow task:
   {title}", one line saying what finishing asks for, then **Can't be
@@ -4179,8 +4207,8 @@ it stays in the side panel's "Also on this ticket".
   `data-tt` and `aria-label` "Show requester details" / "Hide requester
   details". Its bubble, and those of the tiles' right-hand icon actions,
   end at the control's right edge (`after:left-auto! after:right-0!
-  after:[transform:none]!`) rather than centring on it: the strip
-  reaches the pane's edge, and a centred bubble, even hidden, widens the
+  after:[transform:none]!`) rather than centering on it: the strip
+  reaches the pane's edge, and a centered bubble, even hidden, widens the
   pane into a sideways scroll (§Tooltips). The photo's presence bubble
   is `data-tt-align="start"` for the same reason at the left. Open or closed is remembered per agent in the browser
   (`localStorage`, in try/catch); closed until they say otherwise.
@@ -4196,7 +4224,7 @@ it stays in the side panel's "Also on this ticket".
   and solved or closed; a link to them in the queue; "First ticket from
   Daniel" when there are none) and `UserRound` Manager. A
   fact with no data is left out; with no facts there is no band. Status
-  is always a dot plus words, never colour alone, never a coloured pill.
+  is always a dot plus words, never color alone, never a colored pill.
 - **The open view** is four tiles in a `grid` (`gap-2.5 p-3`, two
   columns from `@2xl`, one under it): `rounded-lg border
   border-slate-100 px-3 py-2.5`, each an `h3` `Eyebrow` with a quiet
@@ -4328,19 +4356,19 @@ Desk settings → Shortcuts, and Desk settings → Retention and privacy.
   is a full-width `Toggle` whose help starts "Off until you turn it on";
   its sentence inputs appear under it only while it is on, and a rule that
   is off neither blocks Save with its field errors nor counts in the
-  preview ("Both rules are off, so nothing is closed, anonymised or
+  preview ("Both rules are off, so nothing is closed, anonymized or
   deleted.").
 - **Retention's sentence inputs**: a number `TextInput` (`w-20`) inside the
-  sentence it completes ("After [7] days without a reply."), labelled by
+  sentence it completes ("After [7] days without a reply."), labeled by
   its first words (`<label>After</label>`, `<label>Keep closed tickets
   for</label>`); units and outcomes are `Segmented`
-  (months | years, Anonymise | Delete). An irreversible choice asks with
+  (months | years, Anonymize | Delete). An irreversible choice asks with
   `confirmDialog({ danger: true })` when it is saved, naming tonight's
-  count: choosing Delete, or switching anonymising on while tickets are
+  count: choosing Delete, or switching anonymizing on while tickets are
   due. The dry run is one live sentence ("Tonight: 41 tickets close, 312
-  are anonymised (closed before Nov 2023). Nothing is deleted.") with **See
+  are anonymized (closed before Nov 2023). Nothing is deleted.") with **See
   the list** opening a `Modal` of tickets (number, subject, team, date, a
-  `sm` chip: Closes `neutral`, Anonymised `warn`, Deleted `error`).
+  `sm` chip: Closes `neutral`, Anonymized `warn`, Deleted `error`).
 - **Legal hold** is a side-panel card (`ticket/LegalHoldCard.tsx`) with a
   `Lock` eyebrow: a `Toggle` for settings.manage, a sentence for other
   agents while it is on, nothing otherwise.
@@ -4349,7 +4377,7 @@ Desk settings → Shortcuts, and Desk settings → Retention and privacy.
 
 `/desk/reports` and `/desk/reports/explore` (1.19.0,
 `components/helpdesk/desk/reports/*`, data from
-`/api/helpdesk/analytics/*`). Good defaults first, customisation second:
+`/api/helpdesk/analytics/*`). Good defaults first, customization second:
 the built-in Overview opens on the last 30 days against the 30 before with
 nothing to set up; everything else (filters, other dashboards, Edit,
 Explore, schedules) is one step further.
@@ -4452,14 +4480,14 @@ the dataviz one:
   heatmap for day of the week × hour; a table for anything with two
   splits or many rows. `widgetProblem` enforces it. One axis, always:
   two measures are two widgets.
-- **Colour**: slot 1 is the workspace accent (`--compass-500`), slots 2–8
+- **Color**: slot 1 is the workspace accent (`--compass-500`), slots 2–8
   the validated categorical order in `charts.module.css` (dark steps are
   selected for the dark surface, not flipped; print re-declares light).
   A series keeps its slot when filters change the others: priorities,
   channels, statuses and origin have fixed slots; other keys hash to a
   slot. "Other" and the comparison series are slate. Sequential (the
   heatmap) is one hue: `rgb(var(--compass-600) / α)` in six steps, with a
-  Fewer → More key. Status colours (on target / close / off target) are
+  Fewer → More key. Status colors (on target / close / off target) are
   emerald / amber / red ink and always carry an icon and words ("Off
   target (at most 4h)").
 - **Marks**: 2px lines with round joins, a 10% area wash for a single
@@ -4469,8 +4497,8 @@ the dataviz one:
   gridlines in `--grid`, axis ticks in `--tick`, four equal steps to a
   clean top (whole numbers for counts, 15m/30m/1h… for times, 0–100 for
   percentages). Tick and x labels thin out by width and the latest label
-  always shows. A target is a dashed hairline labelled "Target 4h".
-- **Text never wears the series colour**: values and labels are slate
+  always shows. A target is a dashed hairline labeled "Target 4h".
+- **Text never wears the series color**: values and labels are slate
   ink; identity comes from a swatch, a line key or the legend. Two or more
   series always have a legend (a dashed key for the comparison); one
   series has none (the title names it).
@@ -4507,7 +4535,7 @@ desk (`/desk/settings/assignment`, lucide `Shuffle`), components in
 page needs: `agents.manage_team` for Teams and On call, `automations.manage`
 for Rules).
 
-- **One team at a time.** Teams and On call open with a labelled `Select`
+- **One team at a time.** Teams and On call open with a labeled `Select`
   team switcher (`TeamPicker`); the choice lives in `?team=` so a link or a
   reload lands on the same team.
 - **Mode cards are a radio group**, not a select: three cards in a
@@ -4606,11 +4634,11 @@ lucide `Languages`, in the People group after Agents), components in
 ## Helpdesk: customer portal
 
 The customer portal (1.19.1, Enterprise `helpdesk`) is where people
-outside the organisation, with no CompassDocs account, raise and follow
+outside the organization, with no CompassDocs account, raise and follow
 requests: `/support` and its pages, `app/(portal)/support`, components in
 `components/helpdesk/portal`. It is the third standalone surface beside
 the share and public pages (§Standalone link pages): the person has no
-account, so there is no preference to honour and no app shell.
+account, so there is no preference to honor and no app shell.
 
 - **No CompassDocs chrome, no way into the app.** `PortalHeader` is the
   whole frame: the portal's logo (or its initials in a 32px
@@ -4668,13 +4696,13 @@ account, so there is no preference to honour and no app shell.
   email / Approved domains only, Brand, Protection); then the lock
   banner (`notice-info`, a 16px `Lock`; 1.20.27, it was `text-compass-800`,
   unreadable in dark mode); and the Customers card, on
-  its own **Customers** page since 1.19.4 (§Helpdesk: customer portal help
-  centre) (search, a `sm` **Blocked** `error` chip, Block behind a danger
+  its own **Customers** page since 1.19.4 (§Helpdesk: customer portal Help
+  Center) (search, a `sm` **Blocked** `error` chip, Block behind a danger
   `confirmDialog`). A `notice-warn` asks for the workspace domain when the
   portal is on without one.
 - **The satisfaction survey** (1.19.2, `PortalSurvey`, mock e3) sits under
   the request's title once it is solved or closed and not yet rated: one
-  `bg-surface` `rounded-xl` card, the question centred and bold ("This
+  `bg-surface` `rounded-xl` card, the question centered and bold ("This
   request is solved. How did we do?"), three radio tiles in a row (a
   `sr-only` radio in each label; `w-24`/`sm:w-28`, `rounded-xl`,
   `border-[1.5px]`, lucide `Smile`/`Meh`/`Frown` at 28px; the chosen tile is
@@ -4692,9 +4720,9 @@ account, so there is no preference to honour and no app shell.
   because it was about the same problem. Replies to either go here." No
   icon, no link (they are on the kept request already).
 
-## Helpdesk: customer portal help centre
+## Helpdesk: customer portal Help Center
 
-The help centre (1.19.4, mocks h1 at 1440 and 390, h2) is the portal's
+The Help Center (1.19.4, mocks h1 at 1440 and 390, h2) is the portal's
 home while it is on: anyone who can reach `/support` searches and reads a
 chosen set of documents before raising a request, with no sign-in.
 Components in `components/helpdesk/portal/help`; the settings in
@@ -4708,7 +4736,7 @@ Components in `components/helpdesk/portal/help`; the settings in
   hands out is an allowlist (`HelpArticle`): never an author, tags,
   comments or history. Search matches only what the outside reads (title,
   summary, body without comments; never tags). An article's body loses
-  its HTML comments (`publicBody`) and is drawn by the sanitising
+  its HTML comments (`publicBody`) and is drawn by the sanitizing
   `MarkdownView` with `rewriteUrl` (`lib/md-url-rewrite`): every address,
   in any Markdown or HTML form, is decided on the parsed tree by
   `helpCentreUrl` (files through `/support/api/help/files`, links to
@@ -4716,18 +4744,74 @@ Components in `components/helpdesk/portal/help`; the settings in
   into the workspace dropped, other sites' left as written). Counts are
   true: a category past 300 says "Showing the first 300 of N. Search to
   find the others."
-- **Home**: a full-width hero band (`-mx-4 sm:-mx-6 bg-compass-50`,
-  hairline under it) holding the h1 "How can we help?" and the search;
-  then the categories as a `max-w-5xl` grid of bordered `rounded-xl`
-  `bg-surface` link cards (name `font-semibold`, "8 articles" under it in
-  `text-slate-500`), three across from `sm` and two on a phone (three at
-  390 broke "Troubleshooting" mid-word); then "Still need help?".
+- **Home** (1.20.37, `HelpCentreHome`): a full-width **header band**
+  (`-mx-4 sm:-mx-6`, hairline under it, `.hc-band` in `globals.css`: a
+  compass-100 glow over a compass-50 to canvas wash, every stop
+  `rgb(var(--compass-*))` / `rgb(var(--canvas))`, so a custom accent and
+  all three dark styles follow it, and paper gets none) holding, centered
+  in a `max-w-xl` column, the portal's logo at 48px (`PortalLogo`: the
+  same element and source as `PortalHeader`, the portal's own uploaded
+  logo or the brand's initials, here on `bg-surface` with a hairline
+  because the band is the tint) beside the portal's name, the h1 (the
+  admin's greeting, default "How can we help?") and the search. Then a
+  `max-w-5xl` column of sections, `gap-8`, each a `section` named by its
+  `h2` (`text-lg font-semibold`) with `data-help-section`, **each left out
+  when it has nothing or is switched off** (never an empty card):
+  - **What do you need?** (`tiles`): the request types the portal
+    offers, as the Get help card recipe (a 40px `bg-compass-50
+    text-compass-700` tile with the type's lucide icon from
+    `requestTypeIcon`, the title `font-semibold`, one `line-clamp-2`
+    description): one column, two from 30rem, four from `lg`, at most
+    eight, then a **More →** link to New request (with an `sr-only` "
+    things you can ask for"). A tile is a link to `/support/new?type=N`;
+    signed out, sign-in comes first and returns to that form
+    (`cleanNextPath` allows exactly `?type=N`). Not shown when nothing
+    can be raised (the rule "Still need help?" follows), and on a portal
+    that admits only some domains not to anyone but a signed-in contact
+    it admits (`requestTypesVisible`; the header's **Sign in** is the way
+    in): the catalog is not shown to the world. `print:hidden`.
+  - **Popular articles** (`TrendingUp`) and **Recently updated**
+    (`Clock`): one card each, the title inside (§Dashboard tiles), rows
+    of a 16px `BookOpen` in `text-compass-600`, the title
+    `font-medium`, and a `text-xs text-slate-500` line with where it sits
+    (and "Updated Nov 4, 2026" in the reader's zone); side by side in an
+    `auto-fit` grid (`minmax(min(100%,20rem),1fr)`), so one alone takes
+    the row. Popular lists only articles opened at least once in 90 days.
+  - **Browse by space** (`spaces`): a card per space (one column, two
+    from `sm`, three from `lg`): the name as an `h3` link, "24 articles"
+    in `text-xs text-slate-500`, the space's description in `line-clamp-2`
+    (only for a space the admin chose: a space reached through documents
+    tagged public shows its name alone), its top three articles under a
+    hairline, and **See all ›** (`sr-only` "N articles in {space}") to
+    `/support/spaces/N`, the space's articles by category. With Spaces
+    off the home shows the 1.19.4 category cards instead (a grid, three
+    across from `sm` and two on a phone, three at 390 broke
+    "Troubleshooting" mid-word); with Spaces on, the categories of spaces
+    without a card follow as **More topics**, so nothing public goes
+    unlisted.
+  - **Where a row says it sits** (review M1): a space's own name reaches
+    the outside only for a space the admin chose whose unfiled category is
+    shown, or whose unfiled category is public anyway (it is already named
+    after the space): only those get a card and a page. Every other row
+    says its category, as category pages always did (`SPACE_LABEL_SQL`),
+    so a document tagged `public` in a folder of an internal space nobody
+    chose never names that space.
+  - then "Still need help?". No public articles at all is the
+    `EmptyState` "No articles yet".
 - **The search** (`HelpSearch`) is a GET form to `/support/search` (it
   works without script): a 48px `rounded-xl` `TextInput` with a `Search`
   glyph, and the suggestions as an **inline** card right under it, not a
-  `Popover` (the hero grows to hold them, as in the mock): one row per
-  article, a 16px `BookOpen` in `text-slate-500` and the title, hairlines
-  between. Arrows walk the box and the rows, Escape closes; an
+  `Popover` (the band grows to hold them, as in the mock). Since 1.20.37
+  it is an **ARIA combobox**: the input is `role="combobox"`
+  (`aria-autocomplete="list"`, `aria-expanded`, `aria-controls`,
+  `aria-activedescendant`), focus never leaves it, and the card holds a
+  `listbox` "Suggestions" of `option`s, `aria-selected` on the active one
+  (`bg-compass-50`). From two characters, 200 ms after the last key, up
+  to six: the articles (a 16px `BookOpen` in `text-slate-500`, the title,
+  the space in `text-xs text-slate-500` at the end), then up to two
+  request types (their icon in `text-compass-600`, "New request").
+  Arrow Down / Up move the active option, Enter opens it, Escape closes
+  the list; Enter with none active submits to the results page. An
   `sr-only` live region says how many. Nothing matching is a
   `SectionEmpty` in the card; a rate-limited answer is the server's
   sentence in a `notice-warn` row over the last suggestions, never "No
@@ -4737,15 +4821,15 @@ Components in `components/helpdesk/portal/help`; the settings in
   email." under it, and a primary **New request** at the end (it stays
   beside the text on a phone). Not shown when nothing can be raised.
 - **Article, category and results pages** are the portal's `max-w-3xl`
-  column: a back link "Help centre" (`ChevronLeft`), the h1, then the
-  content. An article: breadcrumb "Help centre / Category", the title at
+  column: a back link "Help Center" (`ChevronLeft`), the h1, then the
+  content. An article: breadcrumb "Help Center / Category", the title at
   `text-3xl`, "Updated 4 Nov 2026" in the reader's zone, the summary as a
   lede, the body in the `doc-read` card, a **Files** card, then "Still
   need help?". Lists are `ArticleRows`: one link per row with a
   `BookOpen` in `text-compass-600`, the title and a two-line summary.
-- **The header** gains "Help centre · Your requests" (a `nav` named
+- **The header** gains "Help Center · Your requests" (a `nav` named
   "Portal") before the address and Sign out, or **Sign in** when signed
-  out; the row wraps on a phone. With the help centre on, the sign-in
+  out; the row wraps on a phone. With the Help Center on, the sign-in
   form lives at `/support?signin=1` (and wherever `?next=` sends people).
 - **The request form** shows "These articles might answer it" under the
   subject from three characters: a `border-compass-200 bg-compass-50`
@@ -4753,14 +4837,14 @@ Components in `components/helpdesk/portal/help`; the settings in
   new tab (`ExternalLink` glyph and an `sr-only` "(opens in a new tab)"),
   so the form keeps what was typed. Nothing renders with no match. The
   subject goes in a POST body and is never stored as a search.
-- **Indexing**: every portal page is `noindex` except the help centre's
+- **Indexing**: every portal page is `noindex` except the Help Center's
   home, categories and articles when the admin ticks "Let search engines
-  index the help centre"; `robots.ts` then allows exactly those paths.
+  index the Help Center"; `robots.ts` then allows exactly those paths.
   Results pages are never indexed.
 - **Desk settings → Customer portal is three pages** under one header
   (§Settings pages: a section with several jobs gets pages; `SubNav`
-  "Customer portal settings"): **Settings**, **Help centre**,
-  **Customers**. The Help centre page's cards: *Show a help centre*
+  "Customer portal settings"): **Settings**, **Help Center**,
+  **Customers**. The Help Center page's cards: *Show a Help Center*
   (`Toggle`s for it and for indexing; a `notice-warn` when the portal
   itself is off; the Settings page's **Open portal** opens it),
   *What's public* (two **option cards**: the whole card is the label of a
@@ -4775,8 +4859,28 @@ Components in `components/helpdesk/portal/help`; the settings in
   a quiet eye button, `aria-pressed`, `EyeOff` and a neutral `sm`
   **Hidden** chip when off) and *Last 30 days* (a `dl` of three: label in
   `text-sm text-slate-500`, value `text-xl font-bold`, "Not enough yet"
-  in `text-sm text-slate-500` when there is no data). One `SaveRow`
-  "Save help centre".
+  in `text-sm text-slate-500` when there is no data). Since 1.20.37 a
+  *Home page* card (`#help-center-home`) follows *Show a Help Center*:
+  the **Greeting** (`Field` `lg`, one line, 120 characters, the default as
+  its placeholder) and a `Toggle` per home section (**Request tiles**,
+  **Popular articles**, **Recently updated**, **Spaces**; all on, and a
+  value stored before 1.20.37 reads as all on), audited with the rest as
+  `helpdesk.portal.help_centre_updated` (`greeting` and each `show_*` in
+  the details when changed). One `SaveRow` "Save Help Center".
+- **Popular counts views without people** (1.20.37): an article page
+  adds one to `hd_hc_article_views` (a number per article per day, after
+  the page is sent) unless the browser is a known bot or a prefetch, and
+  one network address counts an article once in 30 minutes and at most
+  20 articles in that window, in a per-process memory of its own
+  (`ViewDedupe`, capped at 50,000 keys; never the shared rate-limit
+  buckets). A request with no usable address counts nothing. The router's
+  own prefetch reaches the page only as `x-compass-prefetch`, which
+  `proxy.ts` sets (Next 16 hides Next-Router-Prefetch from `headers()`),
+  and an article link never prefetches (`prefetch={false}`). Pruned to 90
+  days with the other stats. The home reads the rule twice whatever the
+  number of spaces: the categories' counts, and one query ranking every
+  public article for Popular, Recently updated and its space's top three
+  (`row_number()` windows).
 
 ## Helpdesk: drafts from Claude and the Claude connector
 
@@ -4784,7 +4888,7 @@ Components in `components/helpdesk/portal/help`; the settings in
 reply: `hd_draft_reply` saves a draft, and a person sends it.
 
 - **The draft card** (`ClaudeDraftCard`, above the composer in the ticket
-  pane, agents who work the ticket only): a `section` labelled by its
+  pane, agents who work the ticket only): a `section` labeled by its
   heading "Draft from Claude", `rounded-xl` with a **dashed** 1.5px
   `border-compass-300` on `bg-compass-50` (dark: `border-compass-500/50`,
   `bg-compass-500/10`). The dashed edge is the house sign for "not sent
@@ -4840,19 +4944,19 @@ settings page, the server and the tests read the same words.
 - **Ctrl/⌘+J** toggles the panel anywhere in the desk, typing included
   (`blockModKey`, never a bare key); with the panel open but focus
   elsewhere it moves focus into the question box first.
-- **The panel** is an `aside` labelled by its "Claude" heading, docked
+- **The panel** is an `aside` labeled by its "Claude" heading, docked
   `fixed` at the right (`sm:top-15 sm:right-4 sm:bottom-4`, 430px,
   `rounded-2xl border border-slate-200 bg-surface shadow-modal`) and
   **full screen under 640px** (`inset-0`, no radius). It is not a modal:
   the desk stays usable beside it, so it takes no focus trap and no scrim.
   Focus starts in the question box; Escape (when focus is inside and no
-  overlay is open), Minimise and Close hand focus back to whatever opened
+  overlay is open), Minimize and Close hand focus back to whatever opened
   it. `print:hidden`.
   - Header: a 28px `bg-slate-900 text-slate-50` circle with `Sparkle`,
     "Claude" (`h2`), a `neutral sm` chip "On #1047", then three quiet icon
     buttons with `data-tt` and `aria-label`: History (a `Popover role="menu"`
     with "New chat" and the earlier chats on this ticket as
-    `menuitemradio`), Minimise (`Minimize2`) and Close (`X`, which also
+    `menuitemradio`), Minimize (`Minimize2`) and Close (`X`, which also
     stops a running answer).
   - The conversation is a `role="log"` with `aria-busy` while an answer
     streams, so a screen reader reads the answer once, complete; an
@@ -4897,8 +5001,8 @@ settings page, the server and the tests read the same words.
     run as a `text-xs` line with a 12px `Workflow` "On this ticket" or
     `TicketPlus` "On a new request" (the words of §Helpdesk: start a
     workflow from the desk, never a radio), Claude's reason as the hint,
-    always labelled as Claude's words ("Claude's reason:" in
-    `font-medium`), then its answers as a `dl` labelled "Claude's proposed
+    always labeled as Claude's words ("Claude's reason:" in
+    `font-medium`), then its answers as a `dl` labeled "Claude's proposed
     answers" ("Start date: 2026-12-07", the label `text-slate-500`; a person
     answer carries a `warn sm` chip "Check this person", and the dialog's
     note adds "Check the person Claude chose for Manager."), then, while it
@@ -4926,7 +5030,7 @@ settings page, the server and the tests read the same words.
     `TriangleAlert` in `ink-warn` (or `text-red-600` and `role="alert"`
     for an error), never a toast.
   - Footer: the **context chips** (the source-chip recipe, as a list
-    labelled "What Claude can use": "#1047 and its notes", "Your articles",
+    labeled "What Claude can use": "#1047 and its notes", "Your articles",
     "Web: vendor sites" when web search is on), the question box (a
     one-row auto-growing textarea, Enter sends, Shift+Enter breaks a line;
     a `.frame-input` in its bordered frame, which carries the one focus
@@ -4937,7 +5041,7 @@ settings page, the server and the tests read the same words.
     each question), then the fixed line "Claude works as you, with
     your desk role. It drafts and suggests; you send and apply." in
     `text-xs text-slate-500`.
-  - Empty: the centred `Sparkle`, "Ask Claude about #1047" and one
+  - Empty: the centered `Sparkle`, "Ask Claude about #1047" and one
     sentence of what it does (the panel's own region, not an
     `EmptyState` card).
 - **Desk settings → Claude in the desk** (`ClaudeDeskSettings`, rail
@@ -5107,7 +5211,7 @@ and stays the one place services are added.
   `ExternalLink` in a new tab. An agent sees only their teams' services,
   and nothing at all without the workspace's `status.read` (the Status
   page's own permission): no pill, pop-ups, banners or notices.
-- **State colours** are `StatusDot` (emerald operational, amber degraded,
+- **State colors** are `StatusDot` (emerald operational, amber degraded,
   red outage, sky maintenance, slate unknown; decoration only, the state is
   always written beside it) and `stateTone()` for chips (`ok`, `warn`,
   `error`, `info`, `neutral`). Copy comes from `stateSentence()`: "is
@@ -5138,7 +5242,7 @@ and stays the one place services are added.
 - **Choosing services** (Desk settings → Teams, the "Status services for
   {team}" section beside "Reply targets"; the same `TeamStatusServices`
   editor in the lead's dialog): one sentence on what agents get, a house
-  table (follow checkbox labelled by the service's name, **Service**,
+  table (follow checkbox labeled by the service's name, **Service**,
   **Now** chip, **Pop-up for** `Select dense` shown only when ticked:
   Outage and degraded, Outage only, Off (banner only)), then "Need another
   service? Add it on the Status page…" and one **Save** (disabled until
@@ -5489,7 +5593,7 @@ each.
   "Match case" checkbox under it, then the Try it box.
 - **The Try it box** (`PatternTester`) is a closed `<details>` whose summary
   reads "Try it" (`text-xs font-medium text-compass-700`). Open: a
-  `rounded-lg border bg-canvas p-3` panel with a labelled `font-mono
+  `rounded-lg border bg-canvas p-3` panel with a labeled `font-mono
   text-xs` `Textarea` ("Sample text", capped at 20,000 characters) and an
   `aria-live="polite"` result under it: a `ok` `sm` chip **Matches** and
   the matched text in `font-mono`, then an `ol` "Capture groups" ("Group 1:
@@ -5805,7 +5909,7 @@ components live in `components/helpdesk/desk/assets`, the server in
   **Details** and **Maintenance in Snipe-IT** (`Wrench`) side cards.
   Tickets the viewer may not open are never named: one `text-xs` line
   counts them. The same holds for maintenance: a record naming a ticket
-  ("#1047") the viewer can't open, or an anonymised one, is left out and
+  ("#1047") the viewer can't open, or an anonymized one, is left out and
   counted ("1 record from a ticket you can't open"). What CompassDocs
   posts to Snipe-IT never carries a subject: the title is "CompassDocs
   #N: <type>" and the note is the agent's own text. When the source can't be reached the page shows the
@@ -5821,7 +5925,7 @@ components live in `components/helpdesk/desk/assets`, the server in
   it into an empty password input; changing the address asks for the
   key again and starts a new asset list (the old one's linked assets stay
   on their tickets as "no longer in the source", so a link never moves to
-  another device with the same id). The solve behaviour is `RadioCards`; **Test connection**
+  another device with the same id). The solve behavior is `RadioCards`; **Test connection**
   (`PlugZap`) and **Sync now** (`RefreshCw`) are secondary buttons that
   toast the result, and the page polls while a sync runs. "Who sees
   assets" is a plain `Card` with the **Agents can search all assets**
@@ -5838,7 +5942,7 @@ components live in `components/helpdesk/desk/assets`, the server in
   `DeviceManagementManagedDevices.Read.All` permission) stays on the card
   as a `notice-warn` `role="alert"` line with an "About this permission"
   link; switching off is confirmed (`confirmDialog({ danger: true })`)
-  and follows Snipe-IT's disconnect rules. Without the licence or the
+  and follows Snipe-IT's disconnect rules. Without the license or the
   directory credentials the switch is `disabled` and the line says why,
   with a "Set up Microsoft 365 directory sync" link for the credentials
   case. While on, a `text-xs` line under it says when it synced, how many
@@ -5854,7 +5958,7 @@ components live in `components/helpdesk/desk/assets`, the server in
   A device only Intune has is an asset of its own with an **Intune** chip:
   Intune has no tags, so the serial stands where the tag would ("SERIAL ·
   Intune"), its page adds "Last seen" and has no maintenance card, and
-  **Open in Intune** goes to the Intune admin centre.
+  **Open in Intune** goes to the Intune admin center.
 - **System notes quote outside text safely.** A name or sentence that
   comes from outside (a device name, which Intune lets its user set, a
   source's error, a checklist, item or person's name) goes into a
@@ -5879,7 +5983,7 @@ components live in `components/helpdesk/desk/assets`, the server in
   once unticked; Cancel keeps the ticket open. The record is posted only
   after the solve committed; a failure is a toast ("Solved, but the
   maintenance record wasn't logged: …") and an internal note, and the
-  ticket stays solved. It comes before "Log your time", so cancelling it
+  ticket stays solved. It comes before "Log your time", so canceling it
   never stops a timer, and it checks checklists first so a blocked solve
   never opens it.
 - **Get help's Device picker** is a plain `Select` ("Not about one of my
@@ -6108,7 +6212,7 @@ ApiWebhooksSettings.tsx`; the server in `lib/helpdesk/api-tokens`,
   error sentence, then the first 2 KB of the response folded in a
   `details`). Never the payload. One `text-xs` line under it says what is
   kept.
-- **What the API and webhooks write is labelled.** A note or reply made
+- **What the API and webhooks write is labeled.** A note or reply made
   with a token carries via `api` ("via API" beside the author, like "via
   Claude"), and a ticket change's timeline line ends "via API". The author
   is the token's "Shown as" name.
@@ -6125,7 +6229,7 @@ the image work in `appearance-upload`).
   CompassDocs app, the portal and print views never get the artwork. The
   CSS is unlayered (it must beat Tailwind's `@layer utilities`) and each
   selector carries the theme, `.desk-art` and its data attribute so it
-  also outranks globals.css's dark-mode ink rules. Colours are
+  also outranks globals.css's dark-mode ink rules. Colors are
   `rgb(var(--…) / alpha)` as everywhere.
 - **Three layers, never more.** A fixed layer behind the whole desk
   holds the picture (`cover`, blurred 8px, bleeding 24px past the edges)
@@ -6164,7 +6268,7 @@ the image work in `appearance-upload`).
   light), the Appearance page says so under the mode's select ("In dark
   mode the desk covers Sunrise 78% so text stays readable").
 - **The plain desk is the fallback, always.** Solid, None, Reduce
-  transparency, Increase contrast, forced colours, a data saver and paper
+  transparency, Increase contrast, forced colors, a data saver and paper
   all give the desk as it was. The first paint is always plain (the
   server can't know the device); the picture is fetched after hydration,
   at the stored width that fits the screen, and the desk turns
@@ -6325,7 +6429,7 @@ addresses 1.20.5 (`lib/helpdesk/send-addresses`).
     whose content the admin still has to act on starts open, and it is
     never closed by the answer to an action inside it (its `open` is
     state set once, then the reader's). Its `summary` may end in a muted
-    `text-xs font-normal` state ("Checked: no organisation-wide access";
+    `text-xs font-normal` state ("Checked: no organization-wide access";
     `ink-warn` when it is a warning).
   - **One input and its button on a row** (Connect mailbox, Check
     access): `flex flex-wrap items-end gap-2`, the `Field` without help
@@ -6343,7 +6447,7 @@ addresses 1.20.5 (`lib/helpdesk/send-addresses`).
     bordered block with "Checked <date>" in `text-xs`, then one line per
     fact in `text-sm`, `ink-warn` for the ones that need action. A fact
     that makes the whole connection unsafe ("This app can read every
-    mailbox in your organisation") is also a `notice-warn` at the top of
+    mailbox in your organization") is also a `notice-warn` at the top of
     the card until it is gone.
   - **Row states** are `sm` chips from a closed set: **Notifications on**
     `ok`, **On a timer** `neutral`, **Waiting for access** `warn`,
@@ -6672,7 +6776,7 @@ hours, `CalendarClock`).
   **Add an event**. With one: the time in `text-sm font-medium`, the place
   beside a `MapPin`, one `text-xs` line "Ready by 13:30 · 30 minutes
   before", then a `sm` chip: **Setup not complete** `warn`, **Setup
-  complete** `ok` (with who and when), **Cancelled** `neutral` (the time
+  complete** `ok` (with who and when), **Canceled** `neutral` (the time
   struck through). **Mark setup complete** is a full-width secondary `sm`
   button with the sentence "The ticket can't be solved until setup is
   complete." under it. Change and Remove are quiet icon buttons in the
@@ -6692,19 +6796,19 @@ hours, `CalendarClock`).
 - **The Calendar page** is `PageContainer` + `PageHeader` (Subscribe and
   Print as secondary actions). One toolbar row: **Today**, previous and
   next icon buttons, the range as a heading, a `Segmented` Day / Week /
-  Month and the team `Select`. A second, quieter row: **Colour by** (a
+  Month and the team `Select`. A second, quieter row: **Color by** (a
   `Segmented` Team / Status) and **Also show** (bordered checkbox pills,
-  **Due dates** and **Recurring tickets**). The view, team, colour and
+  **Due dates** and **Recurring tickets**). The view, team, color and
   layers are remembered per person.
-- **Colour** comes from the reports' validated palette
+- **Color** comes from the reports' validated palette
   (`charts.module.css` `.viz`, composed by `Calendar.module.css`): an item
   sets `--ev` inline; the block is a tint of it with a solid left edge and
-  slate ink. Colour never stands alone: every item carries its team's
+  slate ink. Color never stands alone: every item carries its team's
   short tag ("BS") or its status in words, and the key under the grid
   spells them out. Setup time before an event is the same hue hatched,
-  labelled "Setup". Due dates and recurring tickets are dashed outlines
+  labeled "Setup". Due dates and recurring tickets are dashed outlines
   with a `Clock` or `Repeat` icon and the words "Due", "Reply due" or
-  "Opens". A cancelled event is struck through; a double-booked one gets a
+  "Opens". A canceled event is struck through; a double-booked one gets a
   `TriangleAlert`, a completed setup a `Check`.
 - **Views.** Day and Week are a time grid (`--hour: 3rem`, whole-day
   events in a strip above); Month is a seven-column grid with up to three
@@ -6719,7 +6823,7 @@ hours, `CalendarClock`).
   table of tick box, Time, Event, Place, Owner, Setup by. Week and Month
   are landscape tables, one column or cell a day. Items are told apart by
   their words; the left edge prints black and a dotted edge marks a due
-  date or a recurring ticket. No desk chrome, no buttons, no colour that
+  date or a recurring ticket. No desk chrome, no buttons, no color that
   matters.
 - **Event calendar settings** stack two cards. **Reminders**: bordered
   checkbox pills for the lead times (up to five), a `Toggle` for the late
@@ -6756,7 +6860,7 @@ hours, `CalendarClock`).
   `font-semibold text-compass-ink` (the icon too) while one is running.
   **All-day events never make the pill.** It looks 14 calendar days ahead
   (today included) in the agent's zone; with no timed event in that time
-  there is no pill. Cancelled events are left out everywhere.
+  there is no pill. Canceled events are left out everywhere.
   - **The dropdown** is a `Popover role="menu"` ("Upcoming events",
     end-aligned, `w-[min(23rem,calc(100vw-1rem))]`, `rounded-xl`): a
     header ("Upcoming events", "The next 14 days · times in London time"
@@ -6774,7 +6878,7 @@ hours, `CalendarClock`).
 - **The Calendar rail icon's count** (1.20.24) is the rail's usual badge
   (`bg-compass-600` circle, white `text-3xs`, "99+" past 99): today's
   timed events in the agent's zone that have not ended (a running one
-  counts; all-day, cancelled and finished ones never do). No badge at 0.
+  counts; all-day, canceled and finished ones never do). No badge at 0.
   The link's `aria-label` is "Calendar, 3 events left today". Should the
   answer have been cut at 200 events before the end of today, it reads
   "12+" ("Calendar, 12 or more events left today"). Under `md` the folded
@@ -6831,14 +6935,14 @@ hours, `CalendarClock`).
   - **The timeline**: every park, wake and prep window change is one
     activity line with `Hourglass` (agents only, `event = 'change'`). The
     desk's own lines start with what happened ("Woke for the event on Sun
-    15 Mar", "The event was cancelled. Close this ticket if nothing else is
+    15 Mar", "The event was canceled. Close this ticket if nothing else is
     needed."); a person's start with their name. An invite that doesn't
     park itself says why in one line ("Not parked: the event is more than
     400 days away, …"). A wake that keeps failing ends with "Woke without
     its usual steps after 5 failed attempts (…). Check its targets and its
-    owner." Mail from the meeting's verified organiser who isn't the
+    owner." Mail from the meeting's verified organizer who isn't the
     requester is an agents-only note headed "{name} (the meeting's
-    organiser) wrote, with an update to the meeting:", never a public
+    organizer) wrote, with an update to the meeting:", never a public
     reply.
   - **The Event dialog's Place** help ends "Requesters see the place on
     their request.", since the Scheduled chip shows it.

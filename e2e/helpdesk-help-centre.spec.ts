@@ -27,7 +27,7 @@ async function licensed(page: Page): Promise<boolean> {
   return r.status !== 402;
 }
 
-test.describe("portal help centre (licensed)", () => {
+test.describe("portal Help Center (licensed)", () => {
   test.describe.configure({ mode: "serial" });
   let db: Client;
   const saved = new Map<string, string | null>();
@@ -89,7 +89,7 @@ test.describe("portal help centre (licensed)", () => {
     ids.ok = await doc(`Exporting reports to CSV ${W}`, ids.start, "published", `Open the report and choose **Export**.\n\n<!-- internal: ask Sam -->\n\nIt downloads a spreadsheet.`, "Download any report as a spreadsheet.");
     ids.invoice = await doc(`Paying an invoice ${W}`, ids.billing, "published", "Pay by card or bank transfer.");
     ids.draft = await doc(`Exporting secrets draft ${W}`, ids.start, "draft", "Not ready.");
-    ids.team = (await db.query("INSERT INTO hd_teams (name, position) VALUES ($1, 999) RETURNING id", [`Help centre E2E ${stamp}`])).rows[0].id;
+    ids.team = (await db.query("INSERT INTO hd_teams (name, position) VALUES ($1, 999) RETURNING id", [`Help Center E2E ${stamp}`])).rows[0].id;
     ids.type = (await db.query("INSERT INTO hd_request_types (slug, title, team_id, form, position) VALUES ($1, $2, $3, '[]', 999) RETURNING id", [`hc-e2e-${stamp}`, `Product question ${W}`, ids.team])).rows[0].id;
     await setSetting(
       "helpdesk_portal",
@@ -116,16 +116,18 @@ test.describe("portal help centre (licensed)", () => {
     await expect(cust.getByRole("heading", { level: 1, name: "How can we help?" })).toBeVisible();
     await expect(cust.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/);
     await expect(cust.getByRole("navigation", { name: "Portal" }).getByRole("link", { name: "Your requests" })).toBeVisible();
-    const start = cust.getByRole("link", { name: new RegExp(`Getting started ${W}`) });
-    await expect(start).toContainText("1 article");
+    // 1.20.37: the home shows a card per space (Spaces is on by default); its count is the true one.
+    const card = cust.locator(`[data-help-space="${ids.space}"]`);
+    await expect(card).toContainText("2 articles");
     await expect(cust.getByRole("link", { name: "New request" })).toBeVisible();
 
     // Suggestions as you type: the published article, never the draft.
-    await cust.getByRole("searchbox", { name: "Search the help centre" }).fill(`export ${W}`);
-    const list = cust.getByRole("list", { name: "Suggested articles" });
-    await expect(list.getByRole("link", { name: `Exporting reports to CSV ${W}` })).toBeVisible({ timeout: 30_000 });
+    // (1.20.37: a combobox whose suggestions are listbox options.)
+    await cust.getByRole("combobox", { name: "Search the Help Center" }).fill(`export ${W}`);
+    const list = cust.getByRole("listbox", { name: "Suggestions" });
+    await expect(list.getByRole("option", { name: new RegExp(`Exporting reports to CSV ${W}`) })).toBeVisible({ timeout: 30_000 });
     await expect(list.getByText(`Exporting secrets draft ${W}`)).toHaveCount(0);
-    await list.getByRole("link", { name: `Exporting reports to CSV ${W}` }).click();
+    await list.getByRole("option", { name: new RegExp(`Exporting reports to CSV ${W}`) }).click();
     await expect(cust.getByRole("heading", { level: 1, name: `Exporting reports to CSV ${W}` })).toBeVisible({ timeout: 60_000 });
     await expect(cust.getByText("It downloads a spreadsheet.")).toBeVisible();
     await expect(cust.getByText("ask Sam")).toHaveCount(0);
@@ -134,15 +136,15 @@ test.describe("portal help centre (licensed)", () => {
     // Searching rate-limited says so; it never reads as "no articles match".
     await cust.goto("/support");
     await cust.route("**/support/api/help/search?**", (r) => r.fulfill({ status: 429, json: { error: "Too many searches right now. Wait a moment and try again.", limited: true } }));
-    await cust.getByRole("searchbox", { name: "Search the help centre" }).fill(`invoice ${W}`);
+    await cust.getByRole("combobox", { name: "Search the Help Center" }).fill(`invoice ${W}`);
     await expect(cust.getByTestId("help-limited")).toHaveText(/Too many searches/, { timeout: 30_000 });
     await expect(cust.getByText("No articles match that yet")).toHaveCount(0);
     await cust.unroute("**/support/api/help/search?**");
 
     // Enter opens the results page.
     await cust.goto("/support");
-    await cust.getByRole("searchbox", { name: "Search the help centre" }).fill(`export ${W}`);
-    await cust.getByRole("searchbox", { name: "Search the help centre" }).press("Enter");
+    await cust.getByRole("combobox", { name: "Search the Help Center" }).fill(`export ${W}`);
+    await cust.getByRole("combobox", { name: "Search the Help Center" }).press("Enter");
     const results = cust.getByRole("list", { name: "Search results" });
     await expect(results.getByRole("link").first()).toContainText(`Exporting reports to CSV ${W}`, { timeout: 60_000 });
     await expect(results.getByText(`Exporting secrets draft ${W}`)).toHaveCount(0);
@@ -186,8 +188,8 @@ test.describe("portal help centre (licensed)", () => {
     // The admin's Help centre tab.
     await page.goto("/desk/settings/portal/help-centre");
     const tabs = page.getByRole("navigation", { name: "Customer portal settings" });
-    await expect(tabs.getByRole("link", { name: "Help centre" })).toHaveAttribute("aria-current", "page", { timeout: 60_000 });
-    await expect(page.getByRole("switch", { name: "Show a help centre" }).or(page.getByRole("checkbox", { name: "Show a help centre" }))).toBeChecked();
+    await expect(tabs.getByRole("link", { name: "Help Center" })).toHaveAttribute("aria-current", "page", { timeout: 60_000 });
+    await expect(page.getByRole("switch", { name: "Show a Help Center" }).or(page.getByRole("checkbox", { name: "Show a Help Center" }))).toBeChecked();
     await expect(page.getByRole("list", { name: "Categories, in the order customers see them" }).getByText(`Getting started ${W}`)).toBeVisible();
     await expect(page.getByText("Last 30 days")).toBeVisible();
     await tabs.getByRole("link", { name: "Customers" }).click();

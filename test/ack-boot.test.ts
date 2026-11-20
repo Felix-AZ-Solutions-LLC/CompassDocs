@@ -256,7 +256,9 @@ async function assertSchema1101(db: Client, label: string) {
     // monthYear and warrantyLabel read them as that text).
     // 1.20.6: a whole-day event's first and last day (lib/helpdesk/desk-calendar selects them with
     // to_char as 'YYYY-MM-DD', so they are that text whatever the parser does).
-    ["documents.ack_effective_at", "hd_assets.purchase_date", "hd_assets.warranty_end", "hd_holidays.date", "hd_on_call_rotation.starts_on", "hd_ticket_checklist_items.due_date", "hd_ticket_events.end_date", "hd_ticket_events.start_date", "notify_digest_state.last_daily_on", "policy_settings.due_at"],
+    // 1.20.37: a Help Center article's view-count day (lib/helpdesk/help-centre),
+    // only ever compared in SQL and never read into JavaScript.
+    ["documents.ack_effective_at", "hd_assets.purchase_date", "hd_assets.warranty_end", "hd_hc_article_views.day", "hd_holidays.date", "hd_on_call_rotation.starts_on", "hd_ticket_checklist_items.due_date", "hd_ticket_events.end_date", "hd_ticket_events.start_date", "notify_digest_state.last_daily_on", "policy_settings.due_at"],
     `${label}: the OID 1082 text parser reaches exactly these columns; a new date column must be read as text on purpose`
   );
   const trigger = await db.query(
@@ -998,7 +1000,7 @@ describe("the 1.10.1 additions against a 1.10.0 database, booted twice", () => {
 
     const upgrade = boot(DB);
     assert.ok(upgrade.ok, `the upgrade boot succeeds:\n${upgrade.out}`);
-    assert.match(upgrade.out, /\[ack\] policy audiences materialised: \d+ policy setting row\(s\) and \d+ assignment\(s\)/, "the migration ran and logged its counts");
+    assert.match(upgrade.out, /\[ack\] policy audiences materialized: \d+ policy setting row\(s\) and \d+ assignment\(s\)/, "the migration ran and logged its counts");
     await assertSchema1101(db, "1.13.0 (D1) upgrade boot");
 
     const tables = await db.query<{ t: string }>(
@@ -1115,7 +1117,7 @@ describe("the 1.10.1 additions against a 1.10.0 database, booted twice", () => {
     const between = (await db.query(AFTER)).rows;
     const reboot = boot(DB);
     assert.ok(reboot.ok, `the second boot succeeds:\n${reboot.out}`);
-    assert.doesNotMatch(reboot.out, /policy audiences materialised/, "the migration did not run again");
+    assert.doesNotMatch(reboot.out, /policy audiences materialized/, "the migration did not run again");
     assert.deepEqual((await db.query(AFTER)).rows, between, "nothing moved on the second boot");
     assert.equal(
       (await db.query("SELECT removed_reason FROM policy_assignments WHERE document_id = $1 AND user_id = $2", [quiet, second])).rows[0].removed_reason,

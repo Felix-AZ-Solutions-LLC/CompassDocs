@@ -13,7 +13,7 @@ const cache = new Map<string, { at: number; p: Promise<HdContactCard | null> }>(
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T | null> {
   const res = await fetch(url, { credentials: "same-origin", signal, headers: { accept: "application/json" } });
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(res.status === 402 ? "The helpdesk is not included in your licence." : "Couldn't load the contact card.");
+  if (!res.ok) throw new Error(res.status === 402 ? "The helpdesk is not included in your license." : "Couldn't load the contact card.");
   return (await res.json()) as T;
 }
 

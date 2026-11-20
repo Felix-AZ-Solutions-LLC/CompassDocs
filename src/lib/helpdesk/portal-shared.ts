@@ -262,7 +262,7 @@ export type PortalBlocker = "inactive" | "restricted" | "person_field" | "manage
 
 export const PORTAL_BLOCKER_TEXT: Record<PortalBlocker, string> = {
   inactive: "The request type is switched off.",
-  restricted: "Only some groups in your organisation can use it.",
+  restricted: "Only some groups in your organization can use it.",
   person_field: "Its form asks for a person from your directory.",
   manager_approval: "Its workflow asks the requester's manager to approve.",
   space_approval: "Its workflow grants access to a space.",
@@ -274,7 +274,9 @@ export const PORTAL_BLOCKER_TEXT: Record<PortalBlocker, string> = {
 export function cleanNextPath(raw: unknown): string {
   if (typeof raw !== "string") return "";
   const v = raw.trim();
-  if (!/^\/support(\/[A-Za-z0-9/_-]*)?$/.test(v) || v.includes("//") || v.startsWith(`${PORTAL_API}`)) return "";
+  // 1.20.37: the one query a path may carry is New request's chosen type (a tile on the Help Center's home).
+  if (!/^\/support(\/[A-Za-z0-9/_-]*)?$/.test(v) && !/^\/support\/new\?type=[1-9]\d{0,9}$/.test(v)) return "";
+  if (v.includes("//") || v.startsWith(`${PORTAL_API}`)) return "";
   return v.slice(0, 200);
 }
 

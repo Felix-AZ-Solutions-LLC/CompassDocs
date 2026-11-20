@@ -243,7 +243,7 @@ export function itemSummary(i: CalItem, day: string, tz: string, h12: boolean): 
     if (i.place) parts.push(i.place);
     if (i.teamName) parts.push(i.teamName);
     parts.push(i.statusLabel);
-    if (i.cancelled) parts.push("Cancelled");
+    if (i.cancelled) parts.push("Canceled");
     else {
       if (i.ready < i.start) parts.push(`Setup ready by ${timeLabel(i.ready, tz, h12)}`);
       parts.push(i.setupComplete ? "Setup complete" : "Setup not complete");

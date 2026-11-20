@@ -34,7 +34,7 @@ export function LicenseGate({
         {entitlement && (
           <>
             {" "}
-            It needs a licence with the <code className="font-mono text-xs">{entitlement}</code> entitlement.
+            It needs a license with the <code className="font-mono text-xs">{entitlement}</code> entitlement.
           </>
         )}
       </p>

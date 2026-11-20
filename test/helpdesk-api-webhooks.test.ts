@@ -865,7 +865,7 @@ describe("webhooks", () => {
     for (const d of await deliveries(h.id)) {
       assert.equal(d.state, "failed");
       assert.equal(d.payload, null);
-      assert.match(d.error, /anonymised/);
+      assert.match(d.error, /anonymized/);
     }
   });
 
@@ -956,7 +956,7 @@ describe("webhooks: review fixes", () => {
     let row = (await deliveries(h.id))[0];
     assert.equal(row.state, "failed");
     assert.equal(row.payload, null);
-    assert.match(row.error, /anonymised/);
+    assert.match(row.error, /anonymized/);
     assert.equal(row.attempts, 0, "the in-flight outcome did not overwrite the row");
     assert.equal(await hooks.processDueDeliveries({ ids: [Number(d.id)], now: new Date(Date.now() + 3_600_000) }), 0);
     // The same race when the attempt succeeds: still failed, not "delivered".
@@ -969,7 +969,7 @@ describe("webhooks: review fixes", () => {
     await inFlight2;
     row = (await deliveries(h.id)).find((x) => x.id === d2.id)!;
     assert.equal(row.state, "failed");
-    assert.match(row.error, /anonymised/);
+    assert.match(row.error, /anonymized/);
     // A queued row with no payload left is never sent: it fails with "nothing left to send".
     const before = receivedOn("/anon").length;
     const ghost = await pool().query<{ id: string }>(

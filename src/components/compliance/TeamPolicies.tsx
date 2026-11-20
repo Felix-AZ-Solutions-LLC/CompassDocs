@@ -64,7 +64,7 @@ const SHOW_OPTIONS: SegmentedOption<Show>[] = [
 
 const LOAD_FAILED = "Couldn't load your team's policies.";
 /** The tooltip on a Remind the POST would refuse (the route's 403 for a viewer who leads none of the member's groups). */
-const CANNOT_REMIND_TIP = "Only the group's lead or a programme manager can remind";
+const CANNOT_REMIND_TIP = "Only the group's lead or a program manager can remind";
 
 /** "3 policies" / "1 policy": the count's noun (STYLEGUIDE §Vocabulary). */
 function policies(n: number): string {

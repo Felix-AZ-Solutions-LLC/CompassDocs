@@ -39,7 +39,7 @@ export default async function HelpSearchPage({ searchParams }: { searchParams: P
   return (
     <div className="mx-auto mt-6 w-full max-w-3xl sm:mt-8">
       <HelpBack />
-      <h1 className="mt-2 text-2xl font-bold text-slate-900">Search the help centre</h1>
+      <h1 className="mt-2 text-2xl font-bold text-slate-900">Search the Help Center</h1>
       <HelpSearch initial={q} wide className="mt-4" />
       <div className="mt-5">
         {limited ? (

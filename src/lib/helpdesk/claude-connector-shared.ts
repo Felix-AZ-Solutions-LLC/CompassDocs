@@ -41,7 +41,7 @@ export const HD_CLAUDE_LEVEL_LABEL: Record<HdClaudeLevel, string> = {
 };
 
 export const HD_CLAUDE_LEVEL_HINT: Record<HdClaudeLevel, string> = {
-  read: "Find and read requests and tickets the person can see, and summarise them.",
+  read: "Find and read requests and tickets the person can see, and summarize them.",
   notes: "Recommended. Drafts wait in the ticket for an agent to send or discard.",
   update: "Status, priority, team, assignee, tags, checklist items and macros, within the person's role.",
 };

@@ -100,6 +100,7 @@ describe("style drift guard", () => {
       // The portal's help centre (1.19.4 C3, §Helpdesk: customer portal help centre).
       "app/(portal)/support/articles/[article]/page.tsx",
       "app/(portal)/support/categories/[key]/page.tsx",
+      "app/(portal)/support/spaces/[id]/page.tsx",
       "app/(portal)/support/search/page.tsx",
       "components/helpdesk/portal/help/HelpCentre.tsx",
       // Sign-in surfaces (1.16.0, §Sign-in surfaces): AuthHeading is the one

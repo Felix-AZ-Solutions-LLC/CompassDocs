@@ -122,7 +122,7 @@ export function cleanMatch(raw: unknown): string {
 
 export function cleanTitle(raw: unknown): string {
   const t = typeof raw === "string" ? raw.trim().replace(/\s+/g, " ") : "";
-  if (!t) throw new IncidentInputError("Give the incident a title people will recognise.");
+  if (!t) throw new IncidentInputError("Give the incident a title people will recognize.");
   if (t.length > INCIDENT_LIMITS.title) throw new IncidentInputError(`Keep the title under ${INCIDENT_LIMITS.title} characters.`);
   return t;
 }

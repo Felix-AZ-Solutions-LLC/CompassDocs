@@ -175,7 +175,7 @@ test.describe("Workspace email through Microsoft 365 (fake Microsoft)", () => {
     // --- Limit the app to the mailbox: the access policy commands, with a copy button --------------------
     const lock = page.getByTestId("mail-lockdown");
     await expect(lock.getByRole("heading", { name: `Limit the app to ${MAILBOX}` })).toBeVisible();
-    await expect(lock).toContainText("Mail.Send permission lets an app send as any mailbox in your organisation");
+    await expect(lock).toContainText("Mail.Send permission lets an app send as any mailbox in your organization");
     const commands = lock.getByTestId("mail-commands");
     const short = String(made.client_id).slice(0, 8);
     // Named after the app, so a second CompassDocs in the same tenant makes its own group.

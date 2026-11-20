@@ -430,7 +430,7 @@ function ProgressLine({ s, nested = false }: { s: HdProgressStep; nested?: boole
         : s.state === "declined" || s.state === "failed"
           ? "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300"
           : "bg-slate-100 text-slate-400";
-  const stateWord = { done: "Done", active: "In progress", declined: "Declined", pending: "Not started", skipped: "Skipped", cancelled: "Cancelled", failed: "Can't be done" }[s.state];
+  const stateWord = { done: "Done", active: "In progress", declined: "Declined", pending: "Not started", skipped: "Skipped", cancelled: "Canceled", failed: "Can't be done" }[s.state];
   return (
     <li className={nested ? "ml-7" : ""}>
       <div className="flex items-start gap-2">

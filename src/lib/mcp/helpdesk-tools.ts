@@ -326,7 +326,7 @@ export const HELPDESK_TOOL_DEFS: HdToolDef[] = [
     name: "hd_ticket_summary",
     side: "agent",
     description:
-      "Helpdesk desk: the material to summarise a ticket (the conversation in order, internal notes marked, answers and where its workflow is) plus similar past tickets from the person's queues. You write the summary; nothing is saved.",
+      "Helpdesk desk: the material to summarize a ticket (the conversation in order, internal notes marked, answers and where its workflow is) plus similar past tickets from the person's queues. You write the summary; nothing is saved.",
     inputSchema: obj({ number: NUMBER }, ["number"]),
   },
   {
@@ -1354,7 +1354,7 @@ async function ticketSummary(user: User, a: Args, ctx: Ctx) {
     .slice(0, 5)
     .map(({ row }) => ({ number: row.number, subject: row.subject, status: row.status, team: row.team_name, updated_at: row.updated_at, url: `${ctx.origin}/desk/tickets/${row.number}` }));
   return toolJson({
-    instructions: "Summarise this ticket for an agent: the problem, what has been tried, where it stands and the next step. Internal notes are agent-only: keep them out of anything meant for the requester.",
+    instructions: "Summarize this ticket for an agent: the problem, what has been tried, where it stands and the next step. Internal notes are agent-only: keep them out of anything meant for the requester.",
     ticket: { number: t.number, subject: t.subject, status: t.status, priority: t.priority, team: t.team_name, assignee: t.assignee_name, requester: t.requester_name, opened: t.created_at },
     answers,
     workflow_step: currentStep(d.workflow),

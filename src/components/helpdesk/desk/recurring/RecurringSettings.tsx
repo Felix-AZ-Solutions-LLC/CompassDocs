@@ -289,7 +289,7 @@ export function RecurringSettings() {
           title="No recurring tickets yet"
           body={
             teams.length
-              ? "Schedule the checks your team does every week or month, like a backup restore test or a fire alarm test. Each one opens a ticket on time, honouring the team's holidays."
+              ? "Schedule the checks your team does every week or month, like a backup restore test or a fire alarm test. Each one opens a ticket on time, honoring the team's holidays."
               : "You don't lead a team yet. A team's leads schedule its recurring tickets."
           }
           action={teams.length ? { onClick: () => open("new"), label: "New schedule", icon: <Plus /> } : undefined}

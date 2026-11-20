@@ -423,7 +423,7 @@ export function RequesterAction({
           </div>
           <p className="text-xs text-slate-500">
             Never the desk&apos;s own addresses or the sender&apos;s, never a desk agent&apos;s unless allowed, and never an email whose sender didn&apos;t pass the sender check. In
-            &ldquo;Name &lt;address&gt;&rdquo; only the address in brackets counts. When that address can&apos;t be used, the requester stays and the ticket notes why. Acknowledgements
+            &ldquo;Name &lt;address&gt;&rdquo; only the address in brackets counts. When that address can&apos;t be used, the requester stays and the ticket notes why. Acknowledgments
             to requesters found this way are limited per address and per rule.
           </p>
         </div>

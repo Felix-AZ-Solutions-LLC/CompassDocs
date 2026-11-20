@@ -58,7 +58,7 @@ export async function PATCH(req: Request) {
   const gate = await apiGuard("admin", "identity.sso_manage");
   if (gate instanceof NextResponse) return gate;
   if (!(await featureEnabled("sso"))) {
-    return NextResponse.json({ error: "The Duo sign-in check needs an Enterprise licence with SSO." }, { status: 402 });
+    return NextResponse.json({ error: "The Duo sign-in check needs an Enterprise license with SSO." }, { status: 402 });
   }
   // Owing Duo (the desk rule alone lets an admin reach this page without it): not from this session.
   if (duoStandingOf(gate).verdict.desk) {

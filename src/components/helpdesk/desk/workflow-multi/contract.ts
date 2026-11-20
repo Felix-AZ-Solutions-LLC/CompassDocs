@@ -66,7 +66,7 @@ export const STEP_STATE_LABEL: Record<HdProgressStep["state"] | "failed", string
   done: "Done",
   declined: "Declined",
   skipped: "Skipped",
-  cancelled: "Cancelled",
+  cancelled: "Canceled",
   failed: "Couldn't be done",
 };
 

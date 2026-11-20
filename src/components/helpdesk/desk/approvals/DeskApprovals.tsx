@@ -194,7 +194,7 @@ function ApprovalCard({ a, linkToTicket, onDone }: { a: HdApprovalCard; linkToTi
         ) : a.decision === "declined" ? (
           <Chip tone="error">Declined</Chip>
         ) : (
-          <Chip tone="neutral">Cancelled</Chip>
+          <Chip tone="neutral">Canceled</Chip>
         )}
       </div>
       {(a.answers.length > 0 || a.body) && (

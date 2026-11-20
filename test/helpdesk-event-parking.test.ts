@@ -387,7 +387,7 @@ describe("park and wake", () => {
     assert.equal(d.parking?.parked_until, iso(row.parked_until));
   });
 
-  test("refused with one plain sentence when the event is too close, missing, cancelled, or the ticket solved; the ticket stays as it is", async () => {
+  test("refused with one plain sentence when the event is too close, missing, canceled, or the ticket solved; the ticket stays as it is", async () => {
     const near = await eventTicket("Too close", 2);
     const r = await park("agent", near.number, { action: "park" });
     assert.equal(r.status, 409);
@@ -399,9 +399,9 @@ describe("park and wake", () => {
     assert.deepEqual([iso((await rowOf(near.id)).parked_until), (await rowOf(near.id)).park_prep_days], [await expectedWake(near.id, 0), 0]);
     const none = await ticket("No event");
     assert.equal((await park("agent", none.number, { action: "park" })).body.error, "This ticket has no event to hold it for. Add the event first.");
-    const gone = await eventTicket("Cancelled");
-    await cal.cancelTicketEvent(gone.id, actor(), "Cancelled by hand.");
-    assert.equal((await park("agent", gone.number, { action: "park" })).body.error, "The event was cancelled, so there is nothing to hold this ticket for.");
+    const gone = await eventTicket("Canceled");
+    await cal.cancelTicketEvent(gone.id, actor(), "Canceled by hand.");
+    assert.equal((await park("agent", gone.number, { action: "park" })).body.error, "The event was canceled, so there is nothing to hold this ticket for.");
     const solved = await eventTicket("Solved");
     await pool().query("UPDATE hd_tickets SET status = 'solved', solved_at = now() WHERE id = $1", [solved.id]);
     assert.equal((await park("agent", solved.number, { action: "park" })).body.error, "A solved or closed ticket can't be parked. Reopen it first.");
@@ -562,11 +562,11 @@ describe("park and wake", () => {
     assert.deepEqual([(await rowOf(t.id)).status, (await rowOf(t.id)).parked_until], ["open", null]);
     assert.ok((await lines(t.id)).some((l) => /^Woke: the event moved to .*, so it is inside its prep window now\.$/.test(l.body)));
 
-    const c = await eventTicket("Cancelled later", 90);
+    const c = await eventTicket("Canceled later", 90);
     await park("agent", c.number, { action: "park" });
     await cal.cancelTicketEvent(c.id, { id: null, name: "Helpdesk" }, "The meeting was cancelled.");
     assert.equal((await rowOf(c.id)).status, "open");
-    assert.ok((await lines(c.id)).some((l) => l.body === "The event was cancelled. Close this ticket if nothing else is needed." && l.kind === "internal"));
+    assert.ok((await lines(c.id)).some((l) => l.body === "The event was canceled. Close this ticket if nothing else is needed." && l.kind === "internal"));
 
     const rm = await eventTicket("Removed", 90);
     await park("agent", rm.number, { action: "park" });
@@ -648,7 +648,7 @@ describe("parking itself after the acknowledgement", () => {
     assert.ok(e.ics_dtstamp);
     const ls = await lines(t.id);
     const added = ls.findIndex((l) => l.body.startsWith("Event added from the meeting invite"));
-    const parked = ls.findIndex((l) => l.body.startsWith("Parked until ") && /after the acknowledgement \(a ticket from a meeting invite\)/.test(l.body));
+    const parked = ls.findIndex((l) => l.body.startsWith("Parked until ") && /after the acknowledgment \(a ticket from a meeting invite\)/.test(l.body));
     assert.ok(added >= 0 && parked > added, JSON.stringify(ls));
     await email.helpdeskMailSettledForTests();
     assert.ok(mails.some((m) => m.to.includes(P.req.email) && /received/i.test(m.subject)), "the acknowledgement went out");
@@ -719,7 +719,7 @@ describe("parking itself after the acknowledgement", () => {
     assert.equal(iso((await cal.getTicketEvent(t.id))!.starts_at), later.toISOString(), "the update is applied");
     const note = (await pool().query("SELECT kind, body FROM hd_messages WHERE ticket_id = $1 AND via = 'email' ORDER BY id DESC LIMIT 1", [t.id])).rows[0];
     assert.equal(note.kind, "internal", "never a public requester message");
-    assert.match(note.body, /\(the meeting's organiser\) wrote/);
+    assert.match(note.body, /\(the meeting's organizer\) wrote/);
     assert.equal((await rowOf(t.id)).status, "on_hold", "still parked");
     // A message from the organiser with their update: the ticket wakes so it is read.
     await inbound.processInboundEmail(
@@ -803,7 +803,7 @@ describe("parking itself after the acknowledgement", () => {
     assert.equal((await cal.getTicketEvent(t.id))!.cancelled, true);
     const row = await rowOf(t.id);
     assert.deepEqual([row.status, row.parked_until], ["open", null]);
-    assert.ok((await lines(t.id)).some((l) => l.body === "The event was cancelled. Close this ticket if nothing else is needed."));
+    assert.ok((await lines(t.id)).some((l) => l.body === "The event was canceled. Close this ticket if nothing else is needed."));
     assert.equal(iso((await pool().query("SELECT ics_dtstamp FROM hd_ticket_events WHERE ticket_id = $1", [t.id])).rows[0].ics_dtstamp), new Date(Math.floor(cancelStamp.getTime() / 1000) * 1000).toISOString(), "the CANCEL's DTSTAMP is kept");
     // The same SEQUENCE with an older DTSTAMP, arriving late: still cancelled.
     await inbound.processInboundEmail(mail({ text: "", files: [file(icsText("REQUEST", UID, ["SEQUENCE:4", `DTSTAMP:${stamp(new Date(cancelStamp.getTime() - 3_600_000))}`, `DTSTART:${at(start)}`]))] }), { outsideSenders: false });
@@ -946,7 +946,7 @@ describe("after review: assignment, recomputing, failures, saved views, the back
       throw new Error("simulated failure");
     });
     try {
-      await cal.cancelTicketEvent(c.id, { id: null, name: "Helpdesk" }, "Cancelled.");
+      await cal.cancelTicketEvent(c.id, { id: null, name: "Helpdesk" }, "Canceled.");
       assert.ok(Date.parse((await rowOf(c.id)).parked_until) <= Date.now() + 1000, "due now");
       const f = await eventTicket("Wake keeps failing", 90);
       await park("agent", f.number, { action: "park" });

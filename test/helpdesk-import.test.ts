@@ -833,7 +833,7 @@ describe("review fixes", () => {
     assert.equal(d.tickets_create, 0);
     assert.equal(d.skipped, 2, dr.text);
     const skippedCsv = await call((await routes.skipped()).GET, jsonReq(`/api/helpdesk/admin/import/${job.id}/skipped`, s("admin")), { id: String(job.id) });
-    assert.match(skippedCsv.text, /anonymised/);
+    assert.match(skippedCsv.text, /anonymized/);
     // Started directly (the dry run says nothing to import, so the wizard would not offer it).
     const done = await runToEnd(job.id);
     assert.equal(done?.status, "completed", done?.error);

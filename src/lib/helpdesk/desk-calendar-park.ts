@@ -274,7 +274,7 @@ export async function parkTicket(ticketId: number, actor: ParkActor, opts: ParkO
     if (t.parked_until) return refuse("This ticket is already parked. Change its prep window, or wake it.");
     const e = await eventRow(ticketId, client);
     if (!e) return refuse("This ticket has no event to hold it for. Add the event first.");
-    if (e.cancelled_at) return refuse("The event was cancelled, so there is nothing to hold this ticket for.");
+    if (e.cancelled_at) return refuse("The event was canceled, so there is nothing to hold this ticket for.");
     const event = toEvent(e);
     const prepOwn = prepIn !== undefined ? prepIn : t.park_prep_days;
     const prep = prepOwn ?? settings.park_prep_days;
@@ -298,7 +298,7 @@ export async function parkTicket(ticketId: number, actor: ParkActor, opts: ParkO
     const body =
       reason === "agent"
         ? `${mdInline(actor.name) || "Someone"} parked the ticket until ${when} for the event on ${forEvent}: ${why}`
-        : `Parked until ${when} for the event on ${forEvent}, after the acknowledgement (${reason === "invite" ? "a ticket from a meeting invite" : "a request type that goes on the calendar"}): ${why}`;
+        : `Parked until ${when} for the event on ${forEvent}, after the acknowledgment (${reason === "invite" ? "a ticket from a meeting invite" : "a request type that goes on the calendar"}): ${why}`;
     await line(client, ticketId, actor, body, now);
     return { parked: true, wake_at: new Date(wake).toISOString(), ticket: t, prep, tz, event };
   });
@@ -401,7 +401,7 @@ export async function wakeTicket(ticketId: number, actor: ParkActor, opts: WakeO
         body = `Woke for a message that came with the meeting update${forEvent ? ` (it was parked for the event on ${forEvent})` : ""}`;
         break;
       case "cancelled":
-        body = "The event was cancelled. Close this ticket if nothing else is needed.";
+        body = "The event was canceled. Close this ticket if nothing else is needed.";
         break;
       case "removed":
         body = "Woke: the event was removed from this ticket.";
@@ -452,7 +452,7 @@ export async function parkRefusal(ticketId: number, opts: { times?: import("./de
   const e = await eventRow(ticketId);
   const times = opts.times ?? (e ? { starts_at: new Date(e.starts_at), all_day: e.all_day === 1, start_date: e.start_date, setup_minutes: e.setup_minutes } : null);
   if (!times) return "This ticket has no event to hold it for. Add the event first.";
-  if (!opts.times && e?.cancelled_at) return "The event was cancelled, so there is nothing to hold this ticket for.";
+  if (!opts.times && e?.cancelled_at) return "The event was canceled, so there is nothing to hold this ticket for.";
   const settings = await getCalendarSettings();
   const prep = (opts.prepDays !== undefined ? opts.prepDays : t.park_prep_days) ?? settings.park_prep_days;
   const hours = await calendarOf(t.team_id);
@@ -519,7 +519,7 @@ async function notifyWoke(t: ParkRow, event: HdTicketEvent | null, tz: string, w
     const base = await helpdeskOrigin(origin).catch(() => "");
     const url = hdLinks.ticket(t.number);
     const headline =
-      why === "cancelled" ? "Back in the queue: the event was cancelled" : why === "removed" ? "Back in the queue: the event was removed" : "Back in the queue for its event";
+      why === "cancelled" ? "Back in the queue: the event was canceled" : why === "removed" ? "Back in the queue: the event was removed" : "Back in the queue for its event";
     const when = event ? (event.all_day ? eventWhen(event, tz) : `${eventWhen(event, tz)} (${zoneLabel(tz)})`) : "No event";
     const readyBy = event ? `${readyByLabel(event, tz)}${event.setup_minutes > 0 ? ` (${leadLabel(event.setup_minutes)} before)` : ""}` : "";
     for (const id of ids) {
@@ -569,7 +569,7 @@ export async function setPrepDays(ticketId: number, raw: unknown, actor: ParkAct
     const label = c.value === null ? `the desk's (${prepLabel(prep)})` : prepLabel(prep);
     if (t.parked_until) {
       const e = await eventRow(ticketId, client);
-      if (!e || e.cancelled_at) throw new ParkError("The event was cancelled or removed. Wake the ticket instead.");
+      if (!e || e.cancelled_at) throw new ParkError("The event was canceled or removed. Wake the ticket instead.");
       const hours = await calendarOf(t.team_id, client);
       wake = wakeInstant(toEvent(e), prep, hours);
       if (wake <= now.getTime() + PARK_LIMITS.minLeadMs) {

@@ -519,7 +519,7 @@ export function ClaudePanel() {
               ))}
             </Popover>
           </span>
-          <button type="button" onClick={ctx.closePanel} aria-label="Minimise Claude" data-tt="Minimise" data-tt-pos="bottom" className={iconButtonClass("quiet", "sm")}>
+          <button type="button" onClick={ctx.closePanel} aria-label="Minimize Claude" data-tt="Minimize" data-tt-pos="bottom" className={iconButtonClass("quiet", "sm")}>
             <Minimize2 aria-hidden />
           </button>
           <button

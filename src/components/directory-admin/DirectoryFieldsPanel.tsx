@@ -422,7 +422,7 @@ function OptionsEditor({ field, people, onSaved }: { field: DirectoryField; peop
                 <th className="px-1 py-1">Value</th>
                 <th className="px-1 py-1">Label</th>
                 <th className="px-1 py-1">Aliases</th>
-                <th className="px-1 py-1">Colour</th>
+                <th className="px-1 py-1">Color</th>
                 <th className="px-1 py-1">Hidden</th>
                 <th className="px-1 py-1" />
               </tr>
@@ -434,7 +434,7 @@ function OptionsEditor({ field, people, onSaved }: { field: DirectoryField; peop
                   <td className="px-1 py-1"><TextInput className="w-32 text-xs" value={o.label ?? ""} placeholder={o.value} onChange={(e) => update(i, { label: e.target.value })} aria-label="Label" /></td>
                   <td className="px-1 py-1"><TextInput className="w-48 text-xs" value={(o.matches ?? []).join(", ")} placeholder="Partner, *Attorney*" onChange={(e) => update(i, { matches: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} aria-label="Aliases" /></td>
                   <td className="px-1 py-1">
-                    <Select className="w-24 text-xs" value={o.color ?? ""} onChange={(e) => update(i, { color: e.target.value || undefined })} aria-label="Colour">
+                    <Select className="w-24 text-xs" value={o.color ?? ""} onChange={(e) => update(i, { color: e.target.value || undefined })} aria-label="Color">
                       <option value="">default</option>
                       {Object.keys(CHIP_COLORS).map((c) => (
                         <option key={c} value={c}>{c}</option>

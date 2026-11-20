@@ -6,7 +6,7 @@
 import { PortalHelpCentre } from "@/components/helpdesk/desk/settings/PortalHelpCentre";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Help centre · Customer portal" };
+export const metadata = { title: "Help Center · Customer portal" };
 
 export default function Page() {
   return <PortalHelpCentre />;

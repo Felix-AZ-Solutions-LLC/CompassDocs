@@ -514,16 +514,16 @@ export function PersonRecord({
   // surfaces cannot drift. Irreversible, so it asks with the username typed.
   async function anonymise() {
     const ok = await confirmDialog({
-      title: `Anonymise ${name}'s compliance record?`,
+      title: `Anonymize ${name}'s compliance record?`,
       body: `Replaces this person's name, email and IP address on every confirmation and decision record with "Former staff #${person.id}". Counts, dates, versions and hashes stay. Audit log entries are kept as recorded. This cannot be undone.`,
-      confirmLabel: "Anonymise record",
+      confirmLabel: "Anonymize record",
       danger: true,
       typeToConfirm: person.username,
     });
     if (ok !== true) return;
     await run("anonymise", () => fetch(`/api/admin/users/${person.id}/anonymise-compliance`, { method: "POST" }), {
-      fallback: "Couldn't anonymise the compliance record.",
-      ok: "Compliance record anonymised.",
+      fallback: "Couldn't anonymize the compliance record.",
+      ok: "Compliance record anonymized.",
     });
   }
 
@@ -788,7 +788,7 @@ export function PersonRecord({
                   data-tt="Replace their name, email and IP on every attestation record; counts, dates, versions and hashes stay"
                   data-tt-wrap=""
                 >
-                  Anonymise compliance record…
+                  Anonymize compliance record…
                 </Button>
               )}
             </div>

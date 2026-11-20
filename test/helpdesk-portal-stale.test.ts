@@ -219,7 +219,7 @@ describe("deleting prunes the settings in the same transaction", () => {
     ]);
   });
 
-  test("a space: it leaves the help centre's chosen spaces, with its category keys and its folders'", async () => {
+  test("a space: it leaves the Help Center's chosen spaces, with its category keys and its folders'", async () => {
     const gone = await space("gone");
     const kept = await space("kept");
     const folder = (await q<{ id: number }>("INSERT INTO space_categories (space_id, name) VALUES ($1, 'Guides') RETURNING id", [gone]))[0].id;
@@ -279,7 +279,7 @@ describe("a workspace already in the bad state heals on the next read", () => {
     assert.equal(await getSetting(HD_PORTAL_SETTINGS_KEY), "not json");
   });
 
-  test("help centre: a stale space is cleaned and written back", async () => {
+  test("Help Center: a stale space is cleaned and written back", async () => {
     const kept = await space("hc-kept");
     const gone = (await q<{ id: number }>("SELECT COALESCE(max(id), 0) + 1000 AS id FROM spaces"))[0].id;
     await put(HD_HELP_CENTRE_SETTINGS_KEY, { enabled: true, from_spaces: true, spaces: [gone, kept], order: [`s${gone}`], hidden: [], tagged: true });

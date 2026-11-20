@@ -167,7 +167,7 @@ export function ScimMicrosoftSetup({ status, onState }: { status: ScimStatus; on
         </summary>
         <div className="mt-2 space-y-2">
           <p>
-            Entra shows that, with <strong>Get started</strong> greyed out, on the Provisioning page of an app made
+            Entra shows that, with <strong>Get started</strong> grayed out, on the Provisioning page of an app made
             in App registrations. Entra provisions only apps made from its non-gallery template (&ldquo;Integrate any
             other application you don&rsquo;t find in the gallery&rdquo;), which is the kind this setup finds or makes.
           </p>

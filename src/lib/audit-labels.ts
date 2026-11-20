@@ -87,7 +87,7 @@ export const AUDIT_LABELS: Record<string, string> = {
   "change_request.reject": "Rejected change",
   "ack.requested": "Asked for read confirmations",
   "ack.reminder_sent": "Sent read confirmation reminder",
-  "ack.anonymised": "Anonymised compliance record",
+  "ack.anonymised": "Anonymized compliance record",
 
   // Read confirmation decisions and settings (C1). Every key the ack family
   // can emit lives under "ack." so the category filter groups them; the three
@@ -168,7 +168,7 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.workflow.draft_discarded": "Discarded workflow changes",
   "helpdesk.workflow.deleted": "Deleted workflow",
   "helpdesk.workflow.test_run": "Tested workflow",
-  "helpdesk.workflow.run_cancelled": "Cancelled workflow run",
+  "helpdesk.workflow.run_cancelled": "Canceled workflow run",
   "helpdesk.sla.updated": "Changed helpdesk reply targets",
   "helpdesk.settings.updated": "Changed helpdesk settings",
   "helpdesk.setup.starter": "Added the helpdesk starter set",
@@ -199,7 +199,7 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.m365.mailbox_disconnected": "Disconnected a Microsoft 365 mailbox",
   "helpdesk.m365.mailbox_changed": "Changed how a Microsoft 365 mailbox is looked up",
   "helpdesk.m365.retry_requested": "Asked to try Microsoft 365 messages again",
-  "helpdesk.m365.tenant_wide_changed": "The Microsoft 365 mail app's organisation-wide permissions changed",
+  "helpdesk.m365.tenant_wide_changed": "The Microsoft 365 mail app's organization-wide permissions changed",
   "helpdesk.m365.address_changed": "Changed a help address's Microsoft 365 mailbox",
   "helpdesk.m365.access_checked": "Checked what the Microsoft 365 mail app can reach",
   "helpdesk.m365.subscription_failed": "Microsoft 365 refused mail notifications",
@@ -215,7 +215,7 @@ export const AUDIT_LABELS: Record<string, string> = {
   // Portal satisfaction survey (1.19.2, agent W5, lib/helpdesk/portal-csat).
   "helpdesk.portal.csat": "Rated a request in the customer portal",
   // Customer portal help centre (1.19.4 C3, lib/helpdesk/help-centre).
-  "helpdesk.portal.help_centre_updated": "Changed the customer portal help centre",
+  "helpdesk.portal.help_centre_updated": "Changed the customer portal Help Center",
   // "New" badges in the desk settings rail (1.19.2, agent W5, lib/helpdesk/whats-new).
   "helpdesk.whats_new.seen": "Saw what's new in the desk",
   "helpdesk.automation.created": "Created helpdesk rule",
@@ -241,7 +241,7 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.ticket.deleted": "Deleted ticket",
   // Retention and privacy (1.19.1, agent V5): the sweep's rows carry counts per run.
   "helpdesk.ticket.auto_closed": "Closed solved tickets automatically",
-  "helpdesk.ticket.anonymised": "Anonymised helpdesk tickets",
+  "helpdesk.ticket.anonymised": "Anonymized helpdesk tickets",
   // 1.19.4 (C7): retention's delete moves tickets to the recycle bin; older rows mean a hard delete.
   "helpdesk.ticket.deleted_by_retention": "Moved old helpdesk tickets to the recycle bin",
   // 1.19.4 (area C7, lib/helpdesk/recycle-bin): per ticket (the label keeps "#N subject" after a purge), plus one row per bulk request.
@@ -398,7 +398,7 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.agent_role.changed": "Changed a desk role",
   "helpdesk.agent_role.removed": "Removed someone from the desk",
   // The licence's helpdesk agent allowance refused an add (roles-agents).
-  "helpdesk.agent_role.refused_limit": "Tried to add an agent past the licence's agent allowance",
+  "helpdesk.agent_role.refused_limit": "Tried to add an agent past the license's agent allowance",
   "helpdesk.roles.updated": "Changed desk role capabilities",
   "helpdesk.roles.reset": "Reset desk role capabilities",
   "helpdesk.reply.reviewed": "Reviewed a newbie's reply",
@@ -434,7 +434,7 @@ export const AUDIT_LABELS: Record<string, string> = {
   "helpdesk.webhook.secret_rotated": "Rotated a helpdesk webhook's signing secret",
   "helpdesk.webhook.tested": "Sent a test to a helpdesk webhook",
   "helpdesk.webhook.auto_disabled": "Turned off a failing helpdesk webhook",
-  "helpdesk.workflow_run.cancelled": "Cancelled a workflow run",
+  "helpdesk.workflow_run.cancelled": "Canceled a workflow run",
   // 1.20.21 (lib/helpdesk/workflow-start): an agent started a request type's workflow from the desk; the target label
   // names the workflow and the version the run pinned, details.summary reads "Workflow started by <agent>: …".
   "helpdesk.workflow_run.started": "Started a workflow",

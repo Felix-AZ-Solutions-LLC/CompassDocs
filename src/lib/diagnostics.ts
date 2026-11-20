@@ -265,14 +265,14 @@ export async function checkHelpdeskAgents(): Promise<DiagnosticCheck | null> {
     const { licensed, enforced, used, over } = await agentUsage();
     const agents = (n: number) => `${n} agent${n === 1 ? "" : "s"}`;
     if (licensed === null) {
-      return { ...base, status: "pass", detail: `${agents(used)} on the desk; the licence has no agent limit.` };
+      return { ...base, status: "pass", detail: `${agents(used)} on the desk; the license has no agent limit.` };
     }
     if (!enforced) {
       // The helpdesk is on, so the licence is in grace: the key's number shows, nothing is refused.
       return {
         ...base,
         status: "warn",
-        detail: `${used} of ${agents(licensed)} in use; not enforced while the licence is in grace${over > 0 ? `, over by ${over} once renewed` : ""}.`,
+        detail: `${used} of ${agents(licensed)} in use; not enforced while the license is in grace${over > 0 ? `, over by ${over} once renewed` : ""}.`,
         fix: FIX.license,
       };
     }
@@ -280,7 +280,7 @@ export async function checkHelpdeskAgents(): Promise<DiagnosticCheck | null> {
       return {
         ...base,
         status: "warn",
-        detail: `${used} of ${agents(licensed)} in use: over the licence by ${over}. Nobody loses access, but no one new can be added until agents are removed or more are bought.`,
+        detail: `${used} of ${agents(licensed)} in use: over the license by ${over}. Nobody loses access, but no one new can be added until agents are removed or more are bought.`,
         fix: FIX.agents,
       };
     }

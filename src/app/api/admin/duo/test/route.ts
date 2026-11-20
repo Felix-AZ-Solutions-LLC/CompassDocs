@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   const gate = await apiGuard("admin", "identity.sso_manage");
   if (gate instanceof NextResponse) return gate;
   if (!(await featureEnabled("sso"))) {
-    return NextResponse.json({ error: "The Duo sign-in check needs an Enterprise licence with SSO." }, { status: 402 });
+    return NextResponse.json({ error: "The Duo sign-in check needs an Enterprise license with SSO." }, { status: 402 });
   }
   const session = await currentSession();
   if (!session) return NextResponse.json({ error: "Authentication required." }, { status: 401 });

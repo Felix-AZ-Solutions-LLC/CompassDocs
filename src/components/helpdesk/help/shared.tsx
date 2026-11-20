@@ -1,73 +1,17 @@
 "use client";
 
 // Small pieces every Get help screen shares (1.19.0): the request-type icon
-// map (lucide only: a request type stores an icon *name*), the requester's
+// map (lucide only: a request type stores an icon *name*; request-type-icon), the requester's
 // status chip, how an answer prints, and one JSON fetch helper that hands
 // back the server's own `error` sentence.
 
-import type { LucideIcon } from "lucide-react";
-import {
-  Briefcase,
-  Bug,
-  Building2,
-  Car,
-  CircleHelp,
-  Coffee,
-  Flag,
-  GraduationCap,
-  Heart,
-  KeyRound,
-  Laptop,
-  LifeBuoy,
-  Lock,
-  Mail,
-  Monitor,
-  Package,
-  Phone,
-  Printer,
-  Smartphone,
-  UserPlus,
-  Users,
-  Wallet,
-  Wrench,
-} from "lucide-react";
 import { chipClass, type ChipTone } from "@/components/Chip";
 import { HD_STATUS_LABEL_REQUESTER, type HdFormAnswers, type HdFormField, type HdScheduled, type HdStatus } from "@/lib/helpdesk/types";
 import { ScheduledChip } from "./ScheduledChip";
 
-const ICONS: Record<string, LucideIcon> = {
-  briefcase: Briefcase,
-  bug: Bug,
-  building: Building2,
-  building2: Building2,
-  car: Car,
-  coffee: Coffee,
-  flag: Flag,
-  graduation: GraduationCap,
-  heart: Heart,
-  help: CircleHelp,
-  key: KeyRound,
-  keyround: KeyRound,
-  laptop: Laptop,
-  lifebuoy: LifeBuoy,
-  lock: Lock,
-  mail: Mail,
-  monitor: Monitor,
-  package: Package,
-  phone: Phone,
-  printer: Printer,
-  smartphone: Smartphone,
-  userplus: UserPlus,
-  users: Users,
-  wallet: Wallet,
-  wrench: Wrench,
-};
-
-/** "user-plus", "userPlus" and "UserPlus" all name the same lucide icon. */
-export function requestTypeIcon(name: string | null | undefined): LucideIcon {
-  const key = (name ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  return ICONS[key] ?? LifeBuoy;
-}
+// 1.20.37: the icon map moved to ./request-type-icon (server-safe, so the
+// customer portal's request tiles render it on the server).
+export { requestTypeIcon } from "./request-type-icon";
 
 /** What the requester reads: a running workflow is "In progress" (the approved preview), else the requester labels. */
 export function requesterStatus(status: HdStatus, inWorkflow: boolean): { label: string; tone: ChipTone } {

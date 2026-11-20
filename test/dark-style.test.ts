@@ -146,7 +146,7 @@ describe("dark style preference", () => {
     assert.equal(resolveDarkStyle(undefined, undefined), "slate");
   });
 
-  test("the portal, help centre, public site and sign-in pages follow the workspace default", () => {
+  test("the portal, Help Center, public site and sign-in pages follow the workspace default", () => {
     for (const p of ["/support", "/support/articles/reset-vpn", "/support/requests?x=1", "/public", "/public/hr/leave", "/share/abc", "/upload/abc", "/login", "/login/duo", "/login/preview?theme=dark", "/setup", "/oauth/authorize?client_id=x", "/account/password", "/account/two-step"]) {
       assert.ok(workspaceOnlyPath(p), p);
       assert.equal(darkStyleForPage(p, "black", "graphite"), "graphite", p);

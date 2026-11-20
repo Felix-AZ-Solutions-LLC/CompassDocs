@@ -332,7 +332,7 @@ export async function validateRecurringInput(raw: Record<string, unknown>, base?
 
   let tz = pick("timezone") ?? "";
   if (tz === "" || tz === null) tz = (await hoursForTeam(teamId)).timezone;
-  if (!validTimezone(tz)) return { ok: false, error: "That time zone isn't recognised." };
+  if (!validTimezone(tz)) return { ok: false, error: "That time zone isn't recognized." };
 
   const enabled = pick("enabled") ?? true;
   if (typeof enabled !== "boolean") return { ok: false, error: "Enabled is on or off." };

@@ -101,7 +101,7 @@ export async function PATCH(req: Request) {
     return NextResponse.json(
       {
         error:
-          "Your licence has lapsed: you can turn SSO only off, change the break-glass accounts or enter a new client secret, and nothing else, until it is renewed.",
+          "Your license has lapsed: you can turn SSO only off, change the break-glass accounts or enter a new client secret, and nothing else, until it is renewed.",
       },
       { status: 402 }
     );

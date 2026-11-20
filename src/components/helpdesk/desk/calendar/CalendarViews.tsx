@@ -50,7 +50,7 @@ function Hidden({ i }: { i: CalItem }) {
   return (
     <span className="sr-only">
       , {i.statusLabel}
-      {i.cancelled ? ", cancelled" : i.setupComplete ? ", setup complete" : ", setup not complete"}
+      {i.cancelled ? ", canceled" : i.setupComplete ? ", setup complete" : ", setup not complete"}
       {i.conflicts.length > 0 && !i.cancelled ? ", double-booked" : ""}
     </span>
   );
@@ -328,7 +328,7 @@ export function AgendaList(p: ViewProps & { view: HdCalendarView; month?: number
                         {i.number ? `#${i.number} ` : ""}
                         {i.title}
                       </span>
-                      <span className="block text-xs text-slate-600">{[i.place, tone.label, i.kind === "event" ? (i.cancelled ? "Cancelled" : i.setupComplete ? "Setup complete" : "Setup not complete") : "", i.conflicts.length && !i.cancelled ? "Double-booked" : ""].filter(Boolean).join(" · ")}</span>
+                      <span className="block text-xs text-slate-600">{[i.place, tone.label, i.kind === "event" ? (i.cancelled ? "Canceled" : i.setupComplete ? "Setup complete" : "Setup not complete") : "", i.conflicts.length && !i.cancelled ? "Double-booked" : ""].filter(Boolean).join(" · ")}</span>
                     </span>
                   </>
                 );

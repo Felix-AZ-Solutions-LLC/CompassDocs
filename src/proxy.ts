@@ -1,4 +1,4 @@
-// Request proxy (Next.js 16's name for middleware). Two jobs:
+// Request proxy (Next.js 16's name for middleware). Three jobs:
 //
 // 1. Tell server components which page is being rendered, so a signed-out
 //    visitor can be sent to /login with that page as `?next=` and come back
@@ -24,6 +24,13 @@
 //    diagrams) is public and served without a session anyway. Navigations,
 //    frames, fetch() and API clients without these headers are untouched.
 //
+// 3. (1.20.37) A request Next's router makes as a prefetch carries
+//    Next-Router-Prefetch, which a page's headers() no longer shows in Next
+//    16; the proxy passes it on as x-compass-prefetch: 1, so the Help
+//    Center's article page does not count a view nobody made
+//    (lib/helpdesk/help-centre isPrefetch). One a client sent itself is
+//    dropped on every path, like the page header.
+//
 // No authentication happens here — the session check stays in requireUser,
 // where it can read the database.
 
@@ -31,6 +38,9 @@ import { NextResponse, type NextRequest } from "next/server";
 
 /** The request header that carries the page's path and query. */
 export const RETURN_PATH_HEADER = "x-compass-path";
+
+/** The request header that says the router asked for this page as a prefetch (lib/helpdesk/help-centre PREFETCH_HEADER). */
+export const PREFETCH_HEADER = "x-compass-prefetch";
 
 /** Request kinds a page can make of another site without CORS (Sec-Fetch-Dest). */
 const NO_CORS_SUBRESOURCES = new Set(["image", "audio", "video", "track", "font", "style", "script", "object", "embed"]);
@@ -58,11 +68,13 @@ export function proxy(req: NextRequest) {
   // 1.20.35: a page header the client sent itself is never passed on, on any
   // path: the root layout reads it to decide the dark style (and the sign-in
   // return path before it), so only the proxy may write it.
-  const forged = req.headers.has(RETURN_PATH_HEADER);
+  const forged = req.headers.has(RETURN_PATH_HEADER) || req.headers.has(PREFETCH_HEADER);
   if (!page && !anonymous && !forged) return NextResponse.next();
   const headers = new Headers(req.headers);
   headers.delete(RETURN_PATH_HEADER);
+  headers.delete(PREFETCH_HEADER);
   if (page) headers.set(RETURN_PATH_HEADER, `${pathname}${search}`);
+  if (page && req.headers.has("next-router-prefetch")) headers.set(PREFETCH_HEADER, "1");
   if (anonymous) headers.delete("cookie");
   return NextResponse.next({ request: { headers } });
 }

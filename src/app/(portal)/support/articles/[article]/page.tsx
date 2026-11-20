@@ -8,6 +8,11 @@
 // is decided on the parsed tree by helpCentreUrl (rewriteUrl). No
 // author, tags, comments or history. A wrong or missing slug redirects to
 // the article's own address.
+//
+// 1.20.37: opening an article counts one view for the home's Popular
+// articles (lib/helpdesk/help-centre countArticleView: a number per article
+// per day, no visitor data; bots and prefetches skipped), after the page is
+// sent. Nothing on the page changes.
 
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -16,7 +21,9 @@ import { Paperclip } from "lucide-react";
 import { MarkdownView } from "@/components/MarkdownView";
 import { getPortalSettings, offeredTypes } from "@/lib/helpdesk/portal";
 import { headers } from "next/headers";
-import { articleIdFrom, categoryHref, getHelpCentreSettings, helpCentreArticle, helpCentreOwnHosts, helpCentreUrl } from "@/lib/helpdesk/help-centre";
+import { after } from "next/server";
+import { ipFrom } from "@/lib/audit";
+import { articleIdFrom, categoryHref, countArticleView, getHelpCentreSettings, helpCentreArticle, helpCentreOwnHosts, helpCentreUrl } from "@/lib/helpdesk/help-centre";
 import { HelpBack, StillNeedHelp } from "@/components/helpdesk/portal/help/HelpCentre";
 import { ArticleDate } from "@/components/helpdesk/portal/help/HelpBits";
 
@@ -45,7 +52,7 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
   } catch {
     /* no database: the layout's defaults */
   }
-  return { title: "Help centre" };
+  return { title: "Help Center" };
 }
 
 export default async function HelpArticlePage({ params }: { params: Params }) {
@@ -56,6 +63,8 @@ export default async function HelpArticlePage({ params }: { params: Params }) {
   if (`/support/articles/${segment}` !== article.href) permanentRedirect(article.href);
   const canRaise = (await offeredTypes(portal)).length > 0;
   const h = await headers();
+  const viewer = { headers: new Headers(h), ip: ipFrom(new Request("http://portal.invalid/", { headers: h })) };
+  after(() => countArticleView(article.id, viewer));
   const urls = { publicHrefs: new Map(article.links), ownHosts: await helpCentreOwnHosts(`${h.get("x-forwarded-host") ?? ""},${h.get("host") ?? ""}`) };
   return (
     <div className="mx-auto mt-6 w-full max-w-3xl sm:mt-8">

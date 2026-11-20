@@ -48,7 +48,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       newsletter_id: n.id,
       user_id: user.id,
       author_name: actorName,
-      body: "Cancelled the scheduled send.",
+      body: "Canceled the scheduled send.",
       kind: "comment",
     });
     await audit({

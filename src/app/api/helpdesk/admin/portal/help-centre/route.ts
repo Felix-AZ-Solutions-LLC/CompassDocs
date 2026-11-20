@@ -8,11 +8,14 @@
 // Helpdesk 1.19.4 (C3), Desk settings → Customer portal → Help centre: on
 // or off, what's public (chosen spaces and/or documents tagged public),
 // the categories' order and which are switched off, search engine
-// indexing, and the last 30 days' numbers. What is actually public is
+// indexing, the home page (1.20.37: its greeting and the switches for
+// Popular articles, Recently updated, Spaces and the request tiles), and
+// the last 30 days' numbers. What is actually public is
 // lib/helpdesk/help-centre publicHelpArticles; this route only stores the
 // choices. Desk capability settings.manage. Audited as
 // helpdesk.portal.help_centre_updated with { changed } (and the new value
-// of enabled, the space ids, tagged and indexing when they changed).
+// of enabled, the space ids, tagged, indexing, the greeting and each home
+// section's switch when they changed).
 //
 // 1.20.30: a space that no longer exists is never a refusal. The read
 // cleans the stored value (lib/helpdesk/portal-refs healHelpCentreSettings:
@@ -34,6 +37,7 @@ import { getPortalSettings } from "@/lib/helpdesk/portal";
 import { auditHelpCentreHeal, healHelpCentreSettings } from "@/lib/helpdesk/portal-refs";
 import { hq } from "@/lib/helpdesk/db-core";
 import {
+  HC_HOME_SECTIONS,
   cleanHelpCentreSettings,
   helpCentreAdminCategories,
   helpCentreSpaceOptions,
@@ -98,9 +102,9 @@ export async function PUT(req: Request) {
     hidden: sent.hidden.filter((k) => allowed.has(k)),
   };
   const priv = next.spaces.map((id) => known.get(id)!).find((s) => s.private);
-  if (priv) return badRequest(`“${priv.name}” is a private space. Private spaces are never public: remove it from the help centre.`);
+  if (priv) return badRequest(`“${priv.name}” is a private space. Private spaces are never public: remove it from the Help Center.`);
   if (next.enabled && !next.tagged && !(next.from_spaces && next.spaces.length)) {
-    return badRequest("Choose at least one space, or documents tagged public, before showing the help centre.");
+    return badRequest("Choose at least one space, or documents tagged public, before showing the Help Center.");
   }
   const { settings, changed } = await saveHelpCentreSettings(next);
   if (changed.length) {
@@ -108,7 +112,7 @@ export async function PUT(req: Request) {
       actor: actorFrom(gate),
       action: "helpdesk.portal.help_centre_updated",
       targetType: "helpdesk_portal",
-      targetLabel: "Customer portal help centre",
+      targetLabel: "Customer portal Help Center",
       details: {
         changed,
         ...(changed.includes("enabled") ? { enabled: settings.enabled } : {}),
@@ -116,6 +120,9 @@ export async function PUT(req: Request) {
         ...(changed.includes("tagged") ? { tagged: settings.tagged } : {}),
         ...(changed.includes("indexing") ? { indexing: settings.indexing } : {}),
         ...(changed.includes("hidden") ? { hidden: settings.hidden } : {}),
+        // 1.20.37: the home page's greeting and sections.
+        ...(changed.includes("greeting") ? { greeting: settings.greeting } : {}),
+        ...Object.fromEntries(HC_HOME_SECTIONS.filter((k) => changed.includes(k)).map((k) => [k, settings[k]])),
       },
       ip: ipFrom(req),
     });

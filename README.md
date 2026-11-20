@@ -43,7 +43,7 @@ pricing on the core product, ever.
 **Organize**
 - **Spaces** with three visibility tiers — internal, **private** (granted groups only), or **public** (a branded, read-only site for the open internet, off by default).
 - **Per-space edit rights** — restrict who can author in a space, per person or group, with an org-wide override switch.
-- **Policy handbooks** — bring published policies and SOPs from any space into one numbered handbook with an introduction; read it as one, keep a policy "handbook only", and print a paper copy with an acknowledgement page.
+- **Policy handbooks** — bring published policies and SOPs from any space into one numbered handbook with an introduction; read it as one, keep a policy "handbook only", and print a paper copy with an acknowledgment page.
 - **People directory** — profiles, custom fields, assistants, and each person's authored docs; clickable article bylines.
 - **Personal dashboard** — what needs your attention, the latest in the spaces you follow, popular this week, your quick links, your team from the directory, new starters and anniversaries, and your open training; show or hide any tile.
 - **Quick links** — a launchpad of categorized shortcuts to your other tools, group-restricted, with auto-fetched icons. Pin your own on the dashboard, see your most used, feature links for everyone, and put chosen links on the sign-in page.

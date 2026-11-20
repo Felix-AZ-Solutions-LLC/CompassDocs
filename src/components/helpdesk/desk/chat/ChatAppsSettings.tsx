@@ -477,7 +477,7 @@ function SetupSteps({ app, endpoint }: { app: HdChatApp; endpoint: string }) {
           <li>
             In the Teams Developer Portal, make an app with this bot in the Personal and Team scopes, and two message actions with &ldquo;Fetch a dynamic set of parameters&rdquo;: <b>Get help</b> (command ID getHelp) and <b>Turn into a ticket</b> (makeTicket).
           </li>
-          <li>Publish it to your organisation and install it for the people who should use it (Teams admin centre, setup policies). People are matched through the Microsoft directory sync, so it must be on.</li>
+          <li>Publish it to your organization and install it for the people who should use it (Teams admin center, setup policies). People are matched through the Microsoft directory sync, so it must be on.</li>
           <li>Channels open tickets only when the app is added to that team and someone mentions it there.</li>
         </ol>
       ) : (

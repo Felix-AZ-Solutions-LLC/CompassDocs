@@ -1494,8 +1494,8 @@ export async function requesterAckHeld(ruleId: number, email: string): Promise<s
   const key = email.trim().toLowerCase();
   const perAddress = hdRateLimited(`automation-ack:address:${key}`, REQUESTER_ACK_LIMITS.perAddressPerDay, 86_400_000);
   const perRule = hdRateLimited(`automation-ack:rule:${ruleId}`, REQUESTER_ACK_LIMITS.perRulePerHour, 3_600_000);
-  if (perAddress) return `held the acknowledgement to ${key}: more than ${REQUESTER_ACK_LIMITS.perAddressPerDay} requests a day set it as the requester from a message`;
-  if (perRule) return `held the acknowledgement to ${key}: this rule set more than ${REQUESTER_ACK_LIMITS.perRulePerHour} requesters from a message in the last hour`;
+  if (perAddress) return `held the acknowledgment to ${key}: more than ${REQUESTER_ACK_LIMITS.perAddressPerDay} requests a day set it as the requester from a message`;
+  if (perRule) return `held the acknowledgment to ${key}: this rule set more than ${REQUESTER_ACK_LIMITS.perRulePerHour} requesters from a message in the last hour`;
   return null;
 }
 

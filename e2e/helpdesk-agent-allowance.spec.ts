@@ -77,7 +77,7 @@ test.describe("helpdesk agent allowance", () => {
     await stubAgents(page, within);
     await openAgents(page);
     await expect(page.getByText("5 of 6 agents", { exact: true })).toBeVisible();
-    await expect(page.getByText("on your licence · 3 included, 3 bought", { exact: true })).toBeVisible();
+    await expect(page.getByText("on your license · 3 included, 3 bought", { exact: true })).toBeVisible();
     const meter = page.getByRole("meter", { name: "Helpdesk agents in use" });
     await expect(meter).toHaveAttribute("aria-valuenow", "5");
     await expect(meter).toHaveAttribute("aria-valuemax", "6");
@@ -86,7 +86,7 @@ test.describe("helpdesk agent allowance", () => {
     await expect(buy).toHaveAttribute("href", BUY_URL);
     await expect(buy).toHaveAttribute("target", "_blank");
     await expect(buy).toHaveAttribute("rel", /noopener/);
-    await expect(page.getByText(/people work the desk and your licence includes/)).toHaveCount(0);
+    await expect(page.getByText(/people work the desk and your license includes/)).toHaveCount(0);
     // Directly under the page header, before the list.
     const box = await meter.boundingBox();
     const list = await page.getByLabel("Filter agents").boundingBox();
@@ -104,15 +104,15 @@ test.describe("helpdesk agent allowance", () => {
     await stubAgents(page, { ...within, allowed: 3, licensed: 3, used: 2 });
     await openAgents(page);
     await expect(page.getByText("2 of 3 agents", { exact: true })).toBeVisible();
-    await expect(page.getByText("on your licence · 3 included", { exact: true })).toBeVisible();
+    await expect(page.getByText("on your license · 3 included", { exact: true })).toBeVisible();
     await stubAgents(page, { ...within, allowed: null, enforced: false });
     await openAgents(page);
-    await expect(page.getByText("on your licence · 3 included, 3 bought · not enforced while the licence is in grace", { exact: true })).toBeVisible();
+    await expect(page.getByText("on your license · 3 included, 3 bought · not enforced while the license is in grace", { exact: true })).toBeVisible();
     // Over in grace: no amber warning or bar, the muted line says by how much once renewed.
     await stubAgents(page, { ...within, allowed: null, enforced: false, used: 7, over: 1 });
     await openAgents(page);
     await expect(
-      page.getByText("on your licence · 3 included, 3 bought · not enforced while the licence is in grace · over by 1 once renewed", { exact: true })
+      page.getByText("on your license · 3 included, 3 bought · not enforced while the license is in grace · over by 1 once renewed", { exact: true })
     ).toBeVisible();
     await expect(page.locator("#main .notice-warn")).toHaveCount(0);
     await expect(page.getByRole("meter", { name: "Helpdesk agents in use" }).locator("div")).toHaveClass(/bg-compass-600/);
@@ -122,11 +122,11 @@ test.describe("helpdesk agent allowance", () => {
     test.skip(!(await deskLicensed(page)), "helpdesk is not licensed in this build; the EE rig runs it");
     await stubAgents(page, { ...within, used: 7, over: 1 });
     await openAgents(page);
-    const warn = page.locator(".notice-warn").filter({ hasText: "7 people work the desk and your licence includes 6." });
+    const warn = page.locator(".notice-warn").filter({ hasText: "7 people work the desk and your license includes 6." });
     await expect(warn).toBeVisible();
     // Adding someone new needs one place more than the desk is over by.
     await expect(warn).toContainText("Nobody loses access. To add someone new, buy 2 more agents or take 2 people off the desk.");
-    await expect(warn.locator("b")).toHaveText("7 people work the desk and your licence includes 6.");
+    await expect(warn.locator("b")).toHaveText("7 people work the desk and your license includes 6.");
     const meter = page.getByRole("meter", { name: "Helpdesk agents in use" });
     await expect(meter).toHaveAttribute("aria-valuenow", "6");
     await expect(meter).toHaveAttribute("aria-valuetext", "7 of 6, over by 1");
@@ -145,7 +145,7 @@ test.describe("helpdesk agent allowance", () => {
     test.skip(real.body.licensed !== null, "the rig's key carries an agents claim");
     await openAgents(page);
     // 1.20.27: the line carries no count; the list's filter says how many, once.
-    await expect(page.getByText("Unlimited agents on your licence.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Unlimited agents on your license.", { exact: true })).toBeVisible();
     await expect(page.getByText(`${real.body.used} agent${real.body.used === 1 ? "" : "s"}`, { exact: true })).toBeVisible();
     await expect(page.getByRole("meter")).toHaveCount(0);
     await expect(page.getByRole("link", { name: /Buy more agents/ })).toHaveCount(0);
@@ -158,8 +158,8 @@ test.describe("helpdesk agent allowance", () => {
     await page.getByRole("button", { name: "Add agent" }).first().click();
     const dialog = page.getByRole("dialog");
     const warn = dialog.locator(".notice-warn");
-    await expect(warn).toContainText("All 6 agents on your licence are in use. Buy more agents to add someone, or take someone off the desk first.");
-    await expect(warn.locator("b")).toHaveText("All 6 agents on your licence are in use.");
+    await expect(warn).toContainText("All 6 agents on your license are in use. Buy more agents to add someone, or take someone off the desk first.");
+    await expect(warn.locator("b")).toHaveText("All 6 agents on your license are in use.");
     await expect(warn.getByRole("link", { name: /Buy more agents/ })).toHaveAttribute("href", BUY_URL);
     await expect(dialog.getByRole("button", { name: "Add to desk" })).toBeDisabled();
     await shot(page, "b3-add-agent-limit-1440");
@@ -168,7 +168,7 @@ test.describe("helpdesk agent allowance", () => {
   test("Add agent: the server's 402 (the last place went meanwhile) shows its sentence with the link and reloads the numbers", async ({ page }) => {
     test.skip(!(await deskLicensed(page)), "helpdesk is not licensed in this build; the EE rig runs it");
     await ensureUser(page, PICK, "viewer", PICK_NAME);
-    const sentence = "Your licence includes 6 helpdesk agents and all are in use. Buy more agents to add someone.";
+    const sentence = "Your license includes 6 helpdesk agents and all are in use. Buy more agents to add someone.";
     // The desk as the page first sees it (5 of 6); the 402 means someone took the last place.
     let numbers: Record<string, unknown> = within;
     let posted = 0;

@@ -626,7 +626,7 @@ function AddressDialog({
               pick === "m365" ? (
                 `Replies go out through Microsoft 365 as ${m365MailboxAddress(m365, m365Box)} and show in its Sent Items. Answers always come back to this help address. If Microsoft refuses a reply, it goes out through your workspace mail server from ${workspaceFrom} instead, and this page says so.${
                   typed && m365MailboxAddress(m365, m365Box) !== typed
-                    ? ` This address is an alias of that mailbox, so people see the mailbox's main address as the sender unless your Microsoft 365 organisation has turned on sending from aliases.`
+                    ? ` This address is an alias of that mailbox, so people see the mailbox's main address as the sender unless your Microsoft 365 organization has turned on sending from aliases.`
                     : ""
                 }`
               ) : (

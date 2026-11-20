@@ -92,7 +92,7 @@ export const RETENTION_LOCK = 7_281_931;
 const BATCH = 200;
 /** The local hour the nightly run starts at (or after). */
 export const RETENTION_RUN_HOUR = 2;
-const ANONYMISED_SUBJECT = "Anonymised request";
+const ANONYMISED_SUBJECT = "Anonymized request";
 
 // --- Settings ---------------------------------------------------------------------
 
@@ -475,7 +475,7 @@ export async function anonymiseTicketTx(client: PoolClient, ticketId: number, no
   if (!t.anonymised_at) {
     await client.query(
       `INSERT INTO hd_messages (ticket_id, author_name, kind, body, via, created_at)
-       VALUES ($1, 'Helpdesk', 'system', 'Anonymised: names, emails, message text and files were removed.', 'system', $2)`,
+       VALUES ($1, 'Helpdesk', 'system', 'Anonymized: names, emails, message text and files were removed.', 'system', $2)`,
       [ticketId, now]
     );
   }

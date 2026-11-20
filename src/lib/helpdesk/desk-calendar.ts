@@ -378,7 +378,7 @@ export async function setSetupComplete(
     if (!before) throw new EventError("This ticket has no event.", 404);
     if (t.merged_into) throw new EventError("This ticket was merged into another. Change the event there.", 409);
     if ((before.setup_done_at !== null) === complete) return { row: before, changed: false };
-    if (complete && before.cancelled_at) throw new EventError("The event was cancelled, so there is no setup to mark.", 409);
+    if (complete && before.cancelled_at) throw new EventError("The event was canceled, so there is no setup to mark.", 409);
     if (!complete && !HD_OPEN_STATUSES.includes(t.status)) throw new EventError("Reopen the ticket before you take back Setup complete.", 409);
     const who = mdInline(actor.name) || "Someone";
     if (complete) {
@@ -472,7 +472,7 @@ export async function cancelEventForDeclineTx(client: HdQueryable, ticketId: num
   if (r.rowCount) {
     await client.query(
       `INSERT INTO hd_messages (ticket_id, author_name, kind, body, via, created_at) VALUES ($1, 'Helpdesk', 'internal', $2, 'system', $3)`,
-      [ticketId, "The event was cancelled because the request was declined.", now]
+      [ticketId, "The event was canceled because the request was declined.", now]
     );
   }
 }
@@ -1072,7 +1072,7 @@ export async function applyInviteToTicket(
       await addSystemMessage(
         ticketId,
         sameMeeting
-          ? "This email carried an update to the meeting, but it isn't from the meeting's organiser or the requester, so the event was not changed."
+          ? "This email carried an update to the meeting, but it isn't from the meeting's organizer or the requester, so the event was not changed."
           : "This email carried a meeting invite, but it isn't from the requester, so it wasn't put on the ticket. An agent can add the event by hand.",
         { internal: true }
       );
@@ -1084,7 +1084,7 @@ export async function applyInviteToTicket(
     if (invite.method === "cancel") {
       if (!before || !sameMeeting) return "ignored";
       if (olderThan(before)) return "ignored";
-      const done = await cancelTicketEvent(ticketId, system, `The meeting was cancelled by ${sender} (a cancellation came by email). The event is marked cancelled and no longer holds this ticket open. The ticket was not closed.`, { origin: ctx.origin, ics: { sequence: invite.sequence, dtstamp: invite.dtstamp } });
+      const done = await cancelTicketEvent(ticketId, system, `The meeting was canceled by ${sender} (a cancellation came by email). The event is marked canceled and no longer holds this ticket open. The ticket was not closed.`, { origin: ctx.origin, ics: { sequence: invite.sequence, dtstamp: invite.dtstamp } });
       return done ? "cancelled" : "ignored";
     }
     if (before && !sameMeeting) {

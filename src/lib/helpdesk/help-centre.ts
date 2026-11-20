@@ -136,8 +136,18 @@ export interface HelpArticle {
   summary: string;
   updated_at: string;
   category: { key: string; name: string };
+  /**
+   * 1.20.37: what a row says it sits in (SPACE_LABEL_SQL): the space's own
+   * name only for a space the admin chose whose unfiled category is shown,
+   * else the category's name, as before 1.20.37 (a folder's name; for a
+   * space's unfiled documents, which the category already names, the
+   * space's). Never the name of a space nobody published.
+   */
+  space: string;
   /** The body as the outside reads it (publicBody); only when asked for. */
   body?: string;
+  /** 1.20.37: views in the last HC_LIMITS.popularDays days; only with order "popular". */
+  views?: number;
 }
 
 export interface HelpArticleQuery {
@@ -149,6 +159,10 @@ export interface HelpArticleQuery {
   any?: boolean;
   /** Only this category key. */
   category?: string;
+  /** 1.20.37: only this space. */
+  space?: number;
+  /** 1.20.37: newest update first ("recent"), or most viewed first ("popular"); else the admin's order. */
+  order?: "recent" | "popular";
   /** At most this many (default 200, at most 5000). */
   limit?: number;
   /** Include the public body (an article page). */
@@ -210,13 +224,14 @@ interface PublicScope {
  * below (the articles, and their counts by category) take their WHERE from
  * here and add nothing to it. See this module's header for the rule.
  */
-export async function publicArticleScope(query: Omit<HelpArticleQuery, "limit" | "body"> = {}, given?: HelpCentreContext): Promise<PublicScope | null> {
+export async function publicArticleScope(query: Omit<HelpArticleQuery, "limit" | "body" | "order"> = {}, given?: HelpCentreContext): Promise<PublicScope | null> {
   const { hc, portal } = await resolve(given);
   if (!(await helpCentreOpen({ hc, portal }))) return null;
   const spaces = hc.from_spaces ? hc.spaces : [];
   if (!spaces.length && !hc.tagged) return null;
   if (query.ids && !query.ids.length) return null;
   if (query.category !== undefined && !isCategoryKey(query.category)) return null;
+  if (query.space !== undefined && !(Number.isInteger(query.space) && query.space > 0 && query.space <= 2_147_483_647)) return null;
 
   const params: unknown[] = [spaces, hc.tagged, hc.hidden, HC_PUBLIC_TAG];
   const p = (v: unknown) => {
@@ -241,6 +256,7 @@ export async function publicArticleScope(query: Omit<HelpArticleQuery, "limit" |
   ];
   if (query.ids) where.push(`d.id = ANY(${p(query.ids.filter((n) => Number.isInteger(n) && n > 0).slice(0, 5000))}::int[])`);
   if (query.category !== undefined) where.push(`${CATEGORY_KEY_SQL} = ${p(query.category)}`);
+  if (query.space !== undefined) where.push(`d.space_id = ${p(query.space)}::int`);
 
   let rank = "";
   if (query.q !== undefined) {
@@ -258,11 +274,41 @@ const FROM_SQL = `FROM documents d
        JOIN spaces s ON s.id = d.space_id
        LEFT JOIN space_categories c ON c.id = d.category_id AND c.space_id = d.space_id`;
 
+/** The admin's order: categories, then spaces by name, then the documents' own order. */
+const DEFAULT_ORDER_SQL = "coalesce(c.position, -1), lower(s.name), d.position, lower(d.title), d.id";
+
+/**
+ * 1.20.37: views per document over the Popular window, for order "popular"
+ * (a LEFT JOIN: it only orders, it never adds a row to the rule's).
+ */
+/**
+ * 1.20.37 (review M1): the label a public row carries for its space. A
+ * space's own name travels only when the admin chose the space (while
+ * "Documents in chosen spaces" is on: publicArticleScope's $1) and did not
+ * hide its unfiled category ($3); otherwise the row says its category, as
+ * the category pages always did, so a document tagged public in a folder of
+ * an internal space nobody chose ("Restructuring 2027") never names it.
+ * Only valid inside a query whose params come from publicArticleScope.
+ */
+const SPACE_LABEL_SQL = `(CASE WHEN s.id = ANY($1::int[]) AND NOT (('s' || s.id) = ANY($3::text[])) THEN s.name ELSE coalesce(c.name, s.name) END)`;
+
+const VIEWS_JOIN_SQL = `LEFT JOIN (
+         SELECT document_id, sum(views)::int AS n FROM hd_hc_article_views
+          WHERE day > current_date - ${HC_LIMITS.popularDays} GROUP BY document_id
+       ) v ON v.document_id = d.id`;
+
 /** The public articles matching `query` (publicArticleScope), or [] when the help centre is closed. */
 export async function publicHelpArticles(query: HelpArticleQuery = {}, given?: HelpCentreContext): Promise<HelpArticle[]> {
   const scope = await publicArticleScope(query, given);
   if (!scope) return [];
   const limit = Math.min(Math.max(1, Math.floor(query.limit ?? 200)), 5000);
+  const popular = query.order === "popular";
+  const order =
+    query.order === "recent"
+      ? `${scope.rank}d.updated_at DESC, d.id DESC`
+      : popular
+        ? `${scope.rank}coalesce(v.n, 0) DESC, ${DEFAULT_ORDER_SQL}`
+        : `${scope.rank}${DEFAULT_ORDER_SQL}`;
   const rows = await hq<{
     id: number;
     title: string;
@@ -271,14 +317,19 @@ export async function publicHelpArticles(query: HelpArticleQuery = {}, given?: H
     updated_at: string;
     cat_key: string;
     cat_name: string;
+    space_label: string;
     content?: string;
+    views?: number;
   }>(
     `SELECT d.id, d.title, d.slug, d.summary, d.updated_at,
-            ${CATEGORY_KEY_SQL} AS cat_key, coalesce(c.name, s.name) AS cat_name
+            ${CATEGORY_KEY_SQL} AS cat_key, coalesce(c.name, s.name) AS cat_name,
+            ${SPACE_LABEL_SQL} AS space_label
             ${query.body ? ", d.content" : ""}
+            ${popular ? ", coalesce(v.n, 0) AS views" : ""}
        ${FROM_SQL}
+       ${popular ? VIEWS_JOIN_SQL : ""}
       WHERE ${scope.where}
-      ORDER BY ${scope.rank}coalesce(c.position, -1), lower(s.name), d.position, lower(d.title), d.id
+      ORDER BY ${order}
       LIMIT ${limit}`,
     scope.params
   );
@@ -289,7 +340,9 @@ export async function publicHelpArticles(query: HelpArticleQuery = {}, given?: H
     summary: (r.summary ?? "").trim(),
     updated_at: r.updated_at,
     category: { key: r.cat_key, name: r.cat_name },
+    space: r.space_label,
     ...(query.body ? { body: publicBody(r.content ?? "") } : {}),
+    ...(popular ? { views: Number(r.views ?? 0) } : {}),
   }));
 }
 
@@ -308,6 +361,25 @@ export async function publicHelpCounts(query: Pick<HelpArticleQuery, "category">
        ${FROM_SQL}
       WHERE ${scope.where}
       GROUP BY 1`,
+    scope.params
+  );
+}
+
+export interface HelpSpaceCount {
+  id: number;
+  name: string;
+  count: number;
+}
+
+/** 1.20.37: how many public articles each space holds (publicArticleScope; no row limit, no body). */
+export async function publicHelpSpaces(query: Pick<HelpArticleQuery, "space"> = {}, given?: HelpCentreContext): Promise<HelpSpaceCount[]> {
+  const scope = await publicArticleScope(query, given);
+  if (!scope) return [];
+  return hq<HelpSpaceCount>(
+    `SELECT s.id, min(s.name) AS name, count(*)::int AS count
+       ${FROM_SQL}
+      WHERE ${scope.where}
+      GROUP BY s.id`,
     scope.params
   );
 }
@@ -482,7 +554,367 @@ export async function helpCentreFile(id: number, given?: HelpCentreContext): Pro
 }
 
 export function toSuggestion(a: HelpArticle): HelpSuggestion {
-  return { id: a.id, title: a.title, href: a.href, category: a.category.name, summary: a.summary.slice(0, 240) };
+  return { id: a.id, title: a.title, href: a.href, category: a.category.name, space: a.space, summary: a.summary.slice(0, 240) };
+}
+
+// --- The home (1.20.37) -------------------------------------------------------------------
+
+/** A space card on the home: its name, its description (chosen spaces only), its count and its top articles. */
+export interface HelpHomeSpace {
+  id: number;
+  name: string;
+  /** The space's own description, only for a space the admin chose; "" otherwise. */
+  description: string;
+  count: number;
+  top: HelpSuggestion[];
+}
+
+export interface HelpHome {
+  /** The most viewed public articles (only ones viewed at least once); [] when off. */
+  popular: HelpSuggestion[];
+  /** The newest updated public articles; [] when off. */
+  recent: (HelpSuggestion & { updated_at: string })[];
+  /** A card per space that may be named (spaceNamed), at most HC_LIMITS.homeSpaces; [] when off. */
+  spaces: HelpHomeSpace[];
+  /**
+   * The categories as cards: all of them with Spaces off (the 1.19.4 home);
+   * with Spaces on, those of the spaces without a card (a space that may not
+   * be named, or one past the cap: review L3), so nothing public goes unlisted.
+   */
+  categories: HelpCategory[];
+  /** Public articles in all (the categories' true counts). */
+  total: number;
+}
+
+/** The admin chose this space (and "Documents in chosen spaces" is on): its description may show. */
+function describes(hc: HelpCentreSettings, spaceId: number): boolean {
+  return hc.from_spaces && hc.spaces.includes(spaceId);
+}
+
+/**
+ * 1.20.37 (review M1): a space whose own name the outside may read, so it
+ * may have a card and a page: one the admin chose whose unfiled category is
+ * not hidden, or one whose unfiled category is public anyway (that category
+ * already shows under the space's name). `cats` are the public categories.
+ */
+function spaceNamed(hc: HelpCentreSettings, spaceId: number, cats: readonly { key: string }[]): boolean {
+  const unfiled = `s${spaceId}`;
+  if (describes(hc, spaceId) && !hc.hidden.includes(unfiled)) return true;
+  return cats.some((c) => c.key === unfiled);
+}
+
+interface HomeRow {
+  id: number;
+  title: string;
+  slug: string;
+  summary: string;
+  updated_at: string;
+  cat_key: string;
+  cat_name: string;
+  space_id: number;
+  space_name: string;
+  space_label: string;
+  space_count: number;
+  views: number;
+  pop_rank: number;
+  recent_rank: number;
+  space_rank: number;
+}
+
+/**
+ * Everything the home shows below its header band, each section through
+ * the one rule (publicArticleScope) and each skipped when the admin
+ * switched it off. A section with nothing in it comes back empty, and the
+ * page leaves it out. The same for every visitor (no session is read).
+ *
+ * Review M4: two rule queries, whatever the number of spaces: the
+ * categories' counts, and ONE query whose rows carry their rank in Popular,
+ * in Recently updated and within their space (row_number() windows over the
+ * one scope and the one views aggregate). Before, Popular, Recently updated,
+ * the space counts and every card's top three were each a query of their
+ * own (up to 28 rule evaluations for 24 cards). Two small lookups follow
+ * (the categories' spaces and the chosen spaces' descriptions).
+ */
+export async function helpCentreHome(given?: HelpCentreContext): Promise<HelpHome> {
+  const { hc, portal } = await resolve(given);
+  const c = { hc, portal };
+  const empty: HelpHome = { popular: [], recent: [], spaces: [], categories: [], total: 0 };
+  if (!(await helpCentreOpen(c))) return empty;
+  const cats = await helpCentreCategories(c);
+  const total = cats.reduce((n, x) => n + x.count, 0);
+  if (!total) return empty;
+  const parts: string[] = [];
+  if (hc.show_popular) parts.push(`(pop_rank <= ${HC_LIMITS.home} AND views > 0)`);
+  if (hc.show_recent) parts.push(`recent_rank <= ${HC_LIMITS.home}`);
+  if (hc.show_spaces) parts.push(`space_rank <= ${HC_LIMITS.spaceTop}`);
+  let rows: HomeRow[] = [];
+  if (parts.length) {
+    const scope = await publicArticleScope({}, c);
+    if (scope) {
+      rows = await hq<HomeRow>(
+        `WITH pub AS MATERIALIZED (
+           SELECT d.id, d.title, d.slug, d.summary, d.updated_at,
+                  ${CATEGORY_KEY_SQL} AS cat_key, coalesce(c.name, s.name) AS cat_name,
+                  d.space_id, s.name AS space_name, ${SPACE_LABEL_SQL} AS space_label,
+                  count(*) OVER (PARTITION BY d.space_id)::int AS space_count,
+                  coalesce(v.n, 0) AS views,
+                  row_number() OVER (ORDER BY coalesce(v.n, 0) DESC, ${DEFAULT_ORDER_SQL}) AS pop_rank,
+                  row_number() OVER (ORDER BY d.updated_at DESC, d.id DESC) AS recent_rank,
+                  row_number() OVER (PARTITION BY d.space_id ORDER BY coalesce(v.n, 0) DESC, ${DEFAULT_ORDER_SQL}) AS space_rank
+             ${FROM_SQL}
+             ${VIEWS_JOIN_SQL}
+            WHERE ${scope.where}
+         )
+         SELECT * FROM pub WHERE ${parts.join(" OR ")}`,
+        scope.params
+      );
+    }
+  }
+  const suggestion = (r: HomeRow): HelpSuggestion => ({
+    id: r.id,
+    title: r.title,
+    href: articleHref(r.id, r.slug || r.title),
+    category: r.cat_name,
+    space: r.space_label,
+    summary: (r.summary ?? "").trim().slice(0, 240),
+  });
+  const by = (rank: (r: HomeRow) => number) => [...rows].sort((a, b) => rank(a) - rank(b));
+  const popular = hc.show_popular ? by((r) => Number(r.pop_rank)).filter((r) => Number(r.pop_rank) <= HC_LIMITS.home && Number(r.views) > 0) : [];
+  const recent = hc.show_recent ? by((r) => Number(r.recent_rank)).filter((r) => Number(r.recent_rank) <= HC_LIMITS.home) : [];
+
+  let spaces: HelpHomeSpace[] = [];
+  let categories: HelpCategory[] = cats;
+  if (hc.show_spaces) {
+    // A space ranks where its first category sits in the admin's order.
+    const spaceOfCat = await categorySpaces(cats.map((x) => x.key));
+    const firstCat = new Map<number, number>();
+    cats.forEach((x, i) => {
+      const sid = spaceOfCat.get(x.key);
+      if (sid !== undefined && !firstCat.has(sid)) firstCat.set(sid, i);
+    });
+    const top = new Map<number, HomeRow[]>();
+    for (const r of by((x) => Number(x.space_rank))) {
+      if (Number(r.space_rank) > HC_LIMITS.spaceTop) continue;
+      top.set(r.space_id, [...(top.get(r.space_id) ?? []), r]);
+    }
+    const ordered = [...top.values()]
+      .map((rs) => rs[0])
+      .filter((r) => spaceNamed(hc, r.space_id, cats))
+      .sort(
+        (a, b) =>
+          (firstCat.get(a.space_id) ?? Number.MAX_SAFE_INTEGER) - (firstCat.get(b.space_id) ?? Number.MAX_SAFE_INTEGER) ||
+          a.space_name.localeCompare(b.space_name, undefined, { sensitivity: "base" }) ||
+          a.space_id - b.space_id
+      )
+      .slice(0, HC_LIMITS.homeSpaces);
+    const descriptions = await spaceDescriptions(ordered.filter((r) => describes(hc, r.space_id)).map((r) => r.space_id));
+    spaces = ordered.map((r) => ({
+      id: r.space_id,
+      name: r.space_name,
+      description: descriptions.get(r.space_id) ?? "",
+      count: Number(r.space_count),
+      top: top.get(r.space_id)!.map(suggestion),
+    }));
+    const carded = new Set(spaces.map((x) => x.id));
+    categories = cats.filter((x) => !carded.has(spaceOfCat.get(x.key) ?? -1));
+  }
+  return {
+    popular: popular.map(suggestion),
+    recent: recent.map((r) => ({ ...suggestion(r), updated_at: r.updated_at })),
+    spaces,
+    categories,
+    total,
+  };
+}
+
+/** Category key → its space id ("s<id>" is the space itself; "c<id>" looks up its folder). */
+async function categorySpaces(keys: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const folders: number[] = [];
+  for (const k of keys) {
+    if (k[0] === "s") out.set(k, Number(k.slice(1)));
+    else folders.push(Number(k.slice(1)));
+  }
+  if (folders.length) {
+    for (const r of await hq<{ id: number; space_id: number }>("SELECT id, space_id FROM space_categories WHERE id = ANY($1::int[])", [folders])) out.set(`c${r.id}`, r.space_id);
+  }
+  return out;
+}
+
+/** The descriptions of these spaces (the caller passes only chosen spaces that have public articles). */
+async function spaceDescriptions(ids: number[]): Promise<Map<number, string>> {
+  if (!ids.length) return new Map();
+  const rows = await hq<{ id: number; description: string }>("SELECT id, description FROM spaces WHERE id = ANY($1::int[]) AND visibility <> 'private'", [ids]);
+  return new Map(rows.map((r) => [r.id, (r.description ?? "").trim().slice(0, 300)]));
+}
+
+/**
+ * 1.20.37: one space's page: its public articles by category (the admin's
+ * order), its true count and, for a chosen space, its description; null
+ * when it shows nothing: unknown, private, nothing public in it, or a space
+ * whose name may not be shown (spaceNamed, review M1).
+ */
+export async function helpCentreSpace(
+  id: number,
+  given?: HelpCentreContext
+): Promise<{ id: number; name: string; description: string; total: number; shown: number; categories: { key: string; name: string; articles: HelpSuggestion[] }[] } | null> {
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const { hc, portal } = await resolve(given);
+  const c = { hc, portal };
+  const unfiled = describes(hc, id) && !hc.hidden.includes(`s${id}`) ? [] : await publicHelpCounts({ category: `s${id}` }, c);
+  if (!spaceNamed(hc, id, unfiled)) return null;
+  const [count] = await publicHelpSpaces({ space: id }, c);
+  if (!count) return null;
+  const articles = await publicHelpArticles({ space: id, limit: HC_LIMITS.category }, c);
+  if (!articles.length) return null;
+  const order = orderCategories(
+    [...new Map(articles.map((a) => [a.category.key, a.category])).values()],
+    hc.order
+  );
+  const description = describes(hc, id) ? ((await spaceDescriptions([id])).get(id) ?? "") : "";
+  return {
+    id,
+    name: count.name,
+    description,
+    total: count.count,
+    shown: articles.length,
+    categories: order.map((cat) => ({ key: cat.key, name: cat.name, articles: articles.filter((a) => a.category.key === cat.key).map(toSuggestion) })),
+  };
+}
+
+/**
+ * 1.20.37 (review M2): may this visitor see the portal's request types (the
+ * home's tiles, the suggestions' types)? While anyone with an email may use
+ * the portal, everyone; otherwise only a signed-in contact, whom
+ * currentPortalContact has already checked against the access rule. The
+ * catalog of what can be asked for is not shown to the world on a portal
+ * that admits only some domains.
+ */
+export function requestTypesVisible(portal: Pick<PortalSettings, "access">, contact: unknown): boolean {
+  return portal.access === "anyone" || !!contact;
+}
+
+// --- Views (1.20.37) -----------------------------------------------------------------------
+
+/**
+ * Not a person in a browser: crawlers, link unfurlers, monitors and HTTP
+ * libraries, by their own user agent (cheap, and enough: a view count is
+ * an ordering, not a record).
+ */
+const BOT_UA_RE = /bot\b|bot\/|crawl|spider|slurp|preview|facebookexternalhit|embedly|whatsapp|telegram|discord|skype|monitor|pingdom|uptime|headless|lighthouse|curl\/|wget\/|python|java\/|go-http|okhttp|axios|node-fetch|undici|libwww|httpclient/i;
+
+export function isBotAgent(ua: string | null | undefined): boolean {
+  const v = (ua ?? "").trim();
+  return !v || BOT_UA_RE.test(v);
+}
+
+/**
+ * The request header src/proxy.ts sets (to "1") on a request Next's router
+ * made as a prefetch (it sees Next-Router-Prefetch, which a page's
+ * headers() does not in Next 16), and strips from any request a client
+ * sent with it.
+ */
+export const PREFETCH_HEADER = "x-compass-prefetch";
+
+/**
+ * A prefetch or prerender asks for the page before (or without) anyone
+ * opening it. Review L1: in Next 16 a page's headers() never shows
+ * Next-Router-Prefetch, so the proxy's PREFETCH_HEADER is the router's
+ * signal here; the browser's own (Purpose / Sec-Purpose: speculation rules,
+ * link rel=prefetch) still reach the page. Besides this check, nothing on
+ * the portal prefetches an article: ArticleLink sets prefetch={false}, and
+ * no loading boundary sits over the portal (one would make the router
+ * prefetch the page down to it).
+ */
+export function isPrefetch(h: Headers): boolean {
+  const purpose = `${h.get("purpose") ?? ""} ${h.get("sec-purpose") ?? ""} ${h.get("x-purpose") ?? ""}`.toLowerCase();
+  return h.get(PREFETCH_HEADER) === "1" || h.get("next-router-prefetch") !== null || /prefetch|prerender|preview/.test(purpose);
+}
+
+/**
+ * Review M3: the view counter's own memory, never the shared rate-limit
+ * buckets (lib/helpdesk/access hdRateLimited): address-and-article keys
+ * could grow those to millions, and every limiter walks them past 20,000.
+ * Bounded twice: at most `maxKeys` address-and-article keys at once (when
+ * full, new ones are not counted until old ones expire), and at most
+ * `perAddress` distinct articles counted per address per window (beyond
+ * that a visitor, or a crawler that hides its name, counts nothing new).
+ * Entries go in in time order with one window, so the oldest are at the
+ * front of the Map and expiring them is a loop that stops at the first
+ * live one.
+ *
+ * Review L2: per instance (each server process remembers its own visitors;
+ * behind several instances a reload on another one may count again, which
+ * is fine for an ordering). A request with no usable address is not counted
+ * at all, rather than sharing one key that would hide everyone else.
+ */
+export class ViewDedupe {
+  private seen = new Map<string, number>();
+  private perIp = new Map<string, { count: number; until: number }>();
+  constructor(private readonly opts: { maxKeys: number; perAddress: number; windowMs: number }) {}
+
+  /** True when this address may count this article now (and remembers that it did). */
+  allow(address: string, documentId: number, now = Date.now()): boolean {
+    this.expire(now);
+    const key = `${address}|${documentId}`;
+    if (this.seen.has(key)) return false;
+    let a = this.perIp.get(address);
+    if (a && a.count >= this.opts.perAddress) return false;
+    if (this.seen.size >= this.opts.maxKeys || (!a && this.perIp.size >= this.opts.maxKeys)) return false;
+    if (!a) {
+      a = { count: 0, until: now + this.opts.windowMs };
+      this.perIp.set(address, a);
+    }
+    a.count++;
+    this.seen.set(key, now + this.opts.windowMs);
+    return true;
+  }
+
+  /** Keys held now (tests). */
+  size(): { keys: number; addresses: number } {
+    return { keys: this.seen.size, addresses: this.perIp.size };
+  }
+
+  private expire(now: number): void {
+    for (const [k, until] of this.seen) {
+      if (until > now) break;
+      this.seen.delete(k);
+    }
+    for (const [k, v] of this.perIp) {
+      if (v.until > now) break;
+      this.perIp.delete(k);
+    }
+  }
+}
+
+const VIEW_WINDOW_MS = 30 * 60_000;
+const views = new ViewDedupe({ maxKeys: 50_000, perAddress: 20, windowMs: VIEW_WINDOW_MS });
+
+/**
+ * Count one view of a public article: nothing about who (no contact,
+ * account, address or journey is stored; the row is a number per article
+ * per day). Skipped for bots and prefetches, without a usable address, for
+ * an address (an IPv6 /64) that already counted this article in the last
+ * 30 minutes or 20 articles in that window, and while the counter's memory
+ * is full (ViewDedupe). Never throws; true when it counted.
+ */
+export async function countArticleView(documentId: number, req: { headers: Headers; ip: string | null }): Promise<boolean> {
+  try {
+    if (!Number.isInteger(documentId) || documentId <= 0) return false;
+    if (isBotAgent(req.headers.get("user-agent")) || isPrefetch(req.headers)) return false;
+    const ip = (req.ip ?? "").trim();
+    if (!ip || ip === "unknown") return false;
+    if (!views.allow(searchClientKey(ip), documentId)) return false;
+    await hq(
+      `INSERT INTO hd_hc_article_views (document_id, day, views) VALUES ($1, current_date, 1)
+       ON CONFLICT (document_id, day) DO UPDATE SET views = hd_hc_article_views.views + 1`,
+      [documentId]
+    );
+    await pruneOld().catch(() => {});
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // --- Limits ----------------------------------------------------------------------------
@@ -561,6 +993,7 @@ async function pruneOld(): Promise<void> {
   lastPrune = Date.now();
   await hq("DELETE FROM hd_hc_searches WHERE at < now() - interval '90 days'");
   await hq("DELETE FROM hd_hc_journeys WHERE started_at < now() - interval '90 days'");
+  await hq("DELETE FROM hd_hc_article_views WHERE day < current_date - 90");
 }
 
 /**

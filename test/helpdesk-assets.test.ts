@@ -853,7 +853,7 @@ describe("the asset page", () => {
     await pool().query("INSERT INTO hd_ticket_assets (ticket_id, asset_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [tb.id, id]);
     await pool().query("INSERT INTO hd_time_entries (ticket_id, user_id, minutes) SELECT ticket_id, $2, 43 FROM hd_ticket_assets WHERE asset_id = $1 LIMIT 1", [id, P.agent.id]);
     const mine = await ticket("Battery drains overnight");
-    const anon = await ticket("Anonymised one");
+    const anon = await ticket("Anonymized one");
     await pool().query("UPDATE hd_tickets SET anonymised_at = now() WHERE id = $1", [anon.id]);
     fake.maintenances.push({ id: 1, asset: { id: REQ_ASSET }, title: `CompassDocs #${mine.number}: Repair`, asset_maintenance_type: "Repair", supplier: { id: 3, name: "Apple Store &amp; Repairs" }, start_date: { date: "2026-09-15" }, completion_date: { date: "2026-09-15" }, notes: "Battery replaced." });
     fake.maintenances.push({ id: 2, asset: { id: 1 }, title: "another asset's", asset_maintenance_type: "Repair", start_date: { date: "2026-09-01" } });

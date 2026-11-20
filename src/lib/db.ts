@@ -3251,7 +3251,7 @@ export async function migratePolicyAssignments(client: Queryable) {
     "INSERT INTO settings (key, value) VALUES ('policy_assignments_migrated','1') ON CONFLICT (key) DO NOTHING"
   );
   console.log(
-    `[ack] policy audiences materialised: ${settings.rowCount ?? 0} policy setting row(s) and ${rows.rowCount ?? 0} assignment(s)`
+    `[ack] policy audiences materialized: ${settings.rowCount ?? 0} policy setting row(s) and ${rows.rowCount ?? 0} assignment(s)`
   );
 }
 
@@ -5554,7 +5554,7 @@ export async function createSsoUser(input: {
   // a failure here must never block account creation), and a row for every
   // policy whose audience admits them, with one welcome notice (D1).
   await autoAssignTraining(r[0].id).catch(() => {});
-  await autoAssignPolicies(r[0].id).catch((e) => console.error("[ack] could not enrol the new account:", e));
+  await autoAssignPolicies(r[0].id).catch((e) => console.error("[ack] could not enroll the new account:", e));
   return (await getUserById(r[0].id))!;
 }
 
@@ -5620,7 +5620,7 @@ export async function scimCreateUser(input: {
   // a failure here must never block account creation), and a row for every
   // policy whose audience admits them, with one welcome notice (D1).
   await autoAssignTraining(r[0].id).catch(() => {});
-  await autoAssignPolicies(r[0].id).catch((e) => console.error("[ack] could not enrol the new account:", e));
+  await autoAssignPolicies(r[0].id).catch((e) => console.error("[ack] could not enroll the new account:", e));
   return (await getUserById(r[0].id))!;
 }
 
@@ -5705,7 +5705,7 @@ export async function createUser(input: {
   // a failure here must never block account creation), and a row for every
   // policy whose audience admits them, with one welcome notice (D1).
   await autoAssignTraining(r[0].id).catch(() => {});
-  await autoAssignPolicies(r[0].id).catch((e) => console.error("[ack] could not enrol the new account:", e));
+  await autoAssignPolicies(r[0].id).catch((e) => console.error("[ack] could not enroll the new account:", e));
   return (await getUserById(r[0].id))!;
 }
 
@@ -8565,7 +8565,7 @@ export async function autoAssignPolicies(
       details: { user_id: userId, policies: r.opened.map((p) => p.id), titles: r.opened.map((p) => p.title) },
     });
   } catch (e) {
-    console.error("[ack] could not audit the enrolment:", e);
+    console.error("[ack] could not audit the enrollment:", e);
   }
   let outboxId: number | null = null;
   try {

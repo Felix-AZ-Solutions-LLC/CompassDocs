@@ -500,7 +500,7 @@ const dropReason = (reason: string, outcome: string): string => reason || LEGACY
 // --- Saving the connection -----------------------------------------------------------
 
 const OTHER_TENANT =
-  "The mailboxes connected here belong to another Microsoft 365 organisation. Disconnect them first, then connect the new one.";
+  "The mailboxes connected here belong to another Microsoft 365 organization. Disconnect them first, then connect the new one.";
 
 /** What the one-click setup must know before it creates anything in Entra. */
 export async function m365SetupState(): Promise<{ connected: boolean; tenantInUse: string; clientId: string }> {
@@ -715,7 +715,7 @@ export async function saveM365Settings(raw: M365SettingsInput, by: M365Actor): P
 // --- Mailboxes -----------------------------------------------------------------------
 
 export const NOT_A_MAILBOX =
-  "Distribution lists, Microsoft 365 groups, mail contacts and mailboxes in another organisation can't be connected. Use a shared mailbox instead.";
+  "Distribution lists, Microsoft 365 groups, mail contacts and mailboxes in another organization can't be connected. Use a shared mailbox instead.";
 const WAITING = "Microsoft 365 has not let the app read this mailbox yet. Run the commands under Limit access, then press Check access. A change can take up to two hours to apply.";
 
 /** Whether a refusal says "this is not a mailbox the app could ever read" (as opposed to "not allowed yet"). */
@@ -766,7 +766,7 @@ export async function connectM365Mailbox(
   const wide = (await refreshTenantWide(c)) ?? (await getTenantWide()).roles;
   if (wide.length && opts.confirmTenantWide !== true) {
     throw new M365MailError(
-      `This app can read every mailbox in your organisation (${wide.join(", ")} ${wide.length === 1 ? "is" : "are"} granted in Entra), so connecting a mailbox is all it takes for the desk to read it. Limit the app first, or confirm that you want to connect ${address} anyway.`,
+      `This app can read every mailbox in your organization (${wide.join(", ")} ${wide.length === 1 ? "is" : "are"} granted in Entra), so connecting a mailbox is all it takes for the desk to read it. Limit the app first, or confirm that you want to connect ${address} anyway.`,
       409,
       "tenant_wide"
     );

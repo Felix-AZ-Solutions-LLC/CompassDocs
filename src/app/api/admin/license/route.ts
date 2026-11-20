@@ -24,7 +24,7 @@ const ALL_FEATURES: { key: EntitlementFeature; label: string }[] = [
   { key: "audit_export", label: "Audit-log export" },
   { key: "priority_support", label: "Dedicated support (48-hour response)" },
   { key: "directory_sync", label: "Microsoft 365 directory sync" },
-  { key: "policy_ack", label: "Policy acknowledgements" },
+  { key: "policy_ack", label: "Policy acknowledgments" },
   { key: "training", label: "Training & onboarding" },
 ];
 

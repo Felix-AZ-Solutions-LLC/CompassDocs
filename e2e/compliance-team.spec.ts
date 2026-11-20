@@ -357,7 +357,7 @@ test("a compliance.team_read holder who leads nothing sees every group; a plain 
       // One row per policy the member owes: this policy's row is the one with its title.
       const holderRow = holderCard.getByRole("row").filter({ hasText: "E2E Team Member B" }).filter({ hasText: title });
       await expect(holderRow.getByRole("button", { name: "Remind", exact: true })).toBeDisabled();
-      await expect(holderRow.getByRole("note", { name: "Only the group's lead or a programme manager can remind" })).toBeVisible();
+      await expect(holderRow.getByRole("note", { name: "Only the group's lead or a program manager can remind" })).toBeVisible();
       // The holder leads nothing, so My policies says nothing about a team
       // (the Team tab is their way in); the API agrees.
       expect((await api(hpage, "/api/compliance/mine")).body?.lead_team).toBe(false);

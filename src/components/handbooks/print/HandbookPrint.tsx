@@ -97,7 +97,7 @@ export function HandbookPrint({ hb, toolbar }: { hb: PrintHandbook; toolbar?: Re
           ) : (
             hb.sections.map((s, i) => <ContentsSection key={i} section={s} />)
           )}
-          <p className={`${EYEBROW_TEXT} mb-1 mt-6`}>Acknowledgement</p>
+          <p className={`${EYEBROW_TEXT} mb-1 mt-6`}>Acknowledgment</p>
           <p className="py-1 pl-7 text-sm font-semibold text-slate-900">Signature page</p>
         </div>
         <ScreenFooter hb={hb} />
@@ -110,7 +110,7 @@ export function HandbookPrint({ hb, toolbar }: { hb: PrintHandbook; toolbar?: Re
       <section className={sheet} aria-labelledby="hb-print-sign">
         <div className={styles.grow}>
           <h2 id="hb-print-sign" className="text-2xl font-bold text-slate-900">
-            Acknowledgement
+            Acknowledgment
           </h2>
           <p className="mt-3 text-sm leading-relaxed text-slate-700">
             I confirm that I have received, read and understood the {hb.title} (
