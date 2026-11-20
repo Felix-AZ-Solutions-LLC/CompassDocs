@@ -64,7 +64,7 @@ export function LegalHoldCard({ number }: { number: number }) {
         <div className="mt-2">
           <Toggle
             label="Keep this ticket"
-            help={`${who}Retention and account removal never close, anonymise or delete it. It can't be deleted, or merged into a ticket that isn't on hold.`}
+            help={`${who}Retention and account removal never close, anonymize or delete it. It can't be deleted, or merged into a ticket that isn't on hold.`}
             checked={hold.legal_hold}
             disabled={busy}
             onChange={(v) => void set(v)}
@@ -73,7 +73,7 @@ export function LegalHoldCard({ number }: { number: number }) {
         </div>
       ) : (
         <p className="mt-2 text-sm text-slate-600">
-          {who}Retention and account removal never close, anonymise or delete this ticket. It can&rsquo;t be deleted, or merged into a ticket that isn&rsquo;t on hold.
+          {who}Retention and account removal never close, anonymize or delete this ticket. It can&rsquo;t be deleted, or merged into a ticket that isn&rsquo;t on hold.
         </p>
       )}
     </section>

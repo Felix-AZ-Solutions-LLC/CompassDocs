@@ -549,7 +549,7 @@ describe("handbook_status", () => {
       assert.equal(r.isError, false, r.text);
       assert.equal(r.out.confirmation_available, false);
       assert.equal(r.out.policies, undefined);
-      assert.match(r.out.note, /licence/);
+      assert.match(r.out.note, /license/);
       const listed = (await tool("carol", "list_handbooks")).out;
       const h1 = listed.handbooks.find((h: any) => h.id === handbooks.H1);
       assert.equal(h1.your_progress, null);

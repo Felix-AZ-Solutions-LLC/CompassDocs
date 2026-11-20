@@ -146,7 +146,7 @@ describe("settings", () => {
     assert.equal(retentionCutoff({ keep_amount: 1, keep_unit: "months" }, new Date("2026-03-31T00:00:00Z")).toISOString(), "2026-02-28T00:00:00.000Z");
     assert.equal(
       planSentence({ counts: { close: 41, anonymise: 312, delete: 0, held: 0 }, purge_before: "2023-11-07T02:05:00Z", action: "anonymise" }),
-      "Tonight: 41 tickets close, 312 are anonymised (closed before Nov 2023). Nothing is deleted."
+      "Tonight: 41 tickets close, 312 are anonymized (closed before Nov 2023). Nothing is deleted."
     );
     assert.match(
       planSentence({ enabled: { close: false, purge: false }, counts: { close: 0, anonymise: 0, delete: 0, held: 0 }, purge_before: "2023-11-07T02:05:00Z", action: "anonymise" }),
@@ -249,7 +249,7 @@ describe("the run", () => {
     assert.deepEqual(afterSummary, before, "reports count it the same");
 
     const r = await row(id);
-    assert.equal(r.subject, "Anonymised request");
+    assert.equal(r.subject, "Anonymized request");
     assert.equal(r.requester_id, null);
     assert.equal(r.requester_name, HD_FORMER_REQUESTER);
     assert.equal(r.requester_email, "");
@@ -483,7 +483,7 @@ describe("1.19.1 review: anonymising", () => {
       assert.equal(await body(took), "Andy Agent took the ticket", "pick-up time still reads it");
       assert.equal(await body(cced), "", "other lines are blanked");
       const b = (await pool().query("SELECT title, body, actor_name FROM notifications WHERE id = $1", [bell])).rows[0];
-      assert.deepEqual(b, { title: `#${n} Anonymised request`, body: "", actor_name: HD_FORMER_REQUESTER });
+      assert.deepEqual(b, { title: `#${n} Anonymized request`, body: "", actor_name: HD_FORMER_REQUESTER });
       assert.equal((await pool().query("SELECT title FROM notifications WHERE id = $1", [other])).rows[0].title, "Another ticket", "another ticket's bell is left alone");
       const a = (await pool().query("SELECT action, actor_id, target_id, target_label, details FROM audit_log WHERE id = $1", [aud])).rows[0];
       assert.equal(a.action, "helpdesk.ticket.cc_added");
@@ -507,7 +507,7 @@ describe("1.19.1 review: anonymising", () => {
     assert.deepEqual((await planRetention({ at: NOW, settings: ANON, only: [id], withIds: true })).ids!.purge, [id]);
     assert.deepEqual((await runRetention({ now: new Date(Date.now() + 120_000), settings: ANON, only: [id] })).anonymised, [id]);
     const m = await msgs(id);
-    assert.equal(m.length, lines + 1, "no second 'Anonymised' line");
+    assert.equal(m.length, lines + 1, "no second 'Anonymized' line");
     assert.ok(!m.some((x: { body: string }) => x.body.includes("0170")));
     assert.equal((await pool().query("SELECT count(*)::int AS n FROM hd_attachments WHERE ticket_id = $1", [id])).rows[0].n, 0);
     assert.deepEqual((await planRetention({ at: NOW, settings: ANON, only: [id], withIds: true })).ids!.purge, [], "settles");

@@ -1,7 +1,8 @@
 // Helpdesk 1.19.4 (C3): the customer portal help centre's schema. Kept
 // apart from lib/helpdesk/help-centre (server code) so lib/db's SCHEMA
 // string can append it without importing anything. Additive and
-// idempotent; no foreign keys (nothing here points at a person).
+// idempotent; nothing here points at a person (the one foreign key, 1.20.37,
+// is an article's view count to its document).
 //
 // The help centre's settings are a workspace key (helpdesk_portal_hc), not
 // a table. These two tables only feed the "Last 30 days" numbers on Desk
@@ -23,8 +24,17 @@
 //                   journeys that opened an article and raised nothing
 //                   within 30 minutes.
 //
-// Both are pruned to 90 days as they are written (help-centre pruneOld),
-// so neither needs a sweep, retention rule or export entry.
+//   hd_hc_article_views (1.20.37)
+//                   how often each public article was opened, one row per
+//                   article per day: a number and nothing else (no contact,
+//                   account, address, journey or time of day). It feeds the
+//                   home's Popular articles. The article page counts a view
+//                   only for a browser that is not a known bot or a
+//                   prefetch, at most once per network address and article
+//                   in 30 minutes (in memory, never stored).
+//
+// All three are pruned to 90 days as they are written (help-centre pruneOld),
+// so none needs a sweep, retention rule or export entry.
 //
 //   hd_portal_links.hc_journey
 //                   the journey id of the tab that asked for a sign-in
@@ -54,4 +64,11 @@ CREATE TABLE IF NOT EXISTS hd_hc_journeys (
 );
 CREATE INDEX IF NOT EXISTS idx_hd_hc_journeys_started ON hd_hc_journeys (started_at);
 ALTER TABLE hd_portal_links ADD COLUMN IF NOT EXISTS hc_journey text NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS hd_hc_article_views (
+  document_id integer NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  day date NOT NULL DEFAULT current_date,
+  views integer NOT NULL DEFAULT 0,
+  PRIMARY KEY (document_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_hd_hc_article_views_day ON hd_hc_article_views (day);
 `;

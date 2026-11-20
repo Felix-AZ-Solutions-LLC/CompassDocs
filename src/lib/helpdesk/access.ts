@@ -38,7 +38,7 @@ import type { HdMessage, HdRequestSummary, HdTicket, HdTicketRow } from "./types
 
 type U = { id: number; role: Role };
 
-export const HD_LICENCE_ERROR = "The helpdesk is not included in your licence.";
+export const HD_LICENCE_ERROR = "The helpdesk is not included in your license.";
 
 export function helpdeskLicensed(): Promise<boolean> {
   return featureEnabled("helpdesk");

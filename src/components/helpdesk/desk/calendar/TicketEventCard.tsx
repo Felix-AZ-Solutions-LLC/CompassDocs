@@ -166,7 +166,7 @@ export function TicketEventCard({
           <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1.5">
             {event.cancelled ? (
               <Chip tone="neutral" size="sm">
-                Cancelled
+                Canceled
               </Chip>
             ) : event.setup_complete ? (
               <>
@@ -184,7 +184,7 @@ export function TicketEventCard({
               </Chip>
             )}
           </div>
-          {event.cancelled && <p className="mt-1.5 text-xs text-slate-500">A cancelled event doesn&apos;t hold the ticket open.</p>}
+          {event.cancelled && <p className="mt-1.5 text-xs text-slate-500">A canceled event doesn&apos;t hold the ticket open.</p>}
 
           {canEdit && !event.cancelled && !event.setup_complete && (
             <>

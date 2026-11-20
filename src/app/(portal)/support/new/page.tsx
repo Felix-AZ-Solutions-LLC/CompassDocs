@@ -1,6 +1,7 @@
 // /support/new: raise a request in the customer portal (Helpdesk 1.19.1).
 // Only the request types the admin exposed that need nothing from the
-// directory; their own questions, never prefilled. ?type=<id> preselects.
+// directory; their own questions, never prefilled. ?type=<id> preselects
+// (and, signed out, comes back after signing in: 1.20.37).
 // With the help centre on (1.19.4, C3) the form suggests articles from the
 // subject.
 
@@ -17,11 +18,12 @@ export const metadata = { title: "New request" };
 export default async function PortalNew({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const settings = await getPortalSettings();
   if (!(await portalOpen(settings))) notFound();
-  const contact = await currentPortalContact(settings);
-  if (!contact) redirect("/support?next=/support/new");
-  const [types, helpCentre] = await Promise.all([offeredTypes(settings), helpCentreOpen({ portal: settings })]);
   const sp = await searchParams;
-  const initial = typeof sp.type === "string" && /^\d+$/.test(sp.type) ? Number(sp.type) : null;
+  const initial = typeof sp.type === "string" && /^[1-9]\d{0,9}$/.test(sp.type) ? Number(sp.type) : null;
+  const contact = await currentPortalContact(settings);
+  // 1.20.37: a Help Center tile's chosen type survives signing in.
+  if (!contact) redirect(`/support?next=${encodeURIComponent(initial ? `/support/new?type=${initial}` : "/support/new")}`);
+  const [types, helpCentre] = await Promise.all([offeredTypes(settings), helpCentreOpen({ portal: settings })]);
   return (
     <div className="mx-auto mt-6 w-full max-w-3xl sm:mt-8">
       <Link href="/support/requests" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-compass-700">

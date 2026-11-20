@@ -34,7 +34,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const target = await getUserById(Number(id));
   if (!target) return NextResponse.json({ error: "User not found." }, { status: 404 });
   if (target.id === admin.id) {
-    return NextResponse.json({ error: "You can't anonymise your own compliance record." }, { status: 400 });
+    return NextResponse.json({ error: "You can't anonymize your own compliance record." }, { status: 400 });
   }
 
   const { rows, snapshots_rewritten } = await anonymiseComplianceRecord(target.id);

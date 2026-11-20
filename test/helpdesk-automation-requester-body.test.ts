@@ -652,7 +652,7 @@ describe("the sender check, acknowledgements, drafts and ticket states (review M
       assert.ok(rows.every((r) => r.requester_email === target), "the requester still changes");
       assert.deepEqual(rows.map((r) => !!r.requester_ack_held_at), [...Array(automations.REQUESTER_ACK_LIMITS.perAddressPerDay).fill(false), true]);
       const last = await lines(made[made.length - 1].id);
-      assert.ok(last.some((l) => new RegExp(`held the acknowledgement to ${target.replace(/[.]/g, "\\.")}`).test(l.body)), JSON.stringify(last));
+      assert.ok(last.some((l) => new RegExp(`held the acknowledgment to ${target.replace(/[.]/g, "\\.")}`).test(l.body)), JSON.stringify(last));
     } finally {
       await off(id);
     }

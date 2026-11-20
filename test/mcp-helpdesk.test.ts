@@ -327,7 +327,7 @@ describe("tools/list", () => {
       assert.ok(!(await toolNames("agent")).some((n) => n.startsWith("hd_")));
       const r = await tool("agent", "hd_queue");
       assert.equal(r.isError, true);
-      assert.match(r.text, /licence.*402/);
+      assert.match(r.text, /license.*402/);
     } finally {
       edition.features = ["helpdesk"];
     }

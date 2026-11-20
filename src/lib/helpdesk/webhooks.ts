@@ -776,7 +776,7 @@ async function dropPendingTx(client: PoolClient, why: string, where: string, par
  * finishes its one attempt and its outcome is dropped (the claim is gone).
  */
 export async function anonymiseWebhookDeliveriesTx(client: PoolClient, ticketId: number): Promise<void> {
-  await dropPendingTx(client, "Not sent: the ticket was anonymised.", "ticket_id = $2", [ticketId]);
+  await dropPendingTx(client, "Not sent: the ticket was anonymized.", "ticket_id = $2", [ticketId]);
 }
 
 /** Deleting a ticket for good (lib/helpdesk/retention deleteTicketTx, which the recycle bin's purge uses): its undelivered events go first. */

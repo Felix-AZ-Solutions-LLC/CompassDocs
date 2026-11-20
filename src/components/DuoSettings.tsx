@@ -89,13 +89,13 @@ export function DuoSettings({ initial, users }: { initial: DuoView; users: Picke
           <div className="notice-warn mb-4 flex items-start gap-2 rounded-lg border px-3 py-2 text-sm">
             <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
             <p>
-              Duo is not being enforced. Your licence no longer includes SSO, so nobody is asked for Duo, whatever is saved here. Your Duo
-              settings are kept and apply again as soon as a valid licence is entered.
+              Duo is not being enforced. Your license no longer includes SSO, so nobody is asked for Duo, whatever is saved here. Your Duo
+              settings are kept and apply again as soon as a valid license is entered.
             </p>
           </div>
         )}
         <LicenseGate feature="The Duo sign-in check" entitlement="sso" canManage>
-          This Enterprise build supports it, but your licence doesn&rsquo;t include it yet. While the licence is missing, no Duo rule is
+          This Enterprise build supports it, but your license doesn&rsquo;t include it yet. While the license is missing, no Duo rule is
           enforced.
         </LicenseGate>
       </div>

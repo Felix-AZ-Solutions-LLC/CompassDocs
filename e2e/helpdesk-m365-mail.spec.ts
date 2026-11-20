@@ -160,7 +160,7 @@ test.describe("Microsoft 365 mailboxes (licensed, fake Microsoft)", () => {
     await expect(restrict.getByRole("button", { name: "Copy commands" }).first()).toBeVisible();
     await restrict.getByRole("button", { name: "Check access" }).click();
     const access = restrict.getByTestId("hd-m365-access");
-    await expect(access).toContainText("No organisation-wide mail permission is granted in Entra.", { timeout: 30_000 });
+    await expect(access).toContainText("No organization-wide mail permission is granted in Entra.", { timeout: 30_000 });
     await expect(access).toContainText(`${HELP}: Microsoft 365 did not let the app read this mailbox`);
 
     // "The admin ran the commands": the fake's Exchange scope now holds the help mailbox, and nothing else.
@@ -186,11 +186,11 @@ test.describe("Microsoft 365 mailboxes (licensed, fake Microsoft)", () => {
     await card(page).getByRole("button", { name: "Connect mailbox" }).click();
     const ask = page.getByRole("dialog");
     await expect(ask).toContainText(`Connect ${OTHER}?`, { timeout: 30_000 });
-    await expect(ask).toContainText("This app can read every mailbox in your organisation");
+    await expect(ask).toContainText("This app can read every mailbox in your organization");
     await ask.getByRole("button", { name: "Cancel" }).click();
     await expect(card(page).getByTestId("hd-m365-mailbox-row")).toHaveCount(1);
     // The warning is on the page now, with nobody having pressed Check access.
-    await expect(card(page).getByTestId("hd-m365-tenant-wide")).toContainText("This app can read every mailbox in your organisation. It holds Mail.ReadWrite granted in Entra.", { timeout: 30_000 });
+    await expect(card(page).getByTestId("hd-m365-tenant-wide")).toContainText("This app can read every mailbox in your organization. It holds Mail.ReadWrite granted in Entra.", { timeout: 30_000 });
     // Asked again, the question names the permission; still no.
     await card(page).getByRole("button", { name: "Connect mailbox" }).click();
     await expect(ask).toContainText("Mail.ReadWrite is granted in Entra");

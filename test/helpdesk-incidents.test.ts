@@ -847,7 +847,7 @@ describe("review fixes", () => {
     const pid = (await rowByNumber(d.body.number)).id;
     await dbCore.withTx((c) => retention.anonymiseTicketTx(c, pid));
     const inc = (await pool().query("SELECT title, match_text FROM hd_incidents WHERE id = $1", [d.body.id])).rows[0];
-    assert.equal(inc.title, "Anonymised request");
+    assert.equal(inc.title, "Anonymized request");
     const ups = (await pool().query("SELECT body, author_name FROM hd_incident_updates WHERE incident_id = $1", [d.body.id])).rows;
     assert.ok(ups.length && ups.every((u) => u.body === "" && u.author_name === ""));
     const auds = (await pool().query("SELECT action, details FROM audit_log WHERE target_id = $1 AND action LIKE 'helpdesk.incident.%'", [String(pid)])).rows;

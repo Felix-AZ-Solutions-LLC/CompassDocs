@@ -29,7 +29,7 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
   } catch {
     /* no database: the layout's defaults */
   }
-  return { title: "Help centre" };
+  return { title: "Help Center" };
 }
 
 export default async function HelpCategoryPage({ params }: { params: Params }) {

@@ -114,7 +114,7 @@ function DaySheet({ m }: { m: CalendarPrintModel }) {
                       #{i.number} {i.title}
                     </span>
                     <span className={`block ${MUTED}`}>
-                      {[tone.label !== i.teamName ? i.teamName : null, tone.label, i.cancelled ? "Cancelled" : null, i.repeats ? "Repeats" : null, i.conflicts.length && !i.cancelled ? `Double-booked with ${i.conflicts.map((n) => (n ? `#${n}` : "another team's event")).join(", ")}` : null]
+                      {[tone.label !== i.teamName ? i.teamName : null, tone.label, i.cancelled ? "Canceled" : null, i.repeats ? "Repeats" : null, i.conflicts.length && !i.cancelled ? `Double-booked with ${i.conflicts.map((n) => (n ? `#${n}` : "another team's event")).join(", ")}` : null]
                         .filter(Boolean)
                         .join(" · ")}
                     </span>
@@ -160,7 +160,7 @@ function PrintItem({ i, day, m, full }: { i: CalItem; day: string; m: CalendarPr
       </span>
       {full && (
         <span className={`block ${MUTED}`}>
-          {[i.place, tone.label, i.kind === "event" && !i.cancelled && i.ready < i.start ? `Setup by ${setupBy(i, day, m)}` : null, i.kind === "event" ? (i.cancelled ? "Cancelled" : i.setupComplete ? "Setup complete" : null) : null]
+          {[i.place, tone.label, i.kind === "event" && !i.cancelled && i.ready < i.start ? `Setup by ${setupBy(i, day, m)}` : null, i.kind === "event" ? (i.cancelled ? "Canceled" : i.setupComplete ? "Setup complete" : null) : null]
             .filter(Boolean)
             .join(" · ")}
         </span>

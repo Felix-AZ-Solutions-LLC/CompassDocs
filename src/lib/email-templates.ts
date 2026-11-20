@@ -241,7 +241,7 @@ export const EMAIL_TEMPLATES: EmailTemplateDef[] = [
   },
   {
     key: "ack_program_report",
-    label: "Compliance programme report",
+    label: "Compliance program report",
     description:
       "Sent weekly or monthly to the recipients chosen under Compliance → Settings when the scheduled report is enabled: where read confirmations stand, with the hash of the latest monthly snapshot so it is anchored outside the database.",
     tags: [
@@ -769,7 +769,7 @@ export const EMAIL_TEMPLATES: EmailTemplateDef[] = [
     key: "hd_portal_link",
     label: "Helpdesk: customer portal sign-in link",
     description:
-      "Sent to someone outside your organisation who asks to sign in to the customer portal. The link works once and for 15 minutes.",
+      "Sent to someone outside your organization who asks to sign in to the customer portal. The link works once and for 15 minutes.",
     tags: [
       T("portal_name", "The portal's name (Desk settings, Customer portal)"),
       T("signin_url", "The one-time sign-in link"),
@@ -1122,7 +1122,7 @@ const TAG = (tag: string, label: string) => ({ tag, label });
 export const COMMON_TAGS = [
   TAG("org_name", "Workspace name"),
   TAG("workspace_url", "Link to the workspace"),
-  TAG("accent", "Accent colour (#4f46e5)"),
+  TAG("accent", "Accent color (#4f46e5)"),
   TAG("logo", "Workspace logo (an image; blank when there is none)"),
   TAG("recipient_name", "The recipient's name (blank when the sender does not know it)"),
   TAG("manage_notifications_url", "Link to the recipient's notification settings"),

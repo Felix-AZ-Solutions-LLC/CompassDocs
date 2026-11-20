@@ -296,14 +296,14 @@ function ParkingCard({ initial }: { initial: HdCalendarSettings }) {
         </Field>
         <Toggle
           label="Park tickets from meeting invites until they're due"
-          help="The acknowledgement goes out first, as always. An event too close to park stays in the queue."
+          help="The acknowledgment goes out first, as always. An event too close to park stays in the queue."
           checked={p.park_invites}
           onChange={(v) => change({ park_invites: v })}
           size="full"
         />
         <Toggle
           label="Park tickets from calendar request types until they're due"
-          help="Request types that go on the calendar. After the rules and the acknowledgement."
+          help="Request types that go on the calendar. After the rules and the acknowledgment."
           checked={p.park_request_types}
           onChange={(v) => change({ park_request_types: v })}
           size="full"

@@ -237,12 +237,14 @@ export const DESK_SETTINGS_GROUPS: DeskSettingsGroup[] = [
   {
     label: "Requesters",
     sections: [
-      { key: "portal", label: "Customer portal", icon: Globe, tabs: true, description: "Let people outside your organisation raise and follow requests, without a CompassDocs account.", keywords: "customer portal support site external customers public help centre knowledge base", pages: [
+      { key: "portal", label: "Customer portal", icon: Globe, tabs: true, description: "Let people outside your organization raise and follow requests, without a CompassDocs account.", keywords: "customer portal support site external customers public help center centre knowledge base", pages: [
           { href: `${S}/portal`, label: "Settings", icon: SlidersHorizontal, caps: ADMIN_CAPS, keywords: "portal on off brand protection captcha who can use", topics: [
               { anchor: "portal-requests", label: "What customers can ask for", keywords: "portal request types teams" },
               { anchor: "portal-access", label: "Who can use the portal", keywords: "portal domains sign in verification captcha" },
             ] },
-          { href: `${S}/portal/help-centre`, label: "Help centre", icon: BookOpen, caps: ADMIN_CAPS, keywords: "help centre center knowledge base articles faq public seo indexing" },
+          { href: `${S}/portal/help-centre`, label: "Help Center", icon: BookOpen, caps: ADMIN_CAPS, keywords: "help center centre knowledge base articles faq public seo indexing", topics: [
+              { anchor: "help-center-home", label: "Help Center home page", keywords: "home greeting popular articles recently updated spaces request tiles what do you need sections" },
+            ] },
           { href: `${S}/portal/customers`, label: "Customers", icon: UsersRound, caps: ADMIN_CAPS, keywords: "customers external people block unblock" },
         ] },
       { key: "csat", label: "Satisfaction", icon: Star, tabs: false, description: "Ask one question when a ticket is solved: how did we do?", keywords: "satisfaction csat survey rating feedback score how did we do", pages: [
@@ -299,10 +301,10 @@ export const DESK_SETTINGS_GROUPS: DeskSettingsGroup[] = [
   {
     label: "Security and data",
     sections: [
-      { key: "retention", label: "Retention and privacy", icon: Shield, tabs: false, description: "How long tickets are kept, and what happens to a person's tickets when their account goes.", keywords: "retention privacy gdpr delete anonymise anonymize data protection auto close", pages: [
+      { key: "retention", label: "Retention and privacy", icon: Shield, tabs: false, description: "How long tickets are kept, and what happens to a person's tickets when their account goes.", keywords: "retention privacy gdpr delete anonymize anonymise data protection auto close", pages: [
           { href: `${S}/retention`, label: "Retention and privacy", icon: Shield, caps: ADMIN_CAPS, topics: [
               { anchor: "auto-close", label: "Close solved tickets automatically", keywords: "auto close closing solved days" },
-              { anchor: "account-removal", label: "When an account is removed", keywords: "anonymise account removed export personal data gdpr" },
+              { anchor: "account-removal", label: "When an account is removed", keywords: "anonymize anonymise account removed export personal data gdpr" },
             ] },
         ] },
       { key: "import", label: "Import", icon: Upload, tabs: false, description: "Bring tickets across from Zoho Desk or a CSV file.", keywords: "import migrate zoho desk csv upload", pages: [

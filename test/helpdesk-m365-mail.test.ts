@@ -815,7 +815,7 @@ describe("connecting mailboxes", () => {
       const r = await call(boxesRoute.POST, req(`${API}/mailboxes`, U.manager, { address: a, confirm_tenant_wide: true }));
       assert.equal(r.status, 422, a);
       assert.equal(r.body.code, "not_a_mailbox");
-      assert.match(r.body.error, /found no mailbox with that address\. Distribution lists, Microsoft 365 groups, mail contacts and mailboxes in another organisation can't be connected\. Use a shared mailbox instead\./);
+      assert.match(r.body.error, /found no mailbox with that address\. Distribution lists, Microsoft 365 groups, mail contacts and mailboxes in another organization can't be connected\. Use a shared mailbox instead\./);
     }
     assert.equal((await pool().query("SELECT count(*)::int AS n FROM hd_m365_mailboxes")).rows[0].n, 0);
     assert.match((await call(boxesRoute.POST, req(`${API}/mailboxes`, U.manager, { address: "help+x@acme.example" }))).body.error, /\+ tag/);
@@ -919,7 +919,7 @@ describe("connecting mailboxes", () => {
     // While it is there, the list alone decides what the desk reads: connecting a mailbox needs an explicit yes.
     const no = await call(boxesRoute.POST, req(`${API}/mailboxes`, U.manager, { address: OTHER }));
     assert.deepEqual([no.status, no.body.code], [409, "tenant_wide"]);
-    assert.match(no.body.error, /can read every mailbox in your organisation \(Mail-Advanced\.ReadWrite\.All is granted in Entra\)/);
+    assert.match(no.body.error, /can read every mailbox in your organization \(Mail-Advanced\.ReadWrite\.All is granted in Entra\)/);
     assert.equal((await call(boxesRoute.POST, req(`${API}/mailboxes`, U.manager, { address: OTHER, confirm_tenant_wide: "true" }))).status, 409, "only the boolean true is a yes");
     await assert.rejects(m365.connectM365Mailbox(OTHER, by(), { confirmTenantWide: false }), (e: Error & { code?: string }) => e.code === "tenant_wide");
     assert.equal((await pool().query("SELECT count(*)::int AS n FROM hd_m365_mailboxes WHERE address = $1", [OTHER])).rows[0].n, 0);
@@ -3119,7 +3119,8 @@ describe("the one-click setup", { skip: !fs.existsSync(EE_SETUP) && "the enterpr
     fake.deviceTenant = "11111111-aaaa-bbbb-cccc-222222222222";
     const r = await run();
     assert.equal(r.status, 502);
-    assert.match(r.body.error, /different Microsoft 365 organisation than the mailboxes connected here belong to, so nothing was created/);
+    // The sentence is the enterprise overlay's (ee/m365-mail-setup); it turns US English (1.20.37) when the overlay ships, so either spelling passes.
+    assert.match(r.body.error, /different Microsoft 365 organi[sz]ation than the mailboxes connected here belong to, so nothing was created/);
     assert.equal(live().length, 0);
     assert.equal(fake.calls("POST /graph/v1.0/applications").length, 0);
     // The manual form holds the same line.

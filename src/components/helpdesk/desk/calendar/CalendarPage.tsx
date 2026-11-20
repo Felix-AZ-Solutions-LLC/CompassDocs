@@ -210,10 +210,10 @@ export function CalendarPage({ today, initial }: { /** Today's date in the viewe
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm print:hidden">
             <div className="flex items-center gap-2">
               <span className="text-xs text-slate-500" id="cal-colour-label">
-                Colour by
+                Color by
               </span>
               <Segmented<HdCalendarColour>
-                label="Colour by"
+                label="Color by"
                 size="sm"
                 value={colour}
                 onChange={setColour}

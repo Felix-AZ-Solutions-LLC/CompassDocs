@@ -222,7 +222,7 @@ test.describe("hold until the event (licensed)", () => {
     t = await ticketOf(page, inviteTicket);
     expect(t.ticket.status).toBe("open");
     expect(t.event.cancelled).toBe(true);
-    expect((t.messages as { body: string }[]).some((m) => m.body === "The event was cancelled. Close this ticket if nothing else is needed.")).toBe(true);
+    expect((t.messages as { body: string }[]).some((m) => m.body === "The event was canceled. Close this ticket if nothing else is needed.")).toBe(true);
   });
 
   test("the requester's own parked request reads Scheduled in Get help", async ({ page }) => {

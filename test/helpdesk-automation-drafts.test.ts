@@ -797,7 +797,7 @@ describe("who may draft, and the admin switches", () => {
     edition.features = [];
     try {
       assert.deepEqual(await listed("dadmin"), []);
-      assert.match((await tool("dadmin", "hd_draft_automation", { name: "x" })).text, /licence.*402/);
+      assert.match((await tool("dadmin", "hd_draft_automation", { name: "x" })).text, /license.*402/);
     } finally {
       edition.features = ["helpdesk"];
     }

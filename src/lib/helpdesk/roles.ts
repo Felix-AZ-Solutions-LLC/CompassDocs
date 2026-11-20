@@ -230,7 +230,7 @@ export async function hdCapGate(cap: HdCap, opts: { teamId?: number | null } = {
   if (cross) return cross;
   const user = await apiSession("desk"); // 1.20.5: desk side, so the Duo desk rule applies
   if (user instanceof NextResponse) return user;
-  if (!(await featureEnabled("helpdesk"))) return NextResponse.json({ error: "The helpdesk is not included in your licence." }, { status: 402 });
+  if (!(await featureEnabled("helpdesk"))) return NextResponse.json({ error: "The helpdesk is not included in your license." }, { status: 402 });
   let ok: boolean;
   try {
     ok = await hdCan(user, cap, opts);
@@ -247,7 +247,7 @@ export async function hdAnyCapGate(caps: HdCap[]): Promise<SessionUser | NextRes
   if (cross) return cross;
   const user = await apiSession("desk"); // 1.20.5: desk side, so the Duo desk rule applies
   if (user instanceof NextResponse) return user;
-  if (!(await featureEnabled("helpdesk"))) return NextResponse.json({ error: "The helpdesk is not included in your licence." }, { status: 402 });
+  if (!(await featureEnabled("helpdesk"))) return NextResponse.json({ error: "The helpdesk is not included in your license." }, { status: 402 });
   try {
     for (const c of caps) if (await hdCan(user, c)) return user;
   } catch {

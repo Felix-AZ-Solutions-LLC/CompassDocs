@@ -475,7 +475,7 @@ describe("hd_draft_checklist: a draft a person publishes", () => {
       assert.deepEqual(await listed("manager"), []);
       const r = await tool("manager", "hd_draft_checklist", { name: `no ${STAMP}`, items: [{ title: "a" }] });
       assert.equal(r.isError, true);
-      assert.match(r.text, /licence.*402/);
+      assert.match(r.text, /license.*402/);
     } finally {
       edition.features = ["helpdesk"];
     }
@@ -619,7 +619,7 @@ describe("hd_update_checklist: ticking as the agent", () => {
     edition.features = [];
     try {
       const r = await tool("agent", "hd_update_checklist", { number: t.number, items: [{ id: items[0].id, done: true }] });
-      assert.match(r.text, /licence.*402/);
+      assert.match(r.text, /license.*402/);
     } finally {
       edition.features = ["helpdesk"];
     }

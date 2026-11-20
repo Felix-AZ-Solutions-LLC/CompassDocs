@@ -2,8 +2,9 @@
 
 // Desk settings → Customer portal → Help centre (1.19.4, C3, mock h2): the
 // articles people outside the organisation search at /support before they
-// raise a request. Four cards: Show a help centre (with search engine
-// indexing), What's public (documents in chosen
+// raise a request. Five cards: Show a Help Center (with search engine
+// indexing), Home page (1.20.37: the greeting over the search and a switch
+// per home section, all on by default), What's public (documents in chosen
 // spaces and/or documents tagged `public`; each an option card with a
 // checkbox, the chosen spaces as chips with a "+ Space" menu), Categories
 // (the spaces' folders as rows: a grip that drags, or opens Move up / Move
@@ -22,13 +23,13 @@ import { ArrowDown, ArrowUp, BookOpen, Eye, EyeOff, GripVertical, Lock, Plus, X 
 import { buttonClass, iconButtonClass } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { chipClass } from "@/components/Chip";
-import { SectionEmpty, Toggle } from "@/components/form";
+import { Field, SectionEmpty, TextInput, Toggle } from "@/components/form";
 import { MenuItem, Popover } from "@/components/Popover";
 import { SaveRow } from "@/components/SaveRow";
 import { LoadingRow } from "@/components/Spinner";
 import { toast } from "@/components/Toasts";
 import { useLeaveGuard, useUnsavedChanges } from "@/lib/use-unsaved";
-import { articleCount, type HelpCentreSettings, type HelpCentreStats } from "@/lib/helpdesk/help-centre-shared";
+import { HC_DEFAULT_GREETING, HC_LIMITS, articleCount, type HelpCentreSettings, type HelpCentreStats } from "@/lib/helpdesk/help-centre-shared";
 import { getJson, sendJson } from "../api";
 
 interface SpaceOption {
@@ -73,7 +74,7 @@ export function PortalHelpCentre() {
   }
 
   useEffect(() => {
-    getJson<Loaded>(API, "Couldn't load the help centre settings.")
+    getJson<Loaded>(API, "Couldn't load the Help Center settings.")
       .then(take)
       .catch((e: Error) => setError(e.message));
   }, []);
@@ -139,10 +140,10 @@ export function PortalHelpCentre() {
     if (!s) return;
     setBusy(true);
     try {
-      const d = await sendJson<Loaded>(API, "PUT", { ...s, order: cats ? cats.map((c) => c.key) : s.order }, "Couldn't save the help centre settings.");
+      const d = await sendJson<Loaded>(API, "PUT", { ...s, order: cats ? cats.map((c) => c.key) : s.order }, "Couldn't save the Help Center settings.");
       take(d);
       markClean(JSON.stringify(d.settings));
-      toast("ok", d.settings.enabled ? "Help centre saved. It's showing in the portal." : "Help centre saved. It's hidden from the portal.");
+      toast("ok", d.settings.enabled ? "Help Center saved. It's showing in the portal." : "Help Center saved. It's hidden from the portal.");
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
@@ -158,7 +159,7 @@ export function PortalHelpCentre() {
       <div className="flex flex-col gap-4">
         <Card>
           <Toggle
-            label="Show a help centre"
+            label="Show a Help Center"
             help="Customers search these articles before raising a request, and see suggestions as they type."
             checked={s.enabled}
             onChange={(v) => set({ enabled: v })}
@@ -166,17 +167,47 @@ export function PortalHelpCentre() {
           />
           {s.enabled && !data.portal_on && (
             <p className="notice-warn mt-3 rounded-lg border px-3 py-2 text-sm">
-              The customer portal is off, so nobody sees the help centre yet. Turn the portal on in the Settings tab.
+              The customer portal is off, so nobody sees the Help Center yet. Turn the portal on in the Settings tab.
             </p>
           )}
           <Toggle
             className="mt-4"
-            label="Let search engines index the help centre"
-            help="Off: the help centre asks search engines not to list it. Your requests and sign-in are never indexed."
+            label="Let search engines index the Help Center"
+            help="Off: the Help Center asks search engines not to list it. Your requests and sign-in are never indexed."
             checked={s.indexing}
             onChange={(v) => set({ indexing: v })}
             size="full"
           />
+        </Card>
+
+        <Card id="help-center-home" className="scroll-mt-6" title="Home page" description="What the Help Center's home shows under its header band. A section with nothing in it stays hidden.">
+          <Field label="Greeting" help={`The line above the search box. Leave it empty for “${HC_DEFAULT_GREETING}”`} size="lg">
+            <TextInput value={s.greeting} maxLength={HC_LIMITS.greeting} placeholder={HC_DEFAULT_GREETING} onChange={(e) => set({ greeting: e.target.value })} />
+          </Field>
+          <div className="mt-4 space-y-4">
+            <Toggle
+              label="Request tiles"
+              help={`“What do you need?”: up to ${HC_LIMITS.tiles} of the things customers can ask for, as tiles that open the request form. Hidden when nothing can be raised.`}
+              checked={s.show_tiles}
+              onChange={(v) => set({ show_tiles: v })}
+              size="full"
+            />
+            <Toggle
+              label="Popular articles"
+              help="The most opened articles in the last 90 days. Counted without personal data: a number per article per day."
+              checked={s.show_popular}
+              onChange={(v) => set({ show_popular: v })}
+              size="full"
+            />
+            <Toggle label="Recently updated" help="The articles changed most recently." checked={s.show_recent} onChange={(v) => set({ show_recent: v })} size="full" />
+            <Toggle
+              label="Spaces"
+              help="A card per space with its description, article count and top articles. Off: the home lists the categories instead."
+              checked={s.show_spaces}
+              onChange={(v) => set({ show_spaces: v })}
+              size="full"
+            />
+          </div>
         </Card>
 
         <Card title="What's public">
@@ -250,7 +281,7 @@ export function PortalHelpCentre() {
           <p className="mt-3 text-xs text-slate-500">Counted without personal data: no names, addresses or sign-ins, and typed emails and numbers are blanked.</p>
         </Card>
       </div>
-      <SaveRow dirty={dirty} busy={busy} onSave={save} label="Save help centre" />
+      <SaveRow dirty={dirty} busy={busy} onSave={save} label="Save Help Center" />
     </>
   );
 }
@@ -356,7 +387,7 @@ function CategoryRows({ cats, onMove, onToggle }: { cats: AdminCategory[]; onMov
               type="button"
               onClick={() => onToggle(c)}
               aria-pressed={!c.hidden}
-              aria-label={`Show ${c.name} in the help centre`}
+              aria-label={`Show ${c.name} in the Help Center`}
               data-tt={c.hidden ? "Hidden: its articles aren't public. Show it." : "Showing. Hide it and its articles."}
               className={iconButtonClass("quiet", "sm")}
             >

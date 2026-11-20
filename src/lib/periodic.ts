@@ -186,7 +186,7 @@ export async function runHelpdeskSweeps(
     const { featureEnabled } = await import("./ee");
     if (!(await featureEnabled("helpdesk"))) return result;
   } catch (e) {
-    console.error("[periodic] helpdesk licence check:", e);
+    console.error("[periodic] helpdesk license check:", e);
     return result;
   }
   result.licensed = true;

@@ -34,7 +34,7 @@ export function PortalHeader({ name, logoUrl, email, helpCentre = false }: { nam
             {helpCentre && (
               <nav aria-label="Portal" className="flex items-center gap-1.5">
                 <Link href="/support" className={NAV_LINK}>
-                  Help centre
+                  Help Center
                 </Link>
                 <span aria-hidden>·</span>
                 <Link href="/support/requests" className={NAV_LINK}>

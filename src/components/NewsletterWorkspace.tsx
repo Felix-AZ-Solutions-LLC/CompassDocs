@@ -382,7 +382,7 @@ export function NewsletterWorkspace({
     setNotice(
       at
         ? `Scheduled — it will go out ${fmt.dateTime(at)}.`
-        : "Schedule cancelled."
+        : "Schedule canceled."
     );
     await refresh();
     router.refresh();

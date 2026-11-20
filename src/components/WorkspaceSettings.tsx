@@ -293,7 +293,7 @@ export function WorkspaceSettings({ initial, scope }: { initial: AppSettings; sc
           </div>
           <p className="mt-2 text-xs text-slate-500">
             Buttons, links and focus rings use a shade that keeps white text readable (4.5:1); a
-            light accent is darkened for those, while tinted surfaces keep the colour you chose.
+            light accent is darkened for those, while tinted surfaces keep the color you chose.
           </p>
           <p className="mt-1 text-xs text-slate-500">Applies everywhere after saving (pages refresh with the new color).</p>
         </div>
@@ -312,8 +312,8 @@ export function WorkspaceSettings({ initial, scope }: { initial: AppSettings; sc
         <h3 className="mb-1 font-semibold text-slate-900">Default dark style</h3>
         <p id="workspace-dark-style-help" className="mb-3 text-xs text-slate-500">
           How dark mode looks for everyone who hasn&apos;t chosen their own style under Account → Preferences.
-          The customer portal, the help centre and the sign-in pages always use it. Light mode and the accent
-          colour don&apos;t change.
+          The customer portal, the Help Center and the sign-in pages always use it. Light mode and the accent
+          color don&apos;t change.
         </p>
         <DarkStylePicker
           label="Default dark style"

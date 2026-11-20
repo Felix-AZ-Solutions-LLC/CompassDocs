@@ -1,5 +1,12 @@
-// GET  /support/api/help/search?q=…&j=<journey>   → { articles: HelpSuggestion[] }
-//      suggestions as you type in the help centre's search box.
+// GET  /support/api/help/search?q=…&j=<journey>   → { articles: HelpSuggestion[], types: HelpTypeSuggestion[] }
+//      suggestions as you type in the Help Center's search box: at most six
+//      in all (1.20.37), up to two of them the request types the portal
+//      offers whose title or description matches (lib/helpdesk/portal
+//      offeredTypes, the same list New request shows; none when nothing can
+//      be raised, while the home's Request tiles are switched off, or, on a
+//      portal that admits only some addresses, to anyone but a signed-in
+//      contact it admits: help-centre requestTypesVisible), the rest
+//      articles.
 // POST /support/api/help/search  { q }             → { articles }
 //      the request form's suggestions from its subject: the subject travels
 //      in the body (never the address, so no proxy or access log keeps it)
@@ -14,8 +21,19 @@
 // POST must be same-origin.
 
 import { ipFrom } from "@/lib/audit";
-import { getHelpCentreSettings, helpCentreOpen, helpSearchLimited, searchHelpCentre } from "@/lib/helpdesk/help-centre";
-import { getPortalSettings, portalNotFound, portalOriginRejection } from "@/lib/helpdesk/portal";
+import {
+  HC_LIMITS,
+  cleanHelpQuery,
+  getHelpCentreSettings,
+  helpCentreOpen,
+  helpSearchLimited,
+  matchRequestTypes,
+  newRequestHref,
+  requestTypesVisible,
+  searchHelpCentre,
+  type HelpTypeSuggestion,
+} from "@/lib/helpdesk/help-centre";
+import { currentPortalContact, getPortalSettings, offeredTypes, portalNotFound, portalOriginRejection } from "@/lib/helpdesk/portal";
 import { portalJson, readSmallJson } from "@/lib/helpdesk/portal-http";
 
 export const dynamic = "force-dynamic";
@@ -32,17 +50,26 @@ export async function GET(req: Request) {
   if (!ctx) return portalNotFound();
   if (helpSearchLimited(ipFrom(req) ?? "unknown")) return portalJson({ error: LIMITED, limited: true }, 429);
   const url = new URL(req.url);
+  const q = url.searchParams.get("q") ?? "";
+  const form = url.searchParams.get("src") === "form";
+  // Request types first in the budget (at most two), so a matching one always shows; articles fill the rest.
+  // Nothing is looked up for a query too short to search (review M2).
+  const asksTypes = !form && cleanHelpQuery(q).length >= 2 && ctx.hc.show_tiles && requestTypesVisible(ctx.portal, ctx.portal.access === "anyone" ? null : await currentPortalContact(ctx.portal));
+  const types: HelpTypeSuggestion[] = asksTypes
+    ? matchRequestTypes(await offeredTypes(ctx.portal), q, HC_LIMITS.suggestTypes).map((t) => ({ id: t.id, title: t.title, href: newRequestHref(t.id), icon: t.icon }))
+    : [];
   const articles = await searchHelpCentre(
-    url.searchParams.get("q") ?? "",
+    q,
     {
       journey: url.searchParams.get("j") ?? "",
       // A page from before the POST form may still ask by address: never counted.
-      source: url.searchParams.get("src") === "form" ? "form" : "home",
+      source: form ? "form" : "home",
       record: portalOriginRejection(req) === null,
+      limit: HC_LIMITS.suggest - types.length,
     },
     ctx
   );
-  return portalJson({ articles });
+  return portalJson({ articles, types });
 }
 
 export async function POST(req: Request) {

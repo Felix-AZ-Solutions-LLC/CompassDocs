@@ -176,7 +176,7 @@ export async function botToken(s: TeamsSettings, opts: { fresh?: boolean } = {})
       throw new ChatHttpError("Microsoft refused the app ID and client secret. Check the secret hasn't expired, and that the app ID is the bot's Microsoft App ID.", e.status, e.code);
     }
     if (e instanceof ChatHttpError && e.code === "invalid_request") {
-      throw new ChatHttpError("Microsoft didn't recognise that tenant for this app. Check the tenant ID, and that the bot is single tenant in that tenant.", e.status, e.code);
+      throw new ChatHttpError("Microsoft didn't recognize that tenant for this app. Check the tenant ID, and that the bot is single tenant in that tenant.", e.status, e.code);
     }
     throw e;
   }

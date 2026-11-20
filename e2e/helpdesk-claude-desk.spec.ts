@@ -159,7 +159,7 @@ test.describe("claude in the desk (licensed, fake Messages API)", () => {
     await claude.click();
     const launcher = page.getByRole("menu", { name: `Ask Claude about #${number}` });
     await expect(launcher).toBeVisible();
-    for (const p of ["Summarise this ticket", "Has this happened before?", "Draft a reply", "Translate my reply into French", "What should I do next?"]) {
+    for (const p of ["Summarize this ticket", "Has this happened before?", "Draft a reply", "Translate my reply into French", "What should I do next?"]) {
       await expect(launcher.getByRole("menuitem", { name: p })).toBeVisible();
     }
     await shot(page, "c2-claude-launcher-1440");

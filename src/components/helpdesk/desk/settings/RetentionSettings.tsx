@@ -31,7 +31,7 @@ import { getJson, sendJson } from "../api";
 
 const WHAT: Record<HdRetentionItem["what"], { label: string; tone: "neutral" | "warn" | "error" }> = {
   close: { label: "Closes", tone: "neutral" },
-  anonymise: { label: "Anonymised", tone: "warn" },
+  anonymise: { label: "Anonymized", tone: "warn" },
   delete: { label: "Deleted", tone: "error" },
 };
 
@@ -129,9 +129,9 @@ export function RetentionSettings() {
     } else if (s.retention_enabled && !purgeWasOn && (plan?.counts.anonymise ?? 0) > 0) {
       const n = plan?.counts.anonymise ?? 0;
       const ok = await confirmDialog({
-        title: "Anonymise old tickets?",
-        body: `Closed tickets older than ${s.keep_amount} ${s.keep_unit} lose their subject, names, emails, message text and files. Reports still count them. The next run anonymises ${n.toLocaleString("en-GB")} ${n === 1 ? "ticket" : "tickets"}, and this can't be undone. Tickets on legal hold are kept.`,
-        confirmLabel: "Anonymise old tickets",
+        title: "Anonymize old tickets?",
+        body: `Closed tickets older than ${s.keep_amount} ${s.keep_unit} lose their subject, names, emails, message text and files. Reports still count them. The next run anonymizes ${n.toLocaleString("en-GB")} ${n === 1 ? "ticket" : "tickets"}, and this can't be undone. Tickets on legal hold are kept.`,
+        confirmLabel: "Anonymize old tickets",
         danger: true,
       });
       if (ok !== true) return;
@@ -196,7 +196,7 @@ export function RetentionSettings() {
             </div>
             <div>
               <Toggle
-                label="Anonymise or delete old closed tickets"
+                label="Anonymize or delete old closed tickets"
                 help="Off until you turn it on: closed tickets are kept for good."
                 checked={s.retention_enabled}
                 onChange={(v) => change({ retention_enabled: v })}
@@ -239,7 +239,7 @@ export function RetentionSettings() {
                       value={s.action}
                       onChange={(v) => change({ action: v })}
                       options={[
-                        { value: "anonymise", label: "Anonymise" },
+                        { value: "anonymise", label: "Anonymize" },
                         { value: "delete", label: "Delete" },
                       ]}
                     />
@@ -250,7 +250,7 @@ export function RetentionSettings() {
                     </p>
                   )}
                   <p className="mt-2 text-xs text-slate-500">
-                    Anonymise keeps the ticket for reports but removes names, emails, message text and attachments. Delete moves it to the recycle bin, and it's deleted for good 30 days later. Tickets on legal hold are never touched.
+                    Anonymize keeps the ticket for reports but removes names, emails, message text and attachments. Delete moves it to the recycle bin, and it's deleted for good 30 days later. Tickets on legal hold are never touched.
                   </p>
                 </>
               )}
@@ -262,7 +262,7 @@ export function RetentionSettings() {
           <div className="space-y-4">
             <Toggle
               label="When an account is removed"
-              help="Anonymise that person's tickets as requester and CC. Their agent replies keep the agent's name."
+              help="Anonymize that person's tickets as requester and CC. Their agent replies keep the agent's name."
               checked={s.anonymise_on_account_removal}
               onChange={(v) => change({ anonymise_on_account_removal: v })}
               size="full"

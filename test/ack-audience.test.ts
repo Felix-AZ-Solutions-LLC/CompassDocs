@@ -757,7 +757,7 @@ describe("new accounts and the welcome notice", () => {
 
     assert.equal(await hasOpenAssignment(w1.id, newbie.id), true);
     assert.equal(await hasOpenAssignment(w2.id, newbie.id), true);
-    assert.equal(await hasOpenAssignment(w3.id, newbie.id), false, "'Enrol new joiners automatically' is off");
+    assert.equal(await hasOpenAssignment(w3.id, newbie.id), false, "'Enroll new joiners automatically' is off");
     const r1 = (await row(w1.id, newbie.id))!;
     assert.equal(r1.source, "new_member");
     assert.ok(at(r1.due_at) > Date.now() + 13 * 86_400_000, "due the new-joiner days from now");
@@ -907,7 +907,7 @@ describe("new accounts and the welcome notice", () => {
       const rows = async () =>
         (await pool().query("SELECT COUNT(*)::int AS n FROM policy_assignments WHERE user_id = $1 AND document_id = ANY($2)", [user.id, docIds])).rows[0].n;
       assert.equal(await rows(), 0, "no row on any of this file's policies");
-      assert.ok(errors.some((e) => e.includes("[ack] could not enrol the new account")), `the failure is logged: ${errors.join(" | ")}`);
+      assert.ok(errors.some((e) => e.includes("[ack] could not enroll the new account")), `the failure is logged: ${errors.join(" | ")}`);
       assert.equal((await pool().query("SELECT 1 FROM ack_outbox WHERE user_ids @> $1::jsonb", [JSON.stringify([user.id])])).rowCount, 0, "no welcome");
 
       // The group writers: G1 reaches the 'rejoin' policy by rule and the

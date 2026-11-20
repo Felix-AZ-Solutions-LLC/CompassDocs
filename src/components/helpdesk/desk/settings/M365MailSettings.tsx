@@ -169,7 +169,7 @@ export function M365MailboxField({ value, onChange, typed }: { value: string; on
       label="Microsoft 365 mailbox"
       help={
         alias
-          ? `The desk reads this address's mail in ${picked.address}. Microsoft 365 shows mail sent to an alias under the mailbox's main address unless your organisation has turned on sending from aliases (SendFromAliasEnabled). Until it has, mail to this alias is handled as mail to ${picked.address}.`
+          ? `The desk reads this address's mail in ${picked.address}. Microsoft 365 shows mail sent to an alias under the mailbox's main address unless your organization has turned on sending from aliases (SendFromAliasEnabled). Until it has, mail to this alias is handled as mail to ${picked.address}.`
           : "Pick the connected mailbox this address belongs to, and the desk reads its mail there. An alias uses the mailbox it is an alias of. Distribution lists and Microsoft 365 groups can't be read: use a shared mailbox."
       }
     >
@@ -285,7 +285,7 @@ function NotConnected({ v, manage }: { v: M365MailView; manage: boolean }) {
     <>
       {v.orphaned && (
         <p className="notice-warn mb-3 rounded-lg border px-3 py-2 text-sm">
-          The connection was removed, so the mailboxes below are not being read. Connect the same Microsoft 365 organisation again, or disconnect them.
+          The connection was removed, so the mailboxes below are not being read. Connect the same Microsoft 365 organization again, or disconnect them.
         </p>
       )}
       <details className="text-sm text-slate-600" data-testid="hd-m365-manual">
@@ -369,7 +369,7 @@ function Connected({ v, manage }: { v: M365MailView; manage: boolean }) {
       )}
       {wide.length > 0 && (
         <p className="notice-warn mb-3 rounded-lg border px-3 py-2 text-sm" data-testid="hd-m365-tenant-wide">
-          This app can read every mailbox in your organisation. It holds {wide.join(", ")} granted in Entra. Run the commands under Limit access, then remove {wide.length === 1 ? "that permission" : "those permissions"} from the app in Entra (App registrations, API permissions). The desk looks again every half hour, and when you press Check access.
+          This app can read every mailbox in your organization. It holds {wide.join(", ")} granted in Entra. Run the commands under Limit access, then remove {wide.length === 1 ? "that permission" : "those permissions"} from the app in Entra (App registrations, API permissions). The desk looks again every half hour, and when you press Check access.
         </p>
       )}
       <MailboxList v={v} manage={manage} />
@@ -377,7 +377,7 @@ function Connected({ v, manage }: { v: M365MailView; manage: boolean }) {
         <summary className={SUMMARY}>
           Limit the app to your help mailboxes
           <span className={`ml-2 text-xs font-normal ${wide.length ? "ink-warn" : "text-slate-500"}`} data-testid="hd-m365-restrict-state">
-            {wide.length ? "It reaches every mailbox" : checkedOk ? "Checked: no organisation-wide access" : "Not confirmed yet"}
+            {wide.length ? "It reaches every mailbox" : checkedOk ? "Checked: no organization-wide access" : "Not confirmed yet"}
           </span>
         </summary>
         <Restrict v={v} />
@@ -408,7 +408,7 @@ function MailboxList({ v, manage }: { v: M365MailView; manage: boolean }) {
   const confirmWide = (roles: string[], a: string) =>
     confirmDialog({
       title: `Connect ${a}?`,
-      body: `This app can read every mailbox in your organisation (${roles.join(", ")} ${roles.length === 1 ? "is" : "are"} granted in Entra), so Microsoft will not stop the desk from reading this one, whoever it belongs to. Connect it only if it is a help mailbox. Limiting the app first is safer.`,
+      body: `This app can read every mailbox in your organization (${roles.join(", ")} ${roles.length === 1 ? "is" : "are"} granted in Entra), so Microsoft will not stop the desk from reading this one, whoever it belongs to. Connect it only if it is a help mailbox. Limiting the app first is safer.`,
       confirmLabel: "Connect anyway",
       danger: true,
     });
@@ -941,7 +941,7 @@ function Restrict({ v }: { v: M365MailView }) {
   return (
     <div className="mt-2">
       <p className="text-sm text-slate-600">
-        A Microsoft 365 app is normally given every mailbox in the organisation. This one is given none: an Exchange administrator allows it the mailboxes above and nothing else, with these
+        A Microsoft 365 app is normally given every mailbox in the organization. This one is given none: an Exchange administrator allows it the mailboxes above and nothing else, with these
         commands. Microsoft has no way to do this step from here, so it is run once in Exchange Online PowerShell.
       </p>
       <ul className="mt-2 list-disc space-y-0.5 pl-5 text-xs text-slate-500">
@@ -953,7 +953,7 @@ function Restrict({ v }: { v: M365MailView }) {
       </ul>
       {!first ? (
         <p className="mt-3 text-xs text-slate-500" data-testid="hd-m365-commands-empty">
-          {addresses.length === 0 ? "Connect a mailbox first: the commands name each one." : "Press Check access once, so the desk learns the app's ID in your organisation. The commands appear here after that."}
+          {addresses.length === 0 ? "Connect a mailbox first: the commands name each one." : "Press Check access once, so the desk learns the app's ID in your organization. The commands appear here after that."}
         </p>
       ) : (
         <>
@@ -998,8 +998,8 @@ function AccessResult({ access }: { access: M365AccessCheck | null }) {
       <ul role="list" className="mt-1 space-y-1 text-sm">
         <li className={wide.length ? "ink-warn" : "text-slate-700"}>
           {wide.length
-            ? `The app can reach every mailbox in your organisation (${wide.join(", ")} ${wide.length === 1 ? "is" : "are"} granted in Entra).`
-            : "No organisation-wide mail permission is granted in Entra."}
+            ? `The app can reach every mailbox in your organization (${wide.join(", ")} ${wide.length === 1 ? "is" : "are"} granted in Entra).`
+            : "No organization-wide mail permission is granted in Entra."}
         </li>
         {access.mailboxes.map((m) => (
           <li key={m.address} className={`[overflow-wrap:anywhere] ${m.ok ? "text-slate-700" : "ink-warn"}`}>

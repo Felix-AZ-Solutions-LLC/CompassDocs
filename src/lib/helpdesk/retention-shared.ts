@@ -89,7 +89,7 @@ export function retentionPatchError(patch: Record<string, unknown>): string | nu
     const n = patch.keep_amount;
     if (typeof n !== "number" || !Number.isInteger(n) || n < lim.min || n > lim.max) return `Keep closed tickets for ${lim.min} to ${lim.max} ${unit}.`;
   }
-  if ("action" in patch && patch.action !== "anonymise" && patch.action !== "delete") return "After that, anonymise or delete.";
+  if ("action" in patch && patch.action !== "anonymise" && patch.action !== "delete") return "After that, anonymize or delete.";
   for (const k of ["auto_close_enabled", "retention_enabled", "anonymise_on_account_removal", "include_in_export"] as const) {
     if (k in patch && typeof patch[k] !== "boolean") return "Switches are on or off.";
   }
@@ -144,16 +144,16 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 /** "Tonight: 41 tickets close, 312 are anonymised (closed before Nov 2023). Nothing is deleted." */
 export function planSentence(p: Pick<HdRetentionPlan, "counts" | "purge_before" | "action"> & Partial<Pick<HdRetentionPlan, "enabled">>): string {
   if (p.enabled && !p.enabled.close && !p.enabled.purge) {
-    return "Both rules are off, so nothing is closed, anonymised or deleted. Turn one on to see what the next run would do.";
+    return "Both rules are off, so nothing is closed, anonymized or deleted. Turn one on to see what the next run would do.";
   }
   const n = (x: number, one: string, many: string) => `${x.toLocaleString("en-GB")} ${x === 1 ? one : many}`;
   const before = new Date(p.purge_before);
   const when = `${MONTHS[before.getUTCMonth()]} ${before.getUTCFullYear()}`;
   const parts: string[] = [];
   if (p.counts.close) parts.push(`${n(p.counts.close, "ticket closes", "tickets close")}`);
-  if (p.counts.anonymise) parts.push(`${p.counts.anonymise.toLocaleString("en-GB")} ${p.counts.anonymise === 1 ? "is" : "are"} anonymised (closed before ${when})`);
+  if (p.counts.anonymise) parts.push(`${p.counts.anonymise.toLocaleString("en-GB")} ${p.counts.anonymise === 1 ? "is" : "are"} anonymized (closed before ${when})`);
   if (p.counts.delete) parts.push(`${p.counts.delete.toLocaleString("en-GB")} ${p.counts.delete === 1 ? "goes" : "go"} to the recycle bin (closed before ${when})`);
-  const head = parts.length ? `Tonight: ${parts.join(", ")}.` : "Tonight: nothing to close, anonymise or delete.";
+  const head = parts.length ? `Tonight: ${parts.join(", ")}.` : "Tonight: nothing to close, anonymize or delete.";
   const tail = p.counts.delete ? "" : parts.length ? " Nothing is deleted." : "";
   const held = p.counts.held ? ` ${n(p.counts.held, "ticket is", "tickets are")} on legal hold and kept.` : "";
   return `${head}${tail}${held}`;

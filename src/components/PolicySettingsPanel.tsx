@@ -812,7 +812,7 @@ export function AudienceCard({
             aria-describedby={`${id}-joiners`}
           />
           <span className="min-w-0">
-            <span className="block">Enrol new joiners automatically</span>
+            <span className="block">Enroll new joiners automatically</span>
             <span id={`${id}-joiners`} className="block text-xs text-slate-500">
               New accounts and people added to the audience get {newJoinerDays} days from the day they join
             </span>

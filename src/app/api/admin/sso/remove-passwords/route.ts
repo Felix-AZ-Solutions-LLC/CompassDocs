@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   const gate = await apiGuard("admin", "identity.sso_manage");
   if (gate instanceof NextResponse) return gate;
   if (!(await featureEnabled("sso"))) {
-    return NextResponse.json({ error: "Your licence doesn't include single sign-on." }, { status: 402 });
+    return NextResponse.json({ error: "Your license doesn't include single sign-on." }, { status: 402 });
   }
   if (!(await signInSetup()).ssoOnly) {
     return NextResponse.json({ error: "Turn on SSO only (and save) before removing local passwords." }, { status: 409 });

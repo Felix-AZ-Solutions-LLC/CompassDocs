@@ -76,7 +76,7 @@ test.describe("Helpdesk shortcuts and retention settings", () => {
       await expect(page.locator("h1")).toHaveText("Retention and privacy", SLOW);
       const preview = page.getByTestId("retention-preview");
       const closeSwitch = page.getByRole("switch", { name: /Close solved tickets automatically/ });
-      const purgeSwitch = page.getByRole("switch", { name: /Anonymise or delete old closed tickets/ });
+      const purgeSwitch = page.getByRole("switch", { name: /Anonymize or delete old closed tickets/ });
       // Owner decision (1.19.1): both rules default to off. On the shared rig
       // they are only ever switched on unsaved; every save below has them off.
       if (!before.auto_close_enabled && !before.retention_enabled) {
@@ -109,7 +109,7 @@ test.describe("Helpdesk shortcuts and retention settings", () => {
       await expect(page.getByRole("dialog", { name: "Move old tickets to the recycle bin?" })).toBeVisible(SLOW);
       await page.getByRole("button", { name: "Cancel" }).click();
       expect((await api(page, "/api/helpdesk/admin/retention")).body.settings.action).toBe(before.action);
-      await page.getByRole("radiogroup", { name: "Then" }).getByRole("radio", { name: "Anonymise" }).click();
+      await page.getByRole("radiogroup", { name: "Then" }).getByRole("radio", { name: "Anonymize" }).click();
 
       // Switch both rules off again: their values are kept and saved, the rules stay off.
       await closeSwitch.click();

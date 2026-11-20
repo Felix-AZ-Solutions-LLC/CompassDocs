@@ -784,7 +784,7 @@ function PortalExportMenu() {
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        data-tt="Download or print the programme's records"
+        data-tt="Download or print the program's records"
         className={buttonClass("secondary", "sm")}
       >
         <Download className="h-4 w-4" aria-hidden /> Export <ChevronDown className="h-4 w-4" aria-hidden />

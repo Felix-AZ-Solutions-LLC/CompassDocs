@@ -208,7 +208,7 @@ export function GoogleDirectoryPanel({ initial }: { initial: GoogleState }) {
 
         {!state.enabled && (
           <p className="notice-warn mb-3 rounded-lg border px-3 py-2 text-sm">
-            Your licence doesn&rsquo;t include directory sync. You can configure it, but syncs will
+            Your license doesn&rsquo;t include directory sync. You can configure it, but syncs will
             be refused.
           </p>
         )}
@@ -370,7 +370,7 @@ export function GoogleDirectoryPanel({ initial }: { initial: GoogleState }) {
 
       {state.has_service_account && (
         <div className="rounded-xl border border-slate-200 bg-surface p-4 shadow-xs">
-          <h3 className="mb-1 text-base font-semibold text-slate-900">Authorise in Google</h3>
+          <h3 className="mb-1 text-base font-semibold text-slate-900">Authorize in Google</h3>
           <p className="mb-3 max-w-2xl text-sm text-slate-500">
             In the Google Admin console, go to <strong>Security → API controls → Domain-wide
             delegation</strong> and add a client with the ID and scopes below. Both are shown for

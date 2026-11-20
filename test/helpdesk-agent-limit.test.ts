@@ -286,7 +286,7 @@ describe("setDeskAgent at the limit", () => {
       assert.equal(r.body.code, "agent_limit");
       assert.equal(r.body.allowed, 1);
       assert.ok(Number.isInteger(r.body.used) && r.body.used >= 4, `used: ${r.body.used}`);
-      assert.equal(r.body.error, "Your licence includes 1 helpdesk agent and all are in use. Buy more agents to add someone.");
+      assert.equal(r.body.error, "Your license includes 1 helpdesk agent and all are in use. Buy more agents to add someone.");
       assert.deepEqual(Object.keys(r.body).sort(), ["allowed", "code", "error", "used"]);
       assert.ok(!(await counted()).has(P.fresh1.id), "not added");
       const row = (
@@ -310,7 +310,7 @@ describe("setDeskAgent at the limit", () => {
     try {
       const r = await call(agentsRoute.POST, req("/helpdesk/admin/agents", P.admin.session, { user_id: P.fresh1.id, role: "newbie" }));
       assert.equal(r.status, 402);
-      assert.equal(r.body.error, "Your licence includes 3 helpdesk agents and all are in use. Buy more agents to add someone.");
+      assert.equal(r.body.error, "Your license includes 3 helpdesk agents and all are in use. Buy more agents to add someone.");
     } finally {
       allowance = null;
     }
@@ -469,12 +469,12 @@ describe("in grace (nothing enforced, the key's number still shown)", () => {
       assert.equal(add.after?.role, "agent", "not refused in grace");
       const d = await diagnostics.checkHelpdeskAgents();
       assert.equal(d?.status, "warn");
-      assert.match(d!.detail, /^\d+ of 1 agent in use; not enforced while the licence is in grace, over by \d+ once renewed\.$/);
+      assert.match(d!.detail, /^\d+ of 1 agent in use; not enforced while the license is in grace, over by \d+ once renewed\.$/);
       assert.equal(d?.fix?.href, "/admin/license");
       licensedOverride = 100_000;
       const within = await diagnostics.checkHelpdeskAgents();
       assert.equal(within?.status, "warn");
-      assert.match(within!.detail, /^\d+ of 100000 agents in use; not enforced while the licence is in grace\.$/);
+      assert.match(within!.detail, /^\d+ of 100000 agents in use; not enforced while the license is in grace\.$/);
     } finally {
       allowance = null;
       licensedOverride = undefined;
@@ -487,7 +487,7 @@ describe("in grace (nothing enforced, the key's number still shown)", () => {
       allowance = 1;
       const over = await diagnostics.checkHelpdeskAgents();
       assert.equal(over?.status, "warn");
-      assert.match(over!.detail, /^\d+ of 1 agent in use: over the licence by \d+\./);
+      assert.match(over!.detail, /^\d+ of 1 agent in use: over the license by \d+\./);
       assert.equal(over?.fix?.href, "/desk/settings/agents");
       allowance = 100_000;
       const ok = await diagnostics.checkHelpdeskAgents();
@@ -496,7 +496,7 @@ describe("in grace (nothing enforced, the key's number still shown)", () => {
       allowance = null;
       const free = await diagnostics.checkHelpdeskAgents();
       assert.equal(free?.status, "pass");
-      assert.match(free!.detail, /the licence has no agent limit\.$/);
+      assert.match(free!.detail, /the license has no agent limit\.$/);
     } finally {
       allowance = null;
     }

@@ -1026,9 +1026,9 @@ export async function scanExport(job: JobRow, observe?: ScanObserver): Promise<{
     comments: { ...guessMessageColumns(commentHeaders), ...pickValid(existing?.columns.comments, commentHeaders) },
   };
   if (ticketHeaders.length) {
-    if (!cols.tickets.ref && !cols.tickets.number) warnings.push("No ticket id column was recognised. Choose one under Columns.");
-    if (!cols.tickets.subject) warnings.push("No subject column was recognised. Choose one under Columns.");
-    if (!cols.tickets.created_at) warnings.push("No created date column was recognised. Choose one under Columns.");
+    if (!cols.tickets.ref && !cols.tickets.number) warnings.push("No ticket id column was recognized. Choose one under Columns.");
+    if (!cols.tickets.subject) warnings.push("No subject column was recognized. Choose one under Columns.");
+    if (!cols.tickets.created_at) warnings.push("No created date column was recognized. Choose one under Columns.");
   }
   for (const [kind, headers, c] of [["messages", messageHeaders, cols.messages], ["comments", commentHeaders, cols.comments]] as const) {
     if (!headers.length) continue;
@@ -1358,8 +1358,8 @@ interface ExistingTicket {
   anonymised: boolean;
 }
 
-const ANONYMISED_TICKET = "This ticket was anonymised in CompassDocs, so it isn't imported again";
-const ANONYMISED_MESSAGE = "Its ticket was anonymised in CompassDocs, so it isn't imported again";
+const ANONYMISED_TICKET = "This ticket was anonymized in CompassDocs, so it isn't imported again";
+const ANONYMISED_MESSAGE = "Its ticket was anonymized in CompassDocs, so it isn't imported again";
 
 // --- Dry run ----------------------------------------------------------------------------------
 

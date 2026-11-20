@@ -256,16 +256,16 @@ function UserTable({
   // decision rows); the audit log is not rewritten, and says so.
   async function anonymise(u: User) {
     const ok = await confirmDialog({
-      title: `Anonymise ${u.name || u.username}'s compliance record?`,
+      title: `Anonymize ${u.name || u.username}'s compliance record?`,
       body: `Replaces this person's name, email and IP address on every confirmation and decision record with "Former staff #${u.id}". Counts, dates, versions and hashes stay. Audit log entries are kept as recorded. This cannot be undone.`,
-      confirmLabel: "Anonymise record",
+      confirmLabel: "Anonymize record",
       danger: true,
       typeToConfirm: u.username,
     });
     if (ok !== true) return;
     await run(u.id, () => fetch(`/api/admin/users/${u.id}/anonymise-compliance`, { method: "POST" }), {
-      fallback: "Couldn't anonymise the compliance record.",
-      ok: "Compliance record anonymised.",
+      fallback: "Couldn't anonymize the compliance record.",
+      ok: "Compliance record anonymized.",
     });
   }
 
@@ -413,7 +413,7 @@ function UserTable({
                         u.id !== currentUserId &&
                         (attestations?.[u.id] ?? 0) > 0 && {
                           key: "anon",
-                          label: "Anonymise compliance record…",
+                          label: "Anonymize compliance record…",
                           icon: <UserX />,
                           danger: true,
                           tt: "Replace their name, email and IP on every attestation record; counts, dates, versions and hashes stay",

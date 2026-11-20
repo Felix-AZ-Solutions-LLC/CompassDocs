@@ -196,7 +196,7 @@ export function RolesMatrix() {
             </Table>
           </Card>
           <p className="mt-2 text-xs text-slate-500">
-            Greyed boxes can&rsquo;t change here: Admin has every capability except Reply after review, so an Admin&rsquo;s replies are never held;
+            Grayed boxes can&rsquo;t change here: Admin has every capability except Reply after review, so an Admin&rsquo;s replies are never held;
             assigning roles and this page stay with Managers and Admins; and you can only change roles below your own, with capabilities you have
             yourself. A role replies directly or after review, never both. Delete tickets and Delete for good are off for every role except Admin
             until you tick them; deleting is never offered for tickets on legal hold.

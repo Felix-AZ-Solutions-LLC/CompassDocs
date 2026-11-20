@@ -47,7 +47,7 @@ const RUN_CHIP: Record<HdRunStateB, { tone: ChipTone; label: string }> = {
   waiting: { tone: "accent", label: "Waiting" },
   blocked: { tone: "warn", label: "Stopped" },
   done: { tone: "ok", label: "Finished" },
-  cancelled: { tone: "neutral", label: "Cancelled" },
+  cancelled: { tone: "neutral", label: "Canceled" },
   declined: { tone: "error", label: "Declined" },
 };
 

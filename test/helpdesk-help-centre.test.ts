@@ -401,7 +401,7 @@ describe("what is public (publicHelpArticles, the one rule)", () => {
     assert.deepEqual(both, [doc.ok2, doc.ok1, doc.release, doc.childOfOk, doc.taggedOther].sort((a, b) => a - b));
   });
 
-  test("nothing chosen, help centre off, portal off or no licence: nothing at all", async () => {
+  test("nothing chosen, Help Center off, portal off or no license: nothing at all", async () => {
     assert.deepEqual(await idsOf({}, { from_spaces: false, tagged: false }), []);
     assert.deepEqual(await idsOf({}, { spaces: [] }), []);
     assert.deepEqual(await idsOf({}, { enabled: false }), []);
@@ -454,7 +454,9 @@ describe("what is public (publicHelpArticles, the one rule)", () => {
 
   test("an article carries an allowlist: no author or email, no tags, no comments, no history", async () => {
     const [a] = await hc.publicHelpArticles({ ids: [doc.ok1], body: true }, ctx());
-    assert.deepEqual(Object.keys(a).sort(), ["body", "category", "href", "id", "summary", "title", "updated_at"]);
+    assert.deepEqual(Object.keys(a).sort(), ["body", "category", "href", "id", "space", "summary", "title", "updated_at"]);
+    // 1.20.37: the space travels as a label only: a chosen space's name, else the category's (review M1).
+    assert.equal(typeof a.space, "string");
     const page = await hc.helpCentreArticle(doc.ok1, ctx());
     const json = JSON.stringify([a, page, await hc.publicHelpArticles({ q: WORD }, ctx()), await hc.helpCentreCategories(ctx())]);
     for (const secret of [AUTHOR_EMAIL, COMMENTER_EMAIL, `comment-secret ${STAMP}`, `version-secret ${STAMP}`, "internal-only", "Old title"]) {
@@ -463,7 +465,7 @@ describe("what is public (publicHelpArticles, the one rule)", () => {
     assert.equal(a.href, `/support/articles/${doc.ok1}-${(await pool().query("SELECT slug FROM documents WHERE id = $1", [doc.ok1])).rows[0].slug}`);
   });
 
-  test("the article page as rendered: notes gone, files through the help centre, links only to public articles", async () => {
+  test("the article page as rendered: notes gone, files through the Help Center, links only to public articles", async () => {
     const page = await hc.helpCentreArticle(doc.ok1, ctx());
     assert.ok(page);
     assert.ok(!page!.body.includes("internal note") && !page!.body.includes("<!--"), "HTML comments are removed from the body");
@@ -475,7 +477,7 @@ describe("what is public (publicHelpArticles, the one rule)", () => {
     assert.ok(!html.includes(`/doc/${doc.draft}`) && !html.includes("/doc/"), "no address of a document survives");
     assert.ok(!html.includes("/admin/users") && html.includes("<a>Users</a>"), "an app link keeps only its text");
     assert.ok(html.includes('href="https://example.org/x"'), "outside links stay");
-    assert.ok(html.includes(`src="/support/api/help/files/${att.ok}"`), "images go through the help centre's files");
+    assert.ok(html.includes(`src="/support/api/help/files/${att.ok}"`), "images go through the Help Center's files");
     assert.ok(!html.includes("/api/attachments/"), "never the app's attachment route");
     assert.deepEqual(page!.files.map((f) => f.href), [`/support/api/help/files/${att.ok}`]);
     assert.equal(await hc.helpCentreArticle(doc.draft, ctx()), null);
@@ -521,7 +523,7 @@ describe("what is public (publicHelpArticles, the one rule)", () => {
     assert.ok(!html.includes("/support/articles/5-local") && !html.includes("/support/api/help/files/"));
   });
 
-  test("a video and its poster play from the help centre's files", () => {
+  test("a video and its poster play from the Help Center's files", () => {
     const html = render(`::video[Setup]{src="/api/attachments/${att.ok}" poster="/api/attachments/${att.ok}"}\n\n::video[Gone]{src="/admin/video.mp4"}`, []);
     assert.ok(html.includes(`<video src="/support/api/help/files/${att.ok}"`), html);
     assert.ok(html.includes(`poster="/support/api/help/files/${att.ok}"`), "the poster survives the sanitiser and the player");
@@ -548,7 +550,7 @@ describe("what is public (publicHelpArticles, the one rule)", () => {
     }
     assert.deepEqual(await idsOf({ q: "internal" }), [], "the tag internal-only is not searchable");
     const s = await hc.searchHelpCentre(`expor ${WORD}`, { record: false }, ctx());
-    assert.deepEqual(Object.keys(s[0]).sort(), ["category", "href", "id", "summary", "title"]);
+    assert.deepEqual(Object.keys(s[0]).sort(), ["category", "href", "id", "space", "summary", "title"]);
     assert.equal(s[0].id, doc.ok1, "articles holding every word come first");
     assert.ok(s.length > 1, "then articles holding some of the words");
     assert.deepEqual(mine((await hc.publicHelpArticles({ q: `expor ${WORD}`, any: true, limit: 50 }, ctx())).map((a) => a.id)).sort((a, b) => a - b), [doc.ok2, doc.ok1, doc.release, doc.childOfOk].sort((a, b) => a - b), "any word never reaches a restricted document");
@@ -558,7 +560,21 @@ describe("what is public (publicHelpArticles, the one rule)", () => {
 describe("pure helpers", () => {
   test("settings are cleaned to the shape", () => {
     const s = hc.cleanHelpCentreSettings({ enabled: "yes", spaces: [1, "2", -3, 1, "x"], order: ["c1", "bad", "s2", "c1"], hidden: ["s9", 4], indexing: true, extra: 1 });
-    assert.deepEqual(s, { enabled: false, from_spaces: true, spaces: [1, 2], tagged: false, order: ["c1", "s2"], hidden: ["s9"], indexing: true });
+    assert.deepEqual(s, {
+      enabled: false,
+      from_spaces: true,
+      spaces: [1, 2],
+      tagged: false,
+      order: ["c1", "s2"],
+      hidden: ["s9"],
+      indexing: true,
+      // 1.20.37: the home page's greeting and sections (on unless switched off).
+      greeting: "",
+      show_popular: true,
+      show_recent: true,
+      show_spaces: true,
+      show_tiles: true,
+    });
   });
 
   test("stored queries keep no email address or long number", () => {
@@ -637,7 +653,7 @@ describe("routes and stats", () => {
     }
     await setSetting(portal.HD_PORTAL_SETTINGS_KEY, JSON.stringify(portal.cleanPortalSettings({ enabled: false })));
     try {
-      assert.equal((await call(searchRoute.GET, `/support/api/help/search?q=${WORD}`)).status, 404, "the portal off closes the help centre");
+      assert.equal((await call(searchRoute.GET, `/support/api/help/search?q=${WORD}`)).status, 404, "the portal off closes the Help Center");
     } finally {
       await setSetting(portal.HD_PORTAL_SETTINGS_KEY, JSON.stringify(portalOn()));
     }
@@ -709,7 +725,7 @@ describe("routes and stats", () => {
     assert.ok(!/\?q=|&q=/.test(src) && /method: "POST"/.test(src), "the form sends its subject in the body");
   });
 
-  test("the results page counts only searches the help centre's own form opened", async () => {
+  test("the results page counts only searches the Help Center's own form opened", async () => {
     const q = `resultspage ${WORD}`;
     const count = async () => (await pool().query("SELECT count(*)::int AS n FROM hd_hc_searches WHERE q = $1", [q])).rows[0].n as number;
     const visit = async (headers: Record<string, string>) => {

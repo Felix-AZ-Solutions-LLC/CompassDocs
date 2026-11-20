@@ -438,7 +438,7 @@ const reply = (status: number, body: InboundResult["body"], why?: InboundWhy): I
 export async function handleInbound(req: Request, secret: string, opts: { providerHint?: string; origin?: string; ip?: string | null } = {}): Promise<InboundResult> {
   const settings = await getHelpdeskSettings();
   if (!secretMatches(secret, settings.inbound_secret)) return reply(404, { ok: false, error: "Not found." });
-  if (!(await helpdeskLicensed())) return reply(402, { ok: false, error: "The helpdesk is not included in your licence." });
+  if (!(await helpdeskLicensed())) return reply(402, { ok: false, error: "The helpdesk is not included in your license." });
   if (limited("inbound:all", INBOUND_LIMITS.perMinute, 60_000)) return reply(429, { ok: false, error: "Too many messages. Try again shortly." });
   const length = Number(req.headers.get("content-length") || 0);
   if (length > INBOUND_MAX_BODY_BYTES) return reply(413, { ok: false, error: "The message is too large." });
@@ -695,7 +695,7 @@ export async function processInboundEmail(
               lockedBy
                 ? await asNote(lockedBy.holder.name)
                 : isOrganiser
-                  ? { kind: "internal", body: `${mdInline(author.name)} (the meeting's organiser) wrote, with an update to the meeting:\n\n${inboundBody(email, { reply: true }) || "_(empty email)_"}` }
+                  ? { kind: "internal", body: `${mdInline(author.name)} (the meeting's organizer) wrote, with an update to the meeting:\n\n${inboundBody(email, { reply: true }) || "_(empty email)_"}` }
                   : { kind: toNote ? "internal" : "public", body: inboundBody(email, { reply: true }) || "_(empty reply)_" }
             );
           } catch (e) {

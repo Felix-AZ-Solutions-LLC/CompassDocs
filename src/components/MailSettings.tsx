@@ -381,7 +381,7 @@ function M365Form({ v, use, onSaved }: { v: MailView; use: boolean; onSaved: (v:
         <Field
           label="Sending mailbox's email address"
           error={mailboxError}
-          help="The address recipients see (its primary SMTP address in Exchange). Microsoft doesn't let an app that may only send look it up, so it is asked for here. A shared mailbox works and needs no licence."
+          help="The address recipients see (its primary SMTP address in Exchange). Microsoft doesn't let an app that may only send look it up, so it is asked for here. A shared mailbox works and needs no license."
         >
           <TextInput
             type="email"
@@ -533,13 +533,13 @@ function LockDown({ v }: { v: MailView }) {
         Limit the app to {m.mailbox}
       </h4>
       <p className="mt-1 text-sm text-slate-600">
-        Microsoft&apos;s Mail.Send permission lets an app send as any mailbox in your organisation, not only this one. Limit it, so that the app, or anyone who gets hold of
+        Microsoft&apos;s Mail.Send permission lets an app send as any mailbox in your organization, not only this one. Limit it, so that the app, or anyone who gets hold of
         its secret, can send as {m.mailbox} and nobody else. Microsoft offers no way to do this from here: an Exchange administrator runs these commands once, in PowerShell
         with the ExchangeOnlineManagement module.
       </p>
       {m.last_check?.limited === false && (
         <p className="notice-warn mt-2 rounded-lg border px-3 py-2 text-sm" data-testid="mail-not-limited">
-          Needs attention: the app can also send as {m.last_check.other}, so it can send as other mailboxes in your organisation. Run the commands below, then press Check
+          Needs attention: the app can also send as {m.last_check.other}, so it can send as other mailboxes in your organization. Run the commands below, then press Check
           connection again.
         </p>
       )}
@@ -563,7 +563,7 @@ function LockDown({ v }: { v: MailView }) {
           </div>
           <p className="mt-2 text-xs text-slate-500">
             The first lines make a mail-enabled security group holding only {m.mailbox}, hidden from the address book and named after this app, so another CompassDocs in your
-            organisation makes its own; the policy lets the app reach that group&apos;s members
+            organization makes its own; the policy lets the app reach that group&apos;s members
             and nobody else. Microsoft can take 30 minutes or more to apply it. The last command should then read Granted; run it with any other mailbox and it should read
             Denied.
           </p>
@@ -593,7 +593,7 @@ function LockDown({ v }: { v: MailView }) {
                 </div>
               </>
             ) : (
-              <p className="mt-2 text-xs text-slate-500">Press Check connection once, so CompassDocs learns the app&apos;s object ID in your organisation.</p>
+              <p className="mt-2 text-xs text-slate-500">Press Check connection once, so CompassDocs learns the app&apos;s object ID in your organization.</p>
             )}
           </details>
         </>
@@ -616,7 +616,7 @@ function LockDown({ v }: { v: MailView }) {
               </p>
             </>
           ) : (
-            <p className="mt-2 text-xs text-slate-500">Press Check connection once, so CompassDocs learns the app&apos;s object ID in your organisation.</p>
+            <p className="mt-2 text-xs text-slate-500">Press Check connection once, so CompassDocs learns the app&apos;s object ID in your organization.</p>
           )}
         </>
       )}

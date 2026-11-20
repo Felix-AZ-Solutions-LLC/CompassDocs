@@ -313,7 +313,7 @@ export function ProgramSettingsPanel({ initial }: { initial: ComplianceSettings 
 
       <Card
         title="Compliance report"
-        description="A summary of the programme by email: compliance, overdue people, escalations, the lowest policies and the deadlines ahead. The monthly report carries the monthly snapshot's SHA-256."
+        description="A summary of the program by email: compliance, overdue people, escalations, the lowest policies and the deadlines ahead. The monthly report carries the monthly snapshot's SHA-256."
       >
         <Toggle
           label="Send the compliance report"

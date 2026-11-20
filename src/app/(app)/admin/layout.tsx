@@ -64,10 +64,10 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       {licenceNote && (
         <div className={`${licenceNote.days < 0 ? "notice-error" : "notice-warn"} mb-4 rounded-lg border px-3 py-2 text-sm`}>
           {licenceNote.days > 0
-            ? `Your Enterprise licence expires in ${licenceNote.days} day${licenceNote.days === 1 ? "" : "s"}. `
+            ? `Your Enterprise license expires in ${licenceNote.days} day${licenceNote.days === 1 ? "" : "s"}. `
             : licenceNote.days === 0
-              ? "Your Enterprise licence expires today. "
-              : "Your Enterprise licence has expired. "}
+              ? "Your Enterprise license expires today. "
+              : "Your Enterprise license has expired. "}
           After it lapses, SSO only (and single sign-on with it), SCIM deprovisioning and Duo keep being enforced, but no new accounts are
           created at sign-in, their settings can only be relaxed (SSO only off, the break-glass accounts, a new client secret), and other
           Enterprise features stop, until it is renewed.{" "}

@@ -61,7 +61,7 @@ export class AgentLimitError extends DeskRoleError {
     public used: number
   ) {
     super(
-      `Your licence includes ${allowed} helpdesk agent${allowed === 1 ? "" : "s"} and all are in use. Buy more agents to add someone.`,
+      `Your license includes ${allowed} helpdesk agent${allowed === 1 ? "" : "s"} and all are in use. Buy more agents to add someone.`,
       402
     );
   }

@@ -388,14 +388,14 @@ function BuyAgentsLink({ href, className = "" }: { href: string; className?: str
 function AgentAllowance({ d }: { d: AgentsData }) {
   if (d.licensed === null) {
     // 1.20.27: no count here; the list's filter says it right under ("82 agents" twice, 40px apart).
-    return <p className="mb-4 text-sm text-slate-500">Unlimited agents on your licence.</p>;
+    return <p className="mb-4 text-sm text-slate-500">Unlimited agents on your license.</p>;
   }
   // In grace nothing is refused: no warning, the meter's text says so (and by how much it will be over).
   const grace = !d.enforced;
   const muted = [
-    "on your licence",
+    "on your license",
     allowanceBreakdown(d.licensed),
-    grace ? "not enforced while the licence is in grace" : "",
+    grace ? "not enforced while the license is in grace" : "",
     grace && d.over > 0 ? `over by ${d.over} once renewed` : "",
   ]
     .filter(Boolean)
@@ -409,7 +409,7 @@ function AgentAllowance({ d }: { d: AgentsData }) {
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
           <p>
             <b>
-              {d.used} people work the desk and your licence includes {d.licensed}.
+              {d.used} people work the desk and your license includes {d.licensed}.
             </b>{" "}
             Nobody loses access. To add someone new, buy {need} more {need === 1 ? "agent" : "agents"} or take {need} {need === 1 ? "person" : "people"} off
             the desk.
@@ -552,7 +552,7 @@ function AddAgentModal({
                 <p>{limitError}</p>
               ) : (
                 <p>
-                  <b>{limit.allowed === 1 ? "The 1 agent on your licence is in use." : `All ${limit.allowed} agents on your licence are in use.`}</b> Buy more agents to add someone, or take someone off the desk first.
+                  <b>{limit.allowed === 1 ? "The 1 agent on your license is in use." : `All ${limit.allowed} agents on your license are in use.`}</b> Buy more agents to add someone, or take someone off the desk first.
                 </p>
               )}
               <BuyAgentsLink href={limit.buyUrl} className="mt-1" />

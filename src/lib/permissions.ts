@@ -51,7 +51,7 @@ export const PERMISSIONS = [
   { key: "account.token_create", label: "Mint API token", description: "Create a cdk_ personal access token", scope: "global" },
   { key: "account.token_read", label: "List own API tokens", description: "See personal access tokens", scope: "global" },
   { key: "account.token_revoke", label: "Revoke own API token", description: "Delete a personal access token", scope: "global" },
-  { key: "account.twofa_manage", label: "Manage own 2FA", description: "Enrol/disable TOTP, view recovery codes", scope: "global" },
+  { key: "account.twofa_manage", label: "Manage own 2FA", description: "Enroll/disable TOTP, view recovery codes", scope: "global" },
   // --- ai ---
   { key: "ai.proofread", label: "Use proofreader", description: "Run the AI proofreader", scope: "global" },
   { key: "ai.write_assist", label: "Use writing assistant", description: "Generate/rewrite prose in the editor", scope: "global" },
@@ -92,7 +92,7 @@ export const PERMISSIONS = [
   { key: "directory.print_columns_manage", label: "Manage print layout", description: "Configure directory print columns", scope: "global" },
   { key: "directory.read", label: "Read staff directory", description: "Browse the directory", scope: "global" },
   { key: "directory.search", label: "Search directory", description: "Search people", scope: "global" },
-  { key: "directory.sync_manage", label: "Manage directory sync", description: "Configure Graph/directory synchronisation", scope: "global" },
+  { key: "directory.sync_manage", label: "Manage directory sync", description: "Configure Graph/directory synchronization", scope: "global" },
   // --- document ---
   // Keys keep "ack" (renaming one would break stored grants); the words a
   // role builder reads follow the read-confirmation glossary (STYLEGUIDE

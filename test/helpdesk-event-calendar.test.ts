@@ -494,7 +494,7 @@ describe("the invite reader (pure)", () => {
     assert.equal(dirty.location.length, ics.ICS_LIMITS.location);
   });
 
-  test("the feed writer: escapes, 75-octet folding without splitting a character, whole days end the day after, cancelled", () => {
+  test("the feed writer: escapes, 75-octet folding without splitting a character, whole days end the day after, canceled", () => {
     const text = ics.buildCalendar("IT, events; all", [
       { uid: "ticket-1@x", summary: "#1 Réunion du comité, salle « Ångström »; préparation " + "é".repeat(60), location: "Room; 1, east", description: "Line one\nLine two", url: "https://x.example/desk/tickets/1", all_day: false, starts_at: new Date("2026-11-20T14:00:00Z"), ends_at: new Date("2026-11-20T15:00:00Z"), start_date: null, end_date: null, cancelled: false, sequence: 3, updated_at: new Date("2026-11-01T00:00:00Z") },
       { uid: "ticket-2@x", summary: "#2 Offsite", location: "", description: "", url: "", all_day: true, starts_at: new Date(), ends_at: new Date(), start_date: "2026-11-20", end_date: "2026-11-22", cancelled: true, sequence: 1, updated_at: new Date("2026-11-01T00:00:00Z") },
@@ -628,7 +628,7 @@ describe("double-booking", () => {
     assert.equal((await putEvent("agent", b.number, { setup_minutes: 0 })).body.conflicts.length, 0);
     assert.equal((await putEvent("agent", b.number, { setup_minutes: 30, place: "Somewhere else" })).body.conflicts.length, 0);
     await putEvent("agent", b.number, { place });
-    await cal.cancelTicketEvent(a.id, { id: null, name: "Helpdesk" }, "Cancelled for the test.");
+    await cal.cancelTicketEvent(a.id, { id: null, name: "Helpdesk" }, "Canceled for the test.");
     assert.equal((await getEvent("agent", b.number)).body.conflicts.filter((x: { number: number | null }) => x.number === a.number).length, 0);
   });
 });
@@ -786,7 +786,7 @@ describe("not closed until setup is complete", () => {
     const declined = await eventTicket("Declined", 12);
     await withTx((c) => cal.cancelEventForDeclineTx(c, declined.id, new Date()));
     assert.ok((await eventOf(declined.id)).cancelled_at);
-    assert.ok((await lines(declined.id)).some((l) => l.body === "The event was cancelled because the request was declined."));
+    assert.ok((await lines(declined.id)).some((l) => l.body === "The event was canceled because the request was declined."));
     assert.equal(await cal.eventSetupOpen(declined.id), false);
   });
 
@@ -805,7 +805,7 @@ describe("not closed until setup is complete", () => {
     const plan = await retention.planRetention({ settings, only: [t.id], at: new Date() });
     assert.equal(plan.counts.close, 0, "the preview says the same");
     // Cancelled: nothing is held.
-    await cal.cancelTicketEvent(t.id, { id: null, name: "Helpdesk" }, "Cancelled for the test.");
+    await cal.cancelTicketEvent(t.id, { id: null, name: "Helpdesk" }, "Canceled for the test.");
     run = await retention.runRetention({ settings, only: [t.id] });
     assert.deepEqual(run.closed, [t.id]);
     // And marked complete: the same.
@@ -1032,7 +1032,7 @@ describe("meeting invites by email", () => {
     assert.ok(e.cancelled_at);
     const after = await byNumber(t.number);
     assert.ok(["new", "open"].includes(after.status), `the ticket was not closed (${after.status})`);
-    const note = (await lines(t.id)).find((l) => l.body.startsWith(`The meeting was cancelled by ${P.req.name}`));
+    const note = (await lines(t.id)).find((l) => l.body.startsWith(`The meeting was canceled by ${P.req.name}`));
     assert.ok(note && note.kind === "internal", JSON.stringify(await lines(t.id)));
     assert.match(note!.body, /The ticket was not closed\.$/);
     assert.equal(await cal.eventSetupOpen(t.id), false);
@@ -1244,14 +1244,14 @@ describe("reminders", () => {
     assert.deepEqual((await sweep("2031-12-11T14:05:00Z", [t.id])).sent, []);
 
     const skipped: number[] = [];
-    const cancelled = await ticket("Cancelled", "A", "open", { assignee: P.agent.id });
+    const cancelled = await ticket("Canceled", "A", "open", { assignee: P.agent.id });
     const complete = await ticket("Complete", "A", "open", { assignee: P.agent.id });
     const solved = await ticket("Solved", "A", "open", { assignee: P.agent.id });
     for (const x of [cancelled, complete, solved]) {
       await putEvent("agent", x.number, { starts_at: "2032-01-10T14:00:00Z", ends_at: "2032-01-10T15:00:00Z", setup_minutes: 0 });
       skipped.push(x.id);
     }
-    await cal.cancelTicketEvent(cancelled.id, { id: null, name: "Helpdesk" }, "Cancelled.");
+    await cal.cancelTicketEvent(cancelled.id, { id: null, name: "Helpdesk" }, "Canceled.");
     await setup("agent", complete.number, true);
     await pool().query("UPDATE hd_tickets SET status = 'solved' WHERE id = $1", [solved.id]);
     deliveries.length = 0;
@@ -1330,7 +1330,7 @@ describe("the private calendar feed", () => {
     const d1 = dayOf(soon(2).starts_at);
     const allDay = await eventTicket("Feed offsite", 31, { all_day: true, start_date: d1, end_date: dayOf(soon(2).starts_at, 1), timezone: "Europe/London", starts_at: undefined, ends_at: undefined });
     const cancelled = await eventTicket("Feed cancelled", 32, soon(3));
-    await cal.cancelTicketEvent(cancelled.id, { id: null, name: "Helpdesk" }, "Cancelled.");
+    await cal.cancelTicketEvent(cancelled.id, { id: null, name: "Helpdesk" }, "Canceled.");
     const theirs = await eventTicket("Feed other team", 30, soon(0), "B");
     assert.equal((await makeFeed("agent", T.B)).status, 403, "only a team they work");
     assert.equal((await makeFeed("req", null)).status, 403);

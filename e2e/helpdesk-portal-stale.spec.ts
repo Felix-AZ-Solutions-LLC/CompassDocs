@@ -252,7 +252,7 @@ test.describe("customer portal settings: deleted request types, teams and spaces
     expect(renamed.body.template.items[0].team_id ?? null).toBeNull();
   });
 
-  test("a deleted help centre space leaves the help centre settings; a stored one heals", async ({ page }) => {
+  test("a deleted Help Center space leaves the Help Center settings; a stored one heals", async ({ page }) => {
     test.setTimeout(300_000);
     await login(page, ADMIN);
     test.skip(!(await licensed(page)), "helpdesk is not licensed in this build; the EE rig runs the flow");

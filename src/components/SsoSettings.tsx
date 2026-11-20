@@ -90,7 +90,7 @@ export function SsoSettings({ initial, users = [], viewerId }: { initial: SsoSta
         {header}
         {/* Settings → SSO is an admin page, so the viewer can open License too. */}
         <LicenseGate feature="SSO" entitlement="sso" canManage>
-          This Enterprise build supports it, but your licence doesn&rsquo;t include it yet.
+          This Enterprise build supports it, but your license doesn&rsquo;t include it yet.
         </LicenseGate>
       </div>
     );
@@ -160,7 +160,7 @@ export function SsoSettings({ initial, users = [], viewerId }: { initial: SsoSta
         <div className="notice-warn mb-4 flex items-start gap-2 rounded-lg border px-3 py-2 text-sm">
           <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
           <p>
-            Your Enterprise licence has lapsed. Single sign-on keeps working while SSO only is on, but no new accounts are created at first
+            Your Enterprise license has lapsed. Single sign-on keeps working while SSO only is on, but no new accounts are created at first
             sign-in. Until it is renewed you can turn SSO only off, change the break-glass accounts or enter a new client secret, and nothing
             else.
           </p>

@@ -33,7 +33,7 @@ export const DARK_STYLE_LABEL: Record<DarkStyle, string> = {
 
 export const DARK_STYLE_DESCRIPTION: Record<DarkStyle, string> = {
   slate: "Deep blue-grey, the classic dark look.",
-  graphite: "Neutral greys with no blue tint.",
+  graphite: "Neutral grays with no blue tint.",
   black: "A true black page, for OLED screens and dim rooms.",
 };
 

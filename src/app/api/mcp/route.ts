@@ -434,7 +434,7 @@ const TOOLS = [
   {
     name: "list_handbooks",
     description:
-      "List the policy handbooks you can read, plus the drafts you can edit: id, title, owner (the whole workspace or a space), status, policy and section counts, last update, whether it asks readers to confirm it as a whole, and (with the Read confirmation licence) your own progress, N of M policies confirmed. The handbook's editors, and people who hold Read compliance program, also get the audience progress the Handbooks page shows. Nothing here confirms anything: people confirm in the app, at the confirm_url given.",
+      "List the policy handbooks you can read, plus the drafts you can edit: id, title, owner (the whole workspace or a space), status, policy and section counts, last update, whether it asks readers to confirm it as a whole, and (with the Read confirmation license) your own progress, N of M policies confirmed. The handbook's editors, and people who hold Read compliance program, also get the audience progress the Handbooks page shows. Nothing here confirms anything: people confirm in the app, at the confirm_url given.",
     inputSchema: {
       type: "object",
       properties: {
@@ -468,7 +468,7 @@ const TOOLS = [
   {
     name: "handbook_status",
     description:
-      "Where you stand on a published handbook (Read confirmation licence): each policy as To confirm, Confirmed, Updated since you confirmed or For information, your progress, and whether your whole-handbook confirmation is on record for the handbook as it stands. For the handbook's editors, and people who hold Read compliance program, also the share and number of its audience who confirmed it as it stands (no names). This tool never confirms: the person confirms in the app, on each policy's page or at the confirm_url.",
+      "Where you stand on a published handbook (Read confirmation license): each policy as To confirm, Confirmed, Updated since you confirmed or For information, your progress, and whether your whole-handbook confirmation is on record for the handbook as it stands. For the handbook's editors, and people who hold Read compliance program, also the share and number of its audience who confirmed it as it stands (no names). This tool never confirms: the person confirms in the app, on each policy's page or at the confirm_url.",
     inputSchema: {
       type: "object",
       properties: { id: { type: "number", description: "Handbook id (from list_handbooks)." } },
@@ -1452,7 +1452,7 @@ async function handbookTool(
           handbooks: out,
           note: licensed
             ? "Read handbooks with read_handbook and your standing with handbook_status. People confirm policies and handbooks themselves, in the app (on each policy's page, or at confirm_url); no tool confirms for them."
-            : "Read confirmation isn't included in this workspace's licence, so handbooks are for reading only.",
+            : "Read confirmation isn't included in this workspace's license, so handbooks are for reading only.",
         });
       }
 
@@ -1563,7 +1563,7 @@ async function handbookTool(
           return toolJson({
             handbook: head,
             confirmation_available: false,
-            note: "Read confirmation isn't included in this workspace's licence, so nothing in this handbook asks to be confirmed.",
+            note: "Read confirmation isn't included in this workspace's license, so nothing in this handbook asks to be confirmed.",
           });
         }
         if (h.status !== "published") {

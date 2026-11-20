@@ -4,6 +4,159 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.37] - 2026-11-20
+
+A richer Help Center home, and the product now speaks US English.
+
+### Added
+- **A branded header band on the Help Center's home.** The portal's own
+  logo (or its initials, as before: the source is the one you set under
+  Desk settings → Customer portal → Brand), the portal's name, a one-line
+  greeting and a large search box, on your workspace's accent color. It
+  follows the workspace's dark style (Slate, Graphite or Black) and prints
+  plainly.
+- **What do you need?** The request types customers can raise show as
+  tiles under the band, with each type's icon, name and description, in
+  the order set under Request types. A tile opens that type's form. At
+  most eight show, then **More** opens New request with the full list. A
+  customer who isn't signed in picks a tile, signs in with the emailed
+  link and lands on the form with that type already chosen.
+- **Popular articles**: the articles opened most in the last 90 days.
+  Opening an article adds one to that article's count for the day and
+  nothing else is kept: no name, address, sign-in, network address or time
+  of day. Crawlers, link previews and other bots don't count, nor does a
+  page the browser only prefetched, nor a request without a usable network
+  address; one address counts an article once in 30 minutes and at most 20
+  articles in that time. The home works this out in two database queries
+  however many spaces it shows.
+- **Recently updated**: the articles changed most recently.
+- **Browse by space**: a card per space with its description, its article
+  count and its three most opened articles, and **See all** for a new
+  space page (`/support/spaces/<id>`) listing its articles by category.
+  A space gets a card and a page only when you chose it (and didn't hide
+  its unfiled category) or when its unfiled documents are public anyway;
+  its description shows only for a space you chose. The categories of
+  the other spaces, and of any past the first 24 cards, follow as **More
+  topics**.
+- **Suggestions you can drive from the keyboard.** From two characters the
+  search box suggests up to six matches: articles (with their space) and
+  up to two request types, which open their form. Arrow Down and Arrow Up
+  move through them, Enter opens the highlighted one, Escape closes the
+  list, and Enter with nothing highlighted opens the results page as
+  before. Screen readers hear a combo box with a list of suggestions.
+  Searching still works without JavaScript.
+- **Desk settings → Customer portal → Help Center → Home page**: the
+  **Greeting** (empty means "How can we help?") and a switch each for
+  **Request tiles**, **Popular articles**, **Recently updated** and
+  **Spaces**. With Spaces off the home lists the categories as cards, as
+  before. Changes are audited with the other Help Center settings
+  (`helpdesk.portal.help_centre_updated`, now with the greeting and each
+  switch that changed). Settings search finds the card under "greeting",
+  "popular" and the other section names.
+
+### Changed
+- **US English everywhere.** Every word a person reads is spelled the US
+  way: the app, the desk, the customer portal, tooltips and screen reader
+  labels, messages and errors, emails, exports, the Claude connector's
+  tool descriptions and answers, API error sentences and the public pages.
+  "Help centre" is now **Help Center**; "colour", "organisation",
+  "licence", "cancelled", "anonymise", "programme", "greyed" and the rest
+  are now "color", "organization", "license", "canceled", "anonymize",
+  "program", "grayed". Date formats are unchanged.
+- **A space nobody published is never named.** Rows in Popular, Recently
+  updated and the suggestions say the space they sit in only for a space
+  you chose; otherwise they say their category, as category pages always
+  have. A document tagged `public` inside a folder of an internal space
+  you didn't choose shows its folder's name, never the space's.
+- **On a portal for approved domains only**, the request tiles and the
+  request types among the suggestions show only to a signed-in customer
+  the portal admits; everyone else sees **Sign in** in the header. With
+  **Request tiles** switched off, request types aren't suggested either.
+- **Every home section follows the Help Center's one rule** for what is
+  public: a draft, a document in the trash or in a private space, a
+  handbook-only policy, a policy people must confirm or a document in a
+  hidden category never appears in Popular, Recently updated or a space
+  card, however often it was opened or however recently it changed. The
+  home shows the same to everyone, signed in or not. A section with
+  nothing in it isn't shown.
+- **The search suggestions route** (`GET /support/api/help/search`) also
+  answers `types` (the matching request types the portal offers, at most
+  two) beside `articles`, and each article carries its space's name. It
+  keeps the limit of 40 searches a minute per network address.
+- Search engines may index the new space pages exactly when they may
+  index categories ("Let search engines index the Help Center").
+
+### Upgrading
+Nothing to run. The view counts start empty, so **Popular articles**
+stays hidden until articles have been opened.
+
+- **The new home sections are on by default**, also for a Help Center set
+  up before this release. Switch any of them off under Desk settings →
+  Customer portal → Help Center → **Home page**.
+- **The wording is now US English, and nothing stored or exchanged
+  changed:** stored values, setting keys, database tables and columns,
+  addresses (`/desk/settings/portal/help-centre`), JSON keys in the API
+  and webhooks, status values (the import job's `cancelled`, a workflow
+  run's `cancelled`, the retention action `anonymise`), event and audit
+  action names (`helpdesk.workflow_run.cancelled`,
+  `helpdesk.ticket.anonymised`), the API's `unauthorised` outcome, MCP
+  tool and parameter names and environment variables keep their names.
+  Only the words people read changed.
+- **Wording you may have scripted against.** No email subject changed.
+  These labels and messages did:
+  - audit log labels, on screen and in exports: "Anonymized compliance
+    record", "Anonymized helpdesk tickets", "Canceled workflow run",
+    "Canceled a workflow run", "Changed the customer portal Help Center",
+    "The Microsoft 365 mail app's organization-wide permissions changed",
+    "Tried to add an agent past the license's agent allowance"; the
+    Help Center's audit target is now "Customer portal Help Center";
+  - a newly anonymized ticket's subject is "Anonymized request" and its
+    timeline line "Anonymized: names, emails, message text and files were
+    removed." (tickets anonymized before keep the old words);
+  - a webhook delivery skipped for an anonymized ticket reads "Not sent:
+    the ticket was anonymized.";
+  - an import's skipped rows read "This ticket was anonymized in
+    CompassDocs, so it isn't imported again";
+  - API and MCP error sentences that said "licence" say "license" (for
+    example "The helpdesk is not included in your license."), and the
+    feature on Settings → License reads "Policy acknowledgments";
+  - the email template **Compliance program report** (its name in
+    Settings → Email templates; the template key and subject are
+    unchanged);
+  - the Help Center's page title is "Help Center".
+- **Texts integrations and operators may match on** whose wording changed:
+  - the helpdesk's license refusal, `HD_LICENCE_ERROR`, is now "The
+    helpdesk is not included in your license." It is the 402 answer of
+    API v1, the desk calendar's ICS feed, inbound mail and the chat apps
+    (Microsoft Teams and Slack), the Claude connector's helpdesk tools and
+    the desk's other license checks;
+  - SCIM's lapsed-license detail (`SCIM_LAPSED_DETAIL`): "This
+    workspace's license has lapsed: SCIM can still deactivate accounts,
+    but cannot create, change or re-activate them until it is renewed.";
+  - SSO and Duo refusals: "Your license doesn't include single sign-on.",
+    "Your license has lapsed: …", "The Duo sign-in check needs an
+    Enterprise license with SSO.";
+  - log lines: "[ack] policy audiences materialized: …", "[ack] could not
+    enroll the new account:", "[ack] could not audit the enrollment:",
+    "[periodic] helpdesk license check:";
+  - the audit log's `target_label` for Help Center changes is "Customer
+    portal Help Center" (rows written before keep "Customer portal help
+    centre");
+  - the Microsoft 365 mailbox errors ("…mailboxes in another organization
+    can't be connected…", "…belong to another Microsoft 365
+    organization…", "This app can read every mailbox in your
+    organization…"), the Teams setup error "Microsoft didn't recognize
+    that tenant for this app.", and the recurring-ticket error "That time
+    zone isn't recognized.";
+  - System → Diagnostics' helpdesk agent lines ("…the license has no
+    agent limit.", "…not enforced while the license is in grace",
+    "…over the license by N");
+  - the Claude connector's handbook notes ("Read confirmation isn't
+    included in this workspace's license, …") and tool descriptions
+    ("summarize", "license");
+  - the import wizard's column warnings ("No subject column was
+    recognized. …").
+
 ## [1.20.36] - 2026-11-20
 
 The desk queue remembers each agent's sort.

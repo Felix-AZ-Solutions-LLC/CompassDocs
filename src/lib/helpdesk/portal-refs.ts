@@ -196,7 +196,7 @@ export async function auditHelpCentreHeal(h: HelpCentreHeal, on: "read" | "save"
     actor: actorFrom(null),
     action: "helpdesk.portal.help_centre_updated",
     targetType: "helpdesk_portal",
-    targetLabel: "Customer portal help centre",
+    targetLabel: "Customer portal Help Center",
     details: { changed, cleanup: on, ...helpCentrePruneDetails(h), spaces: h.settings.spaces },
     ip: ip ?? null,
   });

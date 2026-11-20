@@ -18,7 +18,7 @@ export function OutsideCustomerChip({ ticket, size = "sm", inLink = false }: { t
   return (
     <span
       className={chipClass("neutral", size)}
-      {...(inLink ? {} : { "data-tt": "Raised in the customer portal by someone outside your organisation. They see public replies only.", "data-tt-wrap": "", tabIndex: 0 })}
+      {...(inLink ? {} : { "data-tt": "Raised in the customer portal by someone outside your organization. They see public replies only.", "data-tt-wrap": "", tabIndex: 0 })}
     >
       <Globe className={size === "sm" ? "h-3 w-3" : "h-3.5 w-3.5"} aria-hidden />
       Outside customer

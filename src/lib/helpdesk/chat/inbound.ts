@@ -141,7 +141,7 @@ export async function handleTeamsRequest(req: Request): Promise<ChatHttpResult> 
   const tenant = str(conv.tenantId, 100) || str(obj(channelData.tenant).id, 100);
   // Always compared: the saved tenant is a GUID (settings refuse anything else), and an activity without one is refused.
   if (!GUID_RE.test(s.teams.tenant_id) || !tenant || tenant.toLowerCase() !== s.teams.tenant_id.toLowerCase()) return refused("teams", "tenant");
-  if (!(await helpdeskLicensed())) return { status: 402, body: { error: "The helpdesk is not included in your licence." } };
+  if (!(await helpdeskLicensed())) return { status: 402, body: { error: "The helpdesk is not included in your license." } };
 
   const type = str(activity.type, 50);
   const activityId = str(activity.id, 300);
@@ -282,7 +282,7 @@ export async function handleSlackRequest(req: Request): Promise<ChatHttpResult> 
   const team = form ? str(obj(body.team).id, 40) || str(obj(obj(body.user)).team_id, 40) : str(body.team_id, 40);
   if (s.slack.team_id && team && team !== s.slack.team_id) return refused("slack", "workspace");
   if (!s.slack.team_id && team) await pinSlackTeam(team);
-  if (!(await helpdeskLicensed())) return { status: 402, body: { error: "The helpdesk is not included in your licence." } };
+  if (!(await helpdeskLicensed())) return { status: 402, body: { error: "The helpdesk is not included in your license." } };
   const port = (await portFor("slack", s)) as ChatPort;
   return form ? slackInteraction(port, s, body) : slackEvent(port, s, body);
 }

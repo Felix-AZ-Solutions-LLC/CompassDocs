@@ -490,7 +490,7 @@ function MapStep({ job, data, onSaved, onCancel }: { job: ImportJobView; data: P
         )}
       </Card>
 
-      <Card title="Columns" description={zoho ? "Recognised from the export's headers. Change one only if it picked the wrong column." : "Which column holds each part of a ticket."}>
+      <Card title="Columns" description={zoho ? "Recognized from the export's headers. Change one only if it picked the wrong column." : "Which column holds each part of a ticket."}>
         <details open={columnsOpen} className="group">
           <summary className="cursor-pointer text-sm font-medium text-compass-700">Show the columns</summary>
           <ColumnTable

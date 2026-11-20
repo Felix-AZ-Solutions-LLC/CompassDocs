@@ -81,7 +81,7 @@ export function BlockedRunBanner({ detail, onChanged }: { detail: HdTicketDetail
       cancelLabel: "Keep it",
       danger: true,
     });
-    if (yes === true) await act("cancel", {}, "Workflow cancelled. The request is yours to finish.");
+    if (yes === true) await act("cancel", {}, "Workflow canceled. The request is yours to finish.");
   }
 
   return (

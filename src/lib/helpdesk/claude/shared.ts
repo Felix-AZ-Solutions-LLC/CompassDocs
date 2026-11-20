@@ -141,7 +141,7 @@ export type ClaudeIntent = "summary" | "draft" | "research";
 
 /** c2's quick prompts, each with the effort its task needs (lib/helpdesk/claude/turn effortFor). */
 export const CLAUDE_QUICK_PROMPTS: { text: string; intent: ClaudeIntent }[] = [
-  { text: "Summarise this ticket", intent: "summary" },
+  { text: "Summarize this ticket", intent: "summary" },
   { text: "Has this happened before?", intent: "research" },
   { text: "Draft a reply", intent: "draft" },
   { text: "Translate my reply into French", intent: "draft" },

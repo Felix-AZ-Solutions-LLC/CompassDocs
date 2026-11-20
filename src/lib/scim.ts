@@ -177,7 +177,7 @@ export async function scimLapsed(): Promise<boolean> {
 }
 
 export const SCIM_LAPSED_DETAIL =
-  "This workspace's licence has lapsed: SCIM can still deactivate accounts, but cannot create, change or re-activate them until it is renewed.";
+  "This workspace's license has lapsed: SCIM can still deactivate accounts, but cannot create, change or re-activate them until it is renewed.";
 
 // --- Mapping ------------------------------------------------------------------
 

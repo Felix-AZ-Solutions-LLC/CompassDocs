@@ -14,9 +14,10 @@ export default async function robots(): Promise<MetadataRoute.Robots> {
   } catch {
     /* no database (build time) — stay closed */
   }
-  // The customer portal's help centre (1.19.4, C3): its home, categories and
-  // articles, only while it is open and its admin ticked "Let search engines
-  // index the help centre". Sign-in, requests and search stay closed.
+  // The customer portal's Help Center (1.19.4, C3): its home, categories,
+  // spaces (1.20.37) and articles, only while it is open and its admin ticked
+  // "Let search engines index the Help Center". Sign-in, requests and search
+  // stay closed.
   let helpCentre = false;
   try {
     const { getHelpCentreSettings, helpCentreOpen } = await import("@/lib/helpdesk/help-centre");
@@ -25,7 +26,7 @@ export default async function robots(): Promise<MetadataRoute.Robots> {
   } catch {
     /* no database (build time) — stay closed */
   }
-  const allow = [...(indexing ? ["/public", "/public/"] : []), ...(helpCentre ? ["/support$", "/support/articles/", "/support/categories/"] : [])];
+  const allow = [...(indexing ? ["/public", "/public/"] : []), ...(helpCentre ? ["/support$", "/support/articles/", "/support/categories/", "/support/spaces/"] : [])];
   return {
     rules: allow.length ? [{ userAgent: "*", allow, disallow: ["/"] }] : [{ userAgent: "*", disallow: ["/"] }],
   };

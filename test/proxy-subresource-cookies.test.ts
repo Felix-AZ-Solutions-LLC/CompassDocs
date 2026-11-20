@@ -82,7 +82,7 @@ describe("cookies on subresources", () => {
     assert.equal(h.get(RETURN_PATH_HEADER), "/desk/tickets/5?x=1");
   });
 
-  test("the public pictures other sites embed (emails' logo, sign-in artwork, newsletter pictures, help centre files) are served anonymously: they need no session", () => {
+  test("the public pictures other sites embed (emails' logo, sign-in artwork, newsletter pictures, Help Center files) are served anonymously: they need no session", () => {
     for (const path of ["/api/brand/logo", "/api/brand/artwork", "/api/newsletter/assets/abc.png", "/support/api/help/files/3", "/api/plantuml?src=x"]) {
       const h = forwarded(path, { cookie: COOKIE, "sec-fetch-dest": "image", "sec-fetch-site": "cross-site" });
       assert.equal(h.get("cookie"), null, path);
