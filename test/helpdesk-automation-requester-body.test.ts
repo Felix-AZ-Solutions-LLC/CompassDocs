@@ -22,7 +22,10 @@
 //     a draft without the sender scope is refused.
 //
 // Harness as test/helpdesk-automation-drafts. Parallel-safe: everything is
-// this file's own (STAMP); every rule only matches this file's tickets.
+// this file's own (STAMP); every rule only matches this file's tickets. The
+// one person without Get help (Vic Viewer, no role at all) is only that until
+// another file boots and the ladder backfill gives Viewer back, so the checks
+// on them run under the boot lock (support/ladder-lock).
 //
 // Run: DATABASE_URL=… npx tsx --tsconfig ./tsconfig.test.json --test test/helpdesk-automation-requester-body.test.ts
 
@@ -33,6 +36,7 @@ import path from "node:path";
 import { pool, getSetting, createSession, getUserById } from "../src/lib/db";
 import { newToken } from "../src/lib/password";
 import { fixtureQuery } from "./support/retry";
+import { withoutLadderRole } from "./support/ladder-lock";
 
 let currentRequest: Request | null = null;
 function cookieJar(): Map<string, string> {
@@ -141,6 +145,8 @@ async function person(key: string, opts: { desk?: "agent" | "admin" | "manager";
   const session = newToken();
   await createSession(session, id, new Date(Date.now() + 3_600_000).toISOString());
   // No role at all (the ladder role taken away): an account that can't use Get help.
+  // Another file's boot gives it back (the ladder backfill), so the checks that
+  // rely on it take it away again under the boot lock: withoutLadderRole.
   if (opts.request === false) await pool().query("DELETE FROM role_assignments WHERE user_id = $1", [id]);
   else {
     const role = await fixtureQuery("INSERT INTO roles (key, name) VALUES ($1, $1) RETURNING id", [`${STAMP}-req-${key}`]);
@@ -481,7 +487,7 @@ describe("change the requester to a person, and the manual control", () => {
     const again = await call(requesterRoute.POST, "agent", `/tickets/${t.number}/requester`, "POST", { user_id: P.sam.id }, { number: String(t.number) });
     assert.equal(again.body.changed, false);
     // Someone who can't use Get help is refused in a sentence; so is an agent who doesn't work the ticket's team (404).
-    const viewer = await call(requesterRoute.POST, "agent", `/tickets/${t.number}/requester`, "POST", { user_id: P.viewer.id }, { number: String(t.number) });
+    const viewer = await withoutLadderRole([P.viewer.id], () => call(requesterRoute.POST, "agent", `/tickets/${t.number}/requester`, "POST", { user_id: P.viewer.id }, { number: String(t.number) }));
     assert.equal(viewer.status, 400);
     assert.match(viewer.body.error, /can't use Get help, so they can't be a requester/);
     const own = await call(requesterRoute.POST, "agent", `/tickets/${t.number}/requester`, "POST", { email: ALIAS }, { number: String(t.number) });
@@ -709,7 +715,7 @@ describe("save-time checks", () => {
   const save = (actions: Record<string, unknown>, stored = automations.NO_AUTOMATION_REFS) => automations.validateAutomationInput({ name: `Check ${STAMP}`, event: "ticket_created", actions }, false, stored);
   test("people: unknown, can't use Get help, one of the desk's own addresses", async () => {
     assert.deepEqual(await save({ requester_set: { user_id: 99_999_999 } }), { ok: false, error: "Change the requester: unknown person. Pick someone with an active account, or an address." });
-    const v = await save({ requester_set: { user_id: P.viewer.id } });
+    const v = await withoutLadderRole([P.viewer.id], () => save({ requester_set: { user_id: P.viewer.id } }));
     assert.equal(v.ok, false);
     assert.match((v as { error: string }).error, /^Change the requester: Vic Viewer .* can't use Get help/);
     const own = await save({ requester_set: { email: ALIAS } });
