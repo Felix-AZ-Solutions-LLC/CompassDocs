@@ -14,6 +14,7 @@ import { Send } from "lucide-react";
 import { Button } from "@/components/Button";
 import { Field, FormError, Select, TextInput, Textarea } from "@/components/form";
 import type { HdFormField } from "@/lib/helpdesk/types";
+import { newRequestPath, portalSignInHref } from "@/lib/helpdesk/portal-shared";
 import { portalFetch } from "./client";
 import { PortalAttachButton, PortalFileChips } from "./PortalFiles";
 import { RequestSuggestions } from "./help/RequestSuggestions";
@@ -107,7 +108,8 @@ export function PortalNewRequest({
       return;
     }
     setBusy(false);
-    if (r.status === 401) window.location.assign("/support?next=/support/new");
+    // Signed out meanwhile: back here after signing in, the type still picked.
+    if (r.status === 401) window.location.assign(portalSignInHref(newRequestPath(typeId)));
     setFormError(r.error);
   }
 

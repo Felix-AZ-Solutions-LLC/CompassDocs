@@ -270,12 +270,31 @@ export const PORTAL_BLOCKER_TEXT: Record<PortalBlocker, string> = {
   directory_route: "Its workflow routes by the requester's directory entry.",
 };
 
-/** A path inside the portal that a sign-in link may land on; anything else is the portal's home. */
+/**
+ * A path inside the portal that a sign-in link may land on; anything else is
+ * the portal's home. A path takes no query, with one exception (1.20.34):
+ * "New request" with its preselected type, `/support/new?type=<digits>`
+ * (exactly that, nothing else in the query), so a deep link from outside
+ * keeps its type through sign-in.
+ */
 export function cleanNextPath(raw: unknown): string {
   if (typeof raw !== "string") return "";
   const v = raw.trim();
+  if (/^\/support\/new\?type=[0-9]{1,10}$/.test(v)) return v;
   if (!/^\/support(\/[A-Za-z0-9/_-]*)?$/.test(v) || v.includes("//") || v.startsWith(`${PORTAL_API}`)) return "";
   return v.slice(0, 200);
+}
+
+/** "New request", with its type preselected when there is one (`?type=` digits only). */
+export function newRequestPath(type: unknown): string {
+  const t = typeof type === "number" ? String(type) : type;
+  return typeof t === "string" && /^[0-9]{1,10}$/.test(t) ? `${PORTAL_PATH}/new?type=${t}` : `${PORTAL_PATH}/new`;
+}
+
+/** The sign-in form, landing on `next` once signed in (encoded: a `next` may carry its own `?`). */
+export function portalSignInHref(next: string): string {
+  const clean = cleanNextPath(next);
+  return clean ? `${PORTAL_PATH}?next=${encodeURIComponent(clean)}` : `${PORTAL_PATH}?signin=1`;
 }
 
 /** "Priya Shah" → "Priya": what a customer reads of an agent. */

@@ -4,6 +4,24 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.34] - 2026-11-20
+
+A link to a request type keeps its type when the customer has to sign in first.
+
+### Fixed
+- **Customer portal:** opening "New request" with a type already picked
+  (`/support/new?type=<id>`, as a website's contact page links to it) while
+  signed out sent the customer to sign in and then to a blank New request,
+  type forgotten. The type now survives the sign-in form, the emailed
+  sign-in link and the landing after Continue. The same holds when a
+  session ends while the form is open.
+
+### Security
+- Where a portal sign-in may land is still only a portal path. The one
+  query it accepts is `/support/new?type=` followed by digits, with nothing
+  else in the query; any other query, any outside address and the portal's
+  API are refused as before.
+
 ## [1.20.33] - 2026-11-18
 
 Helpdesk automations can read what a ticket says and change who asked.

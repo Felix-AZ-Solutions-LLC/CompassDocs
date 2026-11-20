@@ -397,6 +397,33 @@ describe("sign-in links", () => {
     }
   });
 
+  test("a deep link's request type survives sign-in: the form, the mailed link and the landing keep /support/new?type=", async () => {
+    // compassdocs.io/contact links each card to /support/new?type=N (1.20.34).
+    const addr = `deeplink@${CUST}`;
+    const next = `/support/new?type=${typeIds.bug}`;
+    links.delete(addr);
+    const r = await call(linkRoute.POST, "/support/api/link", { json: { email: addr, next } });
+    assert.equal(r.status, 200);
+    for (let i = 0; i < 40 && !links.has(addr); i++) await settle(50);
+    const token = new URL(links.get(addr)!).searchParams.get("token")!;
+    const stored = (await pool().query("SELECT next_path FROM hd_portal_links WHERE token_hash = $1", [portal.hashPortalToken(token)])).rows[0];
+    assert.equal(stored.next_path, next, "the link remembers the type");
+    const s = await call(sessionRoute.POST, "/support/api/session", { json: { token } });
+    assert.equal(s.status, 200, JSON.stringify(s.body));
+    assert.equal(s.body.next, next, "Continue lands on New request with the type");
+
+    // Anything else in the query, or anywhere else, is still dropped.
+    for (const bad of [`${next}&x=1`, "//evil.example/support/new?type=1", "/support/requests?type=1", "https://evil.example"]) {
+      links.delete(addr);
+      await portal.deliverSignInLink(addr, { origin: ORIGIN, next: bad });
+      const t = new URL(links.get(addr)!).searchParams.get("token")!;
+      const row = (await pool().query("SELECT next_path FROM hd_portal_links WHERE token_hash = $1", [portal.hashPortalToken(t)])).rows[0];
+      assert.equal(row.next_path, "", `refused: ${bad}`);
+      const done = await portal.consumeSignInLink(t);
+      assert.equal(done?.next, "/support/requests", "a refused next lands on Your requests");
+    }
+  });
+
   test("a link expires after 15 minutes", async () => {
     const addr = `expiry@${CUST}`;
     await portal.deliverSignInLink(addr, { origin: ORIGIN });

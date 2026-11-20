@@ -1,13 +1,15 @@
 // /support/new: raise a request in the customer portal (Helpdesk 1.19.1).
 // Only the request types the admin exposed that need nothing from the
-// directory; their own questions, never prefilled. ?type=<id> preselects.
+// directory; their own questions, never prefilled. ?type=<id> preselects,
+// and survives signing in (1.20.34): the sign-in form, the emailed link and
+// the landing all carry /support/new?type=<id> (cleanNextPath allows it).
 // With the help centre on (1.19.4, C3) the form suggests articles from the
 // subject.
 
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
-import { currentPortalContact, getPortalSettings, offeredTypes, portalOpen } from "@/lib/helpdesk/portal";
+import { currentPortalContact, getPortalSettings, newRequestPath, offeredTypes, portalOpen, portalSignInHref } from "@/lib/helpdesk/portal";
 import { PortalNewRequest } from "@/components/helpdesk/portal/PortalNewRequest";
 import { helpCentreOpen } from "@/lib/helpdesk/help-centre";
 
@@ -17,11 +19,11 @@ export const metadata = { title: "New request" };
 export default async function PortalNew({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const settings = await getPortalSettings();
   if (!(await portalOpen(settings))) notFound();
-  const contact = await currentPortalContact(settings);
-  if (!contact) redirect("/support?next=/support/new");
-  const [types, helpCentre] = await Promise.all([offeredTypes(settings), helpCentreOpen({ portal: settings })]);
   const sp = await searchParams;
-  const initial = typeof sp.type === "string" && /^\d+$/.test(sp.type) ? Number(sp.type) : null;
+  const initial = typeof sp.type === "string" && /^\d{1,10}$/.test(sp.type) ? Number(sp.type) : null;
+  const contact = await currentPortalContact(settings);
+  if (!contact) redirect(portalSignInHref(newRequestPath(initial)));
+  const [types, helpCentre] = await Promise.all([offeredTypes(settings), helpCentreOpen({ portal: settings })]);
   return (
     <div className="mx-auto mt-6 w-full max-w-3xl sm:mt-8">
       <Link href="/support/requests" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-compass-700">
