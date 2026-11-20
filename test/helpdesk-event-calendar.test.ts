@@ -987,10 +987,13 @@ describe("meeting invites by email", () => {
     assert.deepEqual([r.status, r.body.outcome], [200, "created"]);
     const t = await byNumber(r.body.ticket!);
     ticketIds.push(t.id);
-    assert.deepEqual([t.team_id, t.subject, t.source, t.status], [T.A, `${STAMP} Board meeting`, "email", "new"]);
+    // 1.20.34: an invite auto-parks after its acknowledgement (Desk settings → Event calendar, on by default), but only for an event
+    // within AUTO_PARK_MAX_DAYS (400) days; this one is in 2031, so the ticket stays in the queue and says why.
+    assert.deepEqual([t.team_id, t.subject, t.source, t.status, !!t.parked_until, t.park_reason], [T.A, `${STAMP} Board meeting`, "email", "new", false, ""]);
     const e = await eventOf(t.id);
     assert.deepEqual([iso(e.starts_at), iso(e.ends_at), e.place, e.source, e.ics_uid, e.ics_sequence, e.setup_minutes, e.timezone], ["2031-07-10T14:00:00.000Z", "2031-07-10T15:30:00.000Z", "Boardroom A", "invite", UID, 0, 30, "America/New_York"]);
     const ls = await lines(t.id);
+    assert.ok(ls.some((l) => l.kind === "internal" && /^Not parked: the event is more than 400 days away/.test(l.body)), JSON.stringify(ls));
     assert.ok(ls.some((l) => l.kind === "internal" && l.body.startsWith(`Event added from the meeting invite ${P.req.name} sent: ${md(said("2031-07-10T14:00:00Z", "2031-07-10T15:30:00Z"))} at Boardroom A.`)), JSON.stringify(ls));
     assert.ok(!ls.some((l) => /not added from the email/.test(l.body)), "the invite is not reported as a file that could not be added");
     assert.equal((await patch("agent", t.number, { status: "solved" })).status, 409, "held until setup is complete");
@@ -1261,7 +1264,23 @@ describe("reminders", () => {
 
   test("the settings: who may, validation, the audit row; no lead times and no late reminder means no reminders; owner and team", async () => {
     const page = await call(adminRoute.GET, req("/admin/calendar", P.dadmin.session));
-    assert.deepEqual(page.body.settings, { reminder_minutes: [1440, 60], late_reminder: true, recipients: "owner_else_team", chat: false, default_setup_minutes: 30 }, "the defaults, with nothing stored");
+    assert.deepEqual(
+      page.body.settings,
+      {
+        reminder_minutes: [1440, 60],
+        late_reminder: true,
+        recipients: "owner_else_team",
+        chat: false,
+        default_setup_minutes: 30,
+        // 1.20.34 (lib/helpdesk/desk-calendar-park).
+        park_prep_days: 10,
+        park_invites: true,
+        park_request_types: true,
+        remind_requester: false,
+        remind_requester_days: 2,
+      },
+      "the defaults, with nothing stored"
+    );
     assert.equal(typeof page.body.chat_connected, "boolean");
     const put = (who: string, body: unknown) => call(adminRoute.PUT, req("/admin/calendar", P[who].session, body, "PUT"));
     assert.equal((await put("agent", { late_reminder: false })).status, 403);

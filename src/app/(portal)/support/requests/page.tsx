@@ -9,6 +9,7 @@ import { Button } from "@/components/Button";
 import { chipClass } from "@/components/Chip";
 import { currentPortalContact, getPortalSettings, listContactRequests, offeredTypes, portalOpen } from "@/lib/helpdesk/portal";
 import { PortalTime } from "@/components/helpdesk/portal/PortalTime";
+import { PortalScheduledChip } from "@/components/helpdesk/help/ScheduledChip";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Your requests" };
@@ -57,7 +58,11 @@ export default async function PortalRequests() {
                     </span>
                   </span>
                 </span>
-                <span className={chipClass(r.tone, "md", "shrink-0")}>{r.status_label}</span>
+                {r.scheduled && r.status === "on_hold" ? (
+          <PortalScheduledChip scheduled={r.scheduled} className="min-w-0 shrink-0 max-sm:max-w-[45%]" />
+        ) : (
+          <span className={chipClass(r.tone, "md", "shrink-0")}>{r.status_label}</span>
+        )}
               </Link>
             </li>
           ))}

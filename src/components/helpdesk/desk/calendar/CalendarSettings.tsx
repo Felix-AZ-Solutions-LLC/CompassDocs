@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { CalendarDays } from "lucide-react";
 import { Card } from "@/components/Card";
-import { Field, Select, Toggle } from "@/components/form";
+import { Field, Select, TextInput, Toggle } from "@/components/form";
 import { PageHeader } from "@/components/PageHeader";
 import { PageContainer } from "@/components/PageWidth";
 import { SaveRow } from "@/components/SaveRow";
@@ -24,7 +24,7 @@ import { LoadingRow } from "@/components/Spinner";
 import { Table, TABLE_HEAD_ROW, TD, TH, TR } from "@/components/Table";
 import { toast } from "@/components/Toasts";
 import { useLeaveGuard, useUnsavedChanges } from "@/lib/use-unsaved";
-import { EVENT_LIMITS, eventWhen, leadLabel, type HdCalendarSettings } from "@/lib/helpdesk/desk-calendar-shared";
+import { EVENT_LIMITS, eventWhen, leadLabel, PARK_SETTING_LIMITS, type HdCalendarSettings } from "@/lib/helpdesk/desk-calendar-shared";
 import { getJson, sendJson } from "../api";
 import { ticketHref } from "../ui";
 import { SETUP_CHOICES } from "./EventDialog";
@@ -108,7 +108,7 @@ export function CalendarSettings() {
 
   return (
     <PageContainer>
-      <PageHeader icon={<CalendarDays />} title="Event calendar" subtitle="Reminders about the events on tickets, and the links calendar apps subscribe to." />
+      <PageHeader icon={<CalendarDays />} title="Event calendar" subtitle="Reminders about the events on tickets, holding tickets until their event, and the links calendar apps subscribe to." />
       <div className="flex flex-col gap-4">
         <Card id="reminders" className="scroll-mt-6" title="Reminders" description="Sent to agents before an event's setup must be ready. A ticket's Event block says when that is.">
           <div className="space-y-5" data-testid="calendar-reminders">
@@ -186,6 +186,8 @@ export function CalendarSettings() {
           <SaveRow dirty={dirty} busy={busy} onSave={save} label="Save reminders" />
         </Card>
 
+        <ParkingCard initial={s} />
+
         {overdue.length > 0 && (
           <Card padding="none" title="Setup never marked" description="These events are over, but their setup was never marked complete, so their tickets can't be solved. Open each one and mark the setup, or remove its event.">
             <Table scroll minWidth="36rem">
@@ -221,5 +223,109 @@ export function CalendarSettings() {
         <FeedLinks all />
       </div>
     </PageContainer>
+  );
+}
+
+type ParkKeys = Pick<HdCalendarSettings, "park_prep_days" | "park_invites" | "park_request_types" | "remind_requester" | "remind_requester_days">;
+const parkKeys = (s: HdCalendarSettings): ParkKeys => ({
+  park_prep_days: s.park_prep_days,
+  park_invites: s.park_invites,
+  park_request_types: s.park_request_types,
+  remind_requester: s.remind_requester,
+  remind_requester_days: s.remind_requester_days,
+});
+
+/**
+ * 1.20.34 (lib/helpdesk/desk-calendar-park): Hold until the event. The desk's prep window, the tickets that park
+ * themselves after the acknowledgement, and the requester's optional reminder. Its own state and its own Save: it
+ * sends only its keys, so the Reminders card's unsaved changes are never sent with it.
+ */
+function ParkingCard({ initial }: { initial: HdCalendarSettings }) {
+  const [p, setP] = useState<ParkKeys>(() => parkKeys(initial));
+  const [prep, setPrep] = useState(String(initial.park_prep_days));
+  const [days, setDays] = useState(String(initial.remind_requester_days));
+  const [busy, setBusy] = useState(false);
+  const snap = JSON.stringify({ ...p, prep, days });
+  const { dirty, markDirty, markClean, hasUnsavedChanges } = useUnsavedChanges(snap);
+  useLeaveGuard(dirty, hasUnsavedChanges);
+  const change = (x: Partial<ParkKeys>) => {
+    markDirty();
+    setP({ ...p, ...x });
+  };
+  const prepN = Number(prep);
+  const prepOk = prep.trim() !== "" && Number.isInteger(prepN) && prepN >= 0 && prepN <= PARK_SETTING_LIMITS.prepDaysMax;
+  const daysN = Number(days);
+  const daysOk = days.trim() !== "" && Number.isInteger(daysN) && daysN >= PARK_SETTING_LIMITS.remindDaysMin && daysN <= PARK_SETTING_LIMITS.remindDaysMax;
+
+  async function save() {
+    if (!prepOk || !daysOk) {
+      toast("error", !prepOk ? `The prep window is 0 to ${PARK_SETTING_LIMITS.prepDaysMax} working days.` : `The reminder goes ${PARK_SETTING_LIMITS.remindDaysMin} to ${PARK_SETTING_LIMITS.remindDaysMax} days before.`);
+      return;
+    }
+    setBusy(true);
+    try {
+      const d = await sendJson<{ settings: HdCalendarSettings }>("/api/helpdesk/admin/calendar", "PUT", { ...p, park_prep_days: prepN, remind_requester_days: daysN }, "Couldn't save the parking settings.");
+      const next = parkKeys(d.settings);
+      setP(next);
+      setPrep(String(next.park_prep_days));
+      setDays(String(next.remind_requester_days));
+      markClean(JSON.stringify({ ...next, prep: String(next.park_prep_days), days: String(next.remind_requester_days) }));
+      toast("ok", "Parking settings saved.");
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card
+      id="parking"
+      className="scroll-mt-6"
+      title="Holding tickets until the event"
+      description="A ticket for an event weeks away can wait on hold, out of the queue with its targets paused, and come back when it's time to prepare. Agents use Hold until the event on the ticket's Event block."
+    >
+      <div className="space-y-5" data-testid="calendar-parking">
+        <Field
+          label="Prep window (working days)"
+          help={`A parked ticket comes back this many working days before its event's setup is due, in its team's calendar. 0 to ${PARK_SETTING_LIMITS.prepDaysMax}. A ticket can set its own.`}
+          error={prepOk ? undefined : `0 to ${PARK_SETTING_LIMITS.prepDaysMax}.`}
+          size="sm"
+        >
+          <TextInput type="number" inputMode="numeric" min={0} max={PARK_SETTING_LIMITS.prepDaysMax} value={prep} onChange={(e) => { markDirty(); setPrep(e.target.value); }} data-testid="park-default-prep" />
+        </Field>
+        <Toggle
+          label="Park tickets from meeting invites until they're due"
+          help="The acknowledgement goes out first, as always. An event too close to park stays in the queue."
+          checked={p.park_invites}
+          onChange={(v) => change({ park_invites: v })}
+          size="full"
+        />
+        <Toggle
+          label="Park tickets from calendar request types until they're due"
+          help="Request types that go on the calendar. After the rules and the acknowledgement."
+          checked={p.park_request_types}
+          onChange={(v) => change({ park_request_types: v })}
+          size="full"
+        />
+        <Toggle
+          label="Remind the requester before the event"
+          help="One short email with the date, time and place, once per event date. If the event moves, it goes again."
+          checked={p.remind_requester}
+          onChange={(v) => change({ remind_requester: v })}
+          size="full"
+        />
+        {p.remind_requester && (
+          <Field
+            label="Days before the event"
+            error={daysOk ? undefined : `${PARK_SETTING_LIMITS.remindDaysMin} to ${PARK_SETTING_LIMITS.remindDaysMax}.`}
+            size="sm"
+          >
+            <TextInput type="number" inputMode="numeric" min={PARK_SETTING_LIMITS.remindDaysMin} max={PARK_SETTING_LIMITS.remindDaysMax} value={days} onChange={(e) => { markDirty(); setDays(e.target.value); }} data-testid="park-remind-days" />
+          </Field>
+        )}
+      </div>
+      <SaveRow dirty={dirty} busy={busy} onSave={save} label="Save parking" />
+    </Card>
   );
 }

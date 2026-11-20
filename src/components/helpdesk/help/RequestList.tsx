@@ -86,7 +86,7 @@ export function RequestList({ viewerName }: { viewerName: string }) {
                   <span className="block truncate text-sm font-semibold text-slate-900">{r.subject}</span>
                   <RequestRowMeta request={r} showTeam viewerName={viewerName} />
                 </span>
-                <RequestStatusChip status={r.status} inWorkflow={r.in_workflow} className="shrink-0" />
+                <RequestStatusChip status={r.status} inWorkflow={r.in_workflow} scheduled={r.scheduled} className="min-w-0 shrink-0 max-sm:max-w-[45%]" />
               </Link>
             </li>
           ))}

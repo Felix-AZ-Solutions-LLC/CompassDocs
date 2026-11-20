@@ -575,10 +575,20 @@ export async function processInboundEmail(
   // attachment). A new ticket gets its event from it. An update or a cancellation of a meeting some open ticket's
   // event came from (the same UID), from that ticket's own verified requester, belongs to that ticket even when the
   // mail names no thread: Outlook and Google send those as new mail. The same authority rules as a token reply follow.
+  // 1.20.34: the meeting's organiser (the ORGANIZER the first invite named) counts as well as the requester, and the
+  // match is scoped to the help address the mail was sent to when it names a listed one (lib/helpdesk/mailboxes).
   const calendar = await import("./desk-calendar");
   const invite = await calendar.inviteFromEmail(email);
-  const threadTicketId =
-    replyAllTicketId ?? (!token && verified && invite ? await calendar.ticketForInviteUid(invite.uid, { id: sender?.id ?? null, email: email.from.email }) : null);
+  const inviteBox = !token && verified && invite && !replyAllTicketId ? await mailboxes.mailboxForInbound(email) : null;
+  const inviteTicketId =
+    !replyAllTicketId && !token && verified && invite
+      ? await calendar.ticketForInviteUid(invite.uid, { id: sender?.id ?? null, email: email.from.email }, {
+          ...(inviteBox?.matched ? { mailboxId: inviteBox.mailbox.id } : {}),
+          // As the organiser: only on the sender check itself (never "trust addresses without results").
+          organiserOk: verdict.ok,
+        })
+      : null;
+  const threadTicketId = replyAllTicketId ?? inviteTicketId;
   let followUpOf: number | null = null;
   // 1.19.1 review (lib/helpdesk/portal-hooks): the portal contact whose
   // closed ticket this follows up; the follow-up opens as their portal ticket.
@@ -637,7 +647,19 @@ export async function processInboundEmail(
         !isRequester && !isAgent && !portal?.blocked && (sender || outsideSenders)
           ? await import("./ccs").then((m) => m.isCcAuthor(t.id, sender?.id ?? null, email.from.email))
           : false;
-      if (isRequester || isAgent || isCc) {
+      // 1.20.34 (lib/helpdesk/desk-calendar): the meeting's organiser, writing about the meeting this ticket's event came
+      // from (the same UID), whose From passed the sender check itself (verdict.ok): their update or cancellation is
+      // applied. Not being the requester, their mail is kept as an agents-only note, never as the requester's message.
+      const isOrganiser =
+        !isRequester && !isAgent && !isCc && !portal?.blocked && verdict.ok && !!invite && (await calendar.isInviteOrganiser(t.id, invite.uid, email.from.email));
+      // An invite for this same meeting from someone it may come from moves or cancels the event and leaves a parked
+      // ticket parked (lib/helpdesk/desk-calendar-park follows the event), unless the mail also carries a message a
+      // person wrote: then the ticket wakes so it is seen. Anyone else's message wakes it as usual.
+      const inviteTrusted = Boolean(isRequester || isAgent || isOrganiser);
+      const sameMeeting = !!invite && (await calendar.ticketHasInvite(t.id, invite.uid));
+      const { inviteMessageText } = await import("./desk-calendar-ics");
+      const inviteSaid = invite && sameMeeting && inviteTrusted ? inviteMessageText(inboundBody(email, { reply: true }), invite, cleanSubject(email.subject)) : "";
+      if (isRequester || isAgent || isCc || isOrganiser) {
         if (t.status === "closed") {
           followUpOf = t.number;
           if (portal?.allowed && portal.contactId) portalFollowUp = { contactId: portal.contactId, teamId: t.team_id };
@@ -657,7 +679,7 @@ export async function processInboundEmail(
           const append = async (what: { kind: "public" | "internal"; body: string }) =>
             addMessage(
               t.id,
-              { ...what, author, via: "email", asRequester: Boolean(isRequester || isCc), email_message_id: messageId, sender_verified: verdict.ok },
+              { ...what, author, via: "email", asRequester: Boolean(isRequester || isCc), email_message_id: messageId, sender_verified: verdict.ok, keepParked: sameMeeting && inviteTrusted && !inviteSaid },
               {
                 origin: opts.origin,
                 actorId: author.id,
@@ -670,7 +692,11 @@ export async function processInboundEmail(
           let r: Awaited<ReturnType<typeof addMessage>>;
           try {
             r = await append(
-              lockedBy ? await asNote(lockedBy.holder.name) : { kind: toNote ? "internal" : "public", body: inboundBody(email, { reply: true }) || "_(empty reply)_" }
+              lockedBy
+                ? await asNote(lockedBy.holder.name)
+                : isOrganiser
+                  ? { kind: "internal", body: `${mdInline(author.name)} (the meeting's organiser) wrote, with an update to the meeting:\n\n${inboundBody(email, { reply: true }) || "_(empty email)_"}` }
+                  : { kind: toNote ? "internal" : "public", body: inboundBody(email, { reply: true }) || "_(empty reply)_" }
             );
           } catch (e) {
             const lockHolder = (e as { extra?: { code?: unknown; holder?: { name?: string } } } | null)?.extra;
@@ -690,7 +716,14 @@ export async function processInboundEmail(
           }
           if (r) await keepFromEmail(email, t.id, r.message.id, author.id);
           // 1.20.6: the invite it carried updates or cancels the ticket's event, or fills it in when there is none.
-          if (r && invite) await calendar.applyInviteToTicket(t.id, invite, { name: author.name }, { origin: opts.origin });
+          if (r && invite) await calendar.applyInviteToTicket(t.id, invite, { name: author.name, email: email.from.email, trusted: inviteTrusted, verified: verdict.ok }, { origin: opts.origin });
+          // 1.20.34: the organiser wrote a message with their update: a parked ticket wakes so it is read (their note
+          // is agents-only, so it doesn't wake the ticket as a requester's message would).
+          if (r && isOrganiser && inviteSaid) {
+            await (await import("./desk-calendar-park")).wakeTicket(t.id, { id: null, name: "Helpdesk" }, { why: "message", origin: opts.origin }).catch((e) =>
+              logEvent("error", "helpdesk.park_wake_failed", { ticket: t.number, step: "organiser_message", error: e instanceof Error ? e.message : String(e) })
+            );
+          }
           // 1.19.4 (C7): binned between the lookup and the append (addMessage found no live row): a new ticket below.
           if (r || !(await (await import("./recycle-bin-guard")).ticketIsBinned({ id: t.id }))) {
             return reply(200, { ok: true, outcome: "appended", ticket: t.number });
@@ -815,7 +848,13 @@ export async function processInboundEmail(
   );
   if (first) await keepFromEmail(email, ticket.id, first.id, author.id);
   // 1.20.6: a meeting invite fills in the ticket's event (lib/helpdesk/desk-calendar applyInviteToTicket; never throws).
-  if (invite) await calendar.applyInviteToTicket(ticket.id, invite, { name: author.name }, { origin: opts.origin });
+  if (invite) {
+    const applied = await calendar.applyInviteToTicket(ticket.id, invite, { name: author.name, email: email.from.email, verified: verdict.ok }, { origin: opts.origin });
+    // 1.20.34 (lib/helpdesk/desk-calendar-park): the acknowledgement and the ticket_created rules have run (createTicket);
+    // now the ticket parks itself until its event is due, when Desk settings → Event calendar says so. Too close: it stays open.
+    // Only for mail whose sender passed the check, or a workspace account: anyone can send an invite for 2099.
+    if (applied === "added") await (await import("./desk-calendar-park")).autoPark(ticket.id, "invite", { origin: opts.origin, senderTrusted: verdict.ok || !!sender });
+  }
   // The mail's Cc become the request's CCs (1.19.1, agent V3), only when the
   // sender is verified; outside addresses only while outside senders are on.
   if (verified) {

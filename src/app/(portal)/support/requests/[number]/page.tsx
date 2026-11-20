@@ -19,6 +19,7 @@ import { PortalSurvey } from "@/components/helpdesk/portal/PortalSurvey";
 import { PortalJoinedNotice } from "@/components/helpdesk/portal/PortalJoinedNotice";
 import { PortalReply } from "@/components/helpdesk/portal/PortalReply";
 import { PortalTime } from "@/components/helpdesk/portal/PortalTime";
+import { PortalScheduledChip } from "@/components/helpdesk/help/ScheduledChip";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Request" };
@@ -59,7 +60,11 @@ export default async function PortalRequest({
           </p>
           <h1 className="mt-0.5 break-words text-2xl font-bold text-slate-900">{r.subject}</h1>
         </div>
-        <span className={chipClass(r.tone, "md", "shrink-0")}>{r.status_label}</span>
+        {r.scheduled && r.status === "on_hold" ? (
+          <PortalScheduledChip scheduled={r.scheduled} className="min-w-0 shrink-0 max-sm:max-w-[45%]" />
+        ) : (
+          <span className={chipClass(r.tone, "md", "shrink-0")}>{r.status_label}</span>
+        )}
       </div>
 
       {(survey.can_rate || survey.rated) && (

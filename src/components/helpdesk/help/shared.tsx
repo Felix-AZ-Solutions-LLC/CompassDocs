@@ -32,7 +32,8 @@ import {
   Wrench,
 } from "lucide-react";
 import { chipClass, type ChipTone } from "@/components/Chip";
-import { HD_STATUS_LABEL_REQUESTER, type HdFormAnswers, type HdFormField, type HdStatus } from "@/lib/helpdesk/types";
+import { HD_STATUS_LABEL_REQUESTER, type HdFormAnswers, type HdFormField, type HdScheduled, type HdStatus } from "@/lib/helpdesk/types";
+import { ScheduledChip } from "./ScheduledChip";
 
 const ICONS: Record<string, LucideIcon> = {
   briefcase: Briefcase,
@@ -80,12 +81,16 @@ export function requesterStatus(status: HdStatus, inWorkflow: boolean): { label:
 export function RequestStatusChip({
   status,
   inWorkflow,
+  scheduled,
   className = "",
 }: {
   status: HdStatus;
   inWorkflow: boolean;
+  /** 1.20.34: parked until its event: "Scheduled · Sun 15 Mar, 10:00 · Room 4" instead of "On hold". */
+  scheduled?: HdScheduled | null;
   className?: string;
 }) {
+  if (scheduled && status === "on_hold") return <ScheduledChip scheduled={scheduled} className={className} />;
   const s = requesterStatus(status, inWorkflow);
   return <span className={chipClass(s.tone, "md", className)}>{s.label}</span>;
 }

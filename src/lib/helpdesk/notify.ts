@@ -251,6 +251,8 @@ export const REQUESTER_NOTIFY_EVENTS = [
   "hd_workflow_message",
   "hd_merged",
   "hd_incident_update",
+  // 1.20.34 (lib/helpdesk/desk-calendar-park): a reminder before the event a request is for (off unless the desk turns it on).
+  "hd_event_coming_up",
 ] as const;
 export type RequesterNotifyEvent = (typeof REQUESTER_NOTIFY_EVENTS)[number];
 
@@ -270,6 +272,8 @@ function requesterEvent(template: string, status: HdStatus): RequesterNotifyEven
       return "hd_merged";
     case "hd_incident_update":
       return "hd_incident_update";
+    case "hd_event_requester_reminder":
+      return "hd_event_coming_up";
     default:
       return "hd_workflow_message";
   }
@@ -409,6 +413,28 @@ export const notifyRequestReceived = guarded("request_received", async (ticketId
     }
   }
 });
+
+/**
+ * 1.20.34 (lib/helpdesk/desk-calendar-park requesterReminderSweep): "Reminder: <event> on <date>" to the requester
+ * (and nobody copied), through their notification settings, Get help's link or the portal's. `vars` say when and
+ * where, already in words.
+ */
+export const notifyEventRequesterReminder = guarded(
+  "event_requester_reminder",
+  async (ticketId: number, vars: { event_date: string; event_time: string; event_place: string }, ctx: NotifyContext = {}) => {
+    const t = await loadTicket(ticketId);
+    if (!t) return;
+    ctx = { ...ctx, origin: await helpdeskOrigin(ctx.origin), actorId: null };
+    await toRequester(
+      t,
+      `Reminder: ${t.subject} on ${vars.event_date}`,
+      `${vars.event_time}${vars.event_place ? ` · ${vars.event_place}` : ""}`,
+      "hd_event_requester_reminder",
+      { ...baseVars(t), event_date: vars.event_date, event_time: vars.event_time, event_place: vars.event_place || "No place given" },
+      ctx
+    );
+  }
+);
 
 /**
  * A message on a ticket. Public from an agent: the requester. Public from

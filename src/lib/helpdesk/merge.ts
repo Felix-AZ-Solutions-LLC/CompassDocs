@@ -286,9 +286,11 @@ export async function mergeTickets(user: MergeActor, input: MergeInput, ctx: { o
       for (const tag of m.tags ?? []) if (!tags.includes(tag)) tags.push(tag);
       await client.query(
         `UPDATE hd_tickets SET status = 'closed', merged_into = $2, closed_at = $3, solved_at = COALESCE(solved_at, $3),
-                updated_at = $3 WHERE id = $1`,
+                parked_until = NULL, parked_at = NULL, park_reason = '', updated_at = $3 WHERE id = $1`,
         [m.id, k.id, now]
       );
+      // 1.20.34: its parking entry ends (lib/helpdesk/desk-calendar-park).
+      await client.query("UPDATE hd_ticket_parkings SET woke_at = $2 WHERE ticket_id = $1 AND woke_at IS NULL", [m.id, now]);
       await insertLine(client, m.id, user, "system", `Merged into #${k.number}`, now);
       merged.push({ id: m.id, number: m.number, requester_id: m.requester_id });
     }

@@ -2,7 +2,9 @@
 //       Desk settings → Event calendar (1.20.6, lib/helpdesk/desk-calendar): the reminder settings, whether a
 //       chat app is connected (the "also message agents" choice needs one), and the events in the past whose
 //       setup was never marked complete (they still hold their tickets open).
-// PUT /api/helpdesk/admin/calendar  { reminder_minutes?, late_reminder?, recipients?, chat?, default_setup_minutes? }
+// PUT /api/helpdesk/admin/calendar  { reminder_minutes?, late_reminder?, recipients?, chat?, default_setup_minutes?,
+//                                     park_prep_days?, park_invites?, park_request_types?, remind_requester?, remind_requester_days? }
+//       (1.20.34: Hold until the event, lib/helpdesk/desk-calendar-park; defaults 10 working days, on, on, off, 2 days)
 //       → { settings }. Audited (helpdesk.calendar.settings_updated) with what changed.
 // Desk capability settings.manage.
 

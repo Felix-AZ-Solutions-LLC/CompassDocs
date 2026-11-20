@@ -6675,3 +6675,71 @@ hours, `CalendarClock`).
   pill moves on and the count drops with no reload (and at a cut-short
   answer's last kept start, which reloads). Both live in the top
   bar and the rail, so print never shows them.
+- **Hold until the event** (1.20.34, `calendar/ParkDialog`,
+  `calendar/ParkedChip`, `lib/helpdesk/desk-calendar-park*`). The words are
+  **park**, **parked**, **wake** and **prep window** (working days); never
+  "snooze" or "defer".
+  - **In the Event block**, under the setup chip, for an agent who may
+    change the ticket's status and a live event on a ticket that isn't
+    solved, closed, merged or binned: a full-width secondary `sm` **Hold
+    until the event** (`Hourglass`) with one `text-xs` line under it
+    ("Leaves the queue until 10 working days before setup is due. Its
+    targets pause."). Parked, the block says so in one `text-xs` line with
+    `Hourglass` instead of the button.
+  - **The dialog** ("Hold #1047 until the event", or "Change the prep
+    window of #1047") is a `Modal`: one help sentence, a `sm` number
+    `Field` for the prep window (0 to 60, the desk's in its help), then an
+    `aria-live` `text-xs` line with the wake time the server worked out
+    ("It wakes Tue 3 Mar, 09:00 (London time)."). An event too close shows
+    the refusal sentence in a `notice-warn` box and the primary button is
+    disabled; the server refuses it the same way.
+  - **The Parked chip** sits with the subject's other chips in the ticket
+    header: a `neutral` `md` chip with `Hourglass`, "Parked until Tue 3 Mar
+    · for the event on Sun 15 Mar" (`truncate`, `max-w-full`). It is a
+    status, never a control: **Wake now** (`AlarmClock`) and **Change prep
+    window** (`SlidersHorizontal`) are `ghost` `sm` buttons beside it,
+    `print:hidden`, only for agents who may change the status. The status
+    pill still reads On hold.
+  - **The queue**: the **Parked** view (`Hourglass`) is the last of the
+    Views with its count like the others; it lists parked tickets soonest
+    to wake first. A parked row's status chip reads **Parked** (`neutral`)
+    and its due slot reads "Wakes Tue 3 Mar · event Sun 15 Mar" in
+    `text-slate-500` (its clocks are paused, so there is no due ink).
+    Parked tickets are in no other view of open work, nor in team counts.
+    The row's chip comes from `statusChip(t, true, { parked: true })`;
+    everywhere else (the ticket header's pill included) `statusChip` says
+    On hold, and the header carries the Parked chip beside it.
+  - **Saved views**: the status `Select` names the group **Not solved
+    (parked left out)**; with it chosen, one native checkbox (`h-4 w-4`)
+    **Include parked tickets** sits under it, off by default and for every
+    view saved before it. The view's summary says which: "Not solved,
+    parked left out" or "Not solved, parked included".
+  - **The timeline**: every park, wake and prep window change is one
+    activity line with `Hourglass` (agents only, `event = 'change'`). The
+    desk's own lines start with what happened ("Woke for the event on Sun
+    15 Mar", "The event was cancelled. Close this ticket if nothing else is
+    needed."); a person's start with their name. An invite that doesn't
+    park itself says why in one line ("Not parked: the event is more than
+    400 days away, …"). A wake that keeps failing ends with "Woke without
+    its usual steps after 5 failed attempts (…). Check its targets and its
+    owner." Mail from the meeting's verified organiser who isn't the
+    requester is an agents-only note headed "{name} (the meeting's
+    organiser) wrote, with an update to the meeting:", never a public
+    reply.
+  - **The Event dialog's Place** help ends "Requesters see the place on
+    their request.", since the Scheduled chip shows it.
+  - **The requester's side** (`help/ScheduledChip`): Get help and the
+    customer portal show a parked request as an `info` `md` chip with
+    `CalendarDays`, **Scheduled · Sun 15 Mar, 10:00 · Room 4** (no time for
+    a whole-day event, no place when none is set), in place of On hold.
+    Get help reads the person's zone and clock; the portal the browser's.
+    It truncates (`max-sm:max-w-[45%]` in a list row) and is never a link.
+  - **Event calendar settings** add a third card, **Holding tickets until
+    the event**, with its own state and its own **Save parking**: the prep
+    window (`sm` number `Field`), two `Toggle`s (**Park tickets from meeting
+    invites until they're due**, **Park tickets from calendar request types
+    until they're due**) and **Remind the requester before the event**,
+    whose **Days before the event** field shows only while it is on.
+  - **Reports**: the **Open now** live tile shows "Parked: 3" in `text-xs
+    font-medium text-slate-600` beside "Right now"; **Parked now** is a
+    live measure of its own.

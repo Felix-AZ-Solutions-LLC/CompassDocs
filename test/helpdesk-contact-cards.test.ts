@@ -224,6 +224,10 @@ before(async () => {
   await getSetting("__schema_bootstrap__");
   lockClient = await pool().connect();
   await lockClient.query("SELECT pg_advisory_lock($1)", [CARDS_LOCK]);
+  // Every card this file reads depends on the directory's column visibility, which
+  // helpdesk-claude-suggest-workflow briefly sets to hide email from agents (under this
+  // lock). Held for the whole file so a Teams-by-email check never reads that window.
+  await lockClient.query("SELECT pg_advisory_lock($1)", [COLUMNS_LOCK]);
   savedCards = await getSetting("helpdesk_contact_cards");
 
   const creds = await hashPassword("Helpdesk!Cards123");
@@ -339,6 +343,7 @@ after(async () => {
   if (savedCards === undefined) await pool().query("DELETE FROM settings WHERE key = 'helpdesk_contact_cards'");
   else await setSetting("helpdesk_contact_cards", savedCards);
   if (lockClient) {
+    await lockClient.query("SELECT pg_advisory_unlock($1)", [COLUMNS_LOCK]).catch(() => {});
     await lockClient.query("SELECT pg_advisory_unlock($1)", [CARDS_LOCK]).catch(() => {});
     lockClient.release();
   }
@@ -462,8 +467,7 @@ describe("contact cards (integration)", () => {
   });
 
   test("directory visibility wins: the built-in mobile column set to admins only", async () => {
-    const client = await pool().connect();
-    await client.query("SELECT pg_advisory_lock($1)", [COLUMNS_LOCK]);
+    // The file already holds COLUMNS_LOCK on lockClient (see `before`).
     const saved = await getSetting("directory_column_visibility");
     try {
       await settings({});
@@ -477,8 +481,6 @@ describe("contact cards (integration)", () => {
     } finally {
       if (saved === undefined) await pool().query("DELETE FROM settings WHERE key = 'directory_column_visibility'");
       else await setSetting("directory_column_visibility", saved);
-      await client.query("SELECT pg_advisory_unlock($1)", [COLUMNS_LOCK]).catch(() => {});
-      client.release();
     }
   });
 

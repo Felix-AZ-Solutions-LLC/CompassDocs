@@ -101,7 +101,7 @@ export function RequestDetail({
         icon={<LifeBuoy />}
         title={req.subject}
         subtitle={[`#${req.number}`, req.request_type_title, `sent ${fmt.date(req.created_at)}`].filter(Boolean).join(" · ")}
-        actions={<RequestStatusChip status={req.status} inWorkflow={req.in_workflow} className="px-3 py-1 text-sm" />}
+        actions={<RequestStatusChip status={req.status} inWorkflow={req.in_workflow} scheduled={req.scheduled} className="px-3 py-1 text-sm" />}
       />
 
       {req.status !== "solved" && req.status !== "closed" && <TeamClosedNotice message={closedNotice} className="mb-4" />}

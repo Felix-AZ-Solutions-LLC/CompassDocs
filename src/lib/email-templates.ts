@@ -662,6 +662,34 @@ export const EMAIL_TEMPLATES: EmailTemplateDef[] = [
       "**Ready by:** {{ready_by}}\n\n" +
       "[Open #{{ticket_number}} in the desk]({{ticket_url}}) and mark Setup complete when it is done. The ticket can't be solved until then.",
   },
+  // 1.20.34 (lib/helpdesk/desk-calendar-park): the requester's reminder before their request's event, when Desk settings,
+  // Event calendar turns it on.
+  {
+    key: "hd_event_requester_reminder",
+    label: "Helpdesk: reminder before an event",
+    description:
+      "Sent to the requester a few days before the event their request is for, once per event date (again if the event moves). Only when Desk settings, Event calendar turns on \"Remind the requester before the event\". Replying to the email adds to the request.",
+    tags: [
+      T("ticket_number", "Request number"),
+      T("subject", "Request subject (the event)"),
+      T("event_date", "The day the event is on (\"Sun 15 Mar\")"),
+      T("event_time", "When it starts, in the desk's time zone, or \"All day\""),
+      T("event_place", "Where it is (blank when no place was given)"),
+      T("team_name", "Team handling it"),
+      T("ticket_url", "Link to the request"),
+      T("thread_ref", "Thread reference for email replies"),
+      T("org_name", "Workspace name"),
+    ],
+    text: ["subject", "event_place", "team_name"],
+    optional: ["event_place"],
+    subject: "[{{org_name}}] Reminder: {{subject}} on {{event_date}} {{thread_ref}}",
+    body:
+      "A reminder about your request **#{{ticket_number}}**:\n\n" +
+      "> {{subject}}\n\n" +
+      "**When:** {{event_date}}, {{event_time}}\n\n" +
+      "**Where:** {{event_place}}\n\n" +
+      "{{team_name}} has it in hand. [Open your request]({{ticket_url}}) or reply to this email if anything has changed.",
+  },
   // 1.19.4 (area C6, lib/helpdesk/share): an agent shares a ticket with another.
   {
     key: "hd_shared",
@@ -1012,6 +1040,16 @@ export const SAMPLE_VARS: Record<string, Record<string, string>> = {
     target_number: "1049",
     ticket_url: "/help/requests/1051",
     thread_ref: "[#1051 ref:m2r8kq4v7xqa1b2c]",
+  },
+  hd_event_requester_reminder: {
+    ticket_number: "1047",
+    subject: "Board meeting: room and video setup",
+    event_date: "Sun 15 Mar",
+    event_time: "10:00 (London time)",
+    event_place: "Room 4",
+    team_name: "Facilities",
+    ticket_url: "/help/requests/1047",
+    thread_ref: "[#1047 ref:m2r8kq4v7xqa1b2c]",
   },
   hd_incident_update: {
     incident_title: "VPN is down from home",

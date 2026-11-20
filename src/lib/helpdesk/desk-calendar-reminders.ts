@@ -26,6 +26,9 @@
 //             time_rev, so its reminders are due again for the new time.
 //   never     a cancelled event, one whose setup is marked complete, or a
 //             ticket that is solved, closed, merged or in the recycle bin.
+//             1.20.34: nor while the ticket is parked until its event
+//             (lib/helpdesk/desk-calendar-park): the nearest due one goes
+//             once it wakes.
 //
 // Server-only.
 
@@ -100,6 +103,8 @@ export async function eventReminderSweep(now: Date = new Date(), opts: { only?: 
        FROM hd_ticket_events e JOIN hd_tickets t ON t.id = e.ticket_id
       WHERE e.cancelled_at IS NULL AND e.setup_done_at IS NULL
         AND t.deleted_at IS NULL AND t.merged_into IS NULL AND t.status IN ('new', 'open', 'pending', 'on_hold')
+        -- 1.20.34: never while the ticket is parked until its event (lib/helpdesk/desk-calendar-park); due ones go once it wakes.
+        AND t.parked_until IS NULL
         AND e.ready_at <= $1::timestamptz + make_interval(mins => $2) AND e.starts_at > $1::timestamptz - interval '24 hours'
         AND ($3::int[] IS NULL OR e.ticket_id = ANY($3::int[]))
         -- Nothing left to send for this revision once "late" has gone.

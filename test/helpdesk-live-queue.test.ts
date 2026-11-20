@@ -214,8 +214,18 @@ async function person(key: string, name: string): Promise<Person> {
   return P[key];
 }
 
+/**
+ * Mail to an address no team owns opens its ticket in the database's first team (`ORDER BY
+ * position, id`, lib/helpdesk/inbound teamForRecipients), and other files do that on purpose
+ * (helpdesk-m365-mail's second mailbox has no team; helpdesk-mailboxes tests the fallback itself).
+ * When this file's teams are the lowest in the database, which on CI's fresh database they can be
+ * whatever their position, that ticket is a real change in the first one's scope: Sam's IT team
+ * heard one in stream test 5 (the CI failure of 1.20.34). So this file's teams sort after its own
+ * catch-all team ("Unrouted", made in `before`), which no agent is in and no test watches.
+ */
+const TEAM_POSITION = 9480;
 async function team(name: string, members: [string, "agent" | "lead"][]): Promise<number> {
-  const r = await fixtureQuery("INSERT INTO hd_teams (name) VALUES ($1) RETURNING id", [`${STAMP} ${name}`]);
+  const r = await fixtureQuery("INSERT INTO hd_teams (name, position) VALUES ($1, $2) RETURNING id", [`${STAMP} ${name}`, TEAM_POSITION]);
   const id = r.rows[0].id as number;
   teamIds.push(id);
   for (const [k, role] of members) await pool().query("INSERT INTO hd_team_members (team_id, user_id, role) VALUES ($1, $2, $3)", [id, P[k].id, role]);
@@ -264,6 +274,9 @@ before(async () => {
   for (const [k, r] of [["sam", "agent"], ["ana", "agent"], ["other", "agent"], ["boss", "manager"], ["many", "agent"], ["rate", "agent"], ["gone", "agent"], ["par", "agent"], ["rev", "agent"], ["dis", "agent"], ["quiet", "agent"]] as const) {
     await pool().query("INSERT INTO hd_agent_roles (user_id, role) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET role = EXCLUDED.role", [P[k].id, r]);
   }
+  // Ahead of this file's other teams in the team order (see `team`): stray mail from other files lands here, never in A to D.
+  const unrouted = await fixtureQuery("INSERT INTO hd_teams (name, position) VALUES ($1, $2) RETURNING id", [`${STAMP} Unrouted`, TEAM_POSITION - 1]);
+  teamIds.push(unrouted.rows[0].id as number);
   A = await team("IT", [["sam", "agent"], ["ana", "agent"], ["many", "agent"], ["rate", "agent"], ["gone", "agent"], ["par", "agent"], ["rev", "agent"], ["dis", "agent"]]);
   B = await team("Facilities", [["other", "agent"]]);
   C = await team("Quiet", []);
@@ -454,10 +467,15 @@ describe("stream", () => {
     assert.ok((await foreign.until(() => foreign.changed().length > 0, 2_500)) >= 0);
     foreign.close();
     // An up-to-date cursor replays nothing.
-    const fresh = await Tap.open(P.sam, { since: live.liveCursor() });
+    const upSince = live.liveStateForTests().upSince;
+    const freshCursor = live.liveCursor();
+    const fresh = await Tap.open(P.sam, { since: freshCursor });
     await fresh.until(() => fresh.frames().length > 0, 2_000);
     await sleep(2_000);
-    assert.equal(fresh.changed().length, 0);
+    const freshMs = shared.parseLiveCursor(freshCursor)!.ms;
+    const inScope = live.liveRingForTests().filter((e) => e.at > freshMs && shared.liveConcerns(e, { teams: new Set([A]), userId: P.sam.id }));
+    assert.equal(live.liveStateForTests().upSince, upSince, "the listener did not reconnect during the probe");
+    assert.equal(fresh.changed().length, 0, `nothing in Sam's scope changed since the cursor (in scope since: ${JSON.stringify(inScope)})`);
     fresh.close();
   });
 });

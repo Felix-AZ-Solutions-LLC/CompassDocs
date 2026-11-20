@@ -257,6 +257,8 @@ export function listRow(t: HdTicket): HdTicketListRow {
     mailbox_id: t.mailbox_id ?? null,
     mailbox_address: t.mailbox_address ?? null,
     mailbox_name: t.mailbox_name ?? null,
+    // 1.20.34: parked until then (lib/helpdesk/desk-calendar-park); listTickets adds its event's start.
+    parked_until: t.parked_until ?? null,
   };
 }
 
@@ -713,6 +715,7 @@ export async function updateTicket(
     }
     let solved = false;
     let setupCompleted = false;
+    let parkingEnded = false;
     if (patch.status !== undefined && patch.status !== before.status) {
       const to = patch.status;
       // A workflow task's required hand-off comes first, whatever solves it
@@ -761,6 +764,13 @@ export async function updateTicket(
       set("status", to);
       changed.push("status");
       lines.push({ kind: "system", body: `${who} changed the status from ${HD_STATUS_LABEL[before.status]} to ${HD_STATUS_LABEL[to]}` });
+      // 1.20.34 (lib/helpdesk/desk-calendar-park): any status change ends a ticket's parking (an agents-only line).
+      const unpark = (await import("./desk-calendar-park-shared")).endParkingSets(before, whoMd);
+      if (unpark) {
+        for (const [col, v] of Object.entries(unpark.sets)) set(col, v);
+        lines.push({ kind: "internal", body: unpark.line });
+        parkingEnded = true;
+      }
       if ((to === "solved" || to === "closed") && !before.solved_at) set("solved_at", now);
       if (to === "closed") set("closed_at", now);
       // Leaving the open statuses for solved or closed is "solved" for the hooks.
@@ -803,6 +813,7 @@ export async function updateTicket(
     if (!sets.length && !changed.includes("custom_fields")) return { before, changed, assigneeChangedTo, solved: false, setupCompleted: false };
     set("updated_at", now);
     await client.query(`UPDATE hd_tickets SET ${sets.join(", ")} WHERE id = $1`, params);
+    if (parkingEnded) await client.query((await import("./desk-calendar-schema")).PARK_HISTORY_CLOSE_SQL, [ticketId, now]);
     // 1.20.28: an internal line here is a field change, marked event 'change' (lib/helpdesk/conversation-shared): the
     // desk draws it as an activity line, not a note card. The status line (kind system) needs no marker.
     for (const l of lines) {
@@ -823,6 +834,10 @@ export async function updateTicket(
     return { before, changed, assigneeChangedTo, solved, setupCompleted };
   });
   if (!tx) return undefined;
+  // 1.20.34: a parked ticket moved to another team counts its wake time in that team's calendar (lib/helpdesk/desk-calendar-park).
+  if (tx.changed.includes("team_id") && tx.before.parked_until && !tx.changed.includes("status")) {
+    await (await import("./desk-calendar-park")).recomputeParked({ kind: "team", ticketId }, { now, origin: ctx.origin });
+  }
   // 1.20.6: the solve marked its event's setup complete (lib/helpdesk/desk-calendar): its webhooks, after the commit.
   if (tx.setupCompleted) await (await import("./desk-calendar")).afterSetupCompleted(ticketId, { id: actor.id, name: actor.name }, ctx.origin);
   if (tx.changed.length) {
@@ -870,8 +885,10 @@ export interface TicketListFilters {
   /** A requester without an account, by email (case-insensitive). */
   requester_email?: string;
   status?: HdStatus;
-  /** "open": any of the open statuses (Reports' live measures). */
-  status_group?: "open";
+  /** "open": any of the open statuses, not parked (Reports' live measures). 1.20.34 "parked": parked until their event. */
+  status_group?: "open" | "parked";
+  /** 1.20.34: with status_group "open", count the parked tickets as well (a saved view's "Include parked tickets"). */
+  include_parked?: boolean;
   request_type_id?: number;
   /** Raw sources (a channel group expands to several: trigger → doc, handbook, space_access, link). */
   sources?: HdSource[];
@@ -909,6 +926,10 @@ export interface TicketListFilters {
 }
 
 const OPEN_SQL = "t.status IN ('new', 'open', 'pending', 'on_hold')";
+/** 1.20.34 (lib/helpdesk/desk-calendar-park): open work: open and not parked until its event. Every view of open work reads this. */
+const WORK_SQL = `(${OPEN_SQL} AND t.parked_until IS NULL)`;
+/** Parked until its event (status on hold with a wake time). */
+const PARKED_SQL = "(t.status = 'on_hold' AND t.parked_until IS NOT NULL)";
 const OVERDUE_SQL = `(${OPEN_SQL} AND t.sla_paused_at IS NULL AND (
     (t.first_replied_at IS NULL AND t.first_reply_due < now()) OR t.resolve_due < now()))`;
 const IN_WORKFLOW_SQL = `(EXISTS (SELECT 1 FROM hd_workflow_runs wr WHERE wr.id = t.workflow_run_id AND wr.state IN ('running', 'waiting', 'blocked')))`;
@@ -924,22 +945,24 @@ function scopeSql(teams: number[] | "all", userId: number, params: unknown[]): s
 function viewSql(view: HdView, userId: number, params: unknown[], tz: string): string {
   if (typeof view === "object") {
     params.push(view.team_id);
-    return `(${OPEN_SQL} AND t.team_id = $${params.length})`;
+    return `(${WORK_SQL} AND t.team_id = $${params.length})`;
   }
   switch (view) {
     case "mine":
       params.push(userId);
-      return `(${OPEN_SQL} AND t.assignee_id = $${params.length})`;
+      return `(${WORK_SQL} AND t.assignee_id = $${params.length})`;
     case "unassigned":
-      return `(${OPEN_SQL} AND t.assignee_id IS NULL)`;
+      return `(${WORK_SQL} AND t.assignee_id IS NULL)`;
     case "open":
-      return OPEN_SQL;
+      return WORK_SQL;
     case "overdue":
-      return OVERDUE_SQL;
+      return `(${OVERDUE_SQL} AND t.parked_until IS NULL)`;
     case "workflow":
-      return `(${OPEN_SQL} AND (${IN_WORKFLOW_SQL} OR t.parent_ticket_id IS NOT NULL))`;
+      return `(${WORK_SQL} AND (${IN_WORKFLOW_SQL} OR t.parent_ticket_id IS NOT NULL))`;
     case "waiting":
-      return "t.status IN ('pending', 'on_hold')";
+      return "(t.status IN ('pending', 'on_hold') AND t.parked_until IS NULL)";
+    case "parked":
+      return PARKED_SQL;
     case "solved_week":
       params.push(tz);
       // 1.19.1: a ticket merged into another was closed, not solved.
@@ -955,6 +978,9 @@ export const SORT_SQL: Record<HdTicketSort, string> = {
   due: "(CASE WHEN t.first_replied_at IS NULL AND t.first_reply_due IS NOT NULL THEN t.first_reply_due ELSE t.resolve_due END) ASC NULLS LAST, t.id",
 };
 
+/** 1.20.34: the Parked view's order: soonest to wake first (its clocks are paused, so "due" means nothing there). */
+const WAKE_SORT_SQL = "t.parked_until ASC NULLS LAST, t.id";
+
 /** A channel name (Reports' channels) or a raw source → the sources it covers; null when unknown. */
 export function channelSources(raw: string): HdSource[] | null {
   if (raw === "trigger") return ["doc", "handbook", "space_access", "link"];
@@ -966,7 +992,7 @@ export function parseView(raw: string | null | undefined): HdView | "all" | null
   if (raw === "all") return "all";
   const m = /^team:(\d+)$/.exec(raw);
   if (m) return { team_id: Number(m[1]) };
-  return (["mine", "unassigned", "open", "overdue", "workflow", "waiting", "solved_week"] as const).includes(raw as HdNamedView)
+  return (["mine", "unassigned", "open", "overdue", "workflow", "waiting", "solved_week", "parked"] as const).includes(raw as HdNamedView)
     ? (raw as HdNamedView)
     : null;
 }
@@ -991,7 +1017,9 @@ export async function ticketListWhere(user: { id: number; role: Role }, f: Ticke
     params.push(v);
     return `$${params.length}`;
   };
-  if (f.status_group === "open") where.push(OPEN_SQL);
+  // 1.20.34: "open" is open work (parked tickets left out, as the reports count them); "parked" is the parked ones.
+  if (f.status_group === "open") where.push(f.include_parked ? OPEN_SQL : WORK_SQL);
+  if (f.status_group === "parked") where.push(PARKED_SQL);
   if (f.request_type_id) where.push(`t.request_type_id = ${bind(f.request_type_id)}`);
   if (f.sources?.length) where.push(`t.source = ANY(${bind(f.sources)}::text[])`);
   if (f.mailbox) where.push(`t.mailbox_id = (SELECT mbf.id FROM hd_mailboxes mbf WHERE lower(mbf.address) = ${bind(f.mailbox.toLowerCase())})`);
@@ -1083,10 +1111,8 @@ export async function listTickets(
   const total = (await hqOne<{ n: number }>(`SELECT count(*)::int AS n FROM hd_tickets t WHERE ${whereSql}`, params))?.n ?? 0;
   if (f.countOnly) return { rows: [], total }; // saved views' counts (1.19.1, lib/helpdesk/saved-views)
   params.push(limit, offset);
-  const rows = await hq<JoinedRow>(
-    `${TICKET_SELECT} WHERE ${whereSql} ORDER BY ${SORT_SQL[f.sort ?? "updated"]} LIMIT $${params.length - 1} OFFSET $${params.length}`,
-    params
-  );
+  const sortSql = f.view === "parked" && (!f.sort || f.sort === "due") ? WAKE_SORT_SQL : SORT_SQL[f.sort ?? "updated"];
+  const rows = await hq<JoinedRow>(`${TICKET_SELECT} WHERE ${whereSql} ORDER BY ${sortSql} LIMIT $${params.length - 1} OFFSET $${params.length}`, params);
   const now = Date.now();
   const tz = await teamTimezones(rows);
   const out = await withClockNotes(
@@ -1107,6 +1133,23 @@ export async function listTickets(
   } catch (e) {
     console.error("[helpdesk] vip:", e);
   }
+  // 1.20.34: a parked row's event start (the Parked view shows when it wakes and when the event is), one batch read.
+  const parked = out.filter((r) => r.parked_until);
+  if (parked.length) {
+    try {
+      const evs = await hq<{ ticket_id: number; starts_at: string; all_day: number; start_date: string | null }>(
+        "SELECT ticket_id, starts_at, all_day, to_char(start_date, 'YYYY-MM-DD') AS start_date FROM hd_ticket_events WHERE ticket_id = ANY($1::int[])",
+        [parked.map((r) => r.id)]
+      );
+      const by = new Map(evs.map((e) => [e.ticket_id, e]));
+      for (const r of parked) {
+        const e = by.get(r.id);
+        r.parked_event = e ? { starts_at: e.starts_at, all_day: e.all_day === 1, start_date: e.all_day === 1 ? e.start_date : null } : null;
+      }
+    } catch (e) {
+      console.error("[helpdesk] parked events:", e);
+    }
+  }
   // 1.19.2: major incident chips (agent W1, lib/helpdesk/incidents), one batch call.
   try {
     const chips = await (await import("./incidents")).incidentChips(out.map((r) => r.id));
@@ -1123,14 +1166,14 @@ export async function countViews(user: { id: number; role: Role }): Promise<HdCo
   const { timezone } = await hoursForTeam(null);
   const params: unknown[] = [];
   const scope = scopeSql(teams, user.id, params);
-  const views: HdNamedView[] = ["mine", "unassigned", "open", "overdue", "workflow", "waiting", "solved_week"];
+  const views: HdNamedView[] = ["mine", "unassigned", "open", "overdue", "workflow", "waiting", "solved_week", "parked"];
   const cols = views.map((v) => `count(*) FILTER (WHERE ${viewSql(v, user.id, params, timezone)})::int AS ${v}`);
   const row = (await hqOne<Record<HdNamedView, number>>(`SELECT ${cols.join(", ")} FROM hd_tickets t WHERE ${scope}`, params))!;
   const teamParams: unknown[] = teams === "all" ? [] : [teams];
   const teamScope = teams === "all" ? "TRUE" : "tm.id = ANY($1::int[])";
   const teamRows = await hq<{ team_id: number; name: string; icon: string; open: number }>(
     `SELECT tm.id AS team_id, tm.name, tm.icon,
-            (SELECT count(*)::int FROM hd_tickets t WHERE t.team_id = tm.id AND ${OPEN_SQL} AND t.deleted_at IS NULL) AS open
+            (SELECT count(*)::int FROM hd_tickets t WHERE t.team_id = tm.id AND ${WORK_SQL} AND t.deleted_at IS NULL) AS open
        FROM hd_teams tm WHERE ${teamScope} ORDER BY tm.position, tm.name`,
     teamParams
   );
@@ -1166,6 +1209,7 @@ export async function countViews(user: { id: number; role: Role }): Promise<HdCo
       overdue: row.overdue,
       first_reply_median_minutes: head?.median != null ? Math.round(Number(head.median)) : null,
       csat_percent: head && head.answered ? Math.round((head.good / head.answered) * 100) : null,
+      parked: row.parked,
     },
     approvals_waiting: approvalsWaiting,
     reviews_pending: reviewsPending,
@@ -1229,7 +1273,14 @@ export async function listMyRequests(
     const { currentStep } = await import("./detail");
     for (const x of inWorkflow) x.current_step = currentStep(await getWorkflowProgress(x._in_workflow_id!, "requester").catch(() => null));
   }
-  return out.map(({ _in_workflow_id: _drop, ...rest }) => rest);
+  // 1.20.34 (lib/helpdesk/desk-calendar-park): a parked request reads "Scheduled · Sun 15 Mar, 10:00 · Room 4".
+  const parkedIds = rows.filter((r) => r.parked_until && r.status === "on_hold").map((r) => r.id);
+  const scheduled = parkedIds.length ? await (await import("./desk-calendar-park")).scheduledFor(parkedIds) : new Map();
+  const ids = new Map(rows.map((r) => [r.number, r.id]));
+  return out.map(({ _in_workflow_id: _drop, ...rest }) => {
+    const s = scheduled.get(ids.get(rest.number));
+    return s ? { ...rest, scheduled: s } : rest;
+  });
 }
 
 /** Requests waiting on this requester (status pending, theirs): the Get help badge. */

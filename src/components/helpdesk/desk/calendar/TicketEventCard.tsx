@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useId, useState } from "react";
 import Link from "next/link";
-import { CalendarDays, Check, MapPin, Pencil, Plus, Repeat, Trash2, TriangleAlert, Undo2 } from "lucide-react";
+import { CalendarDays, Check, Hourglass, MapPin, Pencil, Plus, Repeat, Trash2, TriangleAlert, Undo2 } from "lucide-react";
 import { Button, iconButtonClass } from "@/components/Button";
 import { CARD_CLASS } from "@/components/Card";
 import { Chip } from "@/components/Chip";
@@ -27,6 +27,8 @@ import { eventWhen, leadLabel, readyByLabel, type HdEventConflict, type HdTicket
 import { getJson, sendJson } from "../api";
 import { ticketHref } from "../ui";
 import { EventDialog } from "./EventDialog";
+import { ParkDialog } from "./ParkDialog";
+import { prepLabel, wakeDay } from "@/lib/helpdesk/desk-calendar-park-shared";
 
 export function TicketEventCard({
   number,
@@ -53,6 +55,7 @@ export function TicketEventCard({
   const h12 = time_format === "12h";
   const [view, setView] = useState<HdTicketEventView | null>(null);
   const [editing, setEditing] = useState(false);
+  const [parking, setParking] = useState(false);
   const [busy, setBusy] = useState(false);
   const headId = useId();
 
@@ -198,9 +201,39 @@ export function TicketEventCard({
           )}
 
           {(view?.conflicts.length ?? 0) > 0 && <Conflicts place={event.place} conflicts={view!.conflicts} tz={tz} h12={h12} />}
+
+          {/* 1.20.34 Hold until the event (lib/helpdesk/desk-calendar-park): out of the queue until it's time to prepare. */}
+          {view?.parking?.parked_until ? (
+            <p className="mt-3 flex items-center gap-1.5 text-xs text-slate-500" data-testid="event-parked">
+              <Hourglass className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden />
+              Parked: wakes {wakeDay(view.parking.parked_until, tz)}, {prepLabel(view.parking.prep_days)} before setup is due.
+            </p>
+          ) : view?.parking?.can_park ? (
+            <>
+              <Button variant="secondary" size="sm" icon={<Hourglass />} onClick={() => setParking(true)} className="mt-3 w-full print:hidden" data-testid="event-park">
+                Hold until the event
+              </Button>
+              <p className="mt-1.5 text-xs text-slate-500">
+                Leaves the queue until {prepLabel(view.parking.prep_days)} before setup is due. Its targets pause.
+              </p>
+            </>
+          ) : null}
         </>
       )}
 
+      {parking && view?.parking && (
+        <ParkDialog
+          number={number}
+          mode="park"
+          parking={view.parking}
+          onClose={() => setParking(false)}
+          onSaved={(p) => {
+            setParking(false);
+            setView((v) => (v ? { ...v, parking: p } : v));
+            onChanged?.();
+          }}
+        />
+      )}
       {editing && (
         <EventDialog
           number={number}

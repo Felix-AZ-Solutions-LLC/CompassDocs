@@ -80,7 +80,7 @@ export const HD_MEASURES = {
     good: "down",
     basis: "snapshot",
     group: "Volume",
-    description: "Tickets still open at the end of the period (or of each day, week or month on a chart).",
+    description: "Tickets still open at the end of the period (or of each day, week or month on a chart). A ticket parked until its event is left out from when it was parked.",
   },
   unassigned: {
     label: "Unassigned",
@@ -281,7 +281,18 @@ export const HD_MEASURES = {
     basis: "live",
     group: "Workload",
     drill: { status_group: "open" },
-    description: "Tickets open right now (new, open, waiting or on hold).",
+    description: "Tickets open right now (new, open, waiting or on hold), not counting tickets parked until their event.",
+  },
+  // 1.20.34 (lib/helpdesk/desk-calendar-park): held until their event; not counted as open work anywhere else.
+  parked_now: {
+    label: "Parked now",
+    short: "Parked",
+    unit: "count",
+    good: "neutral",
+    basis: "live",
+    group: "Workload",
+    drill: { status_group: "parked" },
+    description: "Tickets on hold until their event right now. Open now, the backlog and the workload measures leave them out.",
   },
   unassigned_now: {
     label: "Unassigned now",
@@ -812,6 +823,8 @@ export interface HdQueryResult {
   cached: boolean;
   /** Small-sample warning: a percentage or median on fewer than 5. */
   low_sample: boolean;
+  /** 1.20.34: a figure shown beside the total ("Parked: 3" beside Open now). */
+  aside?: { label: string; value: number };
 }
 
 // --- Widgets and dashboards ---------------------------------------------------------------

@@ -89,6 +89,7 @@ export type HdActivityIcon =
   | "priority"
   | "field"
   | "event"
+  | "park"
   | "language"
   | "solve"
   | "cc-add"
@@ -109,6 +110,8 @@ export function activityIcon(m: Line): HdActivityIcon {
     if (/attachments? (?:was|were) not added/.test(m.body)) return "files";
     return "status";
   }
+  // 1.20.34 (lib/helpdesk/desk-calendar-park): the desk's own parking lines ("Woke for the event on …", "Parked until …").
+  if (!split && /^(?:Woke\b|Parked until |Not parked: |The event moved to .* so the ticket now wakes|The event was cancelled\. Close this ticket|(?:The ticket moved to another team|The desk's prep window changed|Its team's business calendar changed), so the ticket now wakes)/.test(m.body)) return "park";
   if (!split) return "other";
   if (/^renamed the ticket/.test(what)) return "rename";
   if (/^(?:moved the ticket to|took the ticket out of its team)/.test(what)) return "team";
@@ -119,6 +122,7 @@ export function activityIcon(m: Line): HdActivityIcon {
   if (/^(?:set|cleared) the (?:sub-)?category/.test(what)) return "category";
   if (/^changed the priority/.test(what)) return "priority";
   if (/^(?:marked the event setup|added an event|changed the event|removed the event)/.test(what)) return "event";
+  if (/^(?:parked the ticket until|woke the ticket|changed the prep window|ended the parking)/.test(what)) return "park";
   if (/^(?:changed|set|cleared) the language/.test(what)) return "language";
   if (/^filled in the solve details/.test(what)) return "solve";
   if (/^(?:set|cleared) /.test(what)) return "field";

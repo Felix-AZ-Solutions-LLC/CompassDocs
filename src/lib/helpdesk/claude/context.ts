@@ -62,6 +62,8 @@ export async function ticketForClaude(user: User, t: HdTicket): Promise<{ ticket
       checklists: await checklistsForMcp(t.id),
       assets,
       assignable: agents.map((g) => ({ id: g.user_id, name: g.name })),
+      // 1.20.34 (lib/helpdesk/desk-calendar-park): parked until its event.
+      parked: t.parked_until && t.status === "on_hold" ? { until: new Date(t.parked_until).toISOString(), event_starts_at: d.event?.starts_at ?? null } : null,
     },
     notes: d.messages.filter((m) => m.kind === "internal").map((m) => m.body),
   };

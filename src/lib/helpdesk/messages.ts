@@ -83,6 +83,12 @@ export interface AddMessageInput {
   solve?: { answers?: unknown; fields?: import("./solve-requirements").SolveFieldPatch };
   /** 1.20.20: a system send an agent's action set off (an automation's macro): the reply lock is checked as theirs. */
   lockAs?: number | null;
+  /**
+   * 1.20.34 (lib/helpdesk/desk-calendar-park): a requester's message wakes a parked ticket. Not this one: an updated or
+   * cancelled meeting invite for the ticket's own event, from its organiser or requester (lib/helpdesk/inbound), which
+   * moves the event (the parking follows it) or cancels it (which wakes it with its own note).
+   */
+  keepParked?: boolean;
 }
 
 export interface AddMessageResult {
@@ -209,6 +215,11 @@ export async function addMessage(ticketId: number, input: AddMessageInput, ctx: 
     const r = await updateTicket(ticketId, { status: "open" }, actor, { ...ctx, fromAutomation: ctx.fromAutomation });
     reopened = status === "solved";
     status = r?.ticket.status ?? status;
+  } else if (asRequester && status === "on_hold" && res.ticket.parked_until && !input.keepParked) {
+    // 1.20.34: the requester (or someone copied) wrote: a ticket parked until its event comes back to open now, its
+    // clocks resumed, with an agents-only line. (On hold without parking stays on hold, as before.)
+    const w = await (await import("./desk-calendar-park")).wakeTicket(ticketId, { id: null, name: "Helpdesk" }, { why: "requester", origin: ctx.origin });
+    if (w) status = w.status;
   } else if (!held && !asRequester && input.then_status && input.then_status !== status) {
     // 1.20.5: a solve carries the dialog's ticket fields and closing answers into the same transaction as the status.
     const solves = solvesForChecklists(status, input.then_status);

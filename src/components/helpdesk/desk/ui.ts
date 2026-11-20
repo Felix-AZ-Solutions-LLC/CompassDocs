@@ -28,7 +28,19 @@ export const STATUS_SHORT: Record<HdStatus, string> = {
   pending: "Waiting",
 };
 
-export function statusChip(t: { status: HdStatus; in_workflow?: boolean }, short = false): { tone: ChipTone; label: string } {
+/** 1.20.34: what a parked ticket's status chip says (lib/helpdesk/desk-calendar-park). */
+export const HD_PARKED_LABEL = "Parked";
+
+/**
+ * The status chip. The status itself (On hold for a parked ticket too: the ticket header shows the Parked chip beside
+ * it); `opts.parked` is for the queue row only, whose one chip then reads Parked.
+ */
+export function statusChip(
+  t: { status: HdStatus; in_workflow?: boolean; parked_until?: string | null },
+  short = false,
+  opts: { parked?: boolean } = {}
+): { tone: ChipTone; label: string } {
+  if (opts.parked && t.parked_until && t.status === "on_hold") return { tone: "neutral", label: HD_PARKED_LABEL };
   if (t.in_workflow && t.status !== "solved" && t.status !== "closed") return { tone: "accent", label: HD_IN_WORKFLOW_LABEL };
   return { tone: STATUS_TONE[t.status], label: (short ? STATUS_SHORT : HD_STATUS_LABEL)[t.status] };
 }

@@ -47,6 +47,7 @@ const VIEW_LABEL: Record<string, string> = {
   workflow: "In a workflow",
   waiting: "Waiting",
   solved_week: "Solved this week",
+  parked: "Parked",
 };
 
 const ORIGIN_LABEL: Record<string, string> = { people: "Opened by people", automated: "Automated only" };
@@ -79,7 +80,8 @@ export function filterSummary(
   if (f.q) parts.push(`Contains "${f.q}"`);
   if (f.team) parts.push(teamName(f.team));
   if (f.created_within) parts.push(createdWithinLabel(f.created_within));
-  if (f.status_group === "open") parts.push("Not solved");
+  if (f.status_group === "open") parts.push(f.include_parked === "1" ? "Not solved, parked included" : "Not solved, parked left out");
+  if (f.status_group === "parked") parts.push("Parked");
   if (f.status) parts.push(HD_STATUS_LABEL[f.status as HdStatus] ?? f.status);
   if (f.priority) parts.push(`${HD_PRIORITY_LABEL[f.priority as HdPriority] ?? f.priority} priority`);
   if (f.assignee === "me") parts.push("Assigned to me");

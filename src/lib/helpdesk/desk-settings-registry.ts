@@ -212,9 +212,10 @@ export const DESK_SETTINGS_GROUPS: DeskSettingsGroup[] = [
             ] },
           { href: `${S}/calendars/test`, label: "Test a due time", icon: Timer, caps: ["sla.manage"], keywords: "test due time due date calculator when is it due" },
         ] },
-      { key: "event-calendar", label: "Event calendar", icon: CalendarDays, tabs: false, description: "Reminders about the events on tickets, and the calendar feed links.", keywords: "event calendar events reminders ical ics feed subscribe outlook google calendar", pages: [
+      { key: "event-calendar", label: "Event calendar", icon: CalendarDays, tabs: false, description: "Reminders about the events on tickets, holding tickets until their event, and the calendar feed links.", keywords: "event calendar events reminders park hold ical ics feed subscribe outlook google calendar", pages: [
           { href: `${S}/event-calendar`, label: "Event calendar", icon: CalendarDays, caps: ADMIN_CAPS, topics: [
               { anchor: "reminders", label: "Event reminders", keywords: "reminders before events setup complete" },
+              { anchor: "parking", label: "Holding tickets until the event", keywords: "park parked hold until the event prep window wake meeting invites requester reminder" },
               { anchor: "feed-links", label: "Calendar feed links", keywords: "ical ics feed subscribe outlook google private link revoke" },
             ] },
         ] },
