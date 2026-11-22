@@ -670,7 +670,7 @@ describe("skills and languages settings", () => {
     assert.equal(del.status, 200);
     assert.equal((await decisionOf(only.id)).kind, "team_mode");
     assert.equal((await decisionOf(only.id)).skills, undefined);
-    assert.match((await notesOf(only.id)).at(-1)!, new RegExp(`^The skill Gone ${STAMP} was removed, so this ticket now waits for the team's turn\.$`));
+    assert.match((await notesOf(only.id)).at(-1)!, new RegExp(`^The skill Gone ${STAMP} was removed, so this ticket now waits for the team's turn\\.$`));
     assert.deepEqual((await decisionOf(both.id)).skills, { language: "fr", skill_ids: [S.Mac], fallback: "queue" });
     assert.match((await notesOf(both.id)).at(-1)!, /was removed, so this ticket no longer needs it while it waits\.$/);
 

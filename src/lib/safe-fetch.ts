@@ -77,20 +77,28 @@ function ipBlocked(ip: string, blockPrivate: boolean): boolean {
     return false;
   }
   if (v === 6) {
-    const low = ip.toLowerCase();
-    if (low === "::1" || low === "::") return true; // loopback / unspecified
-    if (low.startsWith("fe8") || low.startsWith("fe9") || low.startsWith("fea") || low.startsWith("feb"))
-      return true; // link-local fe80::/10
-    if (low.startsWith("::ffff:")) return ipBlocked(low.slice(7), blockPrivate); // v4-mapped
-    if (blockPrivate && (low.startsWith("fc") || low.startsWith("fd"))) return true; // ULA
+    // Judged on the address's eight words, never its spelling: the URL
+    // parser writes [::ffff:127.0.0.1] as ::ffff:7f00:1, so a text prefix
+    // can't find the IPv4 inside.
+    const words = expandV6(ip.toLowerCase());
+    if (!words) return true; // unparseable: refuse
+    const zero = (from: number, to: number) => words.slice(from, to).every((w) => w === 0);
+    const v4 = () => v4FromWords(words[6], words[7]);
+    // ::ffff:0:0/96, IPv4-mapped: the IPv4 address it carries.
+    if (zero(0, 5) && words[5] === 0xffff) return ipBlocked(v4(), blockPrivate);
+    if (zero(0, 6)) {
+      if (words[6] === 0 && words[7] <= 1) return true; // :: unspecified, ::1 loopback
+      // ::/96, the deprecated IPv4-compatible form: never a public route,
+      // and refused outright when what it carries is loopback/link-local.
+      return blockPrivate || ipBlocked(v4(), blockPrivate);
+    }
+    if ((words[0] & 0xffc0) === 0xfe80) return true; // link-local fe80::/10
+    if (blockPrivate && (words[0] & 0xffc0) === 0xfec0) return true; // site-local fec0::/10 (deprecated)
+    if (blockPrivate && (words[0] & 0xfe00) === 0xfc00) return true; // ULA fc00::/7
     // 1.20.29: IPv4 carried inside IPv6. NAT64 (64:ff9b::/96, the IPv4 in
     // the last 32 bits) and 6to4 (2002::/16, the IPv4 in bits 16-47) reach
     // the IPv4 address they carry, so they are judged as that address.
-    const words = expandV6(low);
-    if (!words) return true; // unparseable: refuse
-    if (words[0] === 0x64 && words[1] === 0xff9b && words.slice(2, 6).every((w) => w === 0)) {
-      return ipBlocked(v4FromWords(words[6], words[7]), blockPrivate);
-    }
+    if (words[0] === 0x64 && words[1] === 0xff9b && zero(2, 6)) return ipBlocked(v4(), blockPrivate);
     if (words[0] === 0x2002) return ipBlocked(v4FromWords(words[1], words[2]), blockPrivate);
     return false;
   }
@@ -161,7 +169,10 @@ async function checkTarget(rawUrl: string): Promise<{ url: URL; resolved: { addr
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`Blocked URL scheme: ${url.protocol}`);
   }
-  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  // An IPv6 literal's hostname keeps its brackets ("[::1]"), which isIP()
+  // does not take: unbracketed, it is judged as the address it is, so a
+  // proxied request to [::1] or [fd00::1] can't skip the literal-IP check.
+  const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1").replace(/\.$/, "");
   if (BLOCKED_HOSTNAMES.has(host) || host === "localhost" || host.endsWith(".localhost")) {
     throw new Error(`Blocked host: ${host}`);
   }

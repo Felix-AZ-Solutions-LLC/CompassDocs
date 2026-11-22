@@ -185,14 +185,21 @@ export function resetApiAuthFailsForTests(): void {
   readAudits.clear();
 }
 
-// One recorded successful GET per token and route per minute.
+// One recorded successful GET per token and route per 60 seconds, counted
+// from the last recorded one (a clock-minute bucket recorded two when a
+// burst crossed the minute).
 const readAudits = new Map<string, number>();
 function auditThisRead(key: string, now = Date.now()): boolean {
-  const minute = Math.floor(now / 60_000);
-  if (readAudits.get(key) === minute) return false;
-  readAudits.set(key, minute);
-  if (readAudits.size > 20_000) for (const [k, v] of readAudits) if (v < minute) readAudits.delete(k);
+  const last = readAudits.get(key);
+  if (last !== undefined && now - last < 60_000) return false;
+  readAudits.set(key, now);
+  if (readAudits.size > 20_000) for (const [k, v] of readAudits) if (now - v >= 60_000) readAudits.delete(k);
   return true;
+}
+
+/** Tests only: auditThisRead at a given time. */
+export function auditThisReadAtForTests(key: string, now: number): boolean {
+  return auditThisRead(key, now);
 }
 
 function bearer(req: Request): string {

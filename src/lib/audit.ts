@@ -4,10 +4,11 @@
 //
 // Server-only: uses the Postgres pool.
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { isIP } from "node:net";
 import { pool, getAckDecision } from "./db";
 import { logEvent } from "./log";
+import { getMasterKey } from "./secretbox";
 import type { AckOutcomeInfo, SessionUser } from "./types";
 
 export interface AuditActor {
@@ -130,9 +131,25 @@ function redact(v: unknown, depth = 0): unknown {
  */
 const TYPED_IDENTIFIER_ACTIONS = new Set(["auth.login_failed", "auth.lockout", "auth.lookup_throttled"]);
 
+/** The fingerprint key: undefined until first needed, null once deriving it failed (not retried per sign-in). */
+let fingerprintKey: Buffer | null | undefined;
+
 function typedFingerprint(v: string | null): string | null {
   if (v == null || v === "system") return v;
-  return `typed:${createHash("sha256").update(v.toLowerCase().trim()).digest("hex").slice(0, 12)}`;
+  // Keyed (HMAC under a key derived from the master key), not a bare hash: a
+  // plain SHA-256 of a password typed into the username field could be
+  // guessed back from the log by anyone with a wordlist. Without a usable
+  // master key the field carries no fingerprint at all; that outcome is
+  // kept, so a burst of failed sign-ins doesn't re-read the key file each time.
+  if (fingerprintKey === undefined) {
+    try {
+      fingerprintKey = createHmac("sha256", getMasterKey()).update("compassdocs-audit-typed-v1").digest();
+    } catch {
+      fingerprintKey = null;
+    }
+  }
+  if (!fingerprintKey) return "typed:unavailable";
+  return `typed:${createHmac("sha256", fingerprintKey).update(v.toLowerCase().trim()).digest("hex").slice(0, 12)}`;
 }
 
 export function auditLogFields(entry: AuditEntry): Record<string, unknown> {

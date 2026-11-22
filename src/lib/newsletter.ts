@@ -37,7 +37,10 @@ const FROM_SETTING = "newsletter_from_addresses";
 const FROM_RE = /^(?:[^<>@\n]{1,80}<[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+>|[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+)$/;
 
 export function isValidFromAddress(entry: string): boolean {
-  return FROM_RE.test(entry.trim());
+  // Length first (an 80-character name plus a 254-character address): FROM_RE
+  // backtracks quadratically on a long run of dots.
+  const e = entry.trim();
+  return e.length <= 340 && FROM_RE.test(e);
 }
 
 export async function listNewsletterFromAddresses(): Promise<string[]> {

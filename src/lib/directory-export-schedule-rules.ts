@@ -23,7 +23,7 @@ const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Frida
 
 export function parseRecipientList(raw: unknown): string[] {
   const text = Array.isArray(raw) ? raw.map(String).join(",") : String(raw ?? "");
-  return [...new Set(text.split(/[,;\s]+/).map((s) => s.trim().toLowerCase()).filter((s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s)))].slice(0, 20);
+  return [...new Set(text.split(/[,;\s]+/).map((s) => s.trim().toLowerCase()).filter((s) => s.length <= 254 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s)))].slice(0, 20);
 }
 
 export function sanitizeSchedule(raw: unknown): ExportSchedule {

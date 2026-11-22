@@ -5,6 +5,7 @@ import {
   chatAnswer,
   chatBaseUrl,
   formatSlack,
+  slackResponseUrl,
 } from "@/lib/chat-ask";
 
 export const dynamic = "force-dynamic";
@@ -29,7 +30,8 @@ export async function POST(req: Request) {
 
   const params = new URLSearchParams(raw);
   const question = (params.get("text") || "").trim();
-  const responseUrl = params.get("response_url") || "";
+  // Only ever Slack's host, rebuilt from a constant (never the raw value).
+  const responseUrl = slackResponseUrl(params.get("response_url") || "");
 
   if (!question) {
     return NextResponse.json({
@@ -37,7 +39,7 @@ export async function POST(req: Request) {
       text: "Ask me something — e.g. `/askdocs how do we roll back a deploy?`",
     });
   }
-  if (!responseUrl.startsWith("https://hooks.slack.com/")) {
+  if (!responseUrl) {
     return new Response("bad response_url", { status: 400 });
   }
 

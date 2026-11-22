@@ -20,14 +20,18 @@
 // Server-only: uses the Postgres pool.
 
 import { pool, getSetting, setSetting } from "./db";
+import { logEvent } from "./log";
 import type { ProviderKey } from "./identity-provider";
 import { buildPeopleIndex, MICROSOFT_RESOLVER_PROPERTIES } from "./directory-people-resolve";
 import { normalizePhoto } from "./directory-photos";
 import { parseVisibility, parseColumnVisibility, type Visibility, type ColumnVisibility } from "./directory-visibility";
 import {
   applyMapping,
+  extractPatterns,
   legacyPathMapping,
+  legacyPatterns,
   mappingGroupIds,
+  newPatternProblem,
   mappingProperties,
   parseFieldMappings,
   type FieldMappings,
@@ -539,6 +543,27 @@ export function effectiveMapping(field: DirectoryField, provider: ProviderKey): 
   return field.mappings[provider] ?? null;
 }
 
+/**
+ * One warning per field whose mapping for `provider` still has a pattern
+ * only the legacy engine runs (lib/directory-mapping compilePattern): it
+ * keeps working, on the first LEGACY_VALUE_MAX characters of each value,
+ * until an admin rewrites it.
+ */
+function warnLegacyPatterns(fields: DirectoryField[], provider: ProviderKey): void {
+  for (const f of fields) {
+    const legacy = legacyPatterns(f.mappings[provider]);
+    if (legacy.length) {
+      logEvent("warn", "directory.legacy_pattern", {
+        field: f.label,
+        key: f.key,
+        provider,
+        patterns: legacy,
+        note: "Runs on the backtracking engine against the first 1024 characters of each value; rewrite it without lookarounds or backreferences in Directory → Fields.",
+      });
+    }
+  }
+}
+
 export interface FieldInput {
   key?: string;
   label?: string;
@@ -583,6 +608,9 @@ export async function createField(input: FieldInput & { label: string }): Promis
   if (!KEY_RE.test(key)) throw new Error("Field key must be 1–40 chars of a–z, 0–9, _");
   if (RESERVED_FIELD_KEYS.has(key)) throw new Error(`"${key}" is a built-in column — pick another key.`);
   const kind: FieldKind = input.kind && FIELD_KINDS.includes(input.kind) ? input.kind : "text";
+  // A new pattern must run on the linear-time engine (RE2): refused by name, never dropped.
+  const patternProblem = newPatternProblem(input.mappings);
+  if (patternProblem) throw new Error(patternProblem);
   const mappings = input.mappings === undefined ? {} : parseFieldMappings(input.mappings);
   // A legacy caller sends graph_path alone; fold it into the mappings blob so
   // there is one source of truth to read back.
@@ -635,6 +663,11 @@ export async function updateField(id: number, fields: FieldInput): Promise<Direc
   const cur = parseField(existing);
   // Built-in rows keep their key and kind; everything else is the admin's.
   const kind: FieldKind = cur.builtin ? cur.kind : fields.kind && FIELD_KINDS.includes(fields.kind) ? fields.kind : cur.kind;
+  // A pattern already stored on this field passes unchanged (a rename, a
+  // reorder, the other provider's save); a new or edited one must compile
+  // in RE2, refused by name rather than dropped.
+  const patternProblem = newPatternProblem(fields.mappings, extractPatterns(cur.mappings));
+  if (patternProblem) throw new Error(patternProblem);
   const mappings = fields.mappings === undefined ? cur.mappings : parseFieldMappings(fields.mappings);
   if (fields.mappings === undefined) {
     if (fields.graph_path !== undefined) {
@@ -1273,6 +1306,7 @@ export async function replaceProviderPeople(
   const maxFraction = opts?.allowRemovals ? 1 : opts?.maxDeleteFraction ?? 0.5;
   const provider = PROVIDER_OF_SOURCE[source];
   const fields = await listFields();
+  if (!opts?.dryRun) warnLegacyPatterns(fields, provider);
   // The diff first, from what is stored now: a dry run stops here and shows
   // it; a real run carries it into the report.
   const preview = await previewProviderPeople(source, people, fields);
@@ -1474,6 +1508,7 @@ export async function reapplyMappings(): Promise<{ updated: number; unresolved: 
     await client.query("BEGIN");
     for (const source of ["graph", "google"] as const) {
       const provider = PROVIDER_OF_SOURCE[source];
+      warnLegacyPatterns(fields, provider);
       const rows = await client.query<{ id: number; provider_record: ProviderRecord | null }>(
         "SELECT id, provider_record FROM directory_people WHERE source = $1 AND provider_record IS NOT NULL",
         [source]

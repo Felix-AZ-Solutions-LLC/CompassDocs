@@ -2,7 +2,7 @@ import { hybridRetrieveForAnswer } from "./embeddings";
 import { searchPeopleForAnswer } from "./directory";
 import type { DirectoryPerson } from "./directory";
 import { AiRefusalError, aiAvailable, chatComplete } from "./ai-config";
-import type { Document } from "./types";
+import { DOC_TYPE_LABEL, type DocType, type Document } from "./types";
 import type { SpaceScope } from "./space-scope";
 import type { FindScope } from "./handbook-visibility";
 
@@ -252,7 +252,10 @@ const TONE_WORDS: Record<WriteTone, string> = {
 };
 
 function writeSystem(action: WriteAction, tone: WriteTone, docType: string): string {
-  const kind = docType ? `The document is a ${docType}. ` : "";
+  // Only a known document type reaches the system prompt, as its fixed label:
+  // the request's docType is client-supplied text (CodeQL js/system-prompt-injection).
+  const label = Object.prototype.hasOwnProperty.call(DOC_TYPE_LABEL, docType) ? DOC_TYPE_LABEL[docType as DocType] : "";
+  const kind = label ? `The document type is ${label}. ` : "";
   switch (action) {
     case "draft":
       return `You are a writing assistant for a team's internal documentation. ${kind}From the title alone, produce a well-structured STARTER DRAFT in Markdown: sensible headings and a few bullet points or short sentences the author can fill in. Use [placeholders] for anything specific you can't know (numbers, names, systems). Do not fabricate real details.\n${RULES}`;

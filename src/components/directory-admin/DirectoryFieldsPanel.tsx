@@ -6,13 +6,14 @@
 // data), and the row itself — are what turn "data mapping to custom fields"
 // into something an office manager can drive.
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { buttonClass } from "@/components/Button";
+import { Chip } from "@/components/Chip";
 import { confirmDialog } from "@/components/Dialog";
 import { EntityPicker } from "@/components/EntityPicker";
 import { Plus, Sparkles, Trash2 } from "lucide-react";
 import type { DirectoryField, DirectoryPerson } from "@/lib/directory";
-import { describeMapping, parseMapping, type Mapping } from "@/lib/directory-mapping";
+import { describeMapping, extractPatterns, legacyPatterns, newPatternProblem, parseMapping, patternProblem, type Mapping } from "@/lib/directory-mapping";
 import { CHIP_COLORS, OPTION_HEADS_LIMIT, displayValue, matchOption, rawValue, type FieldOption } from "@/lib/directory-display";
 import { Field, FormError, SectionEmpty, Select, TextInput, Toggle } from "@/components/form";
 import { toast } from "@/components/Toasts";
@@ -48,6 +49,10 @@ const GOOGLE_PATHS = [
   "relations.value", "name.givenName", "name.familyName", "primaryEmail", "customSchemas.HR.employee_id",
 ];
 
+/** Said wherever a stored pattern only the legacy engine runs is shown (the table's chip, the editor's help). */
+const LEGACY_PATTERN_NOTE =
+  "Saved before patterns had to run on the safe engine: it still works, on the first 1,024 characters of each value. Rewrite it without lookarounds or backreferences.";
+
 const KIND_LABEL: Record<string, string> = { text: "Text", choice: "Choice", people: "People", date: "Date" };
 const DISPLAY_LABEL: Record<string, string> = { field: "Text", tag: "Chips", phone: "Phone" };
 
@@ -63,11 +68,14 @@ function MappingRow({
   onChange,
   suggestions,
   allowNested = true,
+  patternError,
 }: {
   value: Mapping | undefined;
   onChange: (m: Mapping | undefined) => void;
   suggestions: string[];
   allowNested?: boolean;
+  /** The inline error for an extract pattern (null: none). */
+  patternError?: (pattern: string) => string | null;
 }) {
   const mode = modeOf(value);
   const listId = useMemo(() => `paths-${Math.random().toString(36).slice(2, 8)}`, []);
@@ -111,9 +119,19 @@ function MappingRow({
       )}
       {value?.kind === "extract" && (
         <div className="grid gap-2 sm:grid-cols-[1fr_1fr_5rem]">
-          <TextInput className="font-mono text-xs" list={listId} placeholder="property, e.g. businessPhones" value={value.path} onChange={(e) => set({ ...value, path: e.target.value })} spellCheck={false} />
-          <TextInput className="font-mono text-xs" placeholder="pattern, e.g. x(\d{2,5})$" value={value.pattern} onChange={(e) => set({ ...value, pattern: e.target.value })} spellCheck={false} />
-          <TextInput className="font-mono text-xs" type="number" min={0} placeholder="group" value={value.group ?? 1} onChange={(e) => set({ ...value, group: Number(e.target.value) })} aria-label="Capture group" />
+          <Field label="Property">
+            <TextInput className="font-mono text-xs" list={listId} placeholder="e.g. businessPhones" value={value.path} onChange={(e) => set({ ...value, path: e.target.value })} spellCheck={false} />
+          </Field>
+          <Field
+            label="Pattern"
+            error={patternError?.(value.pattern) ?? undefined}
+            help={legacyPatterns(value).length ? <span className="ink-warn">{LEGACY_PATTERN_NOTE}</span> : undefined}
+          >
+            <TextInput className="font-mono text-xs" placeholder="e.g. x(\d{2,5})$" value={value.pattern} onChange={(e) => set({ ...value, pattern: e.target.value })} spellCheck={false} />
+          </Field>
+          <Field label="Capture group">
+            <TextInput className="font-mono text-xs" type="number" min={0} value={value.group ?? 1} onChange={(e) => set({ ...value, group: Number(e.target.value) })} />
+          </Field>
         </div>
       )}
       {value?.kind === "first" && (
@@ -131,6 +149,7 @@ function MappingRow({
                   }}
                   suggestions={suggestions}
                   allowNested={false}
+                  patternError={patternError}
                 />
               </div>
               <button type="button" onClick={() => { const of = value.of.filter((_, j) => j !== i); set(of.length ? { kind: "first", of } : undefined); }} className="mt-2 text-slate-400 hover:text-red-600" data-tt="Remove" aria-label="Remove fallback">
@@ -211,9 +230,17 @@ function MappingEditor({
       ? provider === "microsoft" ? MICROSOFT_PEOPLE_PATHS : GOOGLE_PEOPLE_PATHS
       : provider === "microsoft" ? MICROSOFT_PATHS : GOOGLE_PATHS;
   const valid = mapping ? parseMapping(mapping) : null;
+  // A pattern already stored on the field may stay as it is; a new or edited
+  // one must run on the safe engine (RE2), the rule the API enforces.
+  const storedPatterns = useMemo(() => extractPatterns(field.mappings), [field.mappings]);
+  const problem = mapping ? newPatternProblem(mapping, storedPatterns) : null;
+  const [tried, setTried] = useState(false);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const patternError = (p: string) =>
+    tried && p.trim() && !storedPatterns.includes(p.trim()) ? patternProblem(p) : null;
 
   async function runPreview() {
-    if (!valid) return;
+    if (!valid || problem) return;
     setBusy(true);
     const r = await jsonFetch("/api/admin/directory/fields/preview", { method: "POST", body: JSON.stringify({ provider, mapping: valid }) });
     setBusy(false);
@@ -225,6 +252,11 @@ function MappingEditor({
   }
 
   async function save() {
+    if (problem) {
+      setTried(true);
+      requestAnimationFrame(() => editorRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus());
+      return;
+    }
     if (mapping && !valid) {
       toast("error", "That mapping isn't complete.");
       return;
@@ -248,7 +280,7 @@ function MappingEditor({
   }
 
   return (
-    <div className="space-y-3">
+    <div ref={editorRef} className="space-y-3">
       {field.kind === "people" && provider === "microsoft" && (
         <p className="text-xs text-slate-500">
           Entra ID has no assistant attribute, so there is nothing named “assistant” to pick. Map this field to wherever your
@@ -257,7 +289,7 @@ function MappingEditor({
           <code className="font-mono"> manager.mail</code> maps the manager relationship. Not mapped means links are made by hand in People.
         </p>
       )}
-      <MappingRow value={mapping} onChange={(m) => { setMapping(m); setPreview(null); }} suggestions={suggestions} />
+      <MappingRow value={mapping} onChange={(m) => { setMapping(m); setPreview(null); }} suggestions={suggestions} patternError={patternError} />
       {field.kind === "people" && mapping && (
         <Field label="What the value names" help="Emails, sign-in names, object ids, display names (either order), or distinguished names — separated by commas or semicolons. A name two people share links nobody and is reported.">
           <Select value={direction} onChange={(e) => setDirection(e.target.value as "out" | "in")} className="w-full">
@@ -267,7 +299,7 @@ function MappingEditor({
         </Field>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={runPreview} disabled={!valid || busy} className={buttonClass("secondary")}>
+        <button type="button" onClick={runPreview} disabled={!valid || !!problem || busy} className={buttonClass("secondary")}>
           <span className="inline-flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5" /> Preview</span>
         </button>
         <button type="button" onClick={save} disabled={busy} className={buttonClass("primary")}>
@@ -276,7 +308,7 @@ function MappingEditor({
         <button type="button" onClick={loadProps} className={buttonClass("secondary")} aria-expanded={propsOpen}>
           What the records hold
         </button>
-        {mapping && !valid && <span className="text-xs ink-warn">Incomplete — fill in every part.</span>}
+        {mapping && !valid && !problem && <span className="text-xs ink-warn">Incomplete — fill in every part.</span>}
       </div>
       {propsOpen && props && (
         <div className="rounded-lg bg-slate-50 p-3 text-xs">
@@ -736,6 +768,11 @@ function FieldRow({
               <button type="button" className={`${linkBtn} text-left`} onClick={() => setOpen(open?.panel === "mapping" && open.provider === p ? null : { id: f.id, panel: "mapping", provider: p })}>
                 {m ? <span className="font-mono text-2xs text-slate-600">{describeMapping(m)}</span> : <span className="text-slate-500">not mapped</span>}
               </button>
+              {legacyPatterns(m).length > 0 && (
+                <Chip tone="warn" size="sm" className="ml-1.5" data-tt={LEGACY_PATTERN_NOTE} data-tt-wrap="" tabIndex={0}>
+                  Rewrite pattern
+                </Chip>
+              )}
             </td>
           );
         })}

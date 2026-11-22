@@ -189,7 +189,7 @@ async function searchTickets(a: Record<string, any>, ctx: ToolCtx): Promise<Tool
     ? found
         .map(
           (t) =>
-            `<result number="${t.number}" status="${t.status}" team="${quote(t.team_name ?? "none")}" updated="${t.updated_at}">\n<subject written_by="requester">${quote(t.subject)}</subject>\n<requester>${quote(t.requester_name ?? "")}</requester>${t.tags?.length ? `\n<tags>${quote(t.tags.join(", "))}</tags>` : ""}\n</result>`
+            `<result number="${t.number}" status="${t.status}" team="${quote(t.team_name ?? "none").replace(/"/g, "&quot;")}" updated="${t.updated_at}">\n<subject written_by="requester">${quote(t.subject)}</subject>\n<requester>${quote(t.requester_name ?? "")}</requester>${t.tags?.length ? `\n<tags>${quote(t.tags.join(", "))}</tags>` : ""}\n</result>`
         )
         .join("\n")
     : "No matching tickets in the agent's queues.";

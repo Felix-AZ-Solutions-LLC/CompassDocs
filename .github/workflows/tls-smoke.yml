@@ -46,6 +46,10 @@ on:
       - ".github/workflows/tls-smoke.yml"
   workflow_dispatch:
 
+# Checkout only; the stack is built and tested locally on the runner.
+permissions:
+  contents: read
+
 jobs:
   tls-smoke:
     runs-on: ubuntu-latest

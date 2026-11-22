@@ -21,8 +21,14 @@ export interface ParsedSearchQuery {
 
 const OPERATORS = new Set(["space", "type", "tag", "author", "status"]);
 
-export function parseSearchQuery(raw: string): ParsedSearchQuery {
+/** A query is read up to this many characters (the semantic side embeds at most 1000 too). */
+export const SEARCH_QUERY_MAX = 1000;
+
+export function parseSearchQuery(input: string): ParsedSearchQuery {
   const filters: SearchFilters = {};
+  // Capped before the operator regex, which rescans a long run of word
+  // characters with no colon from every position (quadratic).
+  const raw = input.length > SEARCH_QUERY_MAX ? input.slice(0, SEARCH_QUERY_MAX) : input;
   // key:"quoted value" | key:bare-value
   const re = /(\w+):(?:"([^"]*)"|(\S+))/g;
   const text = raw
