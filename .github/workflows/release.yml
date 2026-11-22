@@ -31,7 +31,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     # Holds LEGACY_GHCR_TOKEN; deployable from main only.
-    environment: "CompassDocs legacy image publishing"
+    environment: ghcr-legacy
     # Its own group, not docker-publish's: GitHub keeps one waiting run per
     # group, so sharing would let a release cancel a waiting merge job. A
     # notes-only run touches no image and gets a group of its own.

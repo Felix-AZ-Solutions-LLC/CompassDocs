@@ -9,7 +9,14 @@
 #
 # Moving to the org: RELEASING.md in Felix-AZ-Solutions-LLC/CompassDocs.
 
-LEGACY_ENV_NAME="CompassDocs legacy image publishing"
+# The environment holding LEGACY_GHCR_TOKEN. Core's is "ghcr-legacy";
+# compassdocs-ee's copy of this file names its own ("CompassDocs legacy image
+# publishing"). Environment secrets don't move with a rename.
+LEGACY_ENV_NAME="ghcr-legacy"
+# Until release B points installs at $IMAGE, nobody pulls it, so a private
+# org package is only a warning (the org may not allow public packages yet).
+# Release B sets this to true: from then on installs depend on it.
+ORG_PUBLIC_REQUIRED=false
 # The only scopes LEGACY_GHCR_TOKEN may have (write:packages brings read).
 LEGACY_ALLOWED_SCOPES="write:packages read:packages"
 
@@ -160,6 +167,10 @@ check_public_pull() {
       if [ "$code" = 200 ]; then DIGESTS["$path:$t"]="$digest"; else bad="$bad $t($code)"; fi
     done
     if [ -z "$bad" ]; then continue; fi
+    if [ "$path" = "$IMAGE" ] && [ "$ORG_PUBLIC_REQUIRED" != true ]; then
+      echo "::warning title=$IMAGE is not public yet::Anonymous pull failed for:$bad. Nothing pulls it until release B; before then, make the package public (Org settings → Packages → allow Public; then Org → Packages → ${IMAGE##*/} → Package settings → Change visibility → Public)."
+      continue
+    fi
     fail=1
     if [ "$path" = "$IMAGE" ]; then
       echo "::error title=$IMAGE is not public::Anonymous pull failed for:$bad. Make the package public once (Org → Packages → ${IMAGE##*/} → Package settings → Change visibility → Public). $RERUN"
