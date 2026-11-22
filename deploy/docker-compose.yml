@@ -1,7 +1,7 @@
 # CompassDocs — production stack (app + Postgres).
 #
 # Quickest start (from a fresh directory):
-#   curl -fsSL https://raw.githubusercontent.com/mattny20/CompassDocs/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Felix-AZ-Solutions-LLC/CompassDocs/main/install.sh | bash
 #
 # Or manually: put this file and a .env (see deploy/.env.example) in a folder, then:
 #   docker compose up -d          # start

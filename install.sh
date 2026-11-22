@@ -2,8 +2,8 @@
 #
 # CompassDocs one-command installer.
 #
-#   Community:   curl -fsSL https://raw.githubusercontent.com/mattny20/CompassDocs/main/install.sh | bash
-#   Enterprise:  curl -fsSL https://raw.githubusercontent.com/mattny20/CompassDocs/main/install.sh | COMPASSDOCS_EDITION=enterprise bash
+#   Community:   curl -fsSL https://raw.githubusercontent.com/Felix-AZ-Solutions-LLC/CompassDocs/main/install.sh | bash
+#   Enterprise:  curl -fsSL https://raw.githubusercontent.com/Felix-AZ-Solutions-LLC/CompassDocs/main/install.sh | COMPASSDOCS_EDITION=enterprise bash
 #   With HTTPS:  add COMPASSDOCS_TLS=1 to serve on your domain via a bundled
 #                Caddy reverse proxy (ports 80/443). Set the domain + HTTPS mode
 #                right in the setup wizard — a cert is obtained automatically.
@@ -16,7 +16,7 @@
 # setup wizard (or Settings → License), or pass COMPASSDOCS_LICENSE_KEY=... here.
 set -euo pipefail
 
-REPO_RAW="https://raw.githubusercontent.com/mattny20/CompassDocs/main"
+REPO_RAW="https://raw.githubusercontent.com/Felix-AZ-Solutions-LLC/CompassDocs/main"
 APP_DIR="${COMPASSDOCS_DIR:-compassdocs}"
 
 # Edition: community (default) or enterprise. TLS: bundled Caddy proxy on 80/443.

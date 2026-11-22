@@ -1,6 +1,6 @@
 # Deploy CompassDocs to Azure
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fmattny20%2FCompassDocs%2Fmain%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2Fmattny20%2FCompassDocs%2Fmain%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FFelix-AZ-Solutions-LLC%2FCompassDocs%2Fmain%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FFelix-AZ-Solutions-LLC%2FCompassDocs%2Fmain%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
 
 One click opens a guided wizard in the Azure portal that deploys the full
 CompassDocs stack — the app, Postgres, and (optionally) a Caddy HTTPS proxy —
@@ -46,7 +46,7 @@ path as every other deployment.
   data disk's `/etc/fstab` line without `UUID=`, so the disk never mounted at
   boot and Docker started on an empty `/var/lib/docker`. Re-run the installer
   as root, which repairs it (`cd /opt && curl -fsSL
-  https://raw.githubusercontent.com/mattny20/CompassDocs/main/install.sh |
+  https://raw.githubusercontent.com/Felix-AZ-Solutions-LLC/CompassDocs/main/install.sh |
   sudo COMPASSDOCS_TLS=1 bash`, adding `COMPASSDOCS_EDITION=enterprise` for
   Enterprise), or follow the manual repair in the docs (Self-hosting →
   Azure). Your data is on the disk and comes back once it is mounted. The

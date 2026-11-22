@@ -478,7 +478,7 @@ function EntraSection({
       {!entra.bundled ? (
         <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-500">
           This is the community edition — Entra group sync ships in the enterprise image
-          (ghcr.io/mattny20/compassdocs-ee).
+          (compassdocs-ee).
         </p>
       ) : !entra.licensed ? (
         <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-500">

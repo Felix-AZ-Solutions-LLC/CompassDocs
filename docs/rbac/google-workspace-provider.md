@@ -929,7 +929,7 @@ Match Microsoft exactly — there is no principled reason for the two providers 
 1. **Config modules live in core.** `sso-config.ts:1-4`, `saml-config.ts:2-3` and `directory-config.ts:1-3` all say the same thing: "Lives in the core so the settings survive edition switches and the admin UI can manage them." `google-config.ts` must too. A customer who downgrades and re-upgrades must not have to re-paste a service-account key.
 
 2. **`featureEnabled` is a double gate** (`ee.ts:20-27`): the code must be in the build **and** the licence must grant it. The admin panel must distinguish the three states the way `GroupsPanel.tsx:432-447` and `DirectorySettings.tsx:263-289` already do:
-   - `!bundled` → "This is the community edition — Google Workspace sync ships in the enterprise image (ghcr.io/mattny20/compassdocs-ee)."
+   - `!bundled` → "This is the community edition — Google Workspace sync ships in the enterprise image (compassdocs-ee)."
    - `bundled && !licensed` → "Your licence doesn't include the `directory_sync` entitlement."
    - `bundled && licensed && !configured` → the setup checklist.
 

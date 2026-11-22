@@ -1,9 +1,20 @@
 name: Publish Docker image
 
-# Build and push a container image to GitHub Container Registry (GHCR):
-#   - every push to main       -> tags :latest and :main-<sha>
-#   - every version tag vX.Y.Z -> tags :X.Y.Z, :X.Y, :latest
+# Build and push a container image to GitHub Container Registry (GHCR) on
+# every push to main:
+#   - merge:  tags the build :main-<sha>
+#   - latest: then points :latest at main's head build (whichever that is)
+# Version tags (:X.Y.Z, :X.Y) come only from release.yml, which retags an
+# existing main-<sha>; this workflow never builds a tag ref.
 # Users then install/update by pulling ghcr.io/<owner>/compassdocs.
+#
+# The repo moved from the mattny20 account to the Felix-AZ-Solutions-LLC org,
+# and GHCR can't move packages between accounts. Installs pull
+# ghcr.io/mattny20/compassdocs, so both jobs also copy what they push to that
+# legacy path (same digest), with skopeo: GITHUB_TOKEN reads the org path,
+# mattny20's LEGACY_GHCR_TOKEN (in the "CompassDocs legacy image publishing"
+# environment) writes the legacy one. The shared shell is in
+# .github/scripts/legacy-ghcr.sh. See RELEASING.md, "Moving to the org".
 #
 # Each architecture is built on its OWN native runner (amd64 on ubuntu-latest,
 # arm64 on ubuntu-24.04-arm) and pushed by digest; a final job stitches the
@@ -12,12 +23,20 @@ name: Publish Docker image
 on:
   push:
     branches: [main]
-    tags: ["v*.*.*"]
   workflow_dispatch:
+
+# bash -eo pipefail for every run step (GitHub's default, bash -e, lets a
+# failing command early in a pipeline go unnoticed).
+defaults:
+  run:
+    shell: bash
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }} # e.g. mattny20/CompassDocs (lowercased in steps)
+  IMAGE_NAME: ${{ github.repository }} # e.g. Felix-AZ-Solutions-LLC/CompassDocs (lowercased in steps)
+  # Pre-move image path that installs pull; kept in step with IMAGE.
+  LEGACY_IMAGE: ghcr.io/mattny20/compassdocs
+  LEGACY_USER: mattny20
 
 jobs:
   build:
@@ -85,18 +104,35 @@ jobs:
           name: digests-${{ env.PLATFORM_PAIR }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
-          retention-days: 1
+          # Long enough to re-run a failed merge job days later.
+          retention-days: 14
 
+  # Pushes this build as :main-<sha> at both paths. No concurrency group:
+  # each run writes its own tag, so runs can overlap, and none can be
+  # cancelled while waiting (release.yml needs every main-<sha> it may tag).
   merge:
-    name: Merge manifest & push tags
+    name: Merge manifest & push main-<sha>
     runs-on: ubuntu-latest
     needs: [build]
+    # Only main builds get tags; a dispatch from another branch just builds.
+    if: github.ref == 'refs/heads/main'
+    # Holds LEGACY_GHCR_TOKEN; deployable from main only.
+    environment: "CompassDocs legacy image publishing"
     permissions:
       contents: read
       packages: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    env:
+      RERUN: "Then use Re-run failed jobs on this run (safe: it reuses this run's builds and only writes this build's main-<sha>)."
     steps:
       - name: Prepare
         run: echo "IMAGE=${REGISTRY}/${IMAGE_NAME,,}" >> "$GITHUB_ENV"
+
+      - name: Checkout (shared scripts)
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
 
       - name: Download digests
         uses: actions/download-artifact@v8
@@ -108,16 +144,26 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
+      # flavor latest=false: metadata-action's default (latest=auto) would
+      # add :latest by itself; the latest job below owns that tag.
       - name: Compute image tags
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
+          flavor: latest=false
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=main-,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Name this build's tag
+        id: tag
+        run: |
+          mapfile -t TAGS < <(jq -r '.tags[] | sub("^.*:"; "")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          if [ "${#TAGS[@]}" -ne 1 ] || [[ "${TAGS[0]}" != main-* ]]; then
+            echo "::error::Expected exactly one main-<sha> tag, got: ${TAGS[*]:-none}."
+            exit 1
+          fi
+          echo "tag=${TAGS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         uses: docker/login-action@v4
@@ -126,7 +172,47 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # A rebuild of the same commit ("Re-run all jobs", or a dispatch) gives
+      # new digests, and :latest or version tags may already point at the
+      # first build. So an existing main-<sha> is only accepted if it is
+      # this run's build (same per-arch images, as after "Re-run failed
+      # jobs"); then it isn't pushed again.
+      - name: Don't overwrite an existing main-<sha>
+        id: existing
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          source "$GITHUB_WORKSPACE/.github/scripts/legacy-ghcr.sh"
+          org_login
+          err="$RUNNER_TEMP/inspect.err"
+          if raw=$(skopeo inspect --raw --authfile "$SRC_AUTH" "docker://$IMAGE:$TAG" 2>"$err"); then
+            have=$(jq -r '.manifests[]?.digest' <<< "$raw" | sort | tr '\n' ' ')
+            mine=$(printf 'sha256:%s\n' * | sort | tr '\n' ' ')
+            if [ "$have" != "$mine" ]; then
+              echo "::error title=$TAG already exists::$IMAGE:$TAG is an earlier build of this commit (images: $have), and :latest or version tags may point at it. This run rebuilt it (images: $mine) and won't overwrite it. To retry a failed step of the original run, use \"Re-run failed jobs\" on that run, not \"Re-run all jobs\" or a new dispatch."
+              exit 1
+            fi
+            echo "::notice::$IMAGE:$TAG already is this build; not pushing it again."
+            echo "same=true" >> "$GITHUB_OUTPUT"
+          # Missing tag, or (first publish) no package yet. A refused read
+          # counts too: GITHUB_TOKEN can't write what it can't read, so the
+          # push below would fail rather than overwrite anything. Match the
+          # status text, not bare digits: the error quotes the tag, whose
+          # short SHA can contain "403".
+          elif grep -qiE 'manifest unknown|name unknown|not found|denied|status code[^0-9]*403|403 \(?forbidden' "$err"; then
+            echo "same=false" >> "$GITHUB_OUTPUT"
+          else
+            cat "$err"
+            rm -f "$err"
+            echo "::error::Couldn't check whether $IMAGE:$TAG already exists. $RERUN"
+            exit 1
+          fi
+          rm -f "$err"
+
       - name: Create manifest list and push
+        if: steps.existing.outputs.same != 'true'
         working-directory: ${{ runner.temp }}/digests
         run: |
           docker buildx imagetools create \
@@ -134,5 +220,123 @@ jobs:
             $(printf "${IMAGE}@sha256:%s " *)
 
       - name: Inspect image
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          docker buildx imagetools inspect "${IMAGE}:${{ steps.meta.outputs.version }}"
+          docker buildx imagetools inspect "${IMAGE}:${TAG}"
+
+      # A missing, refused or over-scoped token fails the job: skipping would
+      # quietly stop updates for every install.
+      - name: Copy to the legacy path (ghcr.io/mattny20/compassdocs)
+        id: mirror
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LEGACY_GHCR_TOKEN: ${{ secrets.LEGACY_GHCR_TOKEN }}
+        run: |
+          if [ "$IMAGE" = "$LEGACY_IMAGE" ]; then
+            echo "::notice::This run already publishes to $LEGACY_IMAGE; nothing to copy."
+            exit 0
+          fi
+          source .github/scripts/legacy-ghcr.sh
+          legacy_login
+          legacy_copy "$IMAGE:$TAG" "$LEGACY_IMAGE:$TAG"
+
+      # Runs even when the copy failed, so a private org package is reported
+      # too.
+      - name: Check both paths are publicly pullable
+        if: ${{ !cancelled() && steps.mirror.outcome != 'skipped' }}
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          source .github/scripts/legacy-ghcr.sh
+          check_public_pull "$TAG"
+
+  # Points :latest at both paths to main's head build — the head's, not
+  # necessarily this run's: merge jobs can finish in any order, so each run
+  # copies whatever main is at now. Whichever latest job runs last leaves
+  # both paths on the head. If the head's main-<sha> isn't at both paths yet
+  # (its merge job is still running or failed), this run changes nothing;
+  # the head's own run moves :latest once its merge job is done. A head with
+  # no run of its own ([skip ci]) needs docker-publish run by hand on main.
+  # No cancel-in-progress: a running job always finishes its pair of copies,
+  # so the paths are never left split. While one runs, GitHub keeps only the
+  # newest waiting job and cancels older waiting ones, which is harmless:
+  # every job copies the head anyway.
+  latest:
+    name: Move :latest to main's head
+    runs-on: ubuntu-latest
+    needs: [merge]
+    environment: "CompassDocs legacy image publishing"
+    concurrency:
+      group: ghcr-latest
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    env:
+      RERUN: "Re-running this job is safe: it points :latest at main's current head build."
+    steps:
+      - name: Prepare
+        run: echo "IMAGE=${REGISTRY}/${IMAGE_NAME,,}" >> "$GITHUB_ENV"
+
+      - name: Checkout (shared scripts)
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Point :latest at main's head (both paths)
+        id: move
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LEGACY_GHCR_TOKEN: ${{ secrets.LEGACY_GHCR_TOKEN }}
+        run: |
+          source .github/scripts/legacy-ghcr.sh
+          if ! head=$(main_head); then
+            echo "::error::Couldn't read the head of main from the GitHub API, so can't tell which build :latest should be. $RERUN"
+            exit 1
+          fi
+          tag="main-${head:0:7}"
+          echo "main is at $head ($tag)."
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ "$IMAGE" = "$LEGACY_IMAGE" ]; then
+            org_login   # not under the org yet: one path, GITHUB_TOKEN writes it
+          else
+            legacy_login
+          fi
+          org=$(registry_digest "$SRC_AUTH" "$IMAGE:$tag") || org=""
+          legacy="$org"
+          if [ "$IMAGE" != "$LEGACY_IMAGE" ]; then
+            legacy=$(registry_digest "$DST_AUTH" "$LEGACY_IMAGE:$tag") || legacy=""
+          fi
+          if [ -z "$org" ] || [ "$org" != "$legacy" ]; then
+            if [ "$head" = "$GITHUB_SHA" ]; then
+              echo "::error title=$tag isn't published at both paths::$IMAGE:$tag is ${org:-missing}, $LEGACY_IMAGE:$tag is ${legacy:-missing}, but this run's merge job finished. $RERUN"
+              exit 1
+            fi
+            echo "::notice::$tag (main's head) isn't at both paths yet (org ${org:-missing}, legacy ${legacy:-missing}): its merge job is still running or failed, or the commit had no docker-publish run ([skip ci]). That commit's own run moves :latest once its merge job is done; if it has none, run docker-publish by hand on main. Nothing changed here."
+            echo "moved=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          org_copy "$IMAGE:$tag" "$IMAGE:latest"
+          if [ "$IMAGE" != "$LEGACY_IMAGE" ]; then
+            legacy_copy "$IMAGE:$tag" "$LEGACY_IMAGE:latest"
+          fi
+          echo "moved=true" >> "$GITHUB_OUTPUT"
+
+      # :latest must be the head build's digest at both paths.
+      - name: Check :latest at both paths
+        if: ${{ !cancelled() && steps.move.outputs.tag != '' && steps.move.outputs.moved != 'false' }}
+        env:
+          TAG: ${{ steps.move.outputs.tag }}
+        run: |
+          source .github/scripts/legacy-ghcr.sh
+          fail=0
+          check_public_pull "$TAG" latest || fail=1
+          want="${DIGESTS["$IMAGE:$TAG"]:-}" got="${DIGESTS["$IMAGE:latest"]:-}"
+          if [ -n "$want" ] && [ -n "$got" ] && [ "$want" != "$got" ]; then
+            echo "::error title=latest is not the head build::$IMAGE:latest is $got, $IMAGE:$TAG is $want. $RERUN"
+            fail=1
+          fi
+          exit "$fail"
