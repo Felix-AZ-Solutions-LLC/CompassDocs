@@ -8,15 +8,27 @@
 # to do once an error is fixed, appended to each error).
 #
 # Moving to the org: RELEASING.md in Felix-AZ-Solutions-LLC/CompassDocs.
+#
+# This file is the only copy. compassdocs-ee's build-ee.yml has no copy of
+# its own: its legacy job sparse-checks-out .github/scripts from this repo's
+# main (not a tag) and sources it from there, so a change merged here runs
+# in ee's next build. Keep the functions it calls (legacy_login,
+# legacy_copy, check_public_pull) and the variables above compatible, or
+# change ee in step. RELEASING.md, "The shared publishing script".
+#
+# What differs between the repos comes from the environment; the defaults
+# below are core's.
 
-# The environment holding LEGACY_GHCR_TOKEN. Core's is "ghcr-legacy";
-# compassdocs-ee's copy of this file names its own ("CompassDocs legacy image
-# publishing"). Environment secrets don't move with a rename.
-LEGACY_ENV_NAME="ghcr-legacy"
+# The environment holding LEGACY_GHCR_TOKEN, named in error messages. Core's
+# is "ghcr-legacy"; compassdocs-ee sets LEGACY_ENV_NAME="CompassDocs legacy
+# image publishing". Environment secrets don't move with a rename.
+LEGACY_ENV_NAME="${LEGACY_ENV_NAME:-ghcr-legacy}"
 # Until release B points installs at $IMAGE, nobody pulls it, so a private
 # org package is only a warning (the org may not allow public packages yet).
-# Release B sets this to true: from then on installs depend on it.
-ORG_PUBLIC_REQUIRED=false
+# Release B sets this to true: from then on installs depend on it. Each repo
+# moves its installs in its own release, so compassdocs-ee sets its own
+# value in build-ee.yml rather than following core's default.
+ORG_PUBLIC_REQUIRED="${ORG_PUBLIC_REQUIRED:-false}"
 # The only scopes LEGACY_GHCR_TOKEN may have. write:packages brings
 # read:packages, and GitHub's classic-token page now forces repo on with it
 # (it can't be unticked, even from a ?scopes=write:packages link), so repo is

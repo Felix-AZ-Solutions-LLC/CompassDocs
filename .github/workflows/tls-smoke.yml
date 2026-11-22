@@ -13,6 +13,10 @@ name: TLS smoke test
 # the UI's button sends) then takes the real apply path. A fallback host
 # (COMPASSDOCS_FALLBACK_HOSTS) must keep answering once the domain is live,
 # and the check's own path must reach the app on any host over plain HTTP.
+#
+# Not a required check in the main ruleset (.github/rulesets/main.json): it
+# runs only when the paths below change, and a required check that never
+# reports would block every other PR. When it does run, don't merge red.
 
 on:
   pull_request:
