@@ -29,7 +29,7 @@ updates:
       # useTypeScriptCli flag). Revisit when that path is stable.
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
-      # Types track the runtime: the image is node:22-alpine.
+      # Types track the runtime: the image is node:24-alpine.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
@@ -42,3 +42,10 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    ignore:
+      # The image tracks an even-numbered Node LTS line, moved deliberately
+      # (Dockerfile, e2e.yml and security.yml together, and @types/node with
+      # them). Dependabot proposes the newest major, odd-numbered non-LTS
+      # lines included (#271 offered node 25, end-of-life 2026-06-01).
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
