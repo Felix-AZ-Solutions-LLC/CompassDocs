@@ -3,8 +3,9 @@ name: Release
 # Publish a GitHub Release (and version-tag the image) for the version in
 # package.json. Run it from the Actions tab ("Run workflow") after the version
 # bump is merged to main. It creates the tag + Release server-side via `gh`
-# (using that version's CHANGELOG section as the notes) and adds the semver tags
-# to the already-built container image — no rebuild.
+# (using that version's CHANGELOG section as the notes) and adds :X.Y.Z and
+# :X.Y to the already-built container image — no rebuild. It never touches
+# :latest: docker-publish moves that to each new head of main.
 on:
   workflow_dispatch:
     inputs:
@@ -24,17 +25,18 @@ jobs:
   release:
     runs-on: ubuntu-latest
     # Holds LEGACY_GHCR_TOKEN; deployable from main and v* tags only.
-    environment: ghcr-legacy
-    # Same group as docker-publish's merge job: one registry writer at a
-    # time, so :latest can't end up on different builds at the two paths.
+    environment: "CompassDocs legacy image publishing"
+    # Its own group, not docker-publish's: GitHub keeps one waiting run per
+    # group, so sharing would let a release cancel a waiting merge job. A
+    # notes-only run touches no image and gets a group of its own.
     concurrency:
-      group: ghcr-publish
+      group: ${{ github.event.inputs.notes_only == 'true' && format('release-notes-{0}', github.run_id) || 'release' }}
       cancel-in-progress: false
     env:
       # Pre-move image path that installs pull (see docker-publish.yml).
       LEGACY_IMAGE: ghcr.io/mattny20/compassdocs
       LEGACY_USER: mattny20
-      RERUN: "Re-running this workflow is safe: it retags the build of the commit the version tag points at."
+      RERUN: "Then dispatch a new run of release.yml (or re-run this one): it only adds :X.Y.Z, and :X.Y while this is the newest X.Y release, to the build of the commit the version tag points at."
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -87,6 +89,8 @@ jobs:
 
       # Retag the build of the commit vX.Y.Z points at, not whatever main is
       # now, so a later dispatch can't put this version on another build.
+      # :X.Y goes only to the newest released X.Y.*, so re-running an older
+      # release can't move it back.
       - name: Find the release's build
         id: src
         if: github.event.inputs.notes_only != 'true'
@@ -94,19 +98,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ steps.v.outputs.tag }}"
+          VERSION="${{ steps.v.outputs.version }}"
+          MM="${VERSION%.*}"
           if ! TAG_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha) || [ -z "$TAG_SHA" ]; then
             echo "::error::Couldn't find the commit $TAG points at."
             exit 1
           fi
+          if [ "$TAG_SHA" != "$GITHUB_SHA" ]; then
+            echo "::notice::$TAG is $TAG_SHA (this run is on $GITHUB_SHA); tagging that commit's build."
+          fi
           # docker-publish tags each main build main-<first 7 of the sha>.
           echo "build=main-${TAG_SHA:0:7}" >> "$GITHUB_OUTPUT"
-          if [ "$TAG_SHA" = "$GITHUB_SHA" ]; then
-            echo "move_latest=true" >> "$GITHUB_OUTPUT"
+          newest=$(git ls-remote --tags --refs origin "refs/tags/v$MM.*" | sed 's#.*refs/tags/v##' \
+            | { grep -E "^${MM//./\\.}\.[0-9]+$" || true; } | sort -V | tail -n1)
+          if [ -z "$newest" ] || [ "$newest" = "$VERSION" ]; then
+            echo "tags=$VERSION $MM" >> "$GITHUB_OUTPUT"
           else
-            # main has moved on; docker-publish already put :latest on a
-            # newer build, and moving it back would downgrade installs.
-            echo "move_latest=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::$TAG is $TAG_SHA, but this run is on $GITHUB_SHA. Tagging $TAG's build as its version only; :latest stays where it is."
+            echo "tags=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "::notice::v$newest is newer than $TAG, so :$MM stays on it."
           fi
 
       - name: Log in to GHCR
@@ -126,12 +135,8 @@ jobs:
         run: |
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
           SRC="$IMAGE:${{ steps.src.outputs.build }}"
-          VERSION="${{ steps.v.outputs.version }}"
-          MM="${VERSION%.*}"
-          args=(-t "$IMAGE:$VERSION" -t "$IMAGE:$MM")
-          # :latest lets installs follow releases across minors — the compose
-          # default, and what the admin console's one-click update relies on.
-          if [ "${{ steps.src.outputs.move_latest }}" = true ]; then args+=(-t "$IMAGE:latest"); fi
+          args=()
+          for t in ${{ steps.src.outputs.tags }}; do args+=(-t "$IMAGE:$t"); done
           echo "Retagging $SRC -> ${args[*]}"
           docker buildx imagetools create "${args[@]}" "$SRC"
 
@@ -152,23 +157,37 @@ jobs:
             exit 0
           fi
           if [ -z "$LEGACY_GHCR_TOKEN" ]; then
-            echo "::error title=LEGACY_GHCR_TOKEN secret is missing::Installs pull $LEGACY_IMAGE and won't see this release. Add LEGACY_GHCR_TOKEN to this repo's ghcr-legacy environment: a classic personal access token from the $LEGACY_USER account with only the write:packages scope (RELEASING.md). $RERUN"
+            echo "::error title=LEGACY_GHCR_TOKEN secret is missing::Installs pull $LEGACY_IMAGE and won't see this release. Add LEGACY_GHCR_TOKEN to this repo's \"CompassDocs legacy image publishing\" environment: a classic personal access token from the $LEGACY_USER account with only the write:packages scope (RELEASING.md). $RERUN"
             exit 1
           fi
           SRC="$IMAGE:${{ steps.src.outputs.build }}"
-          VERSION="${{ steps.v.outputs.version }}"
-          TAGS=("$VERSION" "${VERSION%.*}")
-          if [ "${{ steps.src.outputs.move_latest }}" = true ]; then TAGS+=(latest); fi
+          read -ra TAGS <<< "${{ steps.src.outputs.tags }}"
           command -v skopeo >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q skopeo; }
           SRC_AUTH="$RUNNER_TEMP/ghcr-src-auth.json"
           DST_AUTH="$RUNNER_TEMP/ghcr-legacy-auth.json"
-          trap 'rm -f "$SRC_AUTH" "$DST_AUTH"' EXIT
+          SCOPES="$RUNNER_TEMP/legacy-token-headers.txt"
+          trap 'rm -f "$SRC_AUTH" "$DST_AUTH" "$SCOPES"' EXIT
           if ! printf '%s' "$GITHUB_TOKEN" | skopeo login --authfile "$SRC_AUTH" -u "$GITHUB_ACTOR" --password-stdin ghcr.io; then
             echo "::error title=GITHUB_TOKEN login failed::Couldn't log in to ghcr.io with this run's GITHUB_TOKEN. $RERUN"
             exit 1
           fi
           if ! printf '%s' "$LEGACY_GHCR_TOKEN" | skopeo login --authfile "$DST_AUTH" -u "$LEGACY_USER" --password-stdin ghcr.io; then
-            echo "::error title=LEGACY_GHCR_TOKEN was refused::ghcr.io refused the $LEGACY_USER token (expired or revoked?). Make a new classic token from $LEGACY_USER with only write:packages and replace LEGACY_GHCR_TOKEN in the ghcr-legacy environment (RELEASING.md). $RERUN"
+            echo "::error title=LEGACY_GHCR_TOKEN was refused::ghcr.io refused the $LEGACY_USER token (expired or revoked?). Make a new classic token from $LEGACY_USER with only write:packages and replace LEGACY_GHCR_TOKEN in the \"CompassDocs legacy image publishing\" environment (RELEASING.md). $RERUN"
+            exit 1
+          fi
+          # GitHub's classic-token page can tick repo along with
+          # write:packages; that would give this secret full access to every
+          # mattny20 repository. Refuse it.
+          code=$(curl -sS -o /dev/null -D "$SCOPES" -w '%{http_code}' \
+            -H "Authorization: token $LEGACY_GHCR_TOKEN" https://api.github.com/user) || code=000
+          if [ "$code" != 200 ]; then
+            echo "::error title=Couldn't check LEGACY_GHCR_TOKEN's scopes::api.github.com answered $code. $RERUN"
+            exit 1
+          fi
+          scopes=$(tr -d '\r' < "$SCOPES" | sed -n 's/^x-oauth-scopes: *//Ip')
+          echo "LEGACY_GHCR_TOKEN scopes: ${scopes:-none}"
+          if tr ',' '\n' <<< "$scopes" | tr -d ' ' | grep -qx repo; then
+            echo "::error title=LEGACY_GHCR_TOKEN has the repo scope::That gives it full access to every $LEGACY_USER repository. Signed in as $LEGACY_USER, open https://github.com/settings/tokens, edit this token, untick repo (keep write:packages) and save. The token value doesn't change, so the secret needn't be updated. $RERUN"
             exit 1
           fi
           for t in "${TAGS[@]}"; do

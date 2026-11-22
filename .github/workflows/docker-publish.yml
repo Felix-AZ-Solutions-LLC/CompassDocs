@@ -9,8 +9,9 @@ name: Publish Docker image
 # and GHCR can't move packages between accounts. Installs pull
 # ghcr.io/mattny20/compassdocs, so the merge job also copies each tag it pushes
 # to that legacy path (same digest), with skopeo: GITHUB_TOKEN reads the org
-# path, mattny20's LEGACY_GHCR_TOKEN (in the ghcr-legacy environment) writes
-# the legacy one. See RELEASING.md, "Moving to the org".
+# path, mattny20's LEGACY_GHCR_TOKEN (in the "CompassDocs legacy image
+# publishing" environment) writes the legacy one. See RELEASING.md, "Moving to
+# the org". :latest only ever moves to the head of main.
 #
 # Each architecture is built on its OWN native runner (amd64 on ubuntu-latest,
 # arm64 on ubuntu-24.04-arm) and pushed by digest; a final job stitches the
@@ -102,9 +103,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build]
     # Holds LEGACY_GHCR_TOKEN; deployable from main and v* tags only.
-    environment: ghcr-legacy
-    # One registry writer at a time (docker-publish, release, backfill), so
-    # :latest can't end up on different builds at the two paths.
+    environment: "CompassDocs legacy image publishing"
+    # One merge job at a time, so :latest can't end up on different builds at
+    # the two paths. Only this job uses the group: GitHub keeps one waiting
+    # run per group, and any other workflow in it could cancel a waiting merge.
     concurrency:
       group: ghcr-publish
       cancel-in-progress: false
@@ -125,13 +127,42 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
+      # :latest follows the head of main. A merge job that runs after a newer
+      # commit's (it waited in the queue, or it's a re-run) still pushes its
+      # main-<sha>, but leaves :latest alone at both paths.
+      - name: Check this build is still the head of main
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "latest=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          head=""
+          for attempt in 1 2 3; do
+            head=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha) && break
+            echo "Attempt $attempt to read the head of main failed."
+            sleep 5
+          done
+          if [ -z "$head" ]; then
+            echo "::error::Couldn't read the head of main from the GitHub API, so can't tell whether to move :latest. Re-run this job."
+            exit 1
+          fi
+          if [ "$head" = "$GITHUB_SHA" ]; then
+            echo "latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "latest=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::main is at $head now, not $GITHUB_SHA: pushing main-${GITHUB_SHA::7} without moving :latest."
+          fi
+
       - name: Compute image tags
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ steps.head.outputs.latest }}
             type=sha,prefix=main-,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -164,26 +195,42 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LEGACY_GHCR_TOKEN: ${{ secrets.LEGACY_GHCR_TOKEN }}
-          RERUN: "Re-run this job only if it is still the newest docker-publish run; otherwise the next push to main fixes it."
+          RERUN: "Re-running this job is safe: it moves :latest only if its commit is still the head of main."
         run: |
           if [ "$IMAGE" = "$LEGACY_IMAGE" ]; then
             echo "::notice::This run already publishes to $LEGACY_IMAGE; nothing to mirror."
             exit 0
           fi
           if [ -z "$LEGACY_GHCR_TOKEN" ]; then
-            echo "::error title=LEGACY_GHCR_TOKEN secret is missing::Installs pull $LEGACY_IMAGE and won't get this build. Add LEGACY_GHCR_TOKEN to this repo's ghcr-legacy environment: a classic personal access token from the $LEGACY_USER account with only the write:packages scope (RELEASING.md). $RERUN"
+            echo "::error title=LEGACY_GHCR_TOKEN secret is missing::Installs pull $LEGACY_IMAGE and won't get this build. Add LEGACY_GHCR_TOKEN to this repo's \"CompassDocs legacy image publishing\" environment: a classic personal access token from the $LEGACY_USER account with only the write:packages scope (RELEASING.md). $RERUN"
             exit 1
           fi
           command -v skopeo >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q skopeo; }
           SRC_AUTH="$RUNNER_TEMP/ghcr-src-auth.json"
           DST_AUTH="$RUNNER_TEMP/ghcr-legacy-auth.json"
-          trap 'rm -f "$SRC_AUTH" "$DST_AUTH"' EXIT
+          SCOPES="$RUNNER_TEMP/legacy-token-headers.txt"
+          trap 'rm -f "$SRC_AUTH" "$DST_AUTH" "$SCOPES"' EXIT
           if ! printf '%s' "$GITHUB_TOKEN" | skopeo login --authfile "$SRC_AUTH" -u "$GITHUB_ACTOR" --password-stdin "$REGISTRY"; then
             echo "::error title=GITHUB_TOKEN login failed::Couldn't log in to $REGISTRY with this run's GITHUB_TOKEN. $RERUN"
             exit 1
           fi
           if ! printf '%s' "$LEGACY_GHCR_TOKEN" | skopeo login --authfile "$DST_AUTH" -u "$LEGACY_USER" --password-stdin "$REGISTRY"; then
-            echo "::error title=LEGACY_GHCR_TOKEN was refused::$REGISTRY refused the $LEGACY_USER token (expired or revoked?). Make a new classic token from $LEGACY_USER with only write:packages and replace LEGACY_GHCR_TOKEN in the ghcr-legacy environment (RELEASING.md). $RERUN"
+            echo "::error title=LEGACY_GHCR_TOKEN was refused::$REGISTRY refused the $LEGACY_USER token (expired or revoked?). Make a new classic token from $LEGACY_USER with only write:packages and replace LEGACY_GHCR_TOKEN in the \"CompassDocs legacy image publishing\" environment (RELEASING.md). $RERUN"
+            exit 1
+          fi
+          # GitHub's classic-token page can tick repo along with
+          # write:packages; that would give this secret full access to every
+          # mattny20 repository. Refuse it.
+          code=$(curl -sS -o /dev/null -D "$SCOPES" -w '%{http_code}' \
+            -H "Authorization: token $LEGACY_GHCR_TOKEN" https://api.github.com/user) || code=000
+          if [ "$code" != 200 ]; then
+            echo "::error title=Couldn't check LEGACY_GHCR_TOKEN's scopes::api.github.com answered $code. $RERUN"
+            exit 1
+          fi
+          scopes=$(tr -d '\r' < "$SCOPES" | sed -n 's/^x-oauth-scopes: *//Ip')
+          echo "LEGACY_GHCR_TOKEN scopes: ${scopes:-none}"
+          if tr ',' '\n' <<< "$scopes" | tr -d ' ' | grep -qx repo; then
+            echo "::error title=LEGACY_GHCR_TOKEN has the repo scope::That gives it full access to every $LEGACY_USER repository. Signed in as $LEGACY_USER, open https://github.com/settings/tokens, edit this token, untick repo (keep write:packages) and save. The token value doesn't change, so the secret needn't be updated. $RERUN"
             exit 1
           fi
           mapfile -t TAGS < <(jq -r '.tags[] | sub("^.*:"; "")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
@@ -203,7 +250,7 @@ jobs:
       - name: Check both paths are publicly pullable
         if: ${{ !cancelled() && steps.mirror.outcome != 'skipped' }}
         env:
-          RERUN: "Re-run this job only if it is still the newest docker-publish run; otherwise the next push to main fixes it."
+          RERUN: "Re-running this job is safe: it moves :latest only if its commit is still the head of main."
         run: |
           mapfile -t TAGS < <(jq -r '.tags[] | sub("^.*:"; "")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
 

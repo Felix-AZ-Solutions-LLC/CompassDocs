@@ -23,9 +23,11 @@ permissions:
   contents: read
   packages: write
 
-# Same group as docker-publish and release: one registry writer at a time.
+# Its own group: it never overwrites a tag already at the org path, so it
+# needn't wait for docker-publish, and sharing that group could cancel a
+# waiting merge job (GitHub keeps one waiting run per group).
 concurrency:
-  group: ghcr-publish
+  group: ghcr-backfill
   cancel-in-progress: false
 
 jobs:
