@@ -39,26 +39,35 @@ one before it.
 
 ## 2. Community image (automatic)
 
-The merge to `main` triggers `docker-publish.yml` (~8 minutes, multi-arch):
-it pushes `ghcr.io/felix-az-solutions-llc/compassdocs:main-<sha>` and moves
-`:latest` (only if that commit is still the head of `main` when the job
-runs), then copies the same tags to `ghcr.io/mattny20/compassdocs`, the
-path installs pull (see [Moving to the org](#moving-to-the-org)). Its last
-step pulls both paths anonymously and fails if either isn't public, a tag is
-missing, or a tag has a different digest at the two paths. Verify it
-succeeded before proceeding — everything downstream pulls this image. Check
-the run under Actions, or list runs via the API and confirm `docker-publish`
-for the merge commit shows `conclusion: success`.
+The merge to `main` triggers `docker-publish.yml` (~8 minutes, multi-arch).
+It never builds version tags; release.yml adds those (step 3). Two jobs
+follow the builds:
 
-Only one merge job runs at a time (`concurrency: ghcr-publish`, used by
-nothing else). A second one waits for the first. GitHub keeps only one
-waiting run per group, though: if a third arrives, the older waiting one is
-**cancelled**. A cancelled merge job never pushed its `main-<sha>`.
-Re-running it is safe at any time: it moves `:latest` only if its commit is
-still the head of `main`, and otherwise just adds `main-<sha>`. Usually the
-next push makes it unnecessary, but if the cancelled run was a version
-bump's, re-run it before the release workflow, or the release finds no
-`main-<sha>` to tag.
+- **Merge manifest & push main-<sha>** pushes
+  `ghcr.io/felix-az-solutions-llc/compassdocs:main-<sha>`, copies it to
+  `ghcr.io/mattny20/compassdocs:main-<sha>`, the path installs pull (see
+  [Moving to the org](#moving-to-the-org)), and pulls both anonymously: it
+  fails if either isn't public, the tag is missing, or the two digests
+  differ. It has no concurrency group, so it's never cancelled while
+  waiting; runs for different commits write different tags.
+- **Move :latest** then points `:latest` at both paths to that build, only
+  if its commit is still the head of `main`, and checks both. It's in the
+  `ghcr-latest` group with `cancel-in-progress`: when a newer push's job
+  comes along, it replaces this one and re-checks the head itself. A
+  cancelled or skipped **Move :latest** is normal after quick successive
+  pushes.
+
+Verify the merge job succeeded before proceeding — the release (step 3)
+tags its `main-<sha>`. Check the run under Actions, or list the run's jobs
+via the API and confirm **Merge manifest & push main-<sha>** for the merge
+commit shows `conclusion: success` (the run as a whole can show
+`cancelled` because of its **Move :latest** job).
+
+Re-running either job is safe at any time: the merge job only (re)writes
+its own `main-<sha>`, and **Move :latest** moves `:latest` only if its
+commit is still the head of `main`. The per-arch digests the merge job
+needs are kept for 14 days, so "Re-run failed jobs" works for that long;
+after that, push again (or dispatch docker-publish on `main`) instead.
 
 ## 3. GitHub release (manual dispatch)
 
@@ -74,10 +83,11 @@ If either retag fails, the job goes red after trying both; the release
 itself already exists. Fix the cause and dispatch a new run of release.yml
 (or re-run the failed one). Either is safe at any time: it refreshes the
 notes and adds only `:X.Y.Z` (and `:X.Y` if no newer `X.Y.*` exists) to the
-same build. Release runs have their own concurrency group (`release`), so
-they never cancel a waiting docker-publish job. The `notes only` input
-refreshes an existing release's notes without touching tags or images — use
-it for changelog typo fixes; those runs don't queue at all.
+same build. Release runs share the `release` concurrency group with each
+other only. The `notes only` input refreshes an existing release's notes
+without touching tags or images — use it for changelog typo fixes. Those
+runs don't queue, and they fail if the release doesn't exist yet rather
+than create it.
 
 ## 4. Enterprise image (manual dispatch, separate repo)
 
@@ -167,8 +177,9 @@ and installs have had time to act on it.
 `GITHUB_TOKEN` can only write packages the org owns, so it's the only way
 to keep the legacy path current. It lives in a GitHub **Environment**
 named **`CompassDocs legacy image publishing`**, not as a repo or org
-secret, so only the jobs that need it (docker-publish's merge job, release;
-build-ee's legacy job) can read it, and only from `main` or a version tag.
+secret, so only the jobs that need it (docker-publish's merge and
+**Move :latest** jobs, release; build-ee's legacy job) can read it, and only
+from `main`.
 The workflows name the environment exactly; renaming it means updating
 them (and, since an environment's secrets don't move with it, adding the
 token again).
@@ -176,11 +187,12 @@ token again).
 **Making the token.** Signed in as `mattny20`, open
 <https://github.com/settings/tokens/new?scopes=write:packages&description=CompassDocs%20legacy%20image%20publishing>.
 It preselects `write:packages` (which brings `read:packages` with it). Make
-sure **`repo` is not ticked**: it would give the secret full access to every
-`mattny20` repository. Every job that uses the token checks its scopes first
-and fails if `repo` is among them; to fix that, edit the token at
-<https://github.com/settings/tokens>, untick `repo` and save. The token value
-doesn't change, so the secret needn't be updated.
+sure **nothing else is ticked**, `repo` above all: it would give the secret
+full access to every `mattny20` repository. Every job that uses the token
+checks its scopes first and fails, naming the extra scopes, unless they are
+only `write:packages` and `read:packages`; to fix that, edit the token at
+<https://github.com/settings/tokens>, untick the rest and save. The token
+value doesn't change, so the secret needn't be updated.
 
 **The environment**, in **each** of `Felix-AZ-Solutions-LLC/CompassDocs` and
 `Felix-AZ-Solutions-LLC/compassdocs-ee`:
@@ -189,13 +201,15 @@ doesn't change, so the secret needn't be updated.
    `CompassDocs legacy image publishing`. Create it before the first run: a
    job naming an environment that doesn't exist creates it with no rules.
 2. Deployment branches and tags → **Selected branches and tags** → add the
-   branch rule `main` and the tag rule `v*`. No required reviewers, no
-   wait timer.
+   branch rule `main`. (A `v*` tag rule, if you added one earlier, is no
+   longer needed: no job that uses the token runs on a tag.) No required
+   reviewers, no wait timer.
 3. Environment secrets → **Add secret** → `LEGACY_GHCR_TOKEN` → the token.
 
 Each run of those jobs shows up as a deployment to that environment on the
 repo's page; that's expected. If the secret is missing, ghcr.io refuses it
-(expired, revoked) or it has the `repo` scope, the job fails and says so —
+(expired, revoked) or it has any scope beyond `write:packages`/`read:packages`,
+the job fails and says so —
 on purpose: skipping would silently stop updates for every install. Set an
 expiry on the token, put a reminder in the calendar, and renew it (same
 name, same scope, in both repos' environments) **before** it expires.
@@ -204,8 +218,9 @@ name, same scope, in both repos' environments) **before** it expires.
 
 - **Checks fail on the bump PR** — fix on the branch; never merge red.
 - **docker-publish fails after merge** — fix the cause, then re-run the
-  failed job. That's safe even after newer pushes: the merge job moves
-  `:latest` only if its commit is still the head of `main`. Nothing
+  failed job (within 14 days; see [step 2](#2-community-image-automatic)).
+  That's safe even after newer pushes: only **Move :latest** touches
+  `:latest`, and only while its commit is still the head of `main`. Nothing
   downstream has happened yet. If the error names `LEGACY_GHCR_TOKEN` or
   says the org package isn't public, see
   [Moving to the org](#moving-to-the-org) first.

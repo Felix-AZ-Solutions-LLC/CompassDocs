@@ -252,8 +252,9 @@ The `Caddyfile` also documents two alternatives you can switch to with one line:
 certificate** (drop `cert.pem`/`key.pem` in `deploy/certs`).
 
 > Images are published to `ghcr.io/mattny20/compassdocs` automatically on every
-> merge to `main` (`:latest`) and on version tags (`:X.Y.Z`) by the
-> [Docker publish workflow](./.github/workflows/docker-publish.yml). The project
+> merge to `main` (`:latest`) by the
+> [Docker publish workflow](./.github/workflows/docker-publish.yml), and each
+> release adds its version tag (`:X.Y.Z`). The project
 > has moved to the Felix-AZ-Solutions-LLC organization, so every image is also
 > published to `ghcr.io/felix-az-solutions-llc/compassdocs`; installs switch to
 > that address in a later release.

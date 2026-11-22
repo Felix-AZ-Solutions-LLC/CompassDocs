@@ -1,0 +1,151 @@
+# Shared by the workflow steps that write the pre-move image path
+# ($LEGACY_IMAGE, ghcr.io/mattny20/...) and check both paths. Source it from a
+# step that runs under `bash -eo pipefail` (the workflows set
+# `defaults: run: shell: bash`).
+#
+# The steps provide: REGISTRY, IMAGE (the org path), LEGACY_IMAGE, LEGACY_USER,
+# GITHUB_ACTOR, GITHUB_TOKEN, LEGACY_GHCR_TOKEN, RUNNER_TEMP, and RERUN (what
+# to do once an error is fixed, appended to each error).
+#
+# Moving to the org: RELEASING.md in Felix-AZ-Solutions-LLC/CompassDocs.
+
+LEGACY_ENV_NAME="CompassDocs legacy image publishing"
+# The only scopes LEGACY_GHCR_TOKEN may have (write:packages brings read).
+LEGACY_ALLOWED_SCOPES="write:packages read:packages"
+
+# org_login: logs GITHUB_TOKEN (reads and writes the org path) into its own
+# auth file, SRC_AUTH. A trap removes every auth file these functions write
+# when the step exits, however it exits.
+org_login() {
+  command -v skopeo >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q skopeo; }
+  SRC_AUTH="$RUNNER_TEMP/ghcr-src-auth.json"
+  DST_AUTH="$RUNNER_TEMP/ghcr-legacy-auth.json"
+  trap 'rm -f "$SRC_AUTH" "$DST_AUTH" "$RUNNER_TEMP/legacy-token-headers.txt"' EXIT
+  if ! printf '%s' "$GITHUB_TOKEN" | skopeo login --authfile "$SRC_AUTH" -u "$GITHUB_ACTOR" --password-stdin "$REGISTRY"; then
+    echo "::error title=GITHUB_TOKEN login failed::Couldn't log in to $REGISTRY with this run's GITHUB_TOKEN. $RERUN"
+    return 1
+  fi
+}
+
+# legacy_login: checks LEGACY_GHCR_TOKEN is there, accepted and scoped to
+# packages only, after org_login; the legacy token (writes the legacy path)
+# goes into its own auth file, DST_AUTH.
+legacy_login() {
+  if [ -z "${LEGACY_GHCR_TOKEN:-}" ]; then
+    echo "::error title=LEGACY_GHCR_TOKEN secret is missing::Installs pull $LEGACY_IMAGE and won't get this build. Add LEGACY_GHCR_TOKEN to this repo's \"$LEGACY_ENV_NAME\" environment: a classic personal access token from the $LEGACY_USER account with only the write:packages scope (RELEASING.md). $RERUN"
+    return 1
+  fi
+  org_login
+  local headers="$RUNNER_TEMP/legacy-token-headers.txt"
+  if ! printf '%s' "$LEGACY_GHCR_TOKEN" | skopeo login --authfile "$DST_AUTH" -u "$LEGACY_USER" --password-stdin "$REGISTRY"; then
+    echo "::error title=LEGACY_GHCR_TOKEN was refused::$REGISTRY refused the $LEGACY_USER token (expired or revoked?). Make a new classic token from $LEGACY_USER with only write:packages and replace LEGACY_GHCR_TOKEN in the \"$LEGACY_ENV_NAME\" environment (RELEASING.md). $RERUN"
+    return 1
+  fi
+
+  # Only write:packages (and the read:packages it brings) is allowed. GitHub's
+  # classic-token page can tick repo along with it, which would give this
+  # secret full access to every repository of the account.
+  local code scopes s
+  local -a list extra=()
+  code=$(curl -sS -o /dev/null -D "$headers" -w '%{http_code}' \
+    -H "Authorization: token $LEGACY_GHCR_TOKEN" https://api.github.com/user) || code=000
+  if [ "$code" != 200 ]; then
+    rm -f "$headers"
+    echo "::error title=Couldn't check LEGACY_GHCR_TOKEN's scopes::api.github.com answered $code. $RERUN"
+    return 1
+  fi
+  scopes=$(tr -d '\r' < "$headers" | sed -n 's/^x-oauth-scopes: *//Ip')
+  rm -f "$headers"
+  echo "LEGACY_GHCR_TOKEN scopes: ${scopes:-none}"
+  read -ra list <<< "${scopes//,/ }"
+  for s in "${list[@]}"; do
+    case " $LEGACY_ALLOWED_SCOPES " in
+      *" $s "*) ;;
+      *) extra+=("$s") ;;
+    esac
+  done
+  if [ "${#extra[@]}" -gt 0 ]; then
+    echo "::error title=LEGACY_GHCR_TOKEN has scopes it mustn't have::Remove ${extra[*]}. Signed in as $LEGACY_USER, open https://github.com/settings/tokens, edit this token, untick everything but write:packages and save. The token value doesn't change, so the secret needn't be updated. $RERUN"
+    return 1
+  fi
+  case " ${list[*]} " in
+    *" write:packages "*) ;;
+    *)
+      echo "::error title=LEGACY_GHCR_TOKEN lacks write:packages::Signed in as $LEGACY_USER, open https://github.com/settings/tokens, edit this token, tick write:packages and save. $RERUN"
+      return 1
+      ;;
+  esac
+}
+
+# legacy_copy <from-ref> <to-ref>: copies an image (every platform, same
+# digest) with the auth files legacy_login made.
+legacy_copy() {
+  echo "Copying $1 -> $2"
+  if ! skopeo copy --all --preserve-digests --retry-times 3 \
+      --src-authfile "$SRC_AUTH" --dest-authfile "$DST_AUTH" \
+      "docker://$1" "docker://$2"; then
+    echo "::error title=Copy to ${2%:*} failed::Couldn't copy $1 to $2 (see the log above). $RERUN"
+    return 1
+  fi
+}
+
+# org_copy <from-ref> <to-ref>: the same, within the org path (needs only
+# org_login).
+org_copy() {
+  echo "Copying $1 -> $2"
+  if ! skopeo copy --all --preserve-digests --retry-times 3 \
+      --src-authfile "$SRC_AUTH" --dest-authfile "$SRC_AUTH" \
+      "docker://$1" "docker://$2"; then
+    echo "::error title=Copy to ${2%:*} failed::Couldn't copy $1 to $2 (see the log above). $RERUN"
+    return 1
+  fi
+}
+
+# anon_manifest <registry/owner/name> <tag> -> "<http code> <digest>", as an
+# anonymous client would see it.
+anon_manifest() {
+  local repo="${1#"$REGISTRY"/}" token code digest
+  token=$(curl -fsS "https://$REGISTRY/token?scope=repository:$repo:pull" | jq -r '.token // empty') || true
+  if [ -z "$token" ]; then echo "no-token -"; return 0; fi
+  read -r code digest < <(curl -sS -o /dev/null -I \
+    -w '%{http_code} %header{docker-content-digest}\n' \
+    -H "Authorization: Bearer $token" \
+    -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+    "https://$REGISTRY/v2/$repo/manifests/$2") || true
+  echo "${code:-000} ${digest:--}"
+}
+
+# check_public_pull <tag>...: every tag must pull anonymously from IMAGE and
+# (when it differs) LEGACY_IMAGE, with the same digest at both. Fills DIGESTS
+# ["<path>:<tag>"]. Returns 1 after printing an error for each problem.
+declare -A DIGESTS
+check_public_pull() {
+  local path t code digest bad fail=0 a b
+  local -a paths=("$IMAGE")
+  if [ "$LEGACY_IMAGE" != "$IMAGE" ]; then paths+=("$LEGACY_IMAGE"); fi
+  for path in "${paths[@]}"; do
+    bad=""
+    for t in "$@"; do
+      read -r code digest < <(anon_manifest "$path" "$t") || true
+      echo "$path:$t -> $code $digest"
+      if [ "$code" = 200 ]; then DIGESTS["$path:$t"]="$digest"; else bad="$bad $t($code)"; fi
+    done
+    if [ -z "$bad" ]; then continue; fi
+    fail=1
+    if [ "$path" = "$IMAGE" ]; then
+      echo "::error title=$IMAGE is not public::Anonymous pull failed for:$bad. Make the package public once (Org → Packages → ${IMAGE##*/} → Package settings → Change visibility → Public). $RERUN"
+    else
+      echo "::error title=$path is missing this build::Anonymous pull failed for:$bad. Installs won't get it; see the copy step above. $RERUN"
+    fi
+  done
+  if [ "${#paths[@]}" -gt 1 ]; then
+    for t in "$@"; do
+      a="${DIGESTS["$IMAGE:$t"]:-}" b="${DIGESTS["$LEGACY_IMAGE:$t"]:-}"
+      if [ -n "$a" ] && [ -n "$b" ] && [ "$a" != "$b" ]; then
+        echo "::error title=Digests differ for tag $t::$IMAGE:$t is $a but $LEGACY_IMAGE:$t is $b. $RERUN"
+        fail=1
+      fi
+    done
+  fi
+  return "$fail"
+}

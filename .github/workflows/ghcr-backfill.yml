@@ -23,6 +23,11 @@ permissions:
   contents: read
   packages: write
 
+# bash -eo pipefail for every run step.
+defaults:
+  run:
+    shell: bash
+
 # Its own group: it never overwrites a tag already at the org path, so it
 # needn't wait for docker-publish, and sharing that group could cancel a
 # waiting merge job (GitHub keeps one waiting run per group).
