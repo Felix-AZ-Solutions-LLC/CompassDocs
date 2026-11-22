@@ -62,7 +62,7 @@ touching tags or images — use it for changelog typo fixes.
 
 ## 4. Enterprise image (manual dispatch, separate repo)
 
-In `mattny20/compassdocs-ee`, run **build-ee.yml** with input:
+In `Felix-AZ-Solutions-LLC/compassdocs-ee`, run **build-ee.yml** with input:
 
 ```json
 { "core_ref": "vX.Y.Z" }
@@ -75,7 +75,7 @@ image. The core tag must exist first — step 3 before step 4, always.
 
 Cloud tenants pin their image at machine-creation time — publishing
 `:latest` changes nothing on running tenants. Roll the fleet from
-`mattny20/compassdocs-cloud`, either:
+`Felix-AZ-Solutions-LLC/compassdocs-cloud`, either:
 
 - Staff console (console.compassdocscloud.com) → **Upgrade fleet**, or
 - CLI: `npm run cli -- upgrade --all` (rolling, health-gated, stops on
@@ -97,9 +97,9 @@ with `docker compose pull`. So the community image is published to both:
 | `ghcr.io/mattny20/compassdocs` (legacy) | Installs made before the move | `LEGACY_GHCR_TOKEN` |
 
 Both paths carry the same digest under the same tags. The enterprise image
-(`ghcr.io/mattny20/compassdocs-ee`) is unchanged for now: it's built in the
-`compassdocs-ee` repo, which hasn't moved, so the `-ee` compose files still
-name the mattny20 path.
+(`ghcr.io/mattny20/compassdocs-ee`) gets the same treatment in the
+`compassdocs-ee` repo's build-ee.yml; until that repo publishes to both
+addresses, the `-ee` compose files keep naming the mattny20 path.
 
 **`LEGACY_GHCR_TOKEN`** — an Actions secret (org level or on this repo)
 holding a **classic** personal access token from the **`mattny20`** account
