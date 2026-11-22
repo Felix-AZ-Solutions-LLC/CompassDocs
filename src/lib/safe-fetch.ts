@@ -161,7 +161,10 @@ async function checkTarget(rawUrl: string): Promise<{ url: URL; resolved: { addr
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`Blocked URL scheme: ${url.protocol}`);
   }
-  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  // An IPv6 literal's hostname keeps its brackets ("[::1]"), which isIP()
+  // does not take: unbracketed, it is judged as the address it is, so a
+  // proxied request to [::1] or [fd00::1] can't skip the literal-IP check.
+  const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1").replace(/\.$/, "");
   if (BLOCKED_HOSTNAMES.has(host) || host === "localhost" || host.endsWith(".localhost")) {
     throw new Error(`Blocked host: ${host}`);
   }

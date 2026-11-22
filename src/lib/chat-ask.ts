@@ -102,6 +102,23 @@ export async function verifyTeamsSignature(
   return safeEqual(Buffer.from(expected), Buffer.from(authHeader.slice(5).trim()));
 }
 
+/**
+ * The slash command's response_url, rebuilt on Slack's own host, or null when
+ * it is not an https URL on hooks.slack.com. The answer is POSTed there
+ * later, server-side, so the host must never come from the request: a prefix
+ * check on the raw string is not enough on its own (CodeQL js/request-forgery).
+ */
+export function slackResponseUrl(raw: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:" || u.hostname !== "hooks.slack.com" || u.port || u.username || u.password) return null;
+  return `https://hooks.slack.com/${u.pathname.replace(/^\/+/, "")}${u.search}`;
+}
+
 // --- Answering ---------------------------------------------------------------
 
 /** Space ids a chat asker may draw answers from: everything not private. */
