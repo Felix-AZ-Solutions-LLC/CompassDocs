@@ -1,8 +1,8 @@
 # Releasing CompassDocs
 
 The end-to-end chain for shipping a release: core image → GitHub release →
-enterprise image → cloud fleet. Follow it in order; each stage depends on the
-one before it.
+enterprise image. Follow it in order; each stage depends on the one before
+it.
 
 ## 0. Preconditions
 
@@ -119,17 +119,12 @@ It overlays `ee/` onto that core tag and pushes the enterprise image to
 public GHCR packages (its features unlock only with a license key). The
 core tag must exist first — step 3 before step 4, always.
 
-## 5. Cloud fleet (manual, separate repo)
+## 5. Cloud (nothing to do yet)
 
-Cloud tenants pin their image at machine-creation time — publishing
-`:latest` changes nothing on running tenants. Roll the fleet from
-`Felix-AZ-Solutions-LLC/compassdocs-cloud`, either:
-
-- Staff console (console.compassdocscloud.com) → **Upgrade fleet**, or
-- CLI: `npm run cli -- upgrade --all` (rolling, health-gated, stops on
-  first failure; safe to re-run — already-upgraded tenants are skipped).
-
-See that repo's `OPERATIONS.md` §10 for details and rollback.
+There are no cloud tenants: the Fly.io cloud platform is being retired and
+cloud operations move to Azure. The Enterprise build no longer mirrors to
+Fly's registry. When the Azure workspace platform exists (phase 4 of the
+Azure plan), its upgrade step goes here.
 
 ## Moving to the org
 
@@ -300,8 +295,6 @@ often or ee's legacy job breaks on a core change.
   says the org package isn't public, see
   [Moving to the org](#moving-to-the-org) first.
 - **Released the wrong thing** — do not delete tags or force-push main.
-  Ship a patch release (X.Y.Z+1) through the same chain; the fleet upgrade
-  in step 5 accepts any image reference if you need to roll tenants back
-  to the previous version explicitly.
-- **EE build fails** — it's isolated: community users and the cloud fleet
-  are unaffected. Fix and re-dispatch with the same `core_ref`.
+  Ship a patch release (X.Y.Z+1) through the same chain.
+- **EE build fails** — it's isolated: community users are unaffected. Fix
+  and re-dispatch with the same `core_ref`.
