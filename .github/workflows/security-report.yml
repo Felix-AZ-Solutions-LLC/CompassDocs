@@ -1,0 +1,52 @@
+name: Security report
+
+# Manual, read-only: exports the repo's open code-scanning (CodeQL) alerts as
+# a JSON artifact plus a one-line-per-alert summary, for triage outside the
+# GitHub UI. Changes nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      state:
+        description: "Alert state to export"
+        type: choice
+        options: [open, dismissed, fixed]
+        default: open
+
+permissions:
+  contents: read
+  security-events: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  export:
+    name: Export code-scanning alerts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATE: ${{ inputs.state }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/code-scanning/alerts?state=$STATE&per_page=100" \
+            | jq -s 'add // []' > alerts.json
+          jq -r '.[] | [.number, .rule.security_severity_level // .rule.severity, .rule.id,
+                        (.most_recent_instance.location.path + ":" + (.most_recent_instance.location.start_line|tostring)),
+                        .most_recent_instance.message.text] | @tsv' alerts.json > alerts.tsv
+          echo "$(jq length alerts.json) $STATE alerts"
+          {
+            echo "### $(jq length alerts.json) $STATE code-scanning alerts"
+            echo
+            echo '| Rule | Count |'
+            echo '| --- | --- |'
+            jq -r 'group_by(.rule.id) | map([.[0].rule.id, length]) | sort_by(-.[1]) | .[] | "| \(.[0]) | \(.[1]) |"' alerts.json
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: code-scanning-alerts
+          path: |
+            alerts.json
+            alerts.tsv
+          retention-days: 7
