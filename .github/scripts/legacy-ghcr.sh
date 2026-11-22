@@ -17,8 +17,12 @@ LEGACY_ENV_NAME="ghcr-legacy"
 # org package is only a warning (the org may not allow public packages yet).
 # Release B sets this to true: from then on installs depend on it.
 ORG_PUBLIC_REQUIRED=false
-# The only scopes LEGACY_GHCR_TOKEN may have (write:packages brings read).
-LEGACY_ALLOWED_SCOPES="write:packages read:packages"
+# The only scopes LEGACY_GHCR_TOKEN may have. write:packages brings
+# read:packages, and GitHub's classic-token page now forces repo on with it
+# (it can't be unticked, even from a ?scopes=write:packages link), so repo is
+# accepted, with a warning on every run. Anything else (admin:org,
+# delete:packages, workflow, ...) is refused.
+LEGACY_ALLOWED_SCOPES="write:packages read:packages repo"
 
 # org_login: logs GITHUB_TOKEN (reads and writes the org path) into its own
 # auth file, SRC_AUTH. A trap removes every auth file these functions write
@@ -49,9 +53,8 @@ legacy_login() {
     return 1
   fi
 
-  # Only write:packages (and the read:packages it brings) is allowed. GitHub's
-  # classic-token page can tick repo along with it, which would give this
-  # secret full access to every repository of the account.
+  # Only write:packages (with the read:packages and repo GitHub ties to it)
+  # is allowed; see LEGACY_ALLOWED_SCOPES.
   local code scopes s
   local -a list extra=()
   code=$(curl -sS -o /dev/null -D "$headers" -w '%{http_code}' \
@@ -72,9 +75,14 @@ legacy_login() {
     esac
   done
   if [ "${#extra[@]}" -gt 0 ]; then
-    echo "::error title=LEGACY_GHCR_TOKEN has scopes it mustn't have::Remove ${extra[*]}. Signed in as $LEGACY_USER, open https://github.com/settings/tokens, edit this token, untick everything but write:packages and save. The token value doesn't change, so the secret needn't be updated. $RERUN"
+    echo "::error title=LEGACY_GHCR_TOKEN has scopes it mustn't have::Remove ${extra[*]}. Signed in as $LEGACY_USER, open https://github.com/settings/tokens, edit this token, untick everything but write:packages (GitHub keeps repo ticked with it; that's expected) and save. The token value doesn't change, so the secret needn't be updated. $RERUN"
     return 1
   fi
+  case " ${list[*]} " in
+    *" repo "*)
+      echo "::warning title=LEGACY_GHCR_TOKEN carries the repo scope::GitHub ties repo to write:packages on classic tokens, so this token can also change every repository $LEGACY_USER can reach. It is only exposed to main's publishing jobs (environment $LEGACY_ENV_NAME). RELEASING.md describes moving it to a bot account that has no repositories."
+      ;;
+  esac
   case " ${list[*]} " in
     *" write:packages "*) ;;
     *)
