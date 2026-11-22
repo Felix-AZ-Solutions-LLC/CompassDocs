@@ -9,13 +9,17 @@ name: Backfill org image path
 # (RELEASING.md, "Moving to the org"). Safe to run again: a tag that is
 # already there with the same digest is skipped, and a tag that is there with
 # a different digest is left alone (the org path is the newer one) and
-# reported. The source is public, so it's read anonymously; the GITHUB_TOKEN
-# writes the org path.
+# reported. It never copies :latest, and copies :X.Y tags only when the tag
+# filter is set: docker-publish and release.yml maintain those at both paths
+# now, and the backfill writing them could race those jobs. To copy the :X.Y
+# tags of older minors (which no job writes any more), run it with the
+# filter ^[0-9]+\.[0-9]+$ while no release is running. The source is public,
+# so it's read anonymously; the GITHUB_TOKEN writes the org path.
 on:
   workflow_dispatch:
     inputs:
       tag_filter:
-        description: "Only copy tags matching this extended regex (blank = every tag)"
+        description: "Only copy tags matching this extended regex (blank = every tag but latest and X.Y)"
         required: false
         default: ""
 
@@ -28,9 +32,10 @@ defaults:
   run:
     shell: bash
 
-# Its own group: it never overwrites a tag already at the org path, so it
-# needn't wait for docker-publish, and sharing that group could cancel a
-# waiting merge job (GitHub keeps one waiting run per group).
+# Its own group: it never overwrites a tag already at the org path and
+# leaves :latest (and, by default, :X.Y) to the publishing jobs, so it needn't
+# wait for them, and sharing a group could cancel a waiting run (GitHub keeps
+# one waiting run per group).
 concurrency:
   group: ghcr-backfill
   cancel-in-progress: false
@@ -74,6 +79,11 @@ jobs:
             exit 1
           fi
           mapfile -t TAGS < <(jq -r '.Tags[]' <<< "$listing")
+          # :latest is the publishing jobs' alone; so are :X.Y tags unless
+          # the filter asks for them (see the top of this file).
+          skip='^latest$'
+          if [ -z "$TAG_FILTER" ]; then skip='^(latest|[0-9]+\.[0-9]+)$'; fi
+          mapfile -t TAGS < <(printf '%s\n' "${TAGS[@]}" | { grep -Ev -- "$skip" || true; })
           if [ -n "$TAG_FILTER" ]; then
             mapfile -t TAGS < <(printf '%s\n' "${TAGS[@]}" | grep -E -- "$TAG_FILTER" || true)
           fi

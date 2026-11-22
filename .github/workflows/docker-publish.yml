@@ -124,7 +124,7 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     env:
-      RERUN: "Re-running this job is safe: it only (re)writes this build's main-<sha>."
+      RERUN: "Then use Re-run failed jobs on this run (safe: it reuses this run's builds and only writes this build's main-<sha>)."
     steps:
       - name: Prepare
         run: echo "IMAGE=${REGISTRY}/${IMAGE_NAME,,}" >> "$GITHUB_ENV"
@@ -172,7 +172,45 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # A rebuild of the same commit ("Re-run all jobs", or a dispatch) gives
+      # new digests, and :latest or version tags may already point at the
+      # first build. So an existing main-<sha> is only accepted if it is
+      # this run's build (same per-arch images, as after "Re-run failed
+      # jobs"); then it isn't pushed again.
+      - name: Don't overwrite an existing main-<sha>
+        id: existing
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          source "$GITHUB_WORKSPACE/.github/scripts/legacy-ghcr.sh"
+          org_login
+          err="$RUNNER_TEMP/inspect.err"
+          if raw=$(skopeo inspect --raw --authfile "$SRC_AUTH" "docker://$IMAGE:$TAG" 2>"$err"); then
+            have=$(jq -r '.manifests[]?.digest' <<< "$raw" | sort | tr '\n' ' ')
+            mine=$(printf 'sha256:%s\n' * | sort | tr '\n' ' ')
+            if [ "$have" != "$mine" ]; then
+              echo "::error title=$TAG already exists::$IMAGE:$TAG is an earlier build of this commit (images: $have), and :latest or version tags may point at it. This run rebuilt it (images: $mine) and won't overwrite it. To retry a failed step of the original run, use \"Re-run failed jobs\" on that run, not \"Re-run all jobs\" or a new dispatch."
+              exit 1
+            fi
+            echo "::notice::$IMAGE:$TAG already is this build; not pushing it again."
+            echo "same=true" >> "$GITHUB_OUTPUT"
+          # Missing tag, or (first publish) no package yet. A refused read
+          # counts too: GITHUB_TOKEN can't write what it can't read, so the
+          # push below would fail rather than overwrite anything.
+          elif grep -qiE 'manifest unknown|name unknown|not found|denied|403' "$err"; then
+            echo "same=false" >> "$GITHUB_OUTPUT"
+          else
+            cat "$err"
+            rm -f "$err"
+            echo "::error::Couldn't check whether $IMAGE:$TAG already exists. $RERUN"
+            exit 1
+          fi
+          rm -f "$err"
+
       - name: Create manifest list and push
+        if: steps.existing.outputs.same != 'true'
         working-directory: ${{ runner.temp }}/digests
         run: |
           docker buildx imagetools create \
@@ -217,7 +255,8 @@ jobs:
   # copies whatever main is at now. Whichever latest job runs last leaves
   # both paths on the head. If the head's main-<sha> isn't at both paths yet
   # (its merge job is still running or failed), this run changes nothing;
-  # the head's own run moves :latest once its merge job is done.
+  # the head's own run moves :latest once its merge job is done. A head with
+  # no run of its own ([skip ci]) needs docker-publish run by hand on main.
   # No cancel-in-progress: a running job always finishes its pair of copies,
   # so the paths are never left split. While one runs, GitHub keeps only the
   # newest waiting job and cancels older waiting ones, which is harmless:
@@ -274,7 +313,7 @@ jobs:
               echo "::error title=$tag isn't published at both paths::$IMAGE:$tag is ${org:-missing}, $LEGACY_IMAGE:$tag is ${legacy:-missing}, but this run's merge job finished. $RERUN"
               exit 1
             fi
-            echo "::notice::$tag (main's head) isn't at both paths yet (org ${org:-missing}, legacy ${legacy:-missing}): its merge job is still running or failed. That commit's own run moves :latest once its merge job is done; nothing changed here."
+            echo "::notice::$tag (main's head) isn't at both paths yet (org ${org:-missing}, legacy ${legacy:-missing}): its merge job is still running or failed, or the commit had no docker-publish run ([skip ci]). That commit's own run moves :latest once its merge job is done; if it has none, run docker-publish by hand on main. Nothing changed here."
             echo "moved=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi

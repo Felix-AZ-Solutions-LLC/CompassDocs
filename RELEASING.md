@@ -57,10 +57,12 @@ follow the builds:
   whichever of these jobs runs last leaves both paths on the head. If the
   head's `main-<sha>` isn't at both paths yet (its merge job is still
   running, or failed), it changes nothing and says so; the head's own run
-  moves `:latest` when its merge job is done. These jobs run one at a time
-  (`ghcr-latest` group, no cancel-in-progress), so a pair of copies is
-  never interrupted halfway. GitHub keeps only the newest waiting one and
-  cancels older waiting ones; that's harmless, as each copies the head
+  moves `:latest` when its merge job is done. (A head commit with no
+  docker-publish run of its own, e.g. pushed with `[skip ci]`, never gets
+  one: run docker-publish by hand on `main` to build it.) These jobs run
+  one at a time (`ghcr-latest` group, no cancel-in-progress), so a pair of
+  copies is never interrupted halfway. GitHub keeps only the newest waiting
+  one and cancels older waiting ones; that's harmless, as each copies the head
   anyway. A cancelled **Move :latest** is normal after quick successive
   pushes.
 
@@ -70,11 +72,14 @@ via the API and confirm **Merge manifest & push main-<sha>** for the merge
 commit shows `conclusion: success` (the run as a whole can show
 `cancelled` because of its **Move :latest** job).
 
-Re-running either job is safe at any time: the merge job only (re)writes
-its own `main-<sha>`, and **Move :latest** points `:latest` at whatever
-`main`'s head build is then. The per-arch digests the merge job
-needs are kept for 14 days, so "Re-run failed jobs" works for that long;
-after that, push again (or dispatch docker-publish on `main`) instead.
+To retry, use **Re-run failed jobs** on the failed run; that's safe at any
+time. The merge job reuses the run's own per-arch builds (kept for 14 days),
+so it finds its `main-<sha>` already in place if it got that far and goes on
+from there; **Move :latest** points `:latest` at whatever `main`'s head
+build is then. Don't use **Re-run all jobs**, or a new dispatch, for a
+commit whose `main-<sha>` already exists: that rebuilds it with new digests,
+and the merge job refuses to overwrite the existing build (`:latest` and
+version tags may point at it). After 14 days, push again instead.
 
 ## 3. GitHub release (manual dispatch)
 
@@ -86,7 +91,10 @@ both image paths to the build of the commit `vX.Y.Z` points at
 `X.Y.*` release. It never touches `:latest`: docker-publish moves that to
 each new head of `main`, which for a release is the version bump's build.
 
-If either retag fails, the job goes red after trying both; the release
+It reads the digest of `main-<sha>` at the org path once, requires the
+legacy path's `main-<sha>` to have the same digest, copies that exact digest
+to both paths, and finally checks each new tag has the same digest at both.
+If any of that fails, the job goes red after trying both paths; the release
 itself already exists. Fix the cause and dispatch a new run of release.yml
 (or re-run the failed one). Either is safe at any time: it refreshes the
 notes and adds only `:X.Y.Z` (and `:X.Y` if no newer `X.Y.*` exists) to the
@@ -165,10 +173,15 @@ After release A's first docker-publish run, in this order:
    only at `ghcr.io/mattny20/compassdocs` (older versions, `main-<sha>`
    builds) to the org path, skips tags already there with the same digest,
    leaves alone any tag already there with a different digest (the org
-   path is newer) and checks every copied tag pulls anonymously. Leave the
-   tag filter blank for everything, or pass a regex (e.g. `^[0-9]` for
-   version tags only). Safe to re-run. compassdocs-ee has the same
-   workflow for its image.
+   path is newer) and checks every copied tag pulls anonymously. It never
+   copies `:latest`, and skips `:X.Y` tags unless the tag filter is set:
+   the publishing jobs maintain those, and the backfill could race them.
+   Leave the filter blank for everything else, or pass a regex (e.g.
+   `^[0-9]+\.[0-9]+\.[0-9]+$` for version tags only). Then, while no
+   release is running, run it once more with `^[0-9]+\.[0-9]+$` to copy
+   the older minors' `:X.Y` tags (e.g. `:1.19`), which no job writes any
+   more; the current minor's is already there and is left alone. Safe to
+   re-run. compassdocs-ee has the same workflow for its image.
 
 **Release B (later): switch installs.** `deploy/docker-compose*.yml` (and
 so `install.sh`, which downloads them) name the org path; existing installs

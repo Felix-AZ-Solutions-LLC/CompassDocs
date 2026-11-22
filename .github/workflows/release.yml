@@ -14,8 +14,8 @@ on:
         required: false
       notes_only:
         description: "Only refresh the existing release's notes from CHANGELOG (no tag, no image retag)"
-        required: false
-        default: "false"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -36,7 +36,7 @@ jobs:
     # group, so sharing would let a release cancel a waiting merge job. A
     # notes-only run touches no image and gets a group of its own.
     concurrency:
-      group: ${{ github.event.inputs.notes_only == 'true' && format('release-notes-{0}', github.run_id) || 'release' }}
+      group: ${{ inputs.notes_only && format('release-notes-{0}', github.run_id) || 'release' }}
       cancel-in-progress: false
     env:
       REGISTRY: ghcr.io
@@ -82,7 +82,7 @@ jobs:
       - name: Create tag + GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          NOTES_ONLY: ${{ github.event.inputs.notes_only }}
+          NOTES_ONLY: ${{ inputs.notes_only }}
           TAG: ${{ steps.v.outputs.tag }}
         run: |
           if [ "$NOTES_ONLY" = true ] && ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null; then
@@ -110,7 +110,7 @@ jobs:
       # release can't move it back.
       - name: Find the release's build
         id: src
-        if: github.event.inputs.notes_only != 'true'
+        if: ${{ !inputs.notes_only }}
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.v.outputs.tag }}
@@ -141,16 +141,44 @@ jobs:
             echo "::notice::v$newest is newer than $TAG, so :$MM stays on it."
           fi
 
+      # Pin the build once: the org path's main-<sha> digest, which the
+      # legacy path's main-<sha> must match. Both retags below copy that exact
+      # digest, so a rebuild in between can't split the version tags.
+      - name: Pin the build's digest
+        id: pin
+        if: ${{ !inputs.notes_only }}
+        env:
+          BUILD: ${{ steps.src.outputs.build }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LEGACY_GHCR_TOKEN: ${{ secrets.LEGACY_GHCR_TOKEN }}
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          source .github/scripts/legacy-ghcr.sh
+          if [ "$IMAGE" = "$LEGACY_IMAGE" ]; then org_login; else legacy_login; fi
+          if ! digest=$(registry_digest "$SRC_AUTH" "$IMAGE:$BUILD"); then
+            echo "::error title=$BUILD not found::$IMAGE:$BUILD isn't there. Check that docker-publish's merge job finished for it. $RERUN"
+            exit 1
+          fi
+          if [ "$IMAGE" != "$LEGACY_IMAGE" ]; then
+            legacy=$(registry_digest "$DST_AUTH" "$LEGACY_IMAGE:$BUILD") || legacy="missing"
+            if [ "$legacy" != "$digest" ]; then
+              echo "::error title=$BUILD differs between the paths::$IMAGE:$BUILD is $digest but $LEGACY_IMAGE:$BUILD is $legacy. Check docker-publish's merge job for that commit; nothing was tagged. $RERUN"
+              exit 1
+            fi
+          fi
+          echo "Pinned $BUILD = $digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
       # Same skopeo copy (--preserve-digests) as the legacy side and
       # docker-publish, via .github/scripts/legacy-ghcr.sh. continue-on-error
       # so the legacy retag below still runs if this one fails; the last step
       # turns either failure into a red job.
       - name: Add semver tags to the built image
         id: retag
-        if: github.event.inputs.notes_only != 'true'
+        if: ${{ !inputs.notes_only }}
         continue-on-error: true
         env:
-          BUILD: ${{ steps.src.outputs.build }}
+          DIGEST: ${{ steps.pin.outputs.digest }}
           TAGS: ${{ steps.src.outputs.tags }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -158,7 +186,7 @@ jobs:
           source .github/scripts/legacy-ghcr.sh
           org_login
           for t in $TAGS; do
-            org_copy "$IMAGE:$BUILD" "$IMAGE:$t"
+            org_copy "$IMAGE@$DIGEST" "$IMAGE:$t"
           done
 
       # The same tags on the pre-move path that installs pull, copied with
@@ -167,9 +195,9 @@ jobs:
       # failure here must be seen.
       - name: Add semver tags on the legacy path (ghcr.io/mattny20/compassdocs)
         id: legacy_retag
-        if: github.event.inputs.notes_only != 'true'
+        if: ${{ !inputs.notes_only }}
         env:
-          BUILD: ${{ steps.src.outputs.build }}
+          DIGEST: ${{ steps.pin.outputs.digest }}
           TAGS: ${{ steps.src.outputs.tags }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LEGACY_GHCR_TOKEN: ${{ secrets.LEGACY_GHCR_TOKEN }}
@@ -182,8 +210,29 @@ jobs:
           source .github/scripts/legacy-ghcr.sh
           legacy_login
           for t in $TAGS; do
-            legacy_copy "$IMAGE:$BUILD" "$LEGACY_IMAGE:$t"
+            legacy_copy "$IMAGE@$DIGEST" "$LEGACY_IMAGE:$t"
           done
+
+      # Each new tag must be the pinned digest, the same at both paths.
+      - name: Check the version tags at both paths
+        if: ${{ !cancelled() && !inputs.notes_only && steps.pin.outcome == 'success' }}
+        env:
+          DIGEST: ${{ steps.pin.outputs.digest }}
+          TAGS: ${{ steps.src.outputs.tags }}
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          source .github/scripts/legacy-ghcr.sh
+          read -ra tags <<< "$TAGS"
+          fail=0
+          check_public_pull "${tags[@]}" || fail=1
+          for t in "${tags[@]}"; do
+            got="${DIGESTS["$IMAGE:$t"]:-}"
+            if [ -n "$got" ] && [ "$got" != "$DIGEST" ]; then
+              echo "::error title=Tag $t isn't the release build::$IMAGE:$t is $got, expected $DIGEST. $RERUN"
+              fail=1
+            fi
+          done
+          exit "$fail"
 
       - name: Fail if an image retag failed
         if: ${{ !cancelled() && steps.retag.outcome == 'failure' }}
