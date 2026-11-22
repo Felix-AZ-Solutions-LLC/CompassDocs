@@ -94,7 +94,8 @@ each new head of `main`, which for a release is the version bump's build.
 It reads the digest of `main-<sha>` at the org path once, requires the
 legacy path's `main-<sha>` to have the same digest, copies that exact digest
 to both paths, and finally checks each new tag has the same digest at both.
-If any of that fails, the job goes red after trying both paths; the release
+If that first check fails, nothing is tagged. If a copy or the final check
+fails, the job goes red after trying both paths. Either way the release
 itself already exists. Fix the cause and dispatch a new run of release.yml
 (or re-run the failed one). Either is safe at any time: it refreshes the
 notes and adds only `:X.Y.Z` (and `:X.Y` if no newer `X.Y.*` exists) to the

@@ -198,8 +198,10 @@ jobs:
             echo "same=true" >> "$GITHUB_OUTPUT"
           # Missing tag, or (first publish) no package yet. A refused read
           # counts too: GITHUB_TOKEN can't write what it can't read, so the
-          # push below would fail rather than overwrite anything.
-          elif grep -qiE 'manifest unknown|name unknown|not found|denied|403' "$err"; then
+          # push below would fail rather than overwrite anything. Match the
+          # status text, not bare digits: the error quotes the tag, whose
+          # short SHA can contain "403".
+          elif grep -qiE 'manifest unknown|name unknown|not found|denied|status code[^0-9]*403|403 \(?forbidden' "$err"; then
             echo "same=false" >> "$GITHUB_OUTPUT"
           else
             cat "$err"

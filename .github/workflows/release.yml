@@ -156,7 +156,7 @@ jobs:
           source .github/scripts/legacy-ghcr.sh
           if [ "$IMAGE" = "$LEGACY_IMAGE" ]; then org_login; else legacy_login; fi
           if ! digest=$(registry_digest "$SRC_AUTH" "$IMAGE:$BUILD"); then
-            echo "::error title=$BUILD not found::$IMAGE:$BUILD isn't there. Check that docker-publish's merge job finished for it. $RERUN"
+            echo "::error title=$BUILD not found::$IMAGE:$BUILD isn't there. Check that docker-publish's merge job finished for it, or run docker-publish by hand on main if that commit had no run (pushed with [skip ci]). $RERUN"
             exit 1
           fi
           if [ "$IMAGE" != "$LEGACY_IMAGE" ]; then
