@@ -1,17 +1,18 @@
 name: Security scan
 
-# Dependency and filesystem vulnerability scanning: on every PR touching
-# dependency or workflow files, on pushes to main, and weekly so new
-# advisories against unchanged code still get caught.
+# Dependency and filesystem vulnerability scanning: on every PR, on pushes to
+# main, and weekly so new advisories against unchanged code still get caught.
+#
+# Every PR, not only those touching dependency files: both jobs are required
+# checks in the main ruleset (.github/rulesets/main.json), and a required
+# check whose workflow a path filter skipped never reports, so the PR could
+# never merge. Both jobs take a minute or two, beside e2e's ten. A new
+# advisory now fails every open PR, not just dependency PRs; fix it in its
+# own PR (that's what main's push and weekly runs would demand anyway).
 on:
   push:
     branches: [main]
   pull_request:
-    paths:
-      - "package.json"
-      - "package-lock.json"
-      - "Dockerfile"
-      - ".github/workflows/**"
   schedule:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
   workflow_dispatch:

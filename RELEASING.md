@@ -6,7 +6,9 @@ one before it.
 
 ## 0. Preconditions
 
-- `main` is green (e2e, security, tls-smoke workflows).
+- `main` is green (e2e, security, tls-smoke workflows). PRs to `main` need
+  the checks in the **Protect main** ruleset (`.github/rulesets/`; the
+  same holds in compassdocs-ee and compassdocs-licensing).
 - `CHANGELOG.md` has an entry for the new version at the top.
 - **License-key guard** — the pinned Ed25519 public key in
   `src/lib/license.ts` must be intact and appear exactly once:
@@ -225,8 +227,9 @@ workflows.
 
 1. Settings → Environments → **New environment** → name it `ghcr-legacy`
    in CompassDocs, `CompassDocs legacy image publishing` in compassdocs-ee
-   (each repo's workflows and `.github/scripts/legacy-ghcr.sh` name their
-   own). Create it before the first run: a job naming an environment that
+   (each repo's workflows name their own, and pass it to
+   `.github/scripts/legacy-ghcr.sh` as `LEGACY_ENV_NAME` where it differs
+   from core's). Create it before the first run: a job naming an environment that
    doesn't exist creates it, empty and with no rules.
 2. Deployment branches and tags → **Selected branches and tags** → add the
    branch rule `main`. (A `v*` tag rule, if you added one earlier, is no
@@ -236,11 +239,55 @@ workflows.
 
 Each run of those jobs shows up as a deployment to that environment on the
 repo's page; that's expected. If the secret is missing, ghcr.io refuses it
-(expired, revoked) or it has any scope beyond `write:packages`/`read:packages`,
-the job fails and says so —
+(expired, revoked) or it has any scope beyond `write:packages`, `read:packages`
+and the `repo` GitHub forces on with them, the job fails and says so —
 on purpose: skipping would silently stop updates for every install. Set an
 expiry on the token, put a reminder in the calendar, and renew it (same
 name, same scope, in both repos' environments) **before** it expires.
+
+### The shared publishing script
+
+`.github/scripts/legacy-ghcr.sh` (token checks, the skopeo copies to the
+legacy path, the anonymous-pull check) exists **only in this repo**.
+compassdocs-ee used to keep a copy, and the two drifted once. Now
+build-ee.yml's **legacy** job sparse-checks-out `.github/scripts` from
+`Felix-AZ-Solutions-LLC/CompassDocs` at **`main`** and sources it from
+there. What differs between the repos comes from the job's environment,
+with core's values as the defaults:
+
+| Variable | Core (default) | compassdocs-ee (build-ee.yml) |
+| --- | --- | --- |
+| `LEGACY_ENV_NAME` | `ghcr-legacy` | `CompassDocs legacy image publishing` |
+| `ORG_PUBLIC_REQUIRED` | `false` until release B | its own, set when ee's installs move |
+
+(`REGISTRY`, `IMAGE`, `LEGACY_IMAGE`, `LEGACY_USER`, `RERUN` and the tokens
+were already per-job.) The allowed token scopes are deliberately not
+overridable.
+
+**What that means for changes here.** A change to the script merged to
+core's `main` runs in compassdocs-ee's **next** build, without a PR there
+and whatever `core_ref` that build is for. So when you change it:
+
+- keep the functions ee calls (`legacy_login`, `legacy_copy`,
+  `check_public_pull`) and the variables it relies on working, or change
+  build-ee.yml in step (merge core first; ee's next build picks it up);
+- if a change breaks ee's legacy job, fix the script on core's `main`,
+  then re-run that job (safe at any time, compassdocs-ee's DEVELOPMENT.md);
+  nothing core-side needs a release for it;
+- anything that can push to core's `main` runs code in ee's legacy job,
+  which holds `LEGACY_GHCR_TOKEN` (and with it the `repo` scope above):
+  one more reason `main` takes changes only through PRs
+  (`.github/rulesets/`).
+
+**Why `main` and not the `core_ref` tag being built.** Pinning to the tag
+would make a build reproducible, but tags before v1.20.39 have no script
+(and ee may rebuild an older core), and the script is about how images
+reach GHCR today (GitHub's token rules, the legacy path, package
+visibility), not about the core version inside the image: a fix to it must
+apply to every build at once, including a rebuild of an old core. Pinning
+to a commit SHA would make each script change a deliberate ee PR, at the
+cost of bumping it by hand; revisit that if the script starts changing
+often or ee's legacy job breaks on a core change.
 
 ## If something goes wrong
 
