@@ -10,7 +10,7 @@
 // run here, once per process, under an advisory lock.
 
 import "server-only";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomInt, timingSafeEqual } from "node:crypto";
 import type { PoolClient } from "pg";
 import { dbReady, pool } from "../../db";
 import { hq, hqOne } from "../db-core";
@@ -78,7 +78,8 @@ export function hashKey(key: string): string {
 export function newIntegrationKey(): { key: string; hash: string; prefix: string } {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   let s = "";
-  for (const b of randomBytes(40)) s += alphabet[b % 62];
+  // Each character uniform: randomInt rejects, where a byte mod 62 favours A-H.
+  for (let i = 0; i < 40; i++) s += alphabet[randomInt(alphabet.length)];
   const key = `${KEY_PREFIX}${s}`;
   return { key, hash: hashKey(key), prefix: key.slice(0, KEY_PREFIX.length + 6) };
 }

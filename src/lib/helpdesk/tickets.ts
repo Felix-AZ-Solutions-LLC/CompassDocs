@@ -10,7 +10,7 @@
 // client while those run. Server-only.
 
 import "server-only";
-import { randomBytes } from "node:crypto";
+import { randomInt } from "node:crypto";
 import type { PoolClient } from "pg";
 import { hq, hqOne, normalizeRow, withTx } from "./db-core";
 import type { HdQueryable } from "./db-core";
@@ -119,7 +119,8 @@ export function parseTicketNumber(raw: string | number): number | null {
 export function newTicketReplyToken(): string {
   const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
   let s = "";
-  for (const b of randomBytes(16)) s += alphabet[b % 36];
+  // Each character uniform: randomInt rejects, where a byte mod 36 favours a-d.
+  for (let i = 0; i < 16; i++) s += alphabet[randomInt(alphabet.length)];
   return s;
 }
 

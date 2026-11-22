@@ -12,6 +12,7 @@
 // Client-safe on purpose (no server-only marker): the admin UI describes and
 // validates mappings with the same functions the sync runs.
 
+import { RE2JS } from "re2js";
 import type { ProviderKey } from "./identity-provider";
 
 /** A provider's raw record for one person. `_groups` is added by the fetch
@@ -207,22 +208,25 @@ function extract(m: { path: string; pattern: string; group?: number }, record: P
   if (!re) return [];
   const group = Number.isInteger(m.group) && (m.group as number) >= 0 ? (m.group as number) : 1;
   for (const v of valuesAtPath(record, m.path)) {
-    const hit = re.exec(v);
-    if (hit) {
-      const picked = hit[group] ?? hit[0] ?? "";
+    const hit = re.matcher(v);
+    if (hit.find()) {
+      const picked = (group <= hit.groupCount() ? hit.group(group) : null) ?? hit.group(0) ?? "";
       if (picked.trim()) return [picked.trim()];
     }
   }
   return [];
 }
 
-/** A pattern that compiles, or null. Bounded in length so admin data can't
- *  smuggle in something pathological. */
-export function compilePattern(pattern: string): RegExp | null {
+/** A pattern that compiles, or null. Bounded in length, and compiled for
+ *  re2js (linear-time, as helpdesk automation patterns are): the values it
+ *  runs on come from provider records people can edit about themselves, so a
+ *  pattern such as (a+)+$ must not be able to backtrack catastrophically.
+ *  Lookarounds and backreferences are not part of RE2 and don't compile. */
+export function compilePattern(pattern: string): RE2JS | null {
   const p = String(pattern ?? "");
   if (!p || p.length > MAX_PATTERN) return null;
   try {
-    return new RegExp(p, "i");
+    return RE2JS.compile(p, RE2JS.CASE_INSENSITIVE);
   } catch {
     return null;
   }
