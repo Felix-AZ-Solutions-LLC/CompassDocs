@@ -4,6 +4,28 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.39] - 2026-11-22
+
+CompassDocs has a new home on GitHub.
+
+### Changed
+- **The project moved to the Felix-AZ-Solutions-LLC organization.** The
+  code, releases and installer now live at
+  github.com/Felix-AZ-Solutions-LLC/CompassDocs.
+- **The app image is published to two addresses.** Every update goes to the
+  new address, `ghcr.io/felix-az-solutions-llc/compassdocs`, and the same
+  image also goes to the old one, `ghcr.io/mattny20/compassdocs`.
+- **New installs use the new address.** The installer, the Deploy to Azure
+  button and the compose files in `deploy/` now point there. The Enterprise
+  image keeps its current address for now.
+- The admin console checks for updates against the new address.
+
+### Upgrading
+- **Nothing to do.** Installs made before this release keep updating with
+  `docker compose pull` (or the admin console's update) from the old
+  address, which gets every release. If that's ever going to change, the
+  app will tell you first.
+
 ## [1.20.38] - 2026-11-20
 
 A steadier test suite, and more time for the end-to-end run in CI.

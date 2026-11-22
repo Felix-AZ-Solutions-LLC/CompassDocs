@@ -10,7 +10,7 @@
 
 import pkg from "../../package.json";
 
-const REPO = process.env.COMPASSDOCS_REPO || "mattny20/CompassDocs";
+const REPO = process.env.COMPASSDOCS_REPO || "Felix-AZ-Solutions-LLC/CompassDocs";
 const CACHE_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 export interface ReleaseInfo {

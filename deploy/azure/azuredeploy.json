@@ -234,7 +234,7 @@
       "chmod 600 .env",
       "cd /opt",
       "export COMPASSDOCS_EDITION='{EDITION}' COMPASSDOCS_TLS='{TLS}'",
-      "curl -fsSL https://raw.githubusercontent.com/mattny20/CompassDocs/main/install.sh -o /tmp/compassdocs-install.sh",
+      "curl -fsSL https://raw.githubusercontent.com/Felix-AZ-Solutions-LLC/CompassDocs/main/install.sh -o /tmp/compassdocs-install.sh",
       "bash /tmp/compassdocs-install.sh",
       "echo '--- CompassDocs bootstrap complete ---'"
     ],

@@ -5,6 +5,12 @@ name: Publish Docker image
 #   - every version tag vX.Y.Z -> tags :X.Y.Z, :X.Y, :latest
 # Users then install/update by pulling ghcr.io/<owner>/compassdocs.
 #
+# The repo moved from the mattny20 account to the Felix-AZ-Solutions-LLC org,
+# and GHCR can't move packages between accounts. Every install made before the
+# move pulls ghcr.io/mattny20/compassdocs, so the merge job also copies each
+# manifest it pushes to that legacy path (same digest, same tags), logged in as
+# mattny20 with the LEGACY_GHCR_TOKEN secret. See RELEASING.md.
+#
 # Each architecture is built on its OWN native runner (amd64 on ubuntu-latest,
 # arm64 on ubuntu-24.04-arm) and pushed by digest; a final job stitches the
 # per-arch images into one multi-arch manifest. This avoids QEMU emulation,
@@ -17,7 +23,10 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }} # e.g. mattny20/CompassDocs (lowercased in steps)
+  IMAGE_NAME: ${{ github.repository }} # e.g. Felix-AZ-Solutions-LLC/CompassDocs (lowercased in steps)
+  # Pre-move image path that existing installs still pull; kept in step.
+  LEGACY_IMAGE: ghcr.io/mattny20/compassdocs
+  LEGACY_USER: mattny20
 
 jobs:
   build:
@@ -136,3 +145,92 @@ jobs:
       - name: Inspect image
         run: |
           docker buildx imagetools inspect "${IMAGE}:${{ steps.meta.outputs.version }}"
+
+      # Copy the manifest just pushed to the pre-move path, under every tag it
+      # got above. Logs in as mattny20 in a separate DOCKER_CONFIG so the
+      # GITHUB_TOKEN login stays untouched. A missing secret fails the job:
+      # skipping would quietly stop updates for every existing install.
+      - name: Mirror to the legacy path (ghcr.io/mattny20/compassdocs)
+        id: mirror
+        env:
+          LEGACY_GHCR_TOKEN: ${{ secrets.LEGACY_GHCR_TOKEN }}
+        run: |
+          if [ "$IMAGE" = "$LEGACY_IMAGE" ]; then
+            echo "::notice::This run already publishes to $LEGACY_IMAGE; nothing to mirror."
+            exit 0
+          fi
+          if [ -z "$LEGACY_GHCR_TOKEN" ]; then
+            echo "::error title=LEGACY_GHCR_TOKEN secret is missing::Existing installs pull $LEGACY_IMAGE and won't get this build. Add an Actions secret named LEGACY_GHCR_TOKEN (org or repo level) holding a classic personal access token from the $LEGACY_USER account with only the write:packages scope, then re-run this job. See RELEASING.md."
+            exit 1
+          fi
+          mapfile -t TAGS < <(jq -r '.tags[] | sub("^.*:"; "")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          # Copy from a tag only this build has (main-<sha> or X.Y.Z), not
+          # :latest, which a newer run could move in the meantime.
+          SRC_TAG=$(printf '%s\n' "${TAGS[@]}" | grep -vx latest | head -n1 || true)
+          SRC_TAG="${SRC_TAG:-${TAGS[0]}}"
+          args=()
+          for t in "${TAGS[@]}"; do args+=(-t "$LEGACY_IMAGE:$t"); done
+
+          export DOCKER_CONFIG="$RUNNER_TEMP/legacy-docker-config"
+          mkdir -p "$DOCKER_CONFIG"
+          # Same buildx binary as the default config, if one was installed there.
+          if [ -d "$HOME/.docker/cli-plugins" ]; then
+            ln -sfn "$HOME/.docker/cli-plugins" "$DOCKER_CONFIG/cli-plugins"
+          fi
+          printf '%s' "$LEGACY_GHCR_TOKEN" | docker login "$REGISTRY" -u "$LEGACY_USER" --password-stdin
+
+          echo "Copying $IMAGE:$SRC_TAG -> $LEGACY_IMAGE:{${TAGS[*]}}"
+          if ! docker buildx imagetools create "${args[@]}" "$IMAGE:$SRC_TAG"; then
+            echo "::error title=Copy to $LEGACY_IMAGE failed::Check that LEGACY_GHCR_TOKEN is a current $LEGACY_USER token with write:packages, and that $IMAGE is public (see the next step)."
+            exit 1
+          fi
+          docker logout "$REGISTRY" || true
+          rm -rf "$DOCKER_CONFIG"
+
+      # Pull both paths as an anonymous client would. Runs even when the
+      # mirror failed, so a private org package is reported too.
+      - name: Check both paths are publicly pullable
+        if: ${{ !cancelled() && steps.mirror.outcome != 'skipped' }}
+        run: |
+          mapfile -t TAGS < <(jq -r '.tags[] | sub("^.*:"; "")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          SRC_TAG=$(printf '%s\n' "${TAGS[@]}" | grep -vx latest | head -n1 || true)
+          SRC_TAG="${SRC_TAG:-${TAGS[0]}}"
+
+          # anon_manifest <ghcr.io/owner/name> <tag> -> "<http code> <digest>"
+          anon_manifest() {
+            local repo="${1#"$REGISTRY"/}" token code digest
+            token=$(curl -fsS "https://$REGISTRY/token?scope=repository:$repo:pull" | jq -r '.token // empty') || true
+            if [ -z "$token" ]; then echo "no-token -"; return; fi
+            read -r code digest < <(curl -sS -o /dev/null -I \
+              -w '%{http_code} %header{docker-content-digest}\n' \
+              -H "Authorization: Bearer $token" \
+              -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+              "https://$REGISTRY/v2/$repo/manifests/$2") || true
+            echo "${code:-000} ${digest:--}"
+          }
+
+          paths=("$IMAGE")
+          if [ "$LEGACY_IMAGE" != "$IMAGE" ]; then paths+=("$LEGACY_IMAGE"); fi
+          fail=0
+          declare -A src_digest
+          for path in "${paths[@]}"; do
+            bad=""
+            for t in "${TAGS[@]}"; do
+              read -r code digest < <(anon_manifest "$path" "$t") || true
+              echo "$path:$t -> $code $digest"
+              if [ "$code" != 200 ]; then bad="$bad $t($code)"; fi
+              if [ "$t" = "$SRC_TAG" ]; then src_digest[$path]="$digest"; fi
+            done
+            if [ -z "$bad" ]; then continue; fi
+            fail=1
+            if [ "$path" = "$IMAGE" ]; then
+              echo "::error title=$IMAGE is not public::Anonymous pull failed for:$bad. New installs can't pull it. Make the package public once (Org → Packages → compassdocs → Package settings → Change visibility → Public), then re-run this job."
+            else
+              echo "::error title=$path is missing this build::Anonymous pull failed for:$bad. Existing installs won't get this build. Fix the mirror step above, then re-run this job."
+            fi
+          done
+          if [ "${#paths[@]}" -gt 1 ] && [ "$fail" = 0 ] && [ "${src_digest[$IMAGE]}" != "${src_digest[$LEGACY_IMAGE]}" ]; then
+            echo "::error title=Digests differ::$IMAGE:$SRC_TAG is ${src_digest[$IMAGE]} but $LEGACY_IMAGE:$SRC_TAG is ${src_digest[$LEGACY_IMAGE]}."
+            fail=1
+          fi
+          exit "$fail"

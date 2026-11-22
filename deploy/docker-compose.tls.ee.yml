@@ -24,6 +24,8 @@ services:
       retries: 20
 
   app:
+    # Still on the pre-move mattny20 path: the enterprise image is built in a
+    # separate repo that hasn't moved to the Felix-AZ-Solutions-LLC org yet.
     image: ghcr.io/mattny20/compassdocs-ee:${COMPASSDOCS_EE_VERSION:-latest}
     restart: unless-stopped
     depends_on:

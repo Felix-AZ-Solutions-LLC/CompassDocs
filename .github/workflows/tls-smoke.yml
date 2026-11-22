@@ -62,8 +62,13 @@ jobs:
           mkdir -p /tmp/stack
           cp deploy/docker-compose.tls.yml /tmp/stack/docker-compose.yml
           cp deploy/Caddyfile /tmp/stack/Caddyfile
-          # run the image we just built instead of the published one
-          sed -i 's|image: ghcr.io/mattny20/compassdocs:.*|image: compassdocs-test:local|' /tmp/stack/docker-compose.yml
+          # run the image we just built instead of the published one (any owner
+          # path, so a registry move can't silently make this a no-op)
+          sed -i -E 's|image: ghcr\.io/[^/]+/compassdocs:.*|image: compassdocs-test:local|' /tmp/stack/docker-compose.yml
+          if ! grep -q 'image: compassdocs-test:local' /tmp/stack/docker-compose.yml; then
+            echo "::error::Couldn't point the compose app service at the local image; the image line in deploy/docker-compose.tls.yml changed shape."
+            exit 1
+          fi
           echo "POSTGRES_PASSWORD=smoketest123" > /tmp/stack/.env
           # 1.20.27: a fresh install is claimed only with the setup token; preset it for the smoke.
           echo "COMPASSDOCS_SETUP_TOKEN=smoke-setup-token" >> /tmp/stack/.env
