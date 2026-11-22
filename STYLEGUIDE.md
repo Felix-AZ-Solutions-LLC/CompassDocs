@@ -1974,6 +1974,15 @@ a status chip; a status chip never has one.
   (**Email…**), never the chip, and its dialog says what confirming grants
   and to whom (single sign-on gives the account to whoever signs in with
   the address), so nobody confirms by habit.
+- **A directory mapping pattern the safe engine can't run is a "Rewrite
+  pattern" chip** (Directory → Fields): `warn` `sm` beside the mapping in
+  the fields table, outside the cell's button, with `data-tt`
+  (`tabIndex={0}`, `data-tt-wrap`) saying it still works on the first
+  1,024 characters of each value and how to rewrite it; the editor repeats
+  the sentence as the Pattern field's help. Only patterns stored before
+  RE2 was required get it: a new or edited pattern that RE2 refuses is the
+  Pattern `Field`'s inline error (the engine's own reason), shown once Save
+  is tried, never the mapping's generic "Incomplete" line.
 
 **Attribute chips** (a directory field shown as chips, a tag list) are not
 status: render them with `FieldChips`, which shows the option's **label**

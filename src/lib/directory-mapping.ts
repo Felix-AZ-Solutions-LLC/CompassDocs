@@ -14,6 +14,7 @@
 
 import { RE2JS } from "re2js";
 import type { ProviderKey } from "./identity-provider";
+import { re2Refusal } from "./re2-pattern";
 
 /** A provider's raw record for one person. `_groups` is added by the fetch
  *  layer: the ids of the configured groups this person is a (transitive)
@@ -46,6 +47,8 @@ export type FieldMappings = Partial<Record<ProviderKey, Mapping>>;
 
 const MAX_DEPTH = 4;
 const MAX_PATTERN = 200;
+/** A stored pattern RE2 can't run is matched against at most this much of each value (see compilePattern). */
+export const LEGACY_VALUE_MAX = 1024;
 const MAX_VALUES = 50;
 
 // --- Reading a record ----------------------------------------------------------
@@ -208,28 +211,95 @@ function extract(m: { path: string; pattern: string; group?: number }, record: P
   if (!re) return [];
   const group = Number.isInteger(m.group) && (m.group as number) >= 0 ? (m.group as number) : 1;
   for (const v of valuesAtPath(record, m.path)) {
-    const hit = re.matcher(v);
-    if (hit.find()) {
-      const picked = (group <= hit.groupCount() ? hit.group(group) : null) ?? hit.group(0) ?? "";
-      if (picked.trim()) return [picked.trim()];
+    let picked: string | null | undefined;
+    if (re.engine === "re2") {
+      const hit = re.re.matcher(v);
+      if (!hit.find()) continue;
+      picked = (group <= hit.groupCount() ? hit.group(group) : null) ?? hit.group(0);
+    } else {
+      // A legacy pattern on the backtracking engine: the value is capped so a
+      // pathological pattern's cost stays bounded.
+      const hit = re.re.exec(v.slice(0, LEGACY_VALUE_MAX));
+      if (!hit) continue;
+      picked = hit[group] ?? hit[0];
     }
+    if (picked?.trim()) return [picked.trim()];
   }
   return [];
 }
 
-/** A pattern that compiles, or null. Bounded in length, and compiled for
- *  re2js (linear-time, as helpdesk automation patterns are): the values it
- *  runs on come from provider records people can edit about themselves, so a
- *  pattern such as (a+)+$ must not be able to backtrack catastrophically.
- *  Lookarounds and backreferences are not part of RE2 and don't compile. */
-export function compilePattern(pattern: string): RE2JS | null {
+/**
+ * How a pattern runs: on re2js (linear time) whenever it compiles there, as
+ * every newly saved pattern must. A pattern stored before that rule that
+ * RE2 can't run (a lookaround, a backreference, `[^]`, `\cJ`…) keeps working
+ * on JavaScript's RegExp — `legacy` — against at most LEGACY_VALUE_MAX
+ * characters of each value; the fields panel flags it and the sync logs it
+ * so an admin rewrites it. Null when it compiles in neither.
+ */
+export type CompiledMappingPattern = { engine: "re2"; re: RE2JS } | { engine: "legacy"; re: RegExp };
+
+const compiled = new Map<string, CompiledMappingPattern | null>();
+
+export function compilePattern(pattern: string): CompiledMappingPattern | null {
   const p = String(pattern ?? "");
   if (!p || p.length > MAX_PATTERN) return null;
+  const hit = compiled.get(p);
+  if (hit !== undefined) return hit;
+  let out: CompiledMappingPattern | null;
   try {
-    return RE2JS.compile(p, RE2JS.CASE_INSENSITIVE);
+    out = { engine: "re2", re: RE2JS.compile(p, RE2JS.CASE_INSENSITIVE) };
   } catch {
-    return null;
+    try {
+      out = { engine: "legacy", re: new RegExp(p, "i") };
+    } catch {
+      out = null;
+    }
   }
+  if (compiled.size > 500) compiled.clear();
+  compiled.set(p, out);
+  return out;
+}
+
+/** Why a new or edited pattern can't be saved (it must compile in RE2), or null when it can. */
+export function patternProblem(pattern: string): string | null {
+  const p = String(pattern ?? "").trim();
+  if (!p) return "Write a pattern.";
+  if (p.length > MAX_PATTERN) return `Keep a pattern under ${MAX_PATTERN} characters.`;
+  try {
+    RE2JS.compile(p, RE2JS.CASE_INSENSITIVE);
+    return null;
+  } catch (e) {
+    return `${re2Refusal(p, e)}.`;
+  }
+}
+
+/** Every extract pattern in a mapping, a field's mappings blob, or untrusted JSON of either (trimmed). */
+export function extractPatterns(raw: unknown, depth = 0): string[] {
+  if (!raw || typeof raw !== "object" || depth > MAX_DEPTH + 2) return [];
+  const o = raw as Record<string, unknown>;
+  if (o.kind === "extract") return typeof o.pattern === "string" && o.pattern.trim() ? [o.pattern.trim()] : [];
+  return Object.values(o).flatMap((v) => (Array.isArray(v) ? v.flatMap((x) => extractPatterns(x, depth + 1)) : extractPatterns(v, depth + 1)));
+}
+
+/** The stored patterns in a mapping (or mappings blob) that only run on the legacy engine. */
+export function legacyPatterns(raw: unknown): string[] {
+  return dedupe(extractPatterns(raw).filter((p) => compilePattern(p)?.engine === "legacy"));
+}
+
+/**
+ * The first reason a mappings save must be refused: a pattern that isn't
+ * already stored on the field (`stored`, its current patterns) and doesn't
+ * compile in RE2. A stored pattern sent back unchanged — a rename, a reorder,
+ * the other provider's mapping saved — always passes.
+ */
+export function newPatternProblem(raw: unknown, stored: Iterable<string> = []): string | null {
+  const keep = new Set(stored);
+  for (const p of extractPatterns(raw)) {
+    if (keep.has(p)) continue;
+    const problem = patternProblem(p);
+    if (problem) return problem;
+  }
+  return null;
 }
 
 function derive(rule: string, record: ProviderRecord): string[] {
