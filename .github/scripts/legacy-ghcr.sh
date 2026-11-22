@@ -101,6 +101,35 @@ org_copy() {
   fi
 }
 
+# registry_digest <authfile> <ref>: prints the digest of the manifest as the
+# registry serves it (sha256:...), or fails if it can't be read.
+registry_digest() {
+  local raw="$RUNNER_TEMP/manifest.raw"
+  if ! skopeo inspect --raw --authfile "$1" "docker://$2" > "$raw" 2>/dev/null; then
+    rm -f "$raw"
+    return 1
+  fi
+  echo "sha256:$(sha256sum < "$raw" | cut -d' ' -f1)"
+  rm -f "$raw"
+}
+
+# main_head: prints the commit main points at now (40 hex digits), from the
+# GitHub API (needs GH_TOKEN), or fails after three tries. gh prints the API's
+# error JSON on stdout even with --jq, so the answer must look like a sha.
+main_head() {
+  local out attempt
+  for attempt in 1 2 3; do
+    out=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha 2>/dev/null) || out=""
+    if [[ $out =~ ^[0-9a-f]{40}$ ]]; then
+      echo "$out"
+      return 0
+    fi
+    echo "Attempt $attempt to read the head of main failed${out:+: $out}" >&2
+    if [ "$attempt" -lt 3 ]; then sleep 5; fi
+  done
+  return 1
+}
+
 # anon_manifest <registry/owner/name> <tag> -> "<http code> <digest>", as an
 # anonymous client would see it.
 anon_manifest() {

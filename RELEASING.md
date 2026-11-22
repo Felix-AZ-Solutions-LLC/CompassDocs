@@ -50,11 +50,18 @@ follow the builds:
   fails if either isn't public, the tag is missing, or the two digests
   differ. It has no concurrency group, so it's never cancelled while
   waiting; runs for different commits write different tags.
-- **Move :latest** then points `:latest` at both paths to that build, only
-  if its commit is still the head of `main`, and checks both. It's in the
-  `ghcr-latest` group with `cancel-in-progress`: when a newer push's job
-  comes along, it replaces this one and re-checks the head itself. A
-  cancelled or skipped **Move :latest** is normal after quick successive
+- **Move :latest to main's head** then reads the commit `main` is at *now*
+  and, if that commit's `main-<sha>` is at both paths with one digest,
+  points `:latest` at both to it and checks them. It copies the head, not
+  necessarily its own build, because merge jobs can finish in any order:
+  whichever of these jobs runs last leaves both paths on the head. If the
+  head's `main-<sha>` isn't at both paths yet (its merge job is still
+  running, or failed), it changes nothing and says so; the head's own run
+  moves `:latest` when its merge job is done. These jobs run one at a time
+  (`ghcr-latest` group, no cancel-in-progress), so a pair of copies is
+  never interrupted halfway. GitHub keeps only the newest waiting one and
+  cancels older waiting ones; that's harmless, as each copies the head
+  anyway. A cancelled **Move :latest** is normal after quick successive
   pushes.
 
 Verify the merge job succeeded before proceeding — the release (step 3)
@@ -64,8 +71,8 @@ commit shows `conclusion: success` (the run as a whole can show
 `cancelled` because of its **Move :latest** job).
 
 Re-running either job is safe at any time: the merge job only (re)writes
-its own `main-<sha>`, and **Move :latest** moves `:latest` only if its
-commit is still the head of `main`. The per-arch digests the merge job
+its own `main-<sha>`, and **Move :latest** points `:latest` at whatever
+`main`'s head build is then. The per-arch digests the merge job
 needs are kept for 14 days, so "Re-run failed jobs" works for that long;
 after that, push again (or dispatch docker-publish on `main`) instead.
 
@@ -97,8 +104,9 @@ In `Felix-AZ-Solutions-LLC/compassdocs-ee`, run **build-ee.yml** with input:
 { "core_ref": "vX.Y.Z" }
 ```
 
-It overlays `ee/` onto that core tag and pushes the private enterprise
-image. The core tag must exist first — step 3 before step 4, always.
+It overlays `ee/` onto that core tag and pushes the enterprise image to
+public GHCR packages (its features unlock only with a license key). The
+core tag must exist first — step 3 before step 4, always.
 
 ## 5. Cloud fleet (manual, separate repo)
 
@@ -220,7 +228,7 @@ name, same scope, in both repos' environments) **before** it expires.
 - **docker-publish fails after merge** — fix the cause, then re-run the
   failed job (within 14 days; see [step 2](#2-community-image-automatic)).
   That's safe even after newer pushes: only **Move :latest** touches
-  `:latest`, and only while its commit is still the head of `main`. Nothing
+  `:latest`, and it always points it at `main`'s current head build. Nothing
   downstream has happened yet. If the error names `LEGACY_GHCR_TOKEN` or
   says the org package isn't public, see
   [Moving to the org](#moving-to-the-org) first.

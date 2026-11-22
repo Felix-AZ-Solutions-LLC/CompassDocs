@@ -141,16 +141,10 @@ jobs:
             echo "::notice::v$newest is newer than $TAG, so :$MM stays on it."
           fi
 
-      - name: Log in to GHCR
-        if: github.event.inputs.notes_only != 'true'
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # continue-on-error so the legacy retag below still runs if this one
-      # fails; the last step turns either failure into a red job.
+      # Same skopeo copy (--preserve-digests) as the legacy side and
+      # docker-publish, via .github/scripts/legacy-ghcr.sh. continue-on-error
+      # so the legacy retag below still runs if this one fails; the last step
+      # turns either failure into a red job.
       - name: Add semver tags to the built image
         id: retag
         if: github.event.inputs.notes_only != 'true'
@@ -158,13 +152,14 @@ jobs:
         env:
           BUILD: ${{ steps.src.outputs.build }}
           TAGS: ${{ steps.src.outputs.tags }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
-          SRC="$IMAGE:$BUILD"
-          args=()
-          for t in $TAGS; do args+=(-t "$IMAGE:$t"); done
-          echo "Retagging $SRC -> ${args[*]}"
-          docker buildx imagetools create "${args[@]}" "$SRC"
+          source .github/scripts/legacy-ghcr.sh
+          org_login
+          for t in $TAGS; do
+            org_copy "$IMAGE:$BUILD" "$IMAGE:$t"
+          done
 
       # The same tags on the pre-move path that installs pull, copied with
       # skopeo (.github/scripts/legacy-ghcr.sh): GITHUB_TOKEN reads the org
