@@ -195,26 +195,30 @@ and installs have had time to act on it.
 ### The legacy-publishing environment and LEGACY_GHCR_TOKEN
 
 `LEGACY_GHCR_TOKEN` is a **classic** personal access token from the
-**`mattny20`** account with only the **`write:packages`** scope.
+**`mattny20`** account with the **`write:packages`** scope.
 `GITHUB_TOKEN` can only write packages the org owns, so it's the only way
 to keep the legacy path current. It lives in a GitHub **Environment**
 (named **`ghcr-legacy`** in this repo and **`CompassDocs legacy image
-publishing`** in compassdocs-ee), not as a repo or org secret, so only the jobs that need it (docker-publish's merge and
-**Move :latest** jobs, release; build-ee's legacy job) can read it, and only
-from `main`.
+publishing`** in compassdocs-ee), not as a repo or org secret, so only the
+jobs that need it (docker-publish's merge and **Move :latest** jobs,
+release; build-ee's legacy job) can read it, and only from `main`.
 The workflows name the environment exactly; renaming it means updating
 them (and, since an environment's secrets don't move with it, adding the
 token again).
 
 **Making the token.** Signed in as `mattny20`, open
 <https://github.com/settings/tokens/new?scopes=write:packages&description=CompassDocs%20legacy%20image%20publishing>.
-It preselects `write:packages` (which brings `read:packages` with it). Make
-sure **nothing else is ticked**, `repo` above all: it would give the secret
-full access to every `mattny20` repository. Every job that uses the token
-checks its scopes first and fails, naming the extra scopes, unless they are
-only `write:packages` and `read:packages`; to fix that, edit the token at
-<https://github.com/settings/tokens>, untick the rest and save. The token
-value doesn't change, so the secret needn't be updated.
+GitHub ticks `read:packages` and, on classic tokens, also forces `repo` on
+with `write:packages` (it can't be unticked). Leave everything else
+unticked. Every job that uses the token checks its scopes first: it fails,
+naming them, on anything beyond `write:packages`, `read:packages` and
+`repo`, and warns on every run that `repo` is there, because it also lets
+the token change every repository `mattny20` can reach, the org's
+included. To narrow that, move the token to a separate GitHub account that
+owns no repositories and isn't in the org, give that account write access
+to the `mattny20/compassdocs` and `mattny20/compassdocs-ee` packages
+(package settings → Manage access), and set `LEGACY_USER` to it in the
+workflows.
 
 **The environment**, in **each** of `Felix-AZ-Solutions-LLC/CompassDocs` and
 `Felix-AZ-Solutions-LLC/compassdocs-ee`:
