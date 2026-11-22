@@ -20,7 +20,7 @@ export interface SyncSchedule {
 }
 
 export function parseRecipients(raw: string): string[] {
-  return [...new Set(String(raw ?? "").split(/[,;\s]+/).map((s) => s.trim().toLowerCase()).filter((s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s)))].slice(0, 20);
+  return [...new Set(String(raw ?? "").split(/[,;\s]+/).map((s) => s.trim().toLowerCase()).filter((s) => s.length <= 254 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s)))].slice(0, 20);
 }
 
 /** Is a provider due, given its frequency and when it last ran on schedule? */

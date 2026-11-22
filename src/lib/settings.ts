@@ -137,7 +137,7 @@ export function normalizeDomain(raw: string): string {
     .trim()
     .toLowerCase()
     .replace(/^https?:\/\//, "")
-    .replace(/\/.*$/, "")
+    .split("/")[0] // drop any path (a split, not /\/.*$/, which backtracks on a run of slashes)
     .replace(/:\d+$/, "");
   return DOMAIN_RE.test(d) ? d : "";
 }

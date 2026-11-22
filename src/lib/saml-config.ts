@@ -126,15 +126,24 @@ export function parseIdpMetadata(xml: string): {
   idpCert: string;
 } | null {
   const issuer = /entityID="([^"]+)"/.exec(xml)?.[1] ?? "";
-  // First HTTP-Redirect SingleSignOnService location (POST fallback).
-  const redirect =
-    /<[^>]*SingleSignOnService[^>]*HTTP-Redirect[^>]*Location="([^"]+)"/.exec(xml)?.[1] ??
-    /Location="([^"]+)"[^>]*HTTP-Redirect/.exec(xml)?.[1] ??
-    "";
-  const post = /<[^>]*SingleSignOnService[^>]*HTTP-POST[^>]*Location="([^"]+)"/.exec(xml)?.[1] ?? "";
-  const cert = /<(?:[a-zA-Z0-9]+:)?X509Certificate[^>]*>([\s\S]*?)<\/(?:[a-zA-Z0-9]+:)?X509Certificate>/.exec(
-    xml,
-  )?.[1];
+  // Tag by tag, so no pattern rescans the document from every "<" (the old
+  // whole-document patterns were quadratic on a run of unclosed tags).
+  // First HTTP-Redirect SingleSignOnService location (POST fallback), in
+  // either attribute order.
+  const ssoTags = (xml.match(/<[^<>]*>/g) ?? []).filter((t) => t.includes("SingleSignOnService"));
+  // \sLocation, so a ResponseLocation="…" attribute is never read as it.
+  const location = (t: string | undefined) => (t ? /\sLocation="([^"]+)"/.exec(t)?.[1] ?? "" : "");
+  const redirect = location(ssoTags.find((t) => t.includes("HTTP-Redirect")));
+  const post = location(ssoTags.find((t) => t.includes("HTTP-POST")));
+  // The first certificate: its opening tag, then the first closing tag after it.
+  const open = /<(?:[a-zA-Z0-9]+:)?X509Certificate[^<>]*>/.exec(xml);
+  let cert: string | undefined;
+  if (open) {
+    const close = /<\/(?:[a-zA-Z0-9]+:)?X509Certificate>/g;
+    close.lastIndex = open.index + open[0].length;
+    const end = close.exec(xml);
+    if (end) cert = xml.slice(open.index + open[0].length, end.index);
+  }
   const ssoUrl = redirect || post;
   if (!issuer || !ssoUrl || !cert) return null;
   return { idpIssuer: issuer, idpSsoUrl: ssoUrl, idpCert: cert.replace(/\s+/g, "") };

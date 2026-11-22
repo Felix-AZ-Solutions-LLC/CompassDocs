@@ -49,7 +49,7 @@
 // transaction. Server-only.
 
 import "server-only";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import { getSmtpConfig } from "../smtp-config";
 import { getMailMethod, mailConfigured, workspaceFrom } from "../mail-config";
 import { workspaceTransport } from "../mailer";
@@ -66,11 +66,10 @@ import type { HdPriority } from "./types";
 
 const TOKEN_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 
-/** 16 characters of [a-z0-9] (about 82 bits). */
+/** 16 characters of [a-z0-9] (about 82 bits), each uniform (randomInt, not a byte mod 36). */
 export function newReplyToken(): string {
-  const bytes = randomBytes(16);
   let s = "";
-  for (const b of bytes) s += TOKEN_ALPHABET[b % 36];
+  for (let i = 0; i < 16; i++) s += TOKEN_ALPHABET[randomInt(TOKEN_ALPHABET.length)];
   return s;
 }
 

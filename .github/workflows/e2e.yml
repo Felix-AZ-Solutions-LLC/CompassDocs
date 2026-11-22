@@ -8,6 +8,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Checkout and artifact upload only; nothing writes to the repository.
+permissions:
+  contents: read
+
 jobs:
   e2e:
     runs-on: ubuntu-latest

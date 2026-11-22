@@ -7,8 +7,7 @@
   If a new pattern is needed, add it to the guide in the same PR.
 - **Releases follow [RELEASING.md](RELEASING.md)** — version bump in both
   package files, PR titled "X.Y.Z: summary", squash-merge, docker-publish,
-  release.yml, then the enterprise image build (which also mirrors to the
-  cloud fleet's registry).
+  release.yml, then the enterprise image build.
 - Accent/theming: `--compass-*`/`--slate-*` CSS vars are raw "R G B"
   triplets — always `rgb(var(--…))` in hand-written CSS; a bare var fails
   silently.

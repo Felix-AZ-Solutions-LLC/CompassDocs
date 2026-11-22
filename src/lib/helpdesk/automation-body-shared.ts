@@ -29,6 +29,7 @@
 //              sender is on the rule's list (whole addresses and "@domain").
 
 import { RE2JS } from "re2js";
+import { re2Refusal } from "../re2-pattern";
 import { bracketedAddress, scanAddresses } from "./mailboxes-shared";
 import { cleanTrustedSenders } from "./inbound-senders-shared";
 import type { HdFormFieldType, HdFormOption } from "./types";
@@ -61,7 +62,6 @@ export function phraseHit(phrases: readonly string[], text: string): boolean {
 
 export type CompiledPattern = { ok: true; re: RE2JS; groups: number } | { ok: false; error: string };
 
-const UNSUPPORTED = /\(\?<?[=!]|\\[1-9]/;
 const cache = new Map<string, CompiledPattern>();
 
 /**
@@ -80,16 +80,7 @@ export function compilePattern(pattern: string, matchCase = false): CompiledPatt
       const re = RE2JS.compile(pattern, matchCase ? 0 : RE2JS.CASE_INSENSITIVE);
       out = { ok: true, re, groups: re.groupCount() };
     } catch (e) {
-      const why = String(e instanceof Error ? e.message : e)
-        .replace(/^error parsing regexp:\s*/i, "")
-        .replace(/:\s*`[\s\S]*`$/, "")
-        .trim();
-      out = {
-        ok: false,
-        error: UNSUPPORTED.test(pattern)
-          ? `The pattern "${short(pattern)}" can't be used: lookarounds and backreferences aren't supported. Try it in the box below the pattern.`
-          : `The pattern "${short(pattern)}" can't be used: ${why || "it isn't a valid regular expression"}. Try it in the box below the pattern.`,
-      };
+      out = { ok: false, error: `${re2Refusal(pattern, e)}. Try it in the box below the pattern.` };
     }
   }
   if (cache.size > 500) cache.clear();

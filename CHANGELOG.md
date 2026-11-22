@@ -4,7 +4,7 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
-## [1.20.41] - 2026-11-22
+## [1.20.42] - 2026-11-22
 
 Replies from Outlook on the web no longer bring the earlier message with them.
 
@@ -21,6 +21,39 @@ Replies from Outlook on the web no longer bring the earlier message with them.
 
 ### Upgrading
 - **Nothing to do.** Update as usual. Replies already stored are unchanged.
+
+## [1.20.41] - 2026-11-22
+
+Security hardening from a full code-scanning review.
+
+### Security
+- **Safer outbound requests.** The link and webhook fetcher now recognises
+  every way of writing a private or loopback address in IPv6 (including an
+  IPv4 address carried inside one), and Slack replies only ever go to
+  Slack's own host.
+- **No slow-down from crafted input.** Pattern matching on email addresses,
+  search queries, SAML metadata, Teams messages and newsletter senders is
+  bounded or rewritten so oversized input can't tie up the server.
+- **Stronger random tokens.** Reply tokens and integration keys are now
+  drawn evenly from their alphabet (they were slightly biased).
+- **Writing assistant:** only CompassDocs' own document types reach the
+  assistant's instructions, never text from the browser.
+- **Audit log:** the line for a failed sign-in now holds a keyed fingerprint
+  of the typed name (HMAC from the master key), so it can't be reversed
+  even when someone types a password into the name field. Values differ
+  from earlier logs.
+
+### Changed
+- **Directory → Fields mapping patterns:** new or edited patterns must be
+  valid for the safe (RE2) pattern engine, and the error says why a pattern
+  is refused. Patterns saved earlier keep working, on the first 1,024
+  characters of each value. They are flagged "Rewrite pattern" in
+  Directory → Fields and logged on each sync.
+
+### Upgrading
+- **Nothing to do.** Update as usual. If Directory → Fields shows a
+  "Rewrite pattern" chip, rewrite that pattern without lookarounds or
+  backreferences when convenient.
 
 ## [1.20.40] - 2026-11-22
 

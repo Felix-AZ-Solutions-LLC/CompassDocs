@@ -272,7 +272,7 @@ describe("quoted replies", () => {
   const owa = (above: string) =>
     `<html><body><div dir="ltr"><p>${above}</p></div><div id="appendonsend"></div><hr style="display:inline-block;width:98%">${owaHeader}${owaHistory}</body></html>`;
 
-  test("1.20.41: Outlook on the web's reply marker cuts everything after it", () => {
+  test("1.20.42: Outlook on the web's reply marker cuts everything after it", () => {
     assert.equal(htmlToText(owa("Works now, thank you."), { dropQuotes: true }), "Works now, thank you.");
     // #divRplyFwdMsg alone (no #appendonsend): the <hr> just before it goes too.
     const noAppend = `<div><p>Works now, thank you.</p></div><hr>\n${owaHeader}${owaHistory}`;
@@ -291,7 +291,7 @@ describe("quoted replies", () => {
     assert.equal(htmlToText(nested, { dropQuotes: true }), "Done.");
   });
 
-  test("1.20.41: the cut is for replies only, and never leaves nothing", () => {
+  test("1.20.42: the cut is for replies only, and never leaves nothing", () => {
     const html = owa("Works now, thank you.");
     assert.match(htmlToText(html), /Please restart the projector\./, "not a reply: kept");
     assert.match(inboundBody(email({ text: "", html }), { reply: false }), /Please restart the projector\./, "a new ticket keeps it");
