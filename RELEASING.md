@@ -239,8 +239,8 @@ workflows.
 
 Each run of those jobs shows up as a deployment to that environment on the
 repo's page; that's expected. If the secret is missing, ghcr.io refuses it
-(expired, revoked) or it has any scope beyond `write:packages`/`read:packages`,
-the job fails and says so —
+(expired, revoked) or it has any scope beyond `write:packages`, `read:packages`
+and the `repo` GitHub forces on with them, the job fails and says so —
 on purpose: skipping would silently stop updates for every install. Set an
 expiry on the token, put a reminder in the calendar, and renew it (same
 name, same scope, in both repos' environments) **before** it expires.
