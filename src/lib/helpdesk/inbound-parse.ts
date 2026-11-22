@@ -736,7 +736,8 @@ export function htmlToText(html: string, opts: { dropQuotes?: boolean } = {}): s
     const tag = node.tagName ?? "";
     if (SKIP.has(tag)) return;
     if (opts.dropQuotes && isReplyCutMarker(node)) {
-      // The <hr> Outlook puts just before #divRplyFwdMsg goes with the history.
+      // The <hr> Outlook puts just before #divRplyFwdMsg goes with the history
+      // (line breaks and whitespace between them don't count, as in foldQuotes).
       const at = lastHr && lastHr.seq === seq ? lastHr.start : parts.length;
       if (parts.slice(0, at).join("").trim()) {
         parts.length = at; // nothing is written after this
@@ -747,8 +748,10 @@ export function htmlToText(html: string, opts: { dropQuotes?: boolean } = {}): s
     }
     if (opts.dropQuotes && isQuoteContainer(node)) return;
     if (tag === "br") {
+      const hr = lastHr && lastHr.seq === seq ? lastHr : null;
       trimSpaces();
       put("\n");
+      if (hr) hr.seq = seq; // a line break after an <hr> still leaves it "just before"
       return;
     }
     if (tag === "hr") {

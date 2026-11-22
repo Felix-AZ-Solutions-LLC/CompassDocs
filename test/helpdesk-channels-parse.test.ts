@@ -272,11 +272,17 @@ describe("quoted replies", () => {
   const owa = (above: string) =>
     `<html><body><div dir="ltr"><p>${above}</p></div><div id="appendonsend"></div><hr style="display:inline-block;width:98%">${owaHeader}${owaHistory}</body></html>`;
 
-  test("1.20.11: Outlook on the web's reply marker cuts everything after it", () => {
+  test("1.20.41: Outlook on the web's reply marker cuts everything after it", () => {
     assert.equal(htmlToText(owa("Works now, thank you."), { dropQuotes: true }), "Works now, thank you.");
     // #divRplyFwdMsg alone (no #appendonsend): the <hr> just before it goes too.
     const noAppend = `<div><p>Works now, thank you.</p></div><hr>\n${owaHeader}${owaHistory}`;
     assert.equal(htmlToText(noAppend, { dropQuotes: true }), "Works now, thank you.");
+    // Line breaks and whitespace between that <hr> and the header don't keep a stray "---".
+    const brs = `<div><p>Works now, thank you.</p></div><hr>\n<br><br> \n${owaHeader}${owaHistory}`;
+    assert.equal(htmlToText(brs, { dropQuotes: true }), "Works now, thank you.");
+    // But text between them does: that <hr> is the sender's, and stays.
+    const between = `<p>Works now.</p><hr><br>P.S. thanks<br>${owaHeader}${owaHistory}`;
+    assert.equal(htmlToText(between, { dropQuotes: true }), "Works now.\n\n---\n\nP.S. thanks");
     // An <hr> the sender typed further up stays.
     const ownRule = `<p>Step one</p><hr><p>Step two</p>${owaHeader}${owaHistory}`;
     assert.equal(htmlToText(ownRule, { dropQuotes: true }), "Step one\n\n---\n\nStep two");
@@ -285,7 +291,7 @@ describe("quoted replies", () => {
     assert.equal(htmlToText(nested, { dropQuotes: true }), "Done.");
   });
 
-  test("1.20.11: the cut is for replies only, and never leaves nothing", () => {
+  test("1.20.41: the cut is for replies only, and never leaves nothing", () => {
     const html = owa("Works now, thank you.");
     assert.match(htmlToText(html), /Please restart the projector\./, "not a reply: kept");
     assert.match(inboundBody(email({ text: "", html }), { reply: false }), /Please restart the projector\./, "a new ticket keeps it");
