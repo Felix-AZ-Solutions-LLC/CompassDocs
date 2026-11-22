@@ -131,7 +131,8 @@ export function parseIdpMetadata(xml: string): {
   // First HTTP-Redirect SingleSignOnService location (POST fallback), in
   // either attribute order.
   const ssoTags = (xml.match(/<[^<>]*>/g) ?? []).filter((t) => t.includes("SingleSignOnService"));
-  const location = (t: string | undefined) => (t ? /Location="([^"]+)"/.exec(t)?.[1] ?? "" : "");
+  // \sLocation, so a ResponseLocation="…" attribute is never read as it.
+  const location = (t: string | undefined) => (t ? /\sLocation="([^"]+)"/.exec(t)?.[1] ?? "" : "");
   const redirect = location(ssoTags.find((t) => t.includes("HTTP-Redirect")));
   const post = location(ssoTags.find((t) => t.includes("HTTP-POST")));
   // The first certificate: its opening tag, then the first closing tag after it.

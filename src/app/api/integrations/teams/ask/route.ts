@@ -5,6 +5,7 @@ import {
   chatAnswer,
   chatBaseUrl,
   formatTeams,
+  teamsQuestionText,
 } from "@/lib/chat-ask";
 
 export const dynamic = "force-dynamic";
@@ -29,14 +30,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ type: "message", text: "I couldn't read that message." });
   }
 
-  // Strip the <at>webhook name</at> mention Teams prepends, plus any HTML tags.
-  const question = String(body?.text || "")
-    // [^<]* rather than .*?: linear, where .*? rescanned to the end from every unclosed <at>.
-    .replace(/<at>[^<]*<\/at>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const question = teamsQuestionText(body?.text);
 
   if (!question) {
     return NextResponse.json({

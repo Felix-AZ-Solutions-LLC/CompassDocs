@@ -119,6 +119,21 @@ export function slackResponseUrl(raw: string): string | null {
   return `https://hooks.slack.com/${u.pathname.replace(/^\/+/, "")}${u.search}`;
 }
 
+/**
+ * The question in a Teams message: the <at>webhook name</at> mention Teams
+ * prepends and any HTML tags removed, whitespace collapsed. Both patterns are
+ * linear ([^<]* and [^<>]+), so a body of unclosed "<at>" or "<" can't make
+ * the strip quadratic.
+ */
+export function teamsQuestionText(text: unknown): string {
+  return String(text || "")
+    .replace(/<at>[^<]*<\/at>/gi, "")
+    .replace(/<[^<>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 // --- Answering ---------------------------------------------------------------
 
 /** Space ids a chat asker may draw answers from: everything not private. */
