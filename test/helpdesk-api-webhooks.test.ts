@@ -465,6 +465,15 @@ describe("REST API: authentication", () => {
     assert.equal(n.rows[0].n, 1);
   });
 
+  test("read audits: one per 60 seconds from the last, even across a clock minute", () => {
+    const k = `${STAMP}:minute-edge`;
+    const t0 = 1_800_000_059_000; // 1 s before a clock minute ends
+    assert.equal(apiV1.auditThisReadAtForTests(k, t0), true);
+    assert.equal(apiV1.auditThisReadAtForTests(k, t0 + 2_000), false, "next clock minute, 2 s later");
+    assert.equal(apiV1.auditThisReadAtForTests(k, t0 + 59_999), false);
+    assert.equal(apiV1.auditThisReadAtForTests(k, t0 + 60_000), true);
+  });
+
   test("/me: who the token acts as and what it can do", async () => {
     const r = await api(meRoute.GET, agentTok.token, "/me");
     assert.equal(r.status, 200);
