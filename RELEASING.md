@@ -154,7 +154,7 @@ docker-publish and release push every tag to the org path with
 
 | Path | Who pulls it | Written with |
 | --- | --- | --- |
-| `ghcr.io/mattny20/compassdocs` (legacy) | Every install, for now | `LEGACY_GHCR_TOKEN` (environment "CompassDocs legacy image publishing") |
+| `ghcr.io/mattny20/compassdocs` (legacy) | Every install, for now | `LEGACY_GHCR_TOKEN` (environment `ghcr-legacy`) |
 | `ghcr.io/felix-az-solutions-llc/compassdocs` | Nobody yet; installs from release B | `GITHUB_TOKEN` |
 
 compassdocs-ee's build-ee.yml does the same for
@@ -198,8 +198,8 @@ and installs have had time to act on it.
 **`mattny20`** account with only the **`write:packages`** scope.
 `GITHUB_TOKEN` can only write packages the org owns, so it's the only way
 to keep the legacy path current. It lives in a GitHub **Environment**
-named **`CompassDocs legacy image publishing`**, not as a repo or org
-secret, so only the jobs that need it (docker-publish's merge and
+(named **`ghcr-legacy`** in this repo and **`CompassDocs legacy image
+publishing`** in compassdocs-ee), not as a repo or org secret, so only the jobs that need it (docker-publish's merge and
 **Move :latest** jobs, release; build-ee's legacy job) can read it, and only
 from `main`.
 The workflows name the environment exactly; renaming it means updating
@@ -219,9 +219,11 @@ value doesn't change, so the secret needn't be updated.
 **The environment**, in **each** of `Felix-AZ-Solutions-LLC/CompassDocs` and
 `Felix-AZ-Solutions-LLC/compassdocs-ee`:
 
-1. Settings → Environments → **New environment** → name it
-   `CompassDocs legacy image publishing`. Create it before the first run: a
-   job naming an environment that doesn't exist creates it with no rules.
+1. Settings → Environments → **New environment** → name it `ghcr-legacy`
+   in CompassDocs, `CompassDocs legacy image publishing` in compassdocs-ee
+   (each repo's workflows and `.github/scripts/legacy-ghcr.sh` name their
+   own). Create it before the first run: a job naming an environment that
+   doesn't exist creates it, empty and with no rules.
 2. Deployment branches and tags → **Selected branches and tags** → add the
    branch rule `main`. (A `v*` tag rule, if you added one earlier, is no
    longer needed: no job that uses the token runs on a tag.) No required

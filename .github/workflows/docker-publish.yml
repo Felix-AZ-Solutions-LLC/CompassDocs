@@ -12,7 +12,7 @@ name: Publish Docker image
 # and GHCR can't move packages between accounts. Installs pull
 # ghcr.io/mattny20/compassdocs, so both jobs also copy what they push to that
 # legacy path (same digest), with skopeo: GITHUB_TOKEN reads the org path,
-# mattny20's LEGACY_GHCR_TOKEN (in the "CompassDocs legacy image publishing"
+# mattny20's LEGACY_GHCR_TOKEN (in the "ghcr-legacy"
 # environment) writes the legacy one. The shared shell is in
 # .github/scripts/legacy-ghcr.sh. See RELEASING.md, "Moving to the org".
 #
@@ -117,7 +117,7 @@ jobs:
     # Only main builds get tags; a dispatch from another branch just builds.
     if: github.ref == 'refs/heads/main'
     # Holds LEGACY_GHCR_TOKEN; deployable from main only.
-    environment: "CompassDocs legacy image publishing"
+    environment: ghcr-legacy
     permissions:
       contents: read
       packages: write
@@ -267,7 +267,7 @@ jobs:
     name: Move :latest to main's head
     runs-on: ubuntu-latest
     needs: [merge]
-    environment: "CompassDocs legacy image publishing"
+    environment: ghcr-legacy
     concurrency:
       group: ghcr-latest
       cancel-in-progress: false
