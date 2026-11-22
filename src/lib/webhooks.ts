@@ -203,7 +203,8 @@ export function buildPayload(format: string, event: WebhookEvent, info: WebhookI
           size: "Medium",
           wrap: true,
         },
-        { type: "TextBlock", text: describe(event, info).replace(/\*\*/g, "**"), wrap: true },
+        // Adaptive Cards read **bold** as written (the old .replace swapped ** for ** and did nothing).
+        { type: "TextBlock", text: describe(event, info), wrap: true },
       ];
       const card: Record<string, unknown> = {
         $schema: "http://adaptivecards.io/schemas/adaptive-card.json",

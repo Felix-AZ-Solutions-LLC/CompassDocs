@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function validEmails(list: string): boolean {
   const parts = list.split(",").map((a) => a.trim()).filter(Boolean);
-  return parts.length > 0 && parts.every((a) => EMAIL_RE.test(a));
+  // Length first (an address is at most 254 characters): EMAIL_RE backtracks quadratically on a long run of dots.
+  return parts.length > 0 && parts.every((a) => a.length <= 254 && EMAIL_RE.test(a));
 }
 
 /** Webhook URLs embed their secret — only ever return a masked preview. */
