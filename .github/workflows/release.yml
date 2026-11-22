@@ -23,6 +23,18 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Holds LEGACY_GHCR_TOKEN; deployable from main and v* tags only.
+    environment: ghcr-legacy
+    # Same group as docker-publish's merge job: one registry writer at a
+    # time, so :latest can't end up on different builds at the two paths.
+    concurrency:
+      group: ghcr-publish
+      cancel-in-progress: false
+    env:
+      # Pre-move image path that installs pull (see docker-publish.yml).
+      LEGACY_IMAGE: ghcr.io/mattny20/compassdocs
+      LEGACY_USER: mattny20
+      RERUN: "Re-running this workflow is safe: it retags the build of the commit the version tag points at."
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -73,6 +85,30 @@ jobs:
               --notes-file notes.md
           fi
 
+      # Retag the build of the commit vX.Y.Z points at, not whatever main is
+      # now, so a later dispatch can't put this version on another build.
+      - name: Find the release's build
+        id: src
+        if: github.event.inputs.notes_only != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.v.outputs.tag }}"
+          if ! TAG_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha) || [ -z "$TAG_SHA" ]; then
+            echo "::error::Couldn't find the commit $TAG points at."
+            exit 1
+          fi
+          # docker-publish tags each main build main-<first 7 of the sha>.
+          echo "build=main-${TAG_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          if [ "$TAG_SHA" = "$GITHUB_SHA" ]; then
+            echo "move_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            # main has moved on; docker-publish already put :latest on a
+            # newer build, and moving it back would downgrade installs.
+            echo "move_latest=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$TAG is $TAG_SHA, but this run is on $GITHUB_SHA. Tagging $TAG's build as its version only; :latest stays where it is."
+          fi
+
       - name: Log in to GHCR
         if: github.event.inputs.notes_only != 'true'
         uses: docker/login-action@v4
@@ -89,24 +125,25 @@ jobs:
         continue-on-error: true
         run: |
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
-          SRC="$IMAGE:main-$(git rev-parse --short=7 HEAD)"
+          SRC="$IMAGE:${{ steps.src.outputs.build }}"
           VERSION="${{ steps.v.outputs.version }}"
           MM="${VERSION%.*}"
-          echo "Retagging $SRC -> :$VERSION, :$MM, :latest"
+          args=(-t "$IMAGE:$VERSION" -t "$IMAGE:$MM")
           # :latest lets installs follow releases across minors — the compose
           # default, and what the admin console's one-click update relies on.
-          docker buildx imagetools create -t "$IMAGE:$VERSION" -t "$IMAGE:$MM" -t "$IMAGE:latest" "$SRC"
+          if [ "${{ steps.src.outputs.move_latest }}" = true ]; then args+=(-t "$IMAGE:latest"); fi
+          echo "Retagging $SRC -> ${args[*]}"
+          docker buildx imagetools create "${args[@]}" "$SRC"
 
-      # Installs made before the move to the Felix-AZ-Solutions-LLC org pull
-      # ghcr.io/mattny20/compassdocs; give it the same semver tags. Logs in as
-      # mattny20 in a separate DOCKER_CONFIG (see docker-publish.yml and
-      # RELEASING.md). No continue-on-error: a failure here must be seen.
+      # The same tags on the pre-move path that installs pull, copied with
+      # skopeo: GITHUB_TOKEN reads the org path, mattny20's token writes the
+      # legacy one, each from its own auth file (removed on every exit). No
+      # continue-on-error: a failure here must be seen.
       - name: Add semver tags on the legacy path (ghcr.io/mattny20/compassdocs)
         id: legacy_retag
         if: github.event.inputs.notes_only != 'true'
         env:
-          LEGACY_IMAGE: ghcr.io/mattny20/compassdocs
-          LEGACY_USER: mattny20
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LEGACY_GHCR_TOKEN: ${{ secrets.LEGACY_GHCR_TOKEN }}
         run: |
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
@@ -115,22 +152,37 @@ jobs:
             exit 0
           fi
           if [ -z "$LEGACY_GHCR_TOKEN" ]; then
-            echo "::error title=LEGACY_GHCR_TOKEN secret is missing::Existing installs pull $LEGACY_IMAGE and won't see this release. Add an Actions secret named LEGACY_GHCR_TOKEN (org or repo level) holding a classic personal access token from the $LEGACY_USER account with only the write:packages scope, then re-run this workflow. See RELEASING.md."
+            echo "::error title=LEGACY_GHCR_TOKEN secret is missing::Installs pull $LEGACY_IMAGE and won't see this release. Add LEGACY_GHCR_TOKEN to this repo's ghcr-legacy environment: a classic personal access token from the $LEGACY_USER account with only the write:packages scope (RELEASING.md). $RERUN"
             exit 1
           fi
-          SRC="$IMAGE:main-$(git rev-parse --short=7 HEAD)"
+          SRC="$IMAGE:${{ steps.src.outputs.build }}"
           VERSION="${{ steps.v.outputs.version }}"
-          MM="${VERSION%.*}"
-          export DOCKER_CONFIG="$RUNNER_TEMP/legacy-docker-config"
-          mkdir -p "$DOCKER_CONFIG"
-          printf '%s' "$LEGACY_GHCR_TOKEN" | docker login ghcr.io -u "$LEGACY_USER" --password-stdin
-          echo "Retagging $SRC -> $LEGACY_IMAGE:$VERSION, :$MM, :latest"
-          docker buildx imagetools create -t "$LEGACY_IMAGE:$VERSION" -t "$LEGACY_IMAGE:$MM" -t "$LEGACY_IMAGE:latest" "$SRC"
-          docker logout ghcr.io || true
-          rm -rf "$DOCKER_CONFIG"
+          TAGS=("$VERSION" "${VERSION%.*}")
+          if [ "${{ steps.src.outputs.move_latest }}" = true ]; then TAGS+=(latest); fi
+          command -v skopeo >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q skopeo; }
+          SRC_AUTH="$RUNNER_TEMP/ghcr-src-auth.json"
+          DST_AUTH="$RUNNER_TEMP/ghcr-legacy-auth.json"
+          trap 'rm -f "$SRC_AUTH" "$DST_AUTH"' EXIT
+          if ! printf '%s' "$GITHUB_TOKEN" | skopeo login --authfile "$SRC_AUTH" -u "$GITHUB_ACTOR" --password-stdin ghcr.io; then
+            echo "::error title=GITHUB_TOKEN login failed::Couldn't log in to ghcr.io with this run's GITHUB_TOKEN. $RERUN"
+            exit 1
+          fi
+          if ! printf '%s' "$LEGACY_GHCR_TOKEN" | skopeo login --authfile "$DST_AUTH" -u "$LEGACY_USER" --password-stdin ghcr.io; then
+            echo "::error title=LEGACY_GHCR_TOKEN was refused::ghcr.io refused the $LEGACY_USER token (expired or revoked?). Make a new classic token from $LEGACY_USER with only write:packages and replace LEGACY_GHCR_TOKEN in the ghcr-legacy environment (RELEASING.md). $RERUN"
+            exit 1
+          fi
+          for t in "${TAGS[@]}"; do
+            echo "Copying $SRC -> $LEGACY_IMAGE:$t"
+            if ! skopeo copy --all --preserve-digests --retry-times 3 \
+                --src-authfile "$SRC_AUTH" --dest-authfile "$DST_AUTH" \
+                "docker://$SRC" "docker://$LEGACY_IMAGE:$t"; then
+              echo "::error title=Copy to $LEGACY_IMAGE failed::Couldn't tag $LEGACY_IMAGE:$t (see the log above). $RERUN"
+              exit 1
+            fi
+          done
 
       - name: Fail if an image retag failed
         if: ${{ !cancelled() && steps.retag.outcome == 'failure' }}
         run: |
-          echo "::error title=Image retag failed::Couldn't add the semver tags on ghcr.io/${GITHUB_REPOSITORY,,} (see 'Add semver tags to the built image'). The release itself exists; re-run this workflow once docker-publish has finished for this commit."
+          echo "::error title=Image retag failed::Couldn't add the semver tags on ghcr.io/${GITHUB_REPOSITORY,,} (see 'Add semver tags to the built image'). The release itself exists. Check that docker-publish finished for ${{ steps.src.outputs.build }}. $RERUN"
           exit 1

@@ -10,7 +10,7 @@ approval workflow. Enterprise adds an internal helpdesk, compliance, and SSO.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-orange)](./LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/Felix-AZ-Solutions-LLC/CompassDocs)](https://github.com/Felix-AZ-Solutions-LLC/CompassDocs/releases)
-[![Docker image](https://img.shields.io/badge/ghcr.io-felix--az--solutions--llc%2Fcompassdocs-blue?logo=docker)](https://github.com/Felix-AZ-Solutions-LLC/CompassDocs/pkgs/container/compassdocs)
+[![Docker image](https://img.shields.io/badge/ghcr.io-mattny20%2Fcompassdocs-blue?logo=docker)](https://github.com/users/mattny20/packages/container/package/compassdocs)
 ![Next.js](https://img.shields.io/badge/Next.js-15-black)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14%2B-blue)
 
@@ -251,12 +251,12 @@ The `Caddyfile` also documents two alternatives you can switch to with one line:
 **self-signed** (`tls internal`, for a LAN or testing) or **bring-your-own
 certificate** (drop `cert.pem`/`key.pem` in `deploy/certs`).
 
-> Images are published to `ghcr.io/felix-az-solutions-llc/compassdocs` automatically on every
+> Images are published to `ghcr.io/mattny20/compassdocs` automatically on every
 > merge to `main` (`:latest`) and on version tags (`:X.Y.Z`) by the
-> [Docker publish workflow](./.github/workflows/docker-publish.yml). Every image is
-> also published to the project's previous address, `ghcr.io/mattny20/compassdocs`,
-> so installs made before the move to the Felix-AZ-Solutions-LLC organization keep
-> updating with `docker compose pull` and need no change.
+> [Docker publish workflow](./.github/workflows/docker-publish.yml). The project
+> has moved to the Felix-AZ-Solutions-LLC organization, so every image is also
+> published to `ghcr.io/felix-az-solutions-llc/compassdocs`; installs switch to
+> that address in a later release.
 
 ## Deploying to a platform (Vercel / Railway / Render)
 

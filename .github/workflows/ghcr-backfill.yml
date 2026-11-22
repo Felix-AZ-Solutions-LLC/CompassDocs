@@ -1,0 +1,123 @@
+name: Backfill org image path
+
+# One-time copy of every existing tag of the pre-move image
+# (ghcr.io/mattny20/compassdocs) to this repo's path
+# (ghcr.io/felix-az-solutions-llc/compassdocs), so versions published before
+# the move also exist at the new address before installs switch to it.
+#
+# Run it once from the Actions tab after the org package exists and is public
+# (RELEASING.md, "Moving to the org"). Safe to run again: a tag that is
+# already there with the same digest is skipped, and a tag that is there with
+# a different digest is left alone (the org path is the newer one) and
+# reported. The source is public, so it's read anonymously; the GITHUB_TOKEN
+# writes the org path.
+on:
+  workflow_dispatch:
+    inputs:
+      tag_filter:
+        description: "Only copy tags matching this extended regex (blank = every tag)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  packages: write
+
+# Same group as docker-publish and release: one registry writer at a time.
+concurrency:
+  group: ghcr-publish
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    name: Copy legacy tags to the org path
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      LEGACY_IMAGE: ghcr.io/mattny20/compassdocs
+      TAG_FILTER: ${{ github.event.inputs.tag_filter }}
+    steps:
+      - name: Copy missing tags, then check them anonymously
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          if [ "$IMAGE" = "$LEGACY_IMAGE" ]; then
+            echo "::error::This repo publishes to $LEGACY_IMAGE itself; there is nothing to backfill."
+            exit 1
+          fi
+          command -v skopeo >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q skopeo; }
+          AUTH="$RUNNER_TEMP/ghcr-org-auth.json"
+          RAW="$RUNNER_TEMP/manifest.raw"
+          trap 'rm -f "$AUTH" "$RAW"' EXIT
+          if ! printf '%s' "$GITHUB_TOKEN" | skopeo login --authfile "$AUTH" -u "$GITHUB_ACTOR" --password-stdin ghcr.io; then
+            echo "::error title=GITHUB_TOKEN login failed::Couldn't log in to ghcr.io with this run's GITHUB_TOKEN; re-run the workflow."
+            exit 1
+          fi
+
+          # digest_of <skopeo inspect options...> <docker://ref> -> sha256:...
+          # (the digest of the manifest exactly as the registry serves it)
+          digest_of() {
+            skopeo inspect --raw "$@" > "$RAW" || return 1
+            echo "sha256:$(sha256sum < "$RAW" | cut -d' ' -f1)"
+          }
+
+          if ! listing=$(skopeo list-tags --no-creds "docker://$LEGACY_IMAGE"); then
+            echo "::error::Couldn't list the tags of $LEGACY_IMAGE."
+            exit 1
+          fi
+          mapfile -t TAGS < <(jq -r '.Tags[]' <<< "$listing")
+          if [ -n "$TAG_FILTER" ]; then
+            mapfile -t TAGS < <(printf '%s\n' "${TAGS[@]}" | grep -E -- "$TAG_FILTER" || true)
+          fi
+          if [ "${#TAGS[@]}" -eq 0 ]; then
+            echo "::error::No tags of $LEGACY_IMAGE to copy (filter: '${TAG_FILTER:-none}')."
+            exit 1
+          fi
+          echo "${#TAGS[@]} tags to check."
+
+          copied=0 present=0 kept=0 failed=0
+          declare -A want
+          for t in "${TAGS[@]}"; do
+            if ! src=$(digest_of --no-creds "docker://$LEGACY_IMAGE:$t"); then
+              echo "::warning::Couldn't read $LEGACY_IMAGE:$t; skipped."
+              failed=$((failed + 1)); continue
+            fi
+            # Not there yet is the usual case, so its error isn't shown.
+            if dst=$(digest_of --authfile "$AUTH" "docker://$IMAGE:$t" 2>/dev/null); then
+              if [ "$dst" = "$src" ]; then
+                present=$((present + 1)); want[$t]="$src"
+              else
+                echo "::warning::$IMAGE:$t is already $dst ($LEGACY_IMAGE:$t is $src); left as is."
+                kept=$((kept + 1))
+              fi
+              continue
+            fi
+            echo "Copying :$t ($src)"
+            if skopeo copy --all --preserve-digests --retry-times 3 --src-no-creds --dest-authfile "$AUTH" \
+                "docker://$LEGACY_IMAGE:$t" "docker://$IMAGE:$t"; then
+              copied=$((copied + 1)); want[$t]="$src"
+            else
+              echo "::warning::Couldn't copy :$t (see the log above)."
+              failed=$((failed + 1))
+            fi
+          done
+          echo "Copied $copied, already there $present, left as is $kept, failed $failed."
+
+          # Every copied or present tag must now pull anonymously from the org
+          # path with the legacy digest.
+          bad=0
+          for t in "${!want[@]}"; do
+            got=$(digest_of --no-creds "docker://$IMAGE:$t") || got="not pullable"
+            if [ "$got" != "${want[$t]}" ]; then
+              echo "::error::$IMAGE:$t is $got anonymously, expected ${want[$t]}."
+              bad=$((bad + 1))
+            fi
+          done
+          if [ "$bad" -gt 0 ]; then
+            echo "::error title=Backfill check failed::$bad tags don't pull anonymously from $IMAGE with the right digest. If none do, make the package public (Org → Packages → compassdocs → Package settings → Change visibility → Public), then re-run."
+          fi
+          if [ "$failed" -gt 0 ]; then
+            echo "::error title=Some tags weren't copied::$failed tags failed; re-run the workflow (tags already copied are skipped)."
+          fi
+          [ "$bad" -eq 0 ] && [ "$failed" -eq 0 ]

@@ -6,25 +6,24 @@ All notable changes to CompassDocs are documented here. The format is based on
 
 ## [1.20.39] - 2026-11-22
 
-CompassDocs has a new home on GitHub.
+CompassDocs has a new home on GitHub. Nothing changes for your install.
 
 ### Changed
 - **The project moved to the Felix-AZ-Solutions-LLC organization.** The
   code, releases and installer now live at
-  github.com/Felix-AZ-Solutions-LLC/CompassDocs.
-- **The app image is published to two addresses.** Every update goes to the
-  new address, `ghcr.io/felix-az-solutions-llc/compassdocs`, and the same
-  image also goes to the old one, `ghcr.io/mattny20/compassdocs`.
-- **New installs use the new address.** The installer, the Deploy to Azure
-  button and the compose files in `deploy/` now point there. The Enterprise
-  image keeps its current address for now.
-- The admin console checks for updates against the new address.
+  github.com/Felix-AZ-Solutions-LLC/CompassDocs. The installer, the Deploy to
+  Azure button and the admin console's update check use the new address.
+- **Every image is now published to two addresses**: the one your install
+  already uses, `ghcr.io/mattny20/compassdocs` (or
+  `ghcr.io/mattny20/compassdocs-ee` for Enterprise), and the new
+  `ghcr.io/felix-az-solutions-llc/compassdocs` (and `…/compassdocs-ee`). Both
+  get the same image at the same time.
 
 ### Upgrading
-- **Nothing to do.** Installs made before this release keep updating with
-  `docker compose pull` (or the admin console's update) from the old
-  address, which gets every release. If that's ever going to change, the
-  app will tell you first.
+- **Nothing to do.** Your install keeps updating from the address it uses
+  today, which gets every release. New installs still use that address too;
+  a later release moves new installs to the new one, and the app will tell
+  you before anything changes for an existing install.
 
 ## [1.20.38] - 2026-11-20
 

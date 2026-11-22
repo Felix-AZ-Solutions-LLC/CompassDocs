@@ -6,10 +6,11 @@ name: Publish Docker image
 # Users then install/update by pulling ghcr.io/<owner>/compassdocs.
 #
 # The repo moved from the mattny20 account to the Felix-AZ-Solutions-LLC org,
-# and GHCR can't move packages between accounts. Every install made before the
-# move pulls ghcr.io/mattny20/compassdocs, so the merge job also copies each
-# manifest it pushes to that legacy path (same digest, same tags), logged in as
-# mattny20 with the LEGACY_GHCR_TOKEN secret. See RELEASING.md.
+# and GHCR can't move packages between accounts. Installs pull
+# ghcr.io/mattny20/compassdocs, so the merge job also copies each tag it pushes
+# to that legacy path (same digest), with skopeo: GITHUB_TOKEN reads the org
+# path, mattny20's LEGACY_GHCR_TOKEN (in the ghcr-legacy environment) writes
+# the legacy one. See RELEASING.md, "Moving to the org".
 #
 # Each architecture is built on its OWN native runner (amd64 on ubuntu-latest,
 # arm64 on ubuntu-24.04-arm) and pushed by digest; a final job stitches the
@@ -24,7 +25,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }} # e.g. Felix-AZ-Solutions-LLC/CompassDocs (lowercased in steps)
-  # Pre-move image path that existing installs still pull; kept in step.
+  # Pre-move image path that installs pull; kept in step with IMAGE.
   LEGACY_IMAGE: ghcr.io/mattny20/compassdocs
   LEGACY_USER: mattny20
 
@@ -100,6 +101,13 @@ jobs:
     name: Merge manifest & push tags
     runs-on: ubuntu-latest
     needs: [build]
+    # Holds LEGACY_GHCR_TOKEN; deployable from main and v* tags only.
+    environment: ghcr-legacy
+    # One registry writer at a time (docker-publish, release, backfill), so
+    # :latest can't end up on different builds at the two paths.
+    concurrency:
+      group: ghcr-publish
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -146,55 +154,58 @@ jobs:
         run: |
           docker buildx imagetools inspect "${IMAGE}:${{ steps.meta.outputs.version }}"
 
-      # Copy the manifest just pushed to the pre-move path, under every tag it
-      # got above. Logs in as mattny20 in a separate DOCKER_CONFIG so the
-      # GITHUB_TOKEN login stays untouched. A missing secret fails the job:
-      # skipping would quietly stop updates for every existing install.
+      # Copy every tag just pushed to the pre-move path with skopeo: the
+      # GITHUB_TOKEN reads the org path, mattny20's token writes the legacy
+      # one, each from its own auth file (removed on every exit). A missing
+      # or refused token fails the job: skipping would quietly stop updates
+      # for every install.
       - name: Mirror to the legacy path (ghcr.io/mattny20/compassdocs)
         id: mirror
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LEGACY_GHCR_TOKEN: ${{ secrets.LEGACY_GHCR_TOKEN }}
+          RERUN: "Re-run this job only if it is still the newest docker-publish run; otherwise the next push to main fixes it."
         run: |
           if [ "$IMAGE" = "$LEGACY_IMAGE" ]; then
             echo "::notice::This run already publishes to $LEGACY_IMAGE; nothing to mirror."
             exit 0
           fi
           if [ -z "$LEGACY_GHCR_TOKEN" ]; then
-            echo "::error title=LEGACY_GHCR_TOKEN secret is missing::Existing installs pull $LEGACY_IMAGE and won't get this build. Add an Actions secret named LEGACY_GHCR_TOKEN (org or repo level) holding a classic personal access token from the $LEGACY_USER account with only the write:packages scope, then re-run this job. See RELEASING.md."
+            echo "::error title=LEGACY_GHCR_TOKEN secret is missing::Installs pull $LEGACY_IMAGE and won't get this build. Add LEGACY_GHCR_TOKEN to this repo's ghcr-legacy environment: a classic personal access token from the $LEGACY_USER account with only the write:packages scope (RELEASING.md). $RERUN"
+            exit 1
+          fi
+          command -v skopeo >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q skopeo; }
+          SRC_AUTH="$RUNNER_TEMP/ghcr-src-auth.json"
+          DST_AUTH="$RUNNER_TEMP/ghcr-legacy-auth.json"
+          trap 'rm -f "$SRC_AUTH" "$DST_AUTH"' EXIT
+          if ! printf '%s' "$GITHUB_TOKEN" | skopeo login --authfile "$SRC_AUTH" -u "$GITHUB_ACTOR" --password-stdin "$REGISTRY"; then
+            echo "::error title=GITHUB_TOKEN login failed::Couldn't log in to $REGISTRY with this run's GITHUB_TOKEN. $RERUN"
+            exit 1
+          fi
+          if ! printf '%s' "$LEGACY_GHCR_TOKEN" | skopeo login --authfile "$DST_AUTH" -u "$LEGACY_USER" --password-stdin "$REGISTRY"; then
+            echo "::error title=LEGACY_GHCR_TOKEN was refused::$REGISTRY refused the $LEGACY_USER token (expired or revoked?). Make a new classic token from $LEGACY_USER with only write:packages and replace LEGACY_GHCR_TOKEN in the ghcr-legacy environment (RELEASING.md). $RERUN"
             exit 1
           fi
           mapfile -t TAGS < <(jq -r '.tags[] | sub("^.*:"; "")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
-          # Copy from a tag only this build has (main-<sha> or X.Y.Z), not
-          # :latest, which a newer run could move in the meantime.
-          SRC_TAG=$(printf '%s\n' "${TAGS[@]}" | grep -vx latest | head -n1 || true)
-          SRC_TAG="${SRC_TAG:-${TAGS[0]}}"
-          args=()
-          for t in "${TAGS[@]}"; do args+=(-t "$LEGACY_IMAGE:$t"); done
+          for t in "${TAGS[@]}"; do
+            echo "Copying $IMAGE:$t -> $LEGACY_IMAGE:$t"
+            if ! skopeo copy --all --preserve-digests --retry-times 3 \
+                --src-authfile "$SRC_AUTH" --dest-authfile "$DST_AUTH" \
+                "docker://$IMAGE:$t" "docker://$LEGACY_IMAGE:$t"; then
+              echo "::error title=Copy to $LEGACY_IMAGE failed::Couldn't copy :$t (see the log above). Installs won't get this build. $RERUN"
+              exit 1
+            fi
+          done
 
-          export DOCKER_CONFIG="$RUNNER_TEMP/legacy-docker-config"
-          mkdir -p "$DOCKER_CONFIG"
-          # Same buildx binary as the default config, if one was installed there.
-          if [ -d "$HOME/.docker/cli-plugins" ]; then
-            ln -sfn "$HOME/.docker/cli-plugins" "$DOCKER_CONFIG/cli-plugins"
-          fi
-          printf '%s' "$LEGACY_GHCR_TOKEN" | docker login "$REGISTRY" -u "$LEGACY_USER" --password-stdin
-
-          echo "Copying $IMAGE:$SRC_TAG -> $LEGACY_IMAGE:{${TAGS[*]}}"
-          if ! docker buildx imagetools create "${args[@]}" "$IMAGE:$SRC_TAG"; then
-            echo "::error title=Copy to $LEGACY_IMAGE failed::Check that LEGACY_GHCR_TOKEN is a current $LEGACY_USER token with write:packages, and that $IMAGE is public (see the next step)."
-            exit 1
-          fi
-          docker logout "$REGISTRY" || true
-          rm -rf "$DOCKER_CONFIG"
-
-      # Pull both paths as an anonymous client would. Runs even when the
-      # mirror failed, so a private org package is reported too.
+      # Pull both paths as an anonymous client would, and check each tag has
+      # the same digest at both. Runs even when the mirror failed, so a
+      # private org package is reported too.
       - name: Check both paths are publicly pullable
         if: ${{ !cancelled() && steps.mirror.outcome != 'skipped' }}
+        env:
+          RERUN: "Re-run this job only if it is still the newest docker-publish run; otherwise the next push to main fixes it."
         run: |
           mapfile -t TAGS < <(jq -r '.tags[] | sub("^.*:"; "")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
-          SRC_TAG=$(printf '%s\n' "${TAGS[@]}" | grep -vx latest | head -n1 || true)
-          SRC_TAG="${SRC_TAG:-${TAGS[0]}}"
 
           # anon_manifest <ghcr.io/owner/name> <tag> -> "<http code> <digest>"
           anon_manifest() {
@@ -212,25 +223,29 @@ jobs:
           paths=("$IMAGE")
           if [ "$LEGACY_IMAGE" != "$IMAGE" ]; then paths+=("$LEGACY_IMAGE"); fi
           fail=0
-          declare -A src_digest
+          declare -A dig
           for path in "${paths[@]}"; do
             bad=""
             for t in "${TAGS[@]}"; do
               read -r code digest < <(anon_manifest "$path" "$t") || true
               echo "$path:$t -> $code $digest"
-              if [ "$code" != 200 ]; then bad="$bad $t($code)"; fi
-              if [ "$t" = "$SRC_TAG" ]; then src_digest[$path]="$digest"; fi
+              if [ "$code" = 200 ]; then dig["$path:$t"]="$digest"; else bad="$bad $t($code)"; fi
             done
             if [ -z "$bad" ]; then continue; fi
             fail=1
             if [ "$path" = "$IMAGE" ]; then
-              echo "::error title=$IMAGE is not public::Anonymous pull failed for:$bad. New installs can't pull it. Make the package public once (Org → Packages → compassdocs → Package settings → Change visibility → Public), then re-run this job."
+              echo "::error title=$IMAGE is not public::Anonymous pull failed for:$bad. Make the package public once (Org → Packages → compassdocs → Package settings → Change visibility → Public). $RERUN"
             else
-              echo "::error title=$path is missing this build::Anonymous pull failed for:$bad. Existing installs won't get this build. Fix the mirror step above, then re-run this job."
+              echo "::error title=$path is missing this build::Anonymous pull failed for:$bad. Installs won't get this build; see the mirror step above. $RERUN"
             fi
           done
-          if [ "${#paths[@]}" -gt 1 ] && [ "$fail" = 0 ] && [ "${src_digest[$IMAGE]}" != "${src_digest[$LEGACY_IMAGE]}" ]; then
-            echo "::error title=Digests differ::$IMAGE:$SRC_TAG is ${src_digest[$IMAGE]} but $LEGACY_IMAGE:$SRC_TAG is ${src_digest[$LEGACY_IMAGE]}."
-            fail=1
+          if [ "${#paths[@]}" -gt 1 ]; then
+            for t in "${TAGS[@]}"; do
+              a="${dig["$IMAGE:$t"]:-}" b="${dig["$LEGACY_IMAGE:$t"]:-}"
+              if [ -n "$a" ] && [ -n "$b" ] && [ "$a" != "$b" ]; then
+                echo "::error title=Digests differ for tag $t::$IMAGE:$t is $a but $LEGACY_IMAGE:$t is $b. $RERUN"
+                fail=1
+              fi
+            done
           fi
           exit "$fail"

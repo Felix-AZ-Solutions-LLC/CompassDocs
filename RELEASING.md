@@ -41,24 +41,36 @@ one before it.
 
 The merge to `main` triggers `docker-publish.yml` (~8 minutes, multi-arch):
 it pushes `ghcr.io/felix-az-solutions-llc/compassdocs:main-<sha>` and moves
-`:latest`, then copies the same manifest to the legacy path
-`ghcr.io/mattny20/compassdocs` (see [Two image addresses](#two-image-addresses)).
-Its last step pulls both paths anonymously and fails if either isn't public
-or the two disagree. Verify it succeeded before proceeding — everything
-downstream pulls this image. Check the run under Actions, or list runs via
-the API and confirm `docker-publish` for the merge commit shows
-`conclusion: success`.
+`:latest`, then copies the same tags to `ghcr.io/mattny20/compassdocs`, the
+path installs pull (see [Moving to the org](#moving-to-the-org)). Its last
+step pulls both paths anonymously and fails if either isn't public, a tag is
+missing, or a tag has a different digest at the two paths. Verify it
+succeeded before proceeding — everything downstream pulls this image. Check
+the run under Actions, or list runs via the API and confirm `docker-publish`
+for the merge commit shows `conclusion: success`.
+
+Only one job writes to the registry at a time (`concurrency: ghcr-publish`,
+shared by docker-publish's merge job, release and the backfill). A second
+run waits for the first. GitHub keeps only one waiting run per group,
+though: if a third arrives, the older waiting one is **cancelled**. Re-run
+a cancelled release run. If the cancelled run was the merge job of a
+version bump, re-run it before the release workflow, or the release finds
+no `main-<sha>` to tag.
 
 ## 3. GitHub release (manual dispatch)
 
 Run the **release** workflow (`release.yml`, workflow_dispatch on `main`).
 Leave `version` blank to use `package.json`. It tags `vX.Y.Z`, creates the
-GitHub release with notes pulled from `CHANGELOG.md`, and adds `:X.Y.Z`,
-`:X.Y` and `:latest` on both image paths. If either retag fails the job goes
-red after trying both; the release itself already exists, so re-run the
-workflow once the cause is fixed (it refreshes the notes and retags again).
-The `notes only` input refreshes an existing release's notes without
-touching tags or images — use it for changelog typo fixes.
+GitHub release with notes pulled from `CHANGELOG.md`, and adds `:X.Y.Z` and
+`:X.Y` on both image paths to the build of the commit `vX.Y.Z` points at
+(`main-<first 7 of its sha>`). It also moves `:latest` there, but only if
+`main` is still on that commit; otherwise docker-publish has already put
+`:latest` on a newer build, and the release leaves it. If either retag
+fails, the job goes red after trying both; the release itself already
+exists. Re-running the workflow is safe at any time (it refreshes the notes
+and retags the same build). The `notes only` input refreshes an existing
+release's notes without touching tags or images — use it for changelog typo
+fixes.
 
 ## 4. Enterprise image (manual dispatch, separate repo)
 
@@ -83,53 +95,99 @@ Cloud tenants pin their image at machine-creation time — publishing
 
 See that repo's `OPERATIONS.md` §10 for details and rollback.
 
-## Two image addresses
+## Moving to the org
 
-The repository moved from the `mattny20` account to the
-`Felix-AZ-Solutions-LLC` organization. GHCR can't move packages between
-accounts, and every install made before the move has
-`ghcr.io/mattny20/compassdocs` in its own `docker-compose.yml` and updates
-with `docker compose pull`. So the community image is published to both:
+All the CompassDocs repositories moved from the `mattny20` account to the
+`Felix-AZ-Solutions-LLC` organization (core, compassdocs-ee, -cloud,
+-licensing, -trust, -site, -docs). GitHub redirects the old repository
+names, so old links, `raw.githubusercontent.com` URLs and the admin
+console's update check (GitHub API) keep working.
 
-| Path | Who pulls it | Pushed with |
+> **Never create a repository named `mattny20/CompassDocs` or
+> `mattny20/compassdocs-ee`** (or any other moved repo's old name). A new
+> repo at an old name replaces GitHub's redirect: installs' update checks
+> and the raw URLs that `install.sh` and the Azure template fetch would hit
+> the new, empty repo instead.
+
+GHCR can't move packages between accounts, and every install has
+`ghcr.io/mattny20/compassdocs` (or `…/compassdocs-ee`) in its own
+`docker-compose.yml` and updates with `docker compose pull`. So the move
+happens in two releases:
+
+**Release A (1.20.39): publish to both paths, change nothing for installs.**
+docker-publish and release push every tag to the org path with
+`GITHUB_TOKEN` and copy it to the legacy path with skopeo (same digest):
+
+| Path | Who pulls it | Written with |
 | --- | --- | --- |
-| `ghcr.io/felix-az-solutions-llc/compassdocs` | New installs (`deploy/docker-compose*.yml`, `install.sh`) | `GITHUB_TOKEN` |
-| `ghcr.io/mattny20/compassdocs` (legacy) | Installs made before the move | `LEGACY_GHCR_TOKEN` |
+| `ghcr.io/mattny20/compassdocs` (legacy) | Every install, for now | `LEGACY_GHCR_TOKEN` (ghcr-legacy environment) |
+| `ghcr.io/felix-az-solutions-llc/compassdocs` | Nobody yet; installs from release B | `GITHUB_TOKEN` |
 
-Both paths carry the same digest under the same tags. The enterprise image
-(`ghcr.io/mattny20/compassdocs-ee`) gets the same treatment in the
-`compassdocs-ee` repo's build-ee.yml; until that repo publishes to both
-addresses, the `-ee` compose files keep naming the mattny20 path.
+compassdocs-ee's build-ee.yml does the same for
+`ghcr.io/mattny20/compassdocs-ee` and
+`ghcr.io/felix-az-solutions-llc/compassdocs-ee`.
 
-**`LEGACY_GHCR_TOKEN`** — an Actions secret (org level or on this repo)
-holding a **classic** personal access token from the **`mattny20`** account
-with only the **`write:packages`** scope. `GITHUB_TOKEN` can only write
-packages the org owns, so this is the only way to keep the legacy path
-current. If it's missing, `docker-publish` and `release` fail with an error
-saying so — on purpose: skipping would silently stop updates for every
-existing install. Set an expiry on the token, put a reminder in the
-calendar, and renew it (same name, same scope) **before** it expires; an
-expired token fails both workflows the same way.
+After release A's first docker-publish run, in this order:
 
-**Make the org package public — once.** GHCR creates
-`ghcr.io/felix-az-solutions-llc/compassdocs` as private on its first
-publish, so the first `docker-publish` run after the move fails its
-anonymous-pull check. Then: Org → Packages → compassdocs → Package settings
-→ Change visibility → Public, and re-run the failed job. It stays public
-after that.
+1. **Make the org package public — once.** GHCR creates the org package as
+   private on its first publish, so that run fails its anonymous-pull
+   check. Org → Packages → compassdocs → Package settings → Change
+   visibility → Public. Then re-run the failed job, but only if it is
+   still the newest docker-publish run; otherwise the next push to `main`
+   fixes it. Same for `compassdocs-ee` after its first build.
+2. **Run the backfill — once.** Actions → **Backfill org image path**
+   (`ghcr-backfill.yml`) → Run workflow. It copies every tag that exists
+   only at `ghcr.io/mattny20/compassdocs` (older versions, `main-<sha>`
+   builds) to the org path, skips tags already there with the same digest,
+   leaves alone any tag already there with a different digest (the org
+   path is newer) and checks every copied tag pulls anonymously. Leave the
+   tag filter blank for everything, or pass a regex (e.g. `^[0-9]` for
+   version tags only). Safe to re-run. compassdocs-ee has the same
+   workflow for its image.
 
-**How long the legacy path stays.** Until existing installs have moved to
-the new address. An in-app notice telling admins to switch is a later task;
-don't stop publishing to `ghcr.io/mattny20/compassdocs` before that has
-shipped and installs have had time to act on it.
+**Release B (later): switch installs.** `deploy/docker-compose*.yml` (and
+so `install.sh`, which downloads them) name the org path; existing installs
+move when they re-run the installer or follow an in-app notice. Only after
+step 1 and 2 above, so every tag an install might pin exists at the new
+address. The legacy path keeps getting every release until installs have
+moved; don't stop publishing there before the in-app notice has shipped
+and installs have had time to act on it.
+
+### The ghcr-legacy environment and LEGACY_GHCR_TOKEN
+
+`LEGACY_GHCR_TOKEN` is a **classic** personal access token from the
+**`mattny20`** account with only the **`write:packages`** scope.
+`GITHUB_TOKEN` can only write packages the org owns, so it's the only way
+to keep the legacy path current. It lives in a GitHub **Environment**, not
+as a repo or org secret, so only the jobs that need it (docker-publish's
+merge job, release; build-ee's legacy job) can read it, and only from
+`main` or a version tag. In **each** of `Felix-AZ-Solutions-LLC/CompassDocs`
+and `Felix-AZ-Solutions-LLC/compassdocs-ee`:
+
+1. Settings → Environments → **New environment** → name it `ghcr-legacy`.
+   Create it before the first run: a job naming an environment that doesn't
+   exist creates it with no rules.
+2. Deployment branches and tags → **Selected branches and tags** → add the
+   branch rule `main` and the tag rule `v*`. No required reviewers, no
+   wait timer.
+3. Environment secrets → **Add secret** → `LEGACY_GHCR_TOKEN` → the token.
+
+Each run of those jobs shows up as a deployment to `ghcr-legacy` on the
+repo's page; that's expected. If the secret is missing, or ghcr.io refuses
+it (expired, revoked), the job fails and says so — on purpose: skipping
+would silently stop updates for every install. Set an expiry on the token,
+put a reminder in the calendar, and renew it (same name, same scope, in both
+repos' environments) **before** it expires.
 
 ## If something goes wrong
 
 - **Checks fail on the bump PR** — fix on the branch; never merge red.
-- **docker-publish fails after merge** — re-run the workflow from the
-  Actions tab; nothing downstream has happened yet. If the error names
-  `LEGACY_GHCR_TOKEN` or says the org package isn't public, see
-  [Two image addresses](#two-image-addresses) first.
+- **docker-publish fails after merge** — fix the cause, then re-run the
+  failed job, but only if it is still the newest docker-publish run;
+  otherwise the next push to `main` fixes it (re-running an older run would
+  move `:latest` back to an older build). Nothing downstream has happened
+  yet. If the error names `LEGACY_GHCR_TOKEN` or says the org package isn't
+  public, see [Moving to the org](#moving-to-the-org) first.
 - **Released the wrong thing** — do not delete tags or force-push main.
   Ship a patch release (X.Y.Z+1) through the same chain; the fleet upgrade
   in step 5 accepts any image reference if you need to roll tenants back
