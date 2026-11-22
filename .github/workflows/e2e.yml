@@ -33,10 +33,10 @@ jobs:
       COMPASSDOCS_ADMIN_PASSWORD: E2eAdmin!12345
       PORT: 3998
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       # Before the build, because these talk to the database directly and have
@@ -47,7 +47,14 @@ jobs:
       # matches nothing, so a renamed directory or a mistyped glob turns this
       # step into a green tick that runs no tests at all — the one failure mode
       # a test suite must not have.
+      #
+      # The grep and the failure step below read TAP ("# pass N", "not ok").
+      # Node 22 printed TAP when its output was piped; from Node 23 the
+      # default reporter is spec everywhere ("ℹ pass N"), so the reporter is
+      # named here rather than left to the Node version.
       - name: Integration tests (data layer)
+        env:
+          NODE_OPTIONS: --test-reporter=tap
         run: |
           set -o pipefail
           npm run test:integration | tee "$RUNNER_TEMP/integration.log"
@@ -66,7 +73,7 @@ jobs:
           log="$RUNNER_TEMP/integration.log"
           [ -f "$log" ] || exit 0
           grep -n -A45 -E '^\s*not ok ' "$log" | head -n 3000 || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: integration-log
@@ -87,7 +94,7 @@ jobs:
           curl -sf http://127.0.0.1:3998/readyz
       - name: Run e2e suite
         run: npx playwright test
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: playwright-traces

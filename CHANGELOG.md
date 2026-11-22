@@ -4,6 +4,21 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.40] - 2026-11-22
+
+Up-to-date dependencies, and the image moves to Node.js 24 LTS.
+
+### Changed
+- **The Docker image runs on Node.js 24** (the long-term-support line)
+  instead of Node.js 22. Nothing to change on your side: `docker compose
+  pull` picks it up like any update.
+- **Dependency updates** (minor and patch releases): React 19.3, the
+  Tiptap editor 3.34, nodemailer 10.6, the Postgres driver 8.23, the AWS and
+  Azure storage SDKs, SAML, DOMPurify, lucide icons and more.
+
+### Upgrading
+- **Nothing to do.** Update as usual.
+
 ## [1.20.39] - 2026-11-22
 
 CompassDocs has a new home on GitHub. Nothing changes for your install.
