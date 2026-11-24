@@ -42,6 +42,16 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      # STYLEGUIDE.md gate: plain Node with no dependencies, so it runs before
+      # `npm ci` and fails a PR in seconds rather than after the build. It
+      # reports file:line per violation and fails only on violations missing
+      # from scripts/styleguide-baseline.json (or on a fixed one still in it).
+      # The guard tests in test/style-*.test.ts run in the integration step
+      # below. Here, in the required e2e job, rather than a job of its own: a
+      # new job name would need the ruleset changed first
+      # (.github/rulesets/README.md).
+      - name: Style guide check
+        run: node scripts/check-styleguide.mjs
       - run: npm ci
       # Before the build, because these talk to the database directly and have
       # no opinion about the server: a failure here is a data-layer failure and

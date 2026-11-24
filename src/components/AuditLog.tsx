@@ -6,7 +6,7 @@ import { buttonClass } from "@/components/Button";
 import { Table, Th, Td, TABLE_HEAD_ROW, TR } from "@/components/Table";
 import { busyClass } from "@/components/Spinner";
 import { Pager } from "@/components/Pager";
-import { controlClass, SectionEmpty } from "@/components/form";
+import { controlClass, SectionEmpty, SELECT_EXTRA } from "@/components/form";
 import { toast } from "@/components/Toasts";
 import { actionLabel, humanise } from "@/lib/audit-labels";
 import { useFormatDate } from "./SettingsProvider";
@@ -146,7 +146,7 @@ export function AuditLog({
               setCategory(e.target.value);
               load(0, e.target.value);
             }}
-            className={controlClass(false, "w-auto")}
+            className={`${controlClass(false, "w-auto")} ${SELECT_EXTRA}`}
           >
             <option value="">All categories</option>
             {initial.categories.map((c) => (

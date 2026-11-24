@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "check:style": "node scripts/check-styleguide.mjs && tsx --tsconfig ./tsconfig.test.json --test test/style-*.test.ts test/dark-style.test.ts",
     "test:e2e": "playwright test",
     "test:integration": "tsx --tsconfig ./tsconfig.test.json --test test/**/*.test.ts"
   },

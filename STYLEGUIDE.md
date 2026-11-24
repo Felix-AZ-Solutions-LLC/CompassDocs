@@ -4,6 +4,13 @@ The canonical patterns for every page and component in the app. When adding
 or touching UI, match these exactly — consistency across pages is a feature.
 If a new need doesn't fit a pattern here, extend this guide in the same PR.
 
+The rules that can be checked mechanically are checked by
+`scripts/check-styleguide.mjs` (each rule names its section; `--list-rules`
+prints them) and by the guard tests in `test/style-*.test.ts`. `npm run check:style` runs both, and it is a
+release step (RELEASING.md). A documented exception goes in the guide and in
+the rule's allow list in the same PR, never in
+`scripts/styleguide-baseline.json`, which only shrinks.
+
 ## Page skeleton
 
 Every top-level page:

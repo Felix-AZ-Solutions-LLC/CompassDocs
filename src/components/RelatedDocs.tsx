@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { buttonClass } from "@/components/Button";
-import { controlClass, SectionEmpty } from "@/components/form";
+import { controlClass, SectionEmpty, SELECT_EXTRA } from "@/components/form";
 import Link from "next/link";
 import { ChevronDown, ChevronRight, Link2, Plus, X } from "lucide-react";
 import { usePanelCollapse } from "@/lib/use-panel-collapse";
@@ -209,7 +209,7 @@ export function RelatedDocs({
               value={kind}
               onChange={(e) => setKind(e.target.value)}
               aria-label="Relationship type"
-              className={controlClass(false, "w-auto rounded-md px-1.5 py-1 text-xs")}
+              className={`${controlClass(false, "w-auto rounded-md px-1.5 py-1 text-xs")} ${SELECT_EXTRA}`}
             >
               {KIND_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>

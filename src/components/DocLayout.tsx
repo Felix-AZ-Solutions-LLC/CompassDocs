@@ -46,6 +46,7 @@ export function DocLayout({
       {/* top-16 clears the sticky title bar, which is visible exactly when
           this panel is stuck. */}
       <aside
+        aria-label="Document details"
         className={`mt-10 space-y-8 overflow-x-hidden border-t border-slate-100 pt-8 print:hidden ${
           beside
             ? "lg:sticky lg:top-16 lg:mt-0 lg:max-h-[calc(100vh-5.5rem)] lg:w-72 lg:shrink-0 lg:overflow-y-auto lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0"

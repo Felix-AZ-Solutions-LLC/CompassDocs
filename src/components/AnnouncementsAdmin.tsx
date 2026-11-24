@@ -12,7 +12,7 @@ import Link from "next/link";
 import { Megaphone, TriangleAlert, Siren, Archive, ArchiveRestore, Trash2, Check } from "lucide-react";
 import { useFormatDate } from "./SettingsProvider";
 import { PageHeader } from "@/components/PageHeader";
-import { controlClass, SectionEmpty } from "@/components/form";
+import { controlClass, SectionEmpty, SELECT_EXTRA } from "@/components/form";
 import { EntityPicker } from "@/components/EntityPicker";
 import { useAction } from "@/lib/use-action";
 
@@ -197,7 +197,7 @@ export function AnnouncementsAdmin({
             </div>
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-slate-500">Auto-hide after</span>
-              <select value={expiresDays} onChange={(e) => setExpiresDays(Number(e.target.value))} className={field}>
+              <select value={expiresDays} onChange={(e) => setExpiresDays(Number(e.target.value))} className={`${field} ${SELECT_EXTRA}`}>
                 <option value={0}>Never (until archived)</option>
                 <option value={1}>1 day</option>
                 <option value={3}>3 days</option>

@@ -33,7 +33,7 @@ import {
 import { EntityPicker } from "@/components/EntityPicker";
 import { Table, Th, Td, TABLE_HEAD_ROW, TR } from "@/components/Table";
 import { toast } from "@/components/Toasts";
-import { DangerAction, DangerZone, Field, SectionEmpty, TextInput, controlClass } from "@/components/form";
+import { DangerAction, DangerZone, Field, SectionEmpty, TextInput, controlClass, SELECT_EXTRA } from "@/components/form";
 
 interface Role {
   id: number;
@@ -703,7 +703,7 @@ function AssignmentsTab({
             <select
               value={roleId}
               onChange={(e) => setRoleId(Number(e.target.value))}
-              className={controlClass()}
+              className={`${controlClass()} ${SELECT_EXTRA}`}
             >
               {roles.map((r) => (
                 <option key={r.id} value={r.id}>
@@ -719,7 +719,7 @@ function AssignmentsTab({
                 setKind(e.target.value as "user" | "group");
                 setSubjectId(null);
               }}
-              className={controlClass()}
+              className={`${controlClass()} ${SELECT_EXTRA}`}
             >
               <option value="user">A person</option>
               <option value="group">A group</option>
@@ -748,7 +748,7 @@ function AssignmentsTab({
             <select
               value={spaceId}
               onChange={(e) => setSpaceId(e.target.value === "" ? "" : Number(e.target.value))}
-              className={controlClass()}
+              className={`${controlClass()} ${SELECT_EXTRA}`}
             >
               <option value="">Whole workspace</option>
               {spaces.map((s) => (

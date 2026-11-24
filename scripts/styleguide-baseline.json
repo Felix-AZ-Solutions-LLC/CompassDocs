@@ -1,0 +1,70 @@
+{
+  "$comment": "Known style-guide violations that predate a rule in scripts/check-styleguide.mjs. Only ever shrinks: fix an entry and run `node scripts/check-styleguide.mjs --prune-baseline`. Never add one to get a new violation through.",
+  "entries": [
+    {
+      "rule": "form-control-recipe",
+      "file": "src/components/DocEditor.tsx",
+      "text": "<textarea ref={mdRef} value={content} onChange={(e) => { markDirty(); setContent(e.target.value); }} onPaste={(e) => { const file = imageFro"
+    },
+    {
+      "rule": "form-control-recipe",
+      "file": "src/components/EditorBlocks.tsx",
+      "text": "<select value={kind} onChange={(e) => updateAttributes({ kind: e.target.value })} className=\"rounded-sm border border-transparent bg-transpa"
+    },
+    {
+      "rule": "form-control-recipe",
+      "file": "src/components/email-templates/MarkdownWithTags.tsx",
+      "text": "<select value=\"\" onChange={(e) => e.target.value && insert(e.target.value)} aria-label=\"Insert tag\" data-tt=\"Insert a tag at the cursor: rep"
+    },
+    {
+      "rule": "form-control-recipe",
+      "file": "src/components/helpdesk/desk/checklists/ChecklistSettings.tsx",
+      "text": "<input ref={(el) => { if (el) titles.current.set(it.key, el); else titles.current.delete(it.key); }} value={it.title} maxLength={CHECKLIST_L"
+    },
+    {
+      "rule": "form-control-recipe",
+      "file": "src/components/helpdesk/desk/share/ShareActions.tsx",
+      "text": "<input ref={inputRef} id={`${id}-q`} data-autofocus role=\"combobox\" aria-expanded aria-controls={listId} aria-autocomplete=\"list\" aria-activ"
+    },
+    {
+      "rule": "form-control-recipe",
+      "file": "src/components/MigrateImport.tsx",
+      "text": "<input type=\"text\" value={newName} onChange={(e) => setNewName(e.target.value)} onFocus={() => setDest(\"new\")} maxLength={60} className=\"ml-"
+    },
+    {
+      "rule": "form-control-recipe",
+      "file": "src/components/MigrateImport.tsx",
+      "text": "<select value={targetSpaceId} onChange={(e) => setTargetSpaceId(e.target.value)} onFocus={() => setDest(\"existing\")} className=\"ml-1 rounded"
+    },
+    {
+      "rule": "form-control-recipe",
+      "file": "src/components/RichTextEditor.tsx",
+      "text": "<select value=\"\" onChange={(e) => { const tag = e.target.value; if (tag) editor.chain().focus().insertContent(`{{${tag}}}`).run(); }} data-t"
+    },
+    {
+      "rule": "form-control-recipe",
+      "file": "src/components/RichTextEditor.tsx",
+      "text": "<select value={(editor.getAttributes(\"textStyle\").fontFamily as string) || \"\"} onChange={(e) => { const v = e.target.value; if (v) editor.ch"
+    },
+    {
+      "rule": "form-control-recipe",
+      "file": "src/components/ShareCard.tsx",
+      "text": "<input readOnly value={`${origin}${share.url}`} onFocus={(e) => e.target.select()} aria-label=\"Share link URL\" className=\"min-w-0 flex-1 rou"
+    },
+    {
+      "rule": "form-control-recipe",
+      "file": "src/components/SpaceViews.tsx",
+      "text": "<input value={tag} onChange={(e) => setTag(e.target.value)} disabled={busy} placeholder=\"tag name\" className=\"w-24 rounded-md border border-"
+    },
+    {
+      "rule": "form-control-recipe",
+      "file": "src/components/SpaceViews.tsx",
+      "text": "<select className={sel} defaultValue=\"\" disabled={busy} onChange={(e) => { if (e.target.value) onRun({ action: \"type\", type: e.target.value"
+    },
+    {
+      "rule": "form-control-recipe",
+      "file": "src/components/SpaceViews.tsx",
+      "text": "<select className={sel} value={moveTo} disabled={busy} onChange={(e) => setMoveTo(e.target.value)}>"
+    }
+  ]
+}

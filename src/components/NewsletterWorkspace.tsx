@@ -30,7 +30,7 @@ import { RichTextEditor } from "./RichTextEditor";
 import { MarkdownView } from "./MarkdownView";
 import { StatusBadge } from "./NewsletterList";
 import { useFormatDate } from "./SettingsProvider";
-import { controlClass, SectionEmpty } from "@/components/form";
+import { controlClass, SectionEmpty, SELECT_EXTRA } from "@/components/form";
 import { EntityPicker } from "@/components/EntityPicker";
 
 interface NewsletterDetail {
@@ -511,7 +511,7 @@ export function NewsletterWorkspace({
                 <select
                   value={fromAddress}
                   onChange={(e) => setFromAddress(e.target.value)}
-                  className={controlClass(false, "px-2", true)}
+                  className={`${controlClass(false, "px-2", true)} ${SELECT_EXTRA}`}
                 >
                   <option value="">Workspace default</option>
                   {fromAddresses.map((f) => (
@@ -530,7 +530,7 @@ export function NewsletterWorkspace({
                 <select
                   value={archiveSpaceId ?? ""}
                   onChange={(e) => setArchiveSpaceId(e.target.value ? Number(e.target.value) : null)}
-                  className={controlClass(false, "px-2", true)}
+                  className={`${controlClass(false, "px-2", true)} ${SELECT_EXTRA}`}
                 >
                   <option value="">No archive</option>
                   {spaces.map((s) => (
@@ -861,7 +861,7 @@ export function NewsletterWorkspace({
             <button
               onClick={() => decide("request_changes")}
               disabled={!!busy}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20"
             >
               <Undo2 className="h-4 w-4" />
               {busy === "request_changes" ? "Working…" : "Request changes"}

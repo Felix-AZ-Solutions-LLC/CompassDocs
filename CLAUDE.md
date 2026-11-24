@@ -5,6 +5,11 @@
   native `title` on controls; icon-only controls also need `aria-label`),
   empty-state tiers, chip/button/print/dark-mode rules, lucide-only icons.
   If a new pattern is needed, add it to the guide in the same PR.
+  **The guide is a release gate:** `npm run check:style`
+  (`scripts/check-styleguide.mjs` + the `test/style-*` guard tests) must
+  pass before a release PR, and the script also runs in the e2e job and
+  release.yml. Never grow `scripts/styleguide-baseline.json`; fix the code
+  or document the exception in the guide and the rule's allow list.
 - **Releases follow [RELEASING.md](RELEASING.md)** — version bump in both
   package files, PR titled "X.Y.Z: summary", squash-merge, docker-publish,
   release.yml, then the enterprise image build.

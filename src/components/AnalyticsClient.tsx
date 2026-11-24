@@ -35,7 +35,7 @@ import {
 import { useFormatDate } from "./SettingsProvider";
 import { PageHeader } from "@/components/PageHeader";
 import { Modal } from "@/components/Modal";
-import { controlClass, SectionEmpty } from "@/components/form";
+import { controlClass, SectionEmpty, SELECT_EXTRA } from "@/components/form";
 
 type Kpis = Record<string, number>;
 interface SeriesPoint {
@@ -467,7 +467,7 @@ export function AnalyticsClient() {
             </button>
           ))}
         </div>
-        <select value={space} onChange={(e) => { setSpace(e.target.value); setCategory(""); }} className={select}>
+        <select value={space} onChange={(e) => { setSpace(e.target.value); setCategory(""); }} className={`${select} ${SELECT_EXTRA}`}>
           <option value="">All spaces</option>
           {data?.options.spaces.map((s) => (
             <option key={s.id} value={s.id}>
@@ -476,7 +476,7 @@ export function AnalyticsClient() {
           ))}
         </select>
         {space && (data?.options.categories.length ?? 0) > 0 && (
-          <select value={category} onChange={(e) => setCategory(e.target.value)} className={select}>
+          <select value={category} onChange={(e) => setCategory(e.target.value)} className={`${select} ${SELECT_EXTRA}`}>
             <option value="">All categories</option>
             {data?.options.categories.map((c) => (
               <option key={c.id} value={c.id}>
@@ -485,7 +485,7 @@ export function AnalyticsClient() {
             ))}
           </select>
         )}
-        <select value={author} onChange={(e) => setAuthor(e.target.value)} className={select}>
+        <select value={author} onChange={(e) => setAuthor(e.target.value)} className={`${select} ${SELECT_EXTRA}`}>
           <option value="">All authors</option>
           {data?.options.authors.map((a) => (
             <option key={a} value={a}>
