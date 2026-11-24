@@ -50,7 +50,7 @@ import {
   milestonesFor,
 } from "@/lib/directory-display";
 import { chipClass } from "./Chip";
-import { EmptyState, controlClass } from "./form";
+import { EmptyState, controlClass, SELECT_EXTRA } from "./form";
 import { Popover, MenuItem, MenuSeparator } from "./Popover";
 import { Table, Th, Td, TABLE_HEAD_ROW, TR } from "./Table";
 import { OrgChart } from "./directory/OrgChart";
@@ -655,7 +655,7 @@ export function DirectoryClient({
             aria-label={view === "list" ? "Filter by" : "Group by"}
             value={groupField?.key ?? ""}
             onChange={(e) => saveGroupBy(e.target.value)}
-            className={field}
+            className={`${field} ${SELECT_EXTRA}`}
             data-tt={view === "list" ? "Which field the filter menu offers" : "Which field the sections follow"}
           >
             {groupFields.map((f) => (
@@ -666,7 +666,7 @@ export function DirectoryClient({
           </select>
         )}
         {filterOptions.length > 0 && (
-          <select aria-label={`Filter by ${groupField?.label ?? ""}`} value={filterValue} onChange={(e) => setFilterValue(e.target.value)} className={field}>
+          <select aria-label={`Filter by ${groupField?.label ?? ""}`} value={filterValue} onChange={(e) => setFilterValue(e.target.value)} className={`${field} ${SELECT_EXTRA}`}>
             <option value="">All {groupField?.label.toLowerCase()}s</option>
             {filterOptions.map((o) => (
               <option key={o.key} value={o.key}>
@@ -676,7 +676,7 @@ export function DirectoryClient({
           </select>
         )}
         {view === "cards" && groupFields.length > 0 && (
-          <select aria-label="Group cards" value={cardsGroupBy} onChange={(e) => saveCardsGroupBy(e.target.value)} className={field}>
+          <select aria-label="Group cards" value={cardsGroupBy} onChange={(e) => saveCardsGroupBy(e.target.value)} className={`${field} ${SELECT_EXTRA}`}>
             <option value="">No sections</option>
             {groupFields.map((f) => (
               <option key={f.key} value={f.key}>
@@ -750,7 +750,7 @@ export function DirectoryClient({
           <select
             value={nameSort}
             onChange={(e) => saveNameSort(e.target.value)}
-            className={field}
+            className={`${field} ${SELECT_EXTRA}`}
             data-tt="Which part of the name people are ordered by, in every view"
           >
             <option value="full">Full name</option>

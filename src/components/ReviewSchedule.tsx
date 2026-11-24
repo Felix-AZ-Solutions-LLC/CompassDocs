@@ -8,7 +8,7 @@
 import { useState } from "react";
 import { Spinner } from "@/components/Spinner";
 import { buttonClass } from "@/components/Button";
-import { controlClass } from "@/components/form";
+import { controlClass, SELECT_EXTRA } from "@/components/form";
 import { useRouter } from "next/navigation";
 import { CalendarClock } from "lucide-react";
 
@@ -73,7 +73,7 @@ export function ReviewSchedule({
         }
         disabled={busy}
         aria-label="Review cadence"
-        className={controlClass(false, "", true)}
+        className={`${controlClass(false, "", true)} ${SELECT_EXTRA}`}
       >
         <option value="">No review schedule</option>
         {intervals.map((d) => (

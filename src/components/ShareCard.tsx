@@ -9,7 +9,7 @@ import { Spinner } from "@/components/Spinner";
 import { buttonClass } from "@/components/Button";
 import { confirmDialog } from "@/components/Dialog";
 import { CopyButton } from "@/components/CopyButton";
-import { controlClass } from "@/components/form";
+import { controlClass, SELECT_EXTRA } from "@/components/form";
 import { Link as LinkIcon, RefreshCw, Share2, X } from "lucide-react";
 import { useFormatDate } from "./SettingsProvider";
 
@@ -139,7 +139,7 @@ export function ShareCard({
             value={expiry}
             onChange={(e) => setExpiry(e.target.value)}
             aria-label="Link expiry"
-            className={controlClass(false, "", true)}
+            className={`${controlClass(false, "", true)} ${SELECT_EXTRA}`}
           >
             {EXPIRY_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>

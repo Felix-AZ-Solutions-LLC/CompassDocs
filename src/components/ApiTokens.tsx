@@ -5,6 +5,7 @@
 // connector; afterwards only the prefix is visible.
 
 import { useState } from "react";
+import { Box } from "lucide-react";
 import { buttonClass } from "@/components/Button";
 import { confirmDialog } from "@/components/Dialog";
 import { CopyButton } from "@/components/CopyButton";
@@ -113,9 +114,7 @@ export function ApiTokens({
       {/* One-click Claude connect — the front door; tokens below are the fallback. */}
       <div className="mb-5 rounded-xl border border-compass-100 bg-compass-50/50 p-4">
         <div className="flex items-center gap-2">
-          <svg viewBox="0 0 24 24" className="h-4 w-4 text-compass-600" fill="currentColor" aria-hidden>
-            <path d="M12 2 2 7v10l10 5 10-5V7L12 2zm0 2.2 7.5 3.75L12 11.7 4.5 7.95 12 4.2zM4 9.6l7 3.5v6.7l-7-3.5V9.6zm9 10.2v-6.7l7-3.5v6.7l-7 3.5z" />
-          </svg>
+          <Box className="h-4 w-4 shrink-0 text-compass-600" aria-hidden />
           <h3 className="text-sm font-semibold text-slate-800">Connect Claude — one click</h3>
         </div>
         <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-slate-600">

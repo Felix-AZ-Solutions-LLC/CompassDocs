@@ -8,7 +8,7 @@ import { buttonClass } from "@/components/Button";
 import { confirmDialog } from "@/components/Dialog";
 import { Spinner } from "@/components/Spinner";
 import { chipClass } from "@/components/Chip";
-import { controlClass, SectionEmpty } from "@/components/form";
+import { controlClass, SectionEmpty, SELECT_EXTRA } from "@/components/form";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -178,7 +178,7 @@ export function StatusBoard({
             <select
               value={incServiceId}
               onChange={(e) => setIncServiceId(e.target.value === "" ? "" : Number(e.target.value))}
-              className={input}
+              className={`${input} ${SELECT_EXTRA}`}
               aria-label="Affected service"
             >
               <option value="">Affected service…</option>
@@ -188,7 +188,7 @@ export function StatusBoard({
                 </option>
               ))}
             </select>
-            <select value={incSeverity} onChange={(e) => setIncSeverity(e.target.value)} className={input} aria-label="Severity">
+            <select value={incSeverity} onChange={(e) => setIncSeverity(e.target.value)} className={`${input} ${SELECT_EXTRA}`} aria-label="Severity">
               <option value="outage">Outage</option>
               <option value="degraded">Degraded</option>
               <option value="maintenance">Maintenance</option>
@@ -291,7 +291,7 @@ export function StatusBoard({
         {adding && isAdmin && (
           <div className="space-y-2 border-b border-slate-100 bg-slate-50/60 px-4 py-3">
             <div className="flex flex-wrap items-center gap-2">
-              <select value={pick} onChange={(e) => setPick(e.target.value)} className={input} aria-label="Catalog service">
+              <select value={pick} onChange={(e) => setPick(e.target.value)} className={`${input} ${SELECT_EXTRA}`} aria-label="Catalog service">
                 <option value="">From the catalog…</option>
                 {available.map((c) => (
                   <option key={c.name} value={c.name}>
@@ -310,7 +310,7 @@ export function StatusBoard({
               <select
                 value={customProvider}
                 onChange={(e) => setCustomProvider(e.target.value as any)}
-                className={input}
+                className={`${input} ${SELECT_EXTRA}`}
                 disabled={!!pick}
                 aria-label="Provider"
               >
