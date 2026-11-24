@@ -66,6 +66,14 @@ jobs:
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
           echo "Releasing v$VERSION"
 
+      # Release gate (RELEASING.md step 1): the STYLEGUIDE.md check, before
+      # anything is tagged. The bump PR's e2e job already ran it; this
+      # catches a release dispatched from a main that went red after it.
+      # Plain Node, no npm ci. A notes-only run changes no code and skips it.
+      - name: Style guide check
+        if: ${{ !inputs.notes_only }}
+        run: node scripts/check-styleguide.mjs
+
       - name: Build release notes from CHANGELOG
         env:
           VERSION: ${{ steps.v.outputs.version }}

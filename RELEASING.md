@@ -27,15 +27,55 @@ it.
 1. Bump the version in **both** `package.json` and `package-lock.json`
    (the lockfile carries it twice: top-level and under `packages.""`).
 2. Add/finalize the `CHANGELOG.md` entry.
-3. Open a PR from a working branch. Wait for checks to finish (~9 minutes;
+3. **Style-guide gate** ([STYLEGUIDE.md](STYLEGUIDE.md)), before opening
+   the PR:
+
+   ```bash
+   npm run check:style
+   # must end: "Style-guide check passed" and "# fail 0"
+   ```
+
+   That runs `scripts/check-styleguide.mjs` (no dependencies; also the
+   first step of the e2e job and of release.yml, so neither goes green
+   without it) and the guard tests in `test/style-*.test.ts` and
+   `test/dark-style.test.ts`. It fails on any violation not in
+   `scripts/styleguide-baseline.json`: fix the code, or, for a real new
+   exception, add it to the guide and to the rule's allow list in the same
+   PR. Never add to the baseline to get a release through. If it says a
+   baseline entry is gone, run `node scripts/check-styleguide.mjs
+   --prune-baseline` and commit the smaller file.
+
+   The script can't judge how a page looks. If the release changes UI
+   (`git diff --stat vPREVIOUS..HEAD -- src/app src/components`), open each
+   changed page and check it against the guide:
+
+   - **Dark mode**, in each dark style (Slate, Graphite, Black): no light
+     slabs, no unreadable accent ink, no fixed-color surface.
+   - **Print** (`Ctrl+P` preview): controls `print:hidden`, nothing cut off.
+   - **Empty states**: the page and each card with no data — `EmptyState`
+     or `SectionEmpty`, with an `action` where a destination exists.
+   - **Phone width** (375–390px): no sideways scroll, header actions wrap,
+     16px gutters, touch targets at least 36px.
+   - **Tooltips**: every icon-only control shows its `data-tt` on hover and
+     keyboard focus, inside the viewport, and has an `aria-label`.
+   - **Page skeleton**: `PageHeader` icon, title and subtitle; no
+     hard-coded page width.
+
+   Screenshots: CI keeps none (only failure traces). Many specs save them
+   when run against a local server with `E2E_SHOTS` (some read
+   `E2E_SHOTS_DIR`) set to a folder, e.g. `E2E_SHOTS=/tmp/shots
+   E2E_SHOTS_DIR=/tmp/shots npx playwright test e2e/<area>.spec.ts`; their
+   files are named by page, width and theme. Attach the ones for changed
+   pages to the PR, or say in it which pages you checked by hand.
+4. Open a PR from a working branch. Wait for checks to finish (~9 minutes;
    don't merge early — the e2e suite is the slow one).
-4. **Squash-merge** with the title format the changelog automation expects:
+5. **Squash-merge** with the title format the changelog automation expects:
 
    ```
    X.Y.Z: one-line summary (#NNN)
    ```
 
-5. After merging, reset your working branch to `origin/main` before any
+6. After merging, reset your working branch to `origin/main` before any
    further work — the squash means your local branch history and main have
    diverged.
 
@@ -287,6 +327,9 @@ often or ee's legacy job breaks on a core change.
 ## If something goes wrong
 
 - **Checks fail on the bump PR** — fix on the branch; never merge red.
+- **release.yml stops at "Style guide check"** — nothing was tagged.
+  Fix the violation it names (file:line) in a PR, merge, and dispatch
+  release.yml again.
 - **docker-publish fails after merge** — fix the cause, then re-run the
   failed job (within 14 days; see [step 2](#2-community-image-automatic)).
   That's safe even after newer pushes: only **Move :latest** touches
