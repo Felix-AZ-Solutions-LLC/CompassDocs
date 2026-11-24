@@ -156,7 +156,7 @@ function withClassDefs(src, attrs) {
   if (!cls) return attrs;
   let out = attrs;
   for (const [id] of cls.matchAll(/\b[A-Za-z_$][\w$]*\b/g)) {
-    const def = src.match(new RegExp(`(?:const|let|var)\\s+${id.replace(/\$/g, "\\$")}\\s*=\\s*([^;\\n]+)`));
+    const def = src.match(new RegExp(`(?:const|let|var)\\s+${id.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")}\\s*=\\s*([^;\\n]+)`));
     if (def) out += " " + def[1];
   }
   return out;
