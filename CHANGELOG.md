@@ -4,6 +4,24 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.20.42] - 2026-11-22
+
+Replies from Outlook on the web no longer bring the earlier message with them.
+
+### Fixed
+- **An Outlook on the web reply keeps only what was typed.** When a reply
+  arrived with only an HTML part, the desk left out Outlook's
+  From/Sent/To/Subject block but kept the earlier message below it, so the
+  stored reply read "Works now, thank you. --- Please restart the
+  projector." The desk now stops at the point where Outlook starts the
+  quoted history, the same place the conversation view folds it, and
+  leaves out everything after it, along with the line Outlook draws above
+  it. A reply typed below the quote is kept whole. The email that opens a
+  ticket is never cut.
+
+### Upgrading
+- **Nothing to do.** Update as usual. Replies already stored are unchanged.
+
 ## [1.20.41] - 2026-11-22
 
 Security hardening from a full code-scanning review.
