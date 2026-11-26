@@ -39,6 +39,7 @@
 
 import "server-only";
 import nodemailer from "nodemailer";
+import { mailAttachmentsForSend, type MailAttachment } from "./uploads";
 import { M365Error, graph, m365Token, userPath, type M365Credentials } from "./helpdesk/m365/graph";
 import { SECRET_UNREADABLE, entraGrantsSend, getM365SendConfig, graphUserOf, m365SendConfigured, recordM365Check, type M365SendConfig } from "./mail-config";
 import { m365SendSentence } from "./mail-m365-errors";
@@ -57,7 +58,7 @@ export interface OutgoingMail {
   messageId?: string;
   references?: string;
   headers?: Record<string, string>;
-  attachments?: { filename: string; path: string }[];
+  attachments?: MailAttachment[];
 }
 
 /** A refusal from Microsoft, in a sentence (lib/mail-m365-errors). SMTP-like fields let the helpdesk's sender checks read it. */
@@ -103,7 +104,7 @@ export async function buildMime(m: OutgoingMail): Promise<Buffer> {
     messageId: m.messageId,
     references: m.references,
     headers: m.headers,
-    attachments: m.attachments?.length ? m.attachments : undefined,
+    attachments: await mailAttachmentsForSend(m.attachments),
   });
   return info.message as unknown as Buffer;
 }
@@ -207,7 +208,7 @@ export async function sendMimeM365(mime: Buffer, cfg?: M365SendConfig, opts: { w
 
 /** sendMail's message through Microsoft 365: From the mailbox (a chosen sender becomes Reply-To), with its attachments. */
 export async function sendViaM365(
-  m: { to: string[]; subject: string; text: string; html?: string; fromOverride?: string; attachments?: { filename: string; path: string }[] },
+  m: { to: string[]; subject: string; text: string; html?: string; fromOverride?: string; attachments?: MailAttachment[] },
   cfg?: M365SendConfig,
   opts: { wait429?: boolean } = {}
 ): Promise<void> {
@@ -219,7 +220,7 @@ export async function sendViaM365(
 
 /** sendMail's message as MIME for Microsoft 365: From the mailbox (a chosen sender becomes Reply-To), with its attachments. */
 export async function mimeForM365(
-  m: { to: string[]; subject: string; text: string; html?: string; fromOverride?: string; attachments?: { filename: string; path: string }[] },
+  m: { to: string[]; subject: string; text: string; html?: string; fromOverride?: string; attachments?: MailAttachment[] },
   c: M365SendConfig
 ): Promise<Buffer> {
   const who = m365FromFor(c.mailbox, c.fromName, m.fromOverride);

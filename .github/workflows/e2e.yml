@@ -53,6 +53,19 @@ jobs:
       - name: Style guide check
         run: node scripts/check-styleguide.mjs
       - run: npm ci
+      # 1.21.2: Azurite, the Azure Storage emulator, for the blob file store's
+      # tests (test/support/azurite.ts). In CI those tests fail rather than
+      # skip without it, so it is started (and waited for) here.
+      - name: Start Azurite
+        run: |
+          npx --yes azurite@3.37.0 azurite-blob --silent --skipApiVersionCheck --loose \
+            --location "$RUNNER_TEMP/azurite" --blobHost 127.0.0.1 --blobPort 10000 &
+          for i in $(seq 1 90); do
+            (echo > /dev/tcp/127.0.0.1/10000) 2>/dev/null && exit 0
+            sleep 1
+          done
+          echo "::error::Azurite did not start on 127.0.0.1:10000"
+          exit 1
       # Before the build, because these talk to the database directly and have
       # no opinion about the server: a failure here is a data-layer failure and
       # says so, instead of arriving 3 minutes later behind a build.

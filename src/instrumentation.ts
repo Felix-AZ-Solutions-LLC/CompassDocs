@@ -39,7 +39,12 @@ export async function register() {
       return r.rows[0]?.value ?? null;
     });
 
-  const { every, after, runJob, onDrain, onClose, exposeLifecycle } = await import("./lib/shutdown");
+  // 1.21.2: the blob file store (lib/file-store), when it is chosen: a missing or invalid
+  // setting exits here, saying which; an unreachable container is one error line and
+  // /readyz stays not ready until it answers. Nothing for the uploads folder.
+  await (await import("./lib/file-store")).checkFileStoreStartup(logEvent);
+
+  const { every, after, runJob, jobError, onDrain, onClose, exposeLifecycle } = await import("./lib/shutdown");
   exposeLifecycle();
   // The desk's live streams end first (they would otherwise hold the server
   // open until the deadline); the pool closes last, once nothing uses it.
@@ -78,7 +83,7 @@ export async function register() {
         const { runScheduledBackupIfDue } = await import("./lib/backup");
         await runScheduledBackupIfDue();
       } catch (e) {
-        console.error("[backup] scheduler error:", e);
+        jobError("[backup] scheduler error:", e);
       }
     }
     // Content review reminders: emails approvers when a review comes due.
@@ -87,14 +92,14 @@ export async function register() {
       const { remindDueReviews } = await import("./lib/reviews");
       await remindDueReviews();
     } catch (e) {
-      console.error("[reviews] scheduler error:", e);
+      jobError("[reviews] scheduler error:", e);
     }
     // Weekly digest emails (Monday morning; claimed once per ISO week).
     try {
       const { maybeSendWeeklyDigests } = await import("./lib/digest");
       await maybeSendWeeklyDigests();
     } catch (e) {
-      console.error("[digest] scheduler error:", e);
+      jobError("[digest] scheduler error:", e);
     }
     // Hourly and daily notification digests (1.19.0, lib/notify-policy):
     // queued emails, one summary per person; rows are claimed with SKIP
@@ -103,14 +108,14 @@ export async function register() {
       const { sendNotificationDigests } = await import("./lib/notify-policy");
       await sendNotificationDigests();
     } catch (e) {
-      console.error("[notify-digest] scheduler error:", e);
+      jobError("[notify-digest] scheduler error:", e);
     }
     // Training due/overdue reminders (entitlement-gated inside; atomic claim).
     try {
       const { trainingHourly } = await import("./lib/training");
       await trainingHourly();
     } catch (e) {
-      console.error("[training] scheduler error:", e);
+      jobError("[training] scheduler error:", e);
     }
     // Read confirmations (Enterprise, policy_ack; gated inside): the
     // audience reconcile, expired exemptions, due and overdue reminders,
@@ -121,7 +126,7 @@ export async function register() {
       const { complianceHourly } = await import("./lib/compliance");
       await complianceHourly();
     } catch (e) {
-      console.error("[compliance] scheduler error:", e);
+      jobError("[compliance] scheduler error:", e);
     }
     // The neutral weekly and monthly work (1.14.0): the team digest for
     // group leads, the monthly compliance evidence, the weekly compliance
@@ -132,7 +137,7 @@ export async function register() {
       const { runPeriodic } = await import("./lib/periodic");
       await runPeriodic();
     } catch (e) {
-      console.error("[periodic] scheduler error:", e);
+      jobError("[periodic] scheduler error:", e);
     }
     // Scheduled directory syncs (Enterprise): each provider on its own
     // schedule, one instance at a time, with an emailed report.
@@ -140,14 +145,14 @@ export async function register() {
       const { runScheduledDirectorySyncs } = await import("./lib/directory-schedule");
       await runScheduledDirectorySyncs();
     } catch (e) {
-      console.error("[directory] scheduler error:", e);
+      jobError("[directory] scheduler error:", e);
     }
     // Export presets that email themselves (weekly / monthly), one instance.
     try {
       const { runScheduledDirectoryExports } = await import("./lib/directory-export-schedule");
       await runScheduledDirectoryExports();
     } catch (e) {
-      console.error("[directory] export scheduler error:", e);
+      jobError("[directory] export scheduler error:", e);
     }
     // Housekeeping: purge expired sessions / OAuth codes so they don't
     // accumulate forever. Plain deletes — safe to run from every instance.
@@ -155,7 +160,7 @@ export async function register() {
       const { runDbMaintenance } = await import("./lib/db");
       await runDbMaintenance();
     } catch (e) {
-      console.error("[maintenance] scheduler error:", e);
+      jobError("[maintenance] scheduler error:", e);
     }
   };
 
@@ -170,7 +175,7 @@ export async function register() {
       const { sendDueNewsletters } = await import("./lib/newsletter-scheduler");
       await sendDueNewsletters();
     } catch (e) {
-      console.error("[newsletter] scheduler error:", e);
+      jobError("[newsletter] scheduler error:", e);
     }
     // 1.20.31: newsletters going out through Microsoft 365, about 25 a minute
     // (lib/newsletter-delivery; one claimed job at a time, so every instance may run this).
@@ -181,7 +186,7 @@ export async function register() {
         const { newsletterDeliveryTick } = await import("./lib/newsletter-delivery");
         await newsletterDeliveryTick();
       } catch (e) {
-        console.error("[newsletter] delivery error:", e);
+        jobError("[newsletter] delivery error:", e);
       }
     });
     // 1.20.32: the outbox of the workspace's email through Microsoft 365 (lib/mail-outbox):
@@ -192,14 +197,14 @@ export async function register() {
       const { outboxTick } = await import("./lib/mail-outbox");
       await outboxTick();
     } catch (e) {
-      console.error("[mail-outbox] tick error:", e);
+      jobError("[mail-outbox] tick error:", e);
     }
     // Scheduled document publishes / auto-unpublishes (atomic claims too).
     try {
       const { runDueDocSchedules } = await import("./lib/doc-schedule");
       await runDueDocSchedules();
     } catch (e) {
-      console.error("[doc-schedule] scheduler error:", e);
+      jobError("[doc-schedule] scheduler error:", e);
     }
     // SaaS status polling: the per-service claim limits real work to one poll
     // per service per POLL_INTERVAL, so a minutely call here is cheap.
@@ -207,7 +212,7 @@ export async function register() {
       const { refreshDueStatuses } = await import("./lib/status");
       await refreshDueStatuses(await backgroundOrigin());
     } catch (e) {
-      console.error("[status] scheduler error:", e);
+      jobError("[status] scheduler error:", e);
     }
     // Helpdesk (Enterprise, helpdesk; gated inside): SLA breaches and
     // warnings, workflow waits and approval reminders, upload cleanup. Each
@@ -216,7 +221,7 @@ export async function register() {
       const { runHelpdeskSweeps } = await import("./lib/periodic");
       await runHelpdeskSweeps();
     } catch (e) {
-      console.error("[helpdesk] sweep error:", e);
+      jobError("[helpdesk] sweep error:", e);
     }
     // Read-confirmation notices (Enterprise, policy_ack): drain the outbox.
     // The claim is one UPDATE with FOR UPDATE SKIP LOCKED, so every instance
@@ -231,7 +236,7 @@ export async function register() {
         await deliverAckNotices({ origin: await backgroundOrigin() });
       }
     } catch (e) {
-      console.error("[ack] notice outbox error:", e);
+      jobError("[ack] notice outbox error:", e);
     }
   };
   // A custom domain waiting for its DNS (1.20.29, lib/domain-flow): checked
@@ -244,7 +249,7 @@ export async function register() {
       const r = await recheckPendingDomain();
       if (r.status === "applied") console.log(`[domain] ${r.check?.domain} passed its check and is live`);
     } catch (e) {
-      console.error("[domain] re-check error:", e);
+      jobError("[domain] re-check error:", e);
     }
   };
   after(30_000, () => runJob("minutely", newsletterTick));
@@ -263,7 +268,7 @@ export async function register() {
         const { applyProxyConfigOnBoot } = await import("./lib/caddy");
         await applyProxyConfigOnBoot();
       } catch (e) {
-        console.error("[proxy] boot apply error:", e);
+        jobError("[proxy] boot apply error:", e);
       }
     })
   );

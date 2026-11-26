@@ -1,4 +1,5 @@
 import { Pool, types } from "pg";
+import { RetryingPool } from "./db-retry";
 import { HD_ROLES_SCHEMA } from "./helpdesk/roles-schema";
 import { HD_CALENDARS_SCHEMA } from "./helpdesk/calendars-schema";
 import { EMAIL_PARTS_SCHEMA } from "./email-parts-schema";
@@ -170,7 +171,9 @@ function makePool(): Pool {
   // DATABASE_SSL=require forces SSL even when the host looks local.
   const useSsl =
     process.env.DATABASE_SSL === "require" || (!isLocal && !sslDisabled);
-  return new Pool({
+  // 1.21.2: waits through a database restart or failover (lib/db-retry says
+  // exactly what is retried: getting a connection, never a statement sent).
+  return new RetryingPool({
     connectionString,
     ...(password ? { password } : {}),
     max: Number(process.env.DATABASE_POOL_MAX) || 5,

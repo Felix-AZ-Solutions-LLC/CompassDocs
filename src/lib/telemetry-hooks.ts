@@ -19,6 +19,10 @@ export interface TelemetryHooks {
   smtp<T>(server: { host: string; port: number }, fn: () => Promise<T>): Promise<T>;
   /** Count one mail handed to Microsoft 365 (sent) or refused (failed). */
   mail(transport: "smtp" | "m365", ok: boolean): void;
+  /** 1.21.2 (lib/db-retry): a database outage began. */
+  dbOutage?(): void;
+  /** 1.21.2 (lib/db-retry): a request that waited for the database got it, or gave up. */
+  dbRetry?(outcome: "recovered" | "gave_up"): void;
 }
 
 const G = globalThis as unknown as { __compassTelemetry?: TelemetryHooks };

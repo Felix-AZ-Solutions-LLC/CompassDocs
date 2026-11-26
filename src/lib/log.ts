@@ -49,6 +49,10 @@ const SECRET_VARS = [
   "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
   "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
   "APPLICATIONINSIGHTS_CONNECTION_STRING",
+  // 1.21.2: the blob store's development connection string (an account key or SAS, lib/file-store).
+  "COMPASSDOCS_BLOB_CONNECTION_STRING",
+  // The copy command's service principal, when an operator runs it with one.
+  "AZURE_CLIENT_SECRET",
 ];
 
 /** A field whose name says it holds a secret: its value is masked whole. */
@@ -79,6 +83,10 @@ export function redact(text: string, env: Env = process.env): string {
   out = out.replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/g, `$1 ${MASK}`);
   // API-key shapes: Anthropic, OpenAI, Slack, GitHub.
   out = out.replace(/\b(sk-ant-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|gh[pousr]_[A-Za-z0-9]{20,})/g, MASK);
+  // 1.21.2: Azure Storage credentials: a connection string's AccountKey or
+  // SharedAccessSignature, and a SAS's signature in a URL.
+  out = out.replace(/\b(AccountKey|SharedAccessSignature)=[^;\s"']+/gi, `$1=${MASK}`);
+  out = out.replace(/([?&]sig=)[^&\s"'#]+/gi, `$1${MASK}`);
   // Sealed settings (lib/secretbox) are ciphertext, but never worth printing.
   out = out.replace(/enc:v1:[A-Za-z0-9+/=]{16,}/g, `enc:v1:${MASK}`);
   return out;

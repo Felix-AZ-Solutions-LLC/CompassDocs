@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { dbReady, pool, schemaBootFailure, schemaReady } from "@/lib/db";
+import { withoutDbRetry } from "@/lib/db-retry";
+import { fileStoreKind, fileStoreReadiness } from "@/lib/file-store";
 import { isDraining } from "@/lib/shutdown";
 import { logEvent } from "@/lib/log";
 
@@ -25,6 +27,13 @@ let lastFailure = "";
  * the migrations failed, a probe reports that failure (with when the next
  * try is) rather than starting them again, until the back-off is over
  * (lib/db schemaBootFailure: 5 s, doubling to a minute).
+ *
+ * 1.21.2: with the blob file store (lib/file-store), also its container
+ * having answered once in this process (one listing call, tried again by
+ * the next probe until it answers, then never again): a revision whose
+ * storage is wrong or unreachable never takes traffic, while a storage blip
+ * later does not take every replica (storage is shared) out of rotation.
+ * The database is probed without waiting for it (lib/db-retry).
  */
 export async function GET() {
   if (isDraining()) {
@@ -46,16 +55,28 @@ export async function GET() {
   const at: { stage: "migrations" | "database" } = { stage: "migrations" };
   try {
     await Promise.race([
-      (async () => {
+      // 1.21.2: never waits for the database (lib/db-retry): the probe answers within its timeout.
+      withoutDbRetry(async () => {
         if (!schemaReady()) await dbReady();
         at.stage = "database";
         await pool().query("SELECT 1");
-      })(),
+      }),
       timeout,
     ]);
     lastFailure = "";
+    if (fileStoreKind() === "blob") {
+      const problem = await fileStoreReadiness(Math.max(500, TIMEOUT_MS - (Date.now() - started)), logEvent);
+      if (problem) {
+        return NextResponse.json({ status: "unavailable", reason: "file storage unreachable" }, { status: 503, headers: { "Cache-Control": "no-store" } });
+      }
+    }
     return NextResponse.json(
-      { status: "ready", migrations: "applied", db_latency_ms: Date.now() - started },
+      {
+        status: "ready",
+        migrations: "applied",
+        db_latency_ms: Date.now() - started,
+        ...(fileStoreKind() === "blob" ? { file_store: "verified" } : {}),
+      },
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (e) {

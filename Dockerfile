@@ -52,6 +52,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # exit 0, within COMPASSDOCS_SHUTDOWN_TIMEOUT seconds) and JSON logs from the
 # first line in cloud mode. `node server.js` still works without them.
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/start.cjs ./start.cjs
+# 1.21.2: copies an existing uploads folder into the workspace's Azure Blob
+# Storage container (README "File storage"): `node copy-uploads-to-blob.cjs`.
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/copy-uploads-to-blob.cjs ./copy-uploads-to-blob.cjs
 
 USER nextjs
 EXPOSE 3000

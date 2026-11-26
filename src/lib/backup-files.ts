@@ -19,6 +19,14 @@
 // only under the uploads directory, never over the key file, and never
 // through a link.
 //
+// 1.21.2: with the blob store (lib/file-store, COMPASSDOCS_FILE_STORE=blob)
+// the archive is made from the workspace's container instead, in the same
+// format (a stored file's key is its path: "<name>" or "hd-import/<name>"),
+// and a restore writes the archive's stored files into the container. So a
+// backup made on either store restores onto either: entries that are not a
+// stored file's key (anything else an uploads folder held) are skipped and
+// counted when restoring into a container.
+//
 // Server-only.
 
 import "server-only";
@@ -26,7 +34,9 @@ import { createWriteStream } from "node:fs";
 import { lstat, mkdir, open, readdir, rename, unlink } from "node:fs/promises";
 import { basename, dirname, join, normalize, relative, resolve, sep } from "node:path";
 import { once } from "node:events";
+import type { Readable } from "node:stream";
 import { uploadDir } from "./uploads";
+import { fileStore, fileStoreKind, isValidStoreKey, type StoredFile } from "./file-store";
 
 const BLOCK = 512;
 
@@ -128,6 +138,8 @@ export interface FilesArchiveResult {
  * backup's own files when the backup directory is inside uploads).
  */
 export async function writeFilesArchive(dest: string, opts: { root?: string; skip?: string[] } = {}): Promise<FilesArchiveResult> {
+  // 1.21.2: the blob store's files (an explicit root is always a folder).
+  if (!opts.root && fileStoreKind() === "blob") return writeStoreArchive(dest);
   const root = resolve(opts.root ?? uploadDir());
   const keyRel = keyFileRelative(root);
   const skip = new Set((opts.skip ?? []).map((p) => resolve(p)));
@@ -245,6 +257,88 @@ export async function writeFilesArchive(dest: string, opts: { root?: string; ski
   return { files, bytes, vanished: gone };
 }
 
+/**
+ * 1.21.2: the archive of the blob store's files, in the format above. Each
+ * blob is opened (its download answered) before its header is written: one
+ * deleted since the listing is skipped and counted. One that goes while it
+ * is read is padded to its promised size and counted as vanished (keys are
+ * never reused, so nothing refers to it any more); any other read failure
+ * fails the backup rather than archive a damaged file.
+ */
+async function writeStoreArchive(dest: string): Promise<FilesArchiveResult> {
+  const store = fileStore();
+  const listed: StoredFile[] = [];
+  for await (const f of store.list()) if (!excluded(f.key, null)) listed.push(f);
+  listed.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  const out = createWriteStream(dest, { mode: 0o600 });
+  const closed = once(out, "close");
+  let files = 0;
+  let bytes = 0;
+  let gone = 0;
+  let importDir = false;
+  try {
+    for (const f of listed) {
+      const now = await store.stat(f.key);
+      if (!now) {
+        gone++;
+        continue;
+      }
+      if (f.key.startsWith("hd-import/") && !importDir) {
+        await writeAll(out, header("hd-import/", 0, 0o755, now.modifiedAt.getTime(), "5"));
+        importDir = true;
+      }
+      const size = now.size;
+      const body: Readable | null = size > 0 ? store.readStream(f.key, { start: 0, end: size - 1 }) : null;
+      // The first chunk (or the error) before the header: a blob gone since it was listed is skipped.
+      const it = body ? body[Symbol.asyncIterator]() : null;
+      let first: IteratorResult<unknown> | null = null;
+      if (it) {
+        try {
+          first = await it.next();
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException)?.code === "ENOENT") {
+            gone++;
+            continue;
+          }
+          throw new Error(`Could not read the stored file ${f.key}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      await writeAll(out, header(f.key, size, 0o600, now.modifiedAt.getTime(), "0"));
+      let written = 0;
+      let cutShort = false;
+      try {
+        for (let r = first; r && !r.done; r = await it!.next()) {
+          const buf = r.value as Buffer;
+          const part = buf.subarray(0, Math.max(0, size - written));
+          written += part.length;
+          await writeAll(out, part);
+          if (written >= size) break;
+        }
+      } catch (e) {
+        if (await store.stat(f.key).catch(() => "unknown")) {
+          throw new Error(`Could not read the stored file ${f.key}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        cutShort = true;
+      } finally {
+        body?.destroy();
+      }
+      if (written < size) await writeAll(out, Buffer.alloc(size - written, 0));
+      await writeAll(out, padding(size));
+      if (cutShort) {
+        gone++;
+        continue;
+      }
+      files++;
+      bytes += size;
+    }
+    await writeAll(out, Buffer.alloc(BLOCK * 2, 0)); // end of archive
+  } finally {
+    out.end();
+    await closed;
+  }
+  return { files, bytes, vanished: gone };
+}
+
 // --- Reading -------------------------------------------------------------------------
 
 function readOctal(b: Buffer, start: number, len: number): number {
@@ -278,52 +372,80 @@ export interface ExtractResult {
   skipped: number;
 }
 
+/** One entry of an archive: its type flag, path (PAX path when given), size and where its data starts. */
+interface ArchiveEntry {
+  type: string;
+  path: string;
+  size: number;
+  dataAt: number;
+}
+
+/** The entries of an archive, read by position from `fh` (PAX path headers applied, not yielded). */
+async function* archiveEntries(fh: import("node:fs/promises").FileHandle): AsyncGenerator<ArchiveEntry> {
+  let pos = 0;
+  let paxPath: string | null = null;
+  const block = Buffer.alloc(BLOCK);
+  const read = async (buf: Buffer, at: number) => (await fh.read(buf, 0, buf.length, at)).bytesRead;
+  for (;;) {
+    if ((await read(block, pos)) < BLOCK) break;
+    pos += BLOCK;
+    if (block.every((x) => x === 0)) break; // end of archive
+    if (!checksumOk(block)) throw new Error("The attachments archive is damaged (bad header checksum).");
+    const size = readOctal(block, 124, 12);
+    const type = String.fromCharCode(block[156] || 48);
+    const prefix = readString(block, 345, 155);
+    const name = readString(block, 0, 100);
+    const dataAt = pos;
+    pos += size + ((BLOCK - (size % BLOCK)) % BLOCK);
+
+    if (type === "x") {
+      const pax = Buffer.alloc(size);
+      await read(pax, dataAt);
+      const m = /(?:^|\n)\d+ path=([^\n]*)\n/.exec(pax.toString("utf8"));
+      paxPath = m ? m[1] : null;
+      continue;
+    }
+    const path = paxPath ?? (prefix ? `${prefix}/${name}` : name);
+    paxPath = null;
+    yield { type, path, size, dataAt };
+  }
+}
+
+/** Copy `size` bytes at `at` of the archive to `out`, refusing a truncated archive. */
+async function copyEntry(fh: import("node:fs/promises").FileHandle, at: number, size: number, out: NodeJS.WritableStream): Promise<void> {
+  let left = size;
+  const chunk = Buffer.alloc(Math.min(1024 * 1024, Math.max(size, 1)));
+  while (left > 0) {
+    const { bytesRead: n } = await fh.read(chunk, 0, Math.min(chunk.length, left), at);
+    if (n <= 0) throw new Error("The attachments archive is truncated.");
+    await writeAll(out, Buffer.from(chunk.subarray(0, n)));
+    left -= n;
+    at += n;
+  }
+}
+
 /**
  * Restore an archive written by writeFilesArchive into the uploads
  * directory. Files are added or replaced, never deleted: a file uploaded
  * after the backup stays (the restored database simply no longer points at
  * it). Each file is written beside its target and renamed into place, so a
  * failed restore never leaves a half-written attachment.
+ *
+ * 1.21.2: with the blob store, into the workspace's container instead
+ * (extractIntoStore).
  */
 export async function extractFilesArchive(src: string, opts: { root?: string } = {}): Promise<ExtractResult> {
+  if (!opts.root && fileStoreKind() === "blob") return extractIntoStore(src);
   const root = resolve(opts.root ?? uploadDir());
   const keyRel = keyFileRelative(root);
   await mkdir(root, { recursive: true });
   const fh = await open(src, "r");
-  let pos = 0;
   let files = 0;
   let bytes = 0;
   let skipped = 0;
-  let paxPath: string | null = null;
-  const block = Buffer.alloc(BLOCK);
-
-  async function read(buf: Buffer, at: number): Promise<number> {
-    const { bytesRead } = await fh.read(buf, 0, buf.length, at);
-    return bytesRead;
-  }
 
   try {
-    for (;;) {
-      if ((await read(block, pos)) < BLOCK) break;
-      pos += BLOCK;
-      if (block.every((x) => x === 0)) break; // end of archive
-      if (!checksumOk(block)) throw new Error("The attachments archive is damaged (bad header checksum).");
-      const size = readOctal(block, 124, 12);
-      const type = String.fromCharCode(block[156] || 48);
-      const prefix = readString(block, 345, 155);
-      const name = readString(block, 0, 100);
-      const dataAt = pos;
-      pos += size + ((BLOCK - (size % BLOCK)) % BLOCK);
-
-      if (type === "x") {
-        const pax = Buffer.alloc(size);
-        await read(pax, dataAt);
-        const m = /(?:^|\n)\d+ path=([^\n]*)\n/.exec(pax.toString("utf8"));
-        paxPath = m ? m[1] : null;
-        continue;
-      }
-      const path = paxPath ?? (prefix ? `${prefix}/${name}` : name);
-      paxPath = null;
+    for await (const { type, path, size, dataAt } of archiveEntries(fh)) {
       const rel = safeArchivePath(path);
       if (!rel || excluded(rel, keyRel)) {
         skipped++;
@@ -352,16 +474,7 @@ export async function extractFilesArchive(src: string, opts: { root?: string } =
       const out = createWriteStream(tmp, { mode: 0o600 });
       const closed = once(out, "close");
       try {
-        let left = size;
-        let at = dataAt;
-        const chunk = Buffer.alloc(Math.min(1024 * 1024, Math.max(size, 1)));
-        while (left > 0) {
-          const n = await read(chunk.subarray(0, Math.min(chunk.length, left)), at);
-          if (n <= 0) throw new Error("The attachments archive is truncated.");
-          await writeAll(out, Buffer.from(chunk.subarray(0, n)));
-          left -= n;
-          at += n;
-        }
+        await copyEntry(fh, dataAt, size, out);
       } catch (e) {
         out.destroy();
         await unlink(tmp).catch(() => {});
@@ -370,6 +483,52 @@ export async function extractFilesArchive(src: string, opts: { root?: string } =
       out.end();
       await closed;
       await rename(tmp, target);
+      files++;
+      bytes += size;
+    }
+  } finally {
+    await fh.close();
+  }
+  return { files, bytes, skipped };
+}
+
+/**
+ * 1.21.2: restore an archive into the blob store. Only regular-file entries
+ * whose path is a stored file's key are written (each one blob, replaced
+ * whole: a blob appears complete or not at all); everything else (folders,
+ * links, the key file, any other file an uploads folder held) is skipped,
+ * folders silently, the rest counted. Never deletes a blob.
+ */
+async function extractIntoStore(src: string): Promise<ExtractResult> {
+  const store = fileStore();
+  const fh = await open(src, "r");
+  let files = 0;
+  let bytes = 0;
+  let skipped = 0;
+  try {
+    for await (const { type, path, size, dataAt } of archiveEntries(fh)) {
+      if (type === "5") continue;
+      const rel = safeArchivePath(path);
+      if (!rel || (type !== "0" && type !== "\0") || excluded(rel, null) || !isValidStoreKey(rel)) {
+        skipped++;
+        continue;
+      }
+      if (size > 0) {
+        // The size is checked first, so a truncated archive fails here, never as a short blob.
+        const st = await fh.stat();
+        if (dataAt + size > st.size) throw new Error("The attachments archive is truncated.");
+      }
+      const body = fh.createReadStream({ start: dataAt, end: dataAt + Math.max(0, size - 1), autoClose: false });
+      if (size === 0) {
+        body.destroy();
+        await store.write(rel, Buffer.alloc(0));
+      } else {
+        const written = await store.writeStream(rel, body);
+        if (written !== size) {
+          await store.delete(rel).catch(() => {});
+          throw new Error("The attachments archive is truncated.");
+        }
+      }
       files++;
       bytes += size;
     }

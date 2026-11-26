@@ -281,7 +281,7 @@ pooled connection string) when deploying to serverless platforms, and keep
 | Path | Probe | Answers |
 | --- | --- | --- |
 | `/healthz` | liveness and startup | 200 while the process serves requests. Never touches the database, so a database outage never restarts a healthy process. |
-| `/readyz` | readiness | 200 `{"status":"ready","migrations":"applied"}` once the schema and its migrations are applied and the database answers within 3 s; 503 with the reason otherwise (`migrations in progress`, `migrations could not run`, `database unreachable`; after a failed migration it reports that failure with a `retry_at` instead of starting the migrations again on every probe), and 503 `{"status":"draining"}` from the moment the process is told to stop. |
+| `/readyz` | readiness | 200 `{"status":"ready","migrations":"applied"}` once the schema and its migrations are applied and the database answers within 3 s; 503 with the reason otherwise (`migrations in progress`, `migrations could not run`, `database unreachable`; after a failed migration it reports that failure with a `retry_at` instead of starting the migrations again on every probe), and 503 `{"status":"draining"}` from the moment the process is told to stop. With `COMPASSDOCS_FILE_STORE=blob`, also 503 `file storage unreachable` until the workspace's container has answered once ([File storage](#file-storage)). It never waits for the database (1.21.2). |
 
 The image starts the app with `node start.cjs` (since 1.21.0). On `SIGTERM`
 (what `docker stop`, Kubernetes and Azure Container Apps send) it stops
@@ -335,7 +335,13 @@ secret reference.
 | `COMPASSDOCS_SETUP_TOKEN` | yes | The first-run setup token the platform hands the customer. Cloud mode never prints a setup token to the log. |
 | `COMPASSDOCS_ADMIN_USER`, `COMPASSDOCS_ADMIN_PASSWORD` | password | Optional: create the first administrator without the setup page. |
 | `COMPASSDOCS_METRICS_TOKEN` | yes | Optional: a bearer token for `/metrics`. |
-| `COMPASSDOCS_UPLOAD_DIR` | | Where attachments live: a persistent mount (Azure Files). |
+| `COMPASSDOCS_FILE_STORE` | | `blob` keeps the workspace's files in Azure Blob Storage (see [File storage](#file-storage)). Unset, files stay in `COMPASSDOCS_UPLOAD_DIR`, which must then be a persistent volume every replica shares (cloud mode logs a warning). |
+| `COMPASSDOCS_BLOB_ACCOUNT_URL` | | With `blob`: the storage account's address, e.g. `https://cdcloud.blob.core.windows.net` (no SAS, no path). The app signs in with the container app's managed identity. |
+| `COMPASSDOCS_BLOB_CONTAINER` | | With `blob`: the workspace's own container, e.g. `ws-acme`. |
+| `AZURE_CLIENT_ID` | | Optional: the client id of the user-assigned managed identity to sign in with (unset: the system-assigned one). |
+| `COMPASSDOCS_BLOB_CONNECTION_STRING` | yes | Development only (Azurite). Cloud mode refuses one that is not a loopback address. |
+| `DATABASE_RETRY_WINDOW_MS` | | How long a request waits for the database through a restart or failover (default `60000` in cloud mode; see [Riding out a database restart](#riding-out-a-database-restart)). |
+| `COMPASSDOCS_UPLOAD_DIR` | | Where attachments live without `COMPASSDOCS_FILE_STORE=blob`: a persistent mount (Azure Files). |
 | `COMPASSDOCS_LOG_FORMAT` | | Cloud mode logs JSON; `text` switches back to readable lines, redacted the same way. |
 | `COMPASSDOCS_SHUTDOWN_TIMEOUT` | | Seconds to drain on `SIGTERM` (default 25). |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | yes | Optional: traces and metrics to the workspace's Application Insights. See [Telemetry](#telemetry-opentelemetry). |
@@ -363,6 +369,120 @@ traced request or job also has `trace_id` and `span_id`. Secrets never appear: t
 in connection strings, bearer tokens, API keys and fields named like a secret
 are written as `[redacted]`. (`ts` repeats `time` for parsers of the
 pre-1.21.0 JSON lines.)
+
+### File storage
+
+Every attachment, image, logo, newsletter file and helpdesk upload is kept
+under an opaque random name (the original filename stays in the database),
+in one of two stores:
+
+- **The uploads folder** (the default, and what every self-hosted install
+  keeps using unless it opts in): `COMPASSDOCS_UPLOAD_DIR`, `/uploads` in
+  the image. Nothing about it changed in 1.21.2: the same paths and files.
+- **Azure Blob Storage** (`COMPASSDOCS_FILE_STORE=blob`): one private
+  container per workspace, `COMPASSDOCS_BLOB_CONTAINER` in the account at
+  `COMPASSDOCS_BLOB_ACCOUNT_URL`. CompassDocs Cloud keeps each workspace's
+  container in a shared zone-redundant (GZRS) account.
+
+| Variable | Default | |
+| --- | --- | --- |
+| `COMPASSDOCS_FILE_STORE` | `local` | `blob` for Azure Blob Storage. |
+| `COMPASSDOCS_BLOB_ACCOUNT_URL` | | `https://<account>.blob.core.windows.net`: the bare address, never a SAS. |
+| `COMPASSDOCS_BLOB_CONTAINER` | | The workspace's container (3–63 lower-case letters, digits and hyphens). It must exist: the app never creates one. |
+| `AZURE_CLIENT_ID` | | A user-assigned managed identity's client id. With `AZURE_FEDERATED_TOKEN_FILE` and `AZURE_TENANT_ID` too, workload identity (AKS). |
+| `COMPASSDOCS_BLOB_CONNECTION_STRING` | | Instead of the account URL, for development against [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) only (a real account's key works self-hosted with a warning; cloud mode refuses it). Masked in every log line. |
+
+**Signing in.** In production the app uses Microsoft Entra ID, never a
+key: the container app's managed identity (or workload identity), which
+needs the **Storage Blob Data Contributor** role on the workspace's
+container. No account key or SAS is read, logged or made, and no URL to a
+file is ever handed out: files are only served through the app's own
+authorised routes (attachments, video with byte ranges, the portal, the
+help centre), with the same content types and download behaviour as
+before. The Azure SDK is loaded only in blob mode. In blob mode the uploads
+folder holds no user file; a self-hosted install that opts in keeps its
+master key file there as before (or uses `COMPASSDOCS_SECRET_KEY`).
+
+**Start-up and readiness.** A missing or invalid setting is one error line
+each (`File storage can't start: …`) and the process exits 1. Then the
+container is tried once: if it is missing, the identity may not use it, or
+it does not answer, that is one error line, and `/readyz` answers 503
+`file storage unreachable` until the container answers, so a revision with
+broken storage never takes traffic. Once it has answered, `/readyz` does not
+check it again: storage is shared by every replica, so a blip there would
+take them all out of rotation, including for pages that need no file.
+Settings → System → Diagnostics' "Upload storage" check writes and removes a
+probe blob.
+
+**Usage.** `storedUsage()` in `lib/uploads` gives the workspace's files and
+bytes (in blob mode every blob in its container), with one listing call per
+5000 files.
+
+**Backups.** A backup set's files half is made from whichever store is in
+use and restores into whichever store is in use: an uploads-folder backup
+restores into a container (its stored files; anything else the folder held
+is skipped and counted) and the other way round. Restoring adds or replaces
+files and never deletes one.
+
+**Moving an existing install into a container.** `copy-uploads-to-blob.cjs`
+(in the image's `/app`; `scripts/` in the repository) copies the uploads
+folder's stored files into the container. It is idempotent and resumable: a
+file already in the container with the same size and MD5 is left alone, so
+a run that stopped is simply run again; a blob with different content is a
+conflict, never overwritten. Each copied file is read back and checked. The
+master key file and anything that is not a stored file are listed and
+skipped, and the folder is never changed. It signs in with
+`DefaultAzureCredential` (an operator's `az login`, a service principal in
+`AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET`, or a managed
+identity):
+
+```bash
+# UPLOADS_VOLUME: the install's uploads volume (`docker volume ls | grep uploads`).
+docker run --rm -v "$UPLOADS_VOLUME":/uploads:ro \
+  -e AZURE_TENANT_ID -e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET \
+  ghcr.io/mattny20/compassdocs:1.21.2 \
+  node copy-uploads-to-blob.cjs --from /uploads \
+    --account-url https://cdcloud.blob.core.windows.net --container ws-acme
+# --dry-run lists what it would copy; --json prints a summary object; exit 0 = everything is there.
+```
+
+Run it once with the old install still serving, again after stopping it (it
+only copies what changed), then start the workspace with
+`COMPASSDOCS_FILE_STORE=blob`. Cloud mode takes the encryption key from
+`COMPASSDOCS_SECRET_KEY`, never the key file: set it to the contents of the
+old `/uploads/.secret.key` (see below), or saved credentials and backups
+can't be opened.
+
+### Riding out a database restart
+
+Azure resizes, patches and fails over a PostgreSQL flexible server with a
+pause of 10 to 60 seconds. With `DATABASE_RETRY_WINDOW_MS` above 0 (the
+default in cloud mode is `60000`; self-hosted it is `0`, as before, unless
+you set it) a request that meets such a pause waits for the database, trying
+again with backoff (250 ms doubling to 5 s), instead of failing.
+
+- **Retried**: getting a connection (refused, reset, timed out, `57P01`,
+  `57P03` "starting up", `53300`, "Connection terminated"), for
+  `pool.query()` and for `pool.connect()` before a transaction; and a
+  statement pg refused to send because its connection had already failed.
+  Nothing has reached the server in either case.
+- **Never retried**: a statement that was sent. If the connection drops
+  after that, the request fails: the server may already have run and
+  committed it. Nor anything inside a transaction: one that breaks midway
+  fails and is never resumed or replayed. Authentication errors, a missing
+  database and every statement error fail at once, as before.
+- A request waits at most the window, and never past the outage's own
+  window (one that arrives 50 s into an outage waits 10 s more; after that,
+  requests fail at once until the database answers). While shutting down,
+  no wait runs past the drain deadline. A request that gave up fails with
+  "The database is unavailable (…); waited N s for it."
+- A broken connection is closed, never handed out again.
+- The log says `db.unavailable` once when an outage starts and `db.available`
+  once when it ends (how long, how many requests waited, how many gave up,
+  how many background tasks skipped a run). A background job that meets an
+  outage skips that run quietly and tries again at its next one. With
+  telemetry on, `compassdocs.db.outages` and
+  `compassdocs.db.retried_requests` count them. `/readyz` never waits.
 
 ### Moving a self-hosted install to COMPASSDOCS_SECRET_KEY
 
