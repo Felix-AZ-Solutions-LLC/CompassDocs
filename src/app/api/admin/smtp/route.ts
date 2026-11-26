@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { apiGuard, credentialSaveError } from "@/lib/api-auth";
-import { getSmtpConfig, updateSmtpConfig, smtpConfigured } from "@/lib/smtp-config";
+import { apiGuard, credentialSaveError, platformSettingRefusal } from "@/lib/api-auth";
+import { getSmtpConfig, updateSmtpConfig, smtpConfigured, smtpFromPlatform } from "@/lib/smtp-config";
 import { sendMailWith } from "@/lib/mailer";
 import { MailConfigError, setMailMethod } from "@/lib/mail-config";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
@@ -19,6 +19,7 @@ async function view() {
     has_pass: Boolean(cfg.pass),
     from: cfg.from,
     configured: smtpConfigured(cfg),
+    platform: smtpFromPlatform(),
   };
 }
 
@@ -56,6 +57,12 @@ export async function PATCH(req: Request) {
       await audit({ actor: actorFrom(user), action: "settings.mail_test", targetType: "settings", targetId: "mail", targetLabel: "Email", details: { method: "smtp", ok: false, error: error.slice(0, 300) }, ip: ipFrom(req) });
       return NextResponse.json({ ok: false, error }, { status: 502 });
     }
+  }
+
+  // 1.21.0: SMTP set by the platform (cloud mode, COMPASSDOCS_SMTP_*) is
+  // read-only; choosing it as the way mail goes out (`use`) still works.
+  if (smtpFromPlatform() && ["host", "port", "secure", "user", "pass", "clear_pass", "from"].some((k) => body?.[k] !== undefined)) {
+    return platformSettingRefusal("SMTP");
   }
 
   const keyErr = await credentialSaveError(() => updateSmtpConfig({

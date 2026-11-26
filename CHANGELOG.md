@@ -4,6 +4,54 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.21.0] - 2026-11-26
+
+Cloud mode, the first part of CompassDocs Cloud on Azure; and, for every
+install, clean shutdowns and a readiness check that waits for the
+database's migrations. Self-hosted installs change nothing unless they opt
+in.
+
+### Added
+- **Cloud mode (`COMPASSDOCS_CLOUD=1`)** for workspaces run by CompassDocs
+  Cloud as Azure Container Apps. Domain & HTTPS, the update check and
+  one-click updater, and Backups (schedule, destinations, restore) are the
+  platform's: they leave the settings rail, its search and the command
+  palette, an old link shows "Managed by CompassDocs Cloud", and their APIs
+  answer 403 with a plain sentence. The setup wizard asks for no domain,
+  HTTPS or cookie choice. See the README, "Cloud mode (COMPASSDOCS_CLOUD)",
+  for every variable and API.
+- **Secrets from the environment in cloud mode.** `COMPASSDOCS_SECRET_KEY`
+  is required (the app refuses to start without it and says why) and no key
+  file is ever created or read. A license key, an Anthropic API key or an
+  SMTP relay (`COMPASSDOCS_SMTP_*`) set by the platform wins over a saved
+  one and shows as "Set by the platform", read-only. Links in email come
+  from `COMPASSDOCS_BASE_URL`, and the session cookie is always Secure.
+- **`DATABASE_PASSWORD`** (any install, optional): the database password
+  apart from `DATABASE_URL`, for secret stores.
+- **JSON logs** in cloud mode, or anywhere with `COMPASSDOCS_LOG_FORMAT=json`:
+  every line on stdout and stderr is one JSON object with time, level,
+  message, event and the request's `x-request-id`, and secrets are written
+  as `[redacted]`. Readable lines stay the default.
+
+### Changed
+- **Clean shutdowns.** The image now starts with `node start.cjs`. On
+  SIGTERM CompassDocs stops taking new requests and background work, lets
+  what is running finish, closes the database connections and exits 0,
+  within 25 seconds (`COMPASSDOCS_SHUTDOWN_TIMEOUT`). The compose files give
+  it 30 seconds (`stop_grace_period`) instead of Docker's 10.
+- **`/readyz` waits for the migrations**: it answers 503 "migrations in
+  progress" after an upgrade until the schema is ready, and 503 "draining"
+  while shutting down. `/healthz` is unchanged (no database).
+- With `COMPASSDOCS_LOG_FORMAT=json`, every log line is now JSON (before,
+  only some were), leading with `time` and `message`; `ts` and `event` are
+  still there.
+
+### Upgrading
+- **Nothing to do.** Update as usual. If you start the container with your
+  own command, use `node start.cjs` to get the clean shutdown. To keep the
+  encryption key in `.env` instead of the uploads volume (optional), follow
+  the README, "Moving a self-hosted install to COMPASSDOCS_SECRET_KEY".
+
 ## [1.20.41] - 2026-11-22
 
 Security hardening from a full code-scanning review.

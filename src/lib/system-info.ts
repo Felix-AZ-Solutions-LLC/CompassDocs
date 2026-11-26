@@ -4,6 +4,7 @@ import { getDatabaseStats, attachmentsUsage } from "./db";
 import { listBackups, backupDir } from "./backup";
 import { destinationStatus } from "./backup-destinations";
 import pkg from "../../package.json";
+import { isCloud } from "./cloud";
 
 export interface SystemInfo {
   app: {
@@ -45,12 +46,14 @@ async function diskUsage(dir: string): Promise<{ total: number; free: number } |
 }
 
 export async function getSystemInfo(): Promise<SystemInfo> {
+  // 1.21.0: in cloud mode there are no local backups to count (lib/cloud).
+  const cloud = isCloud();
   const [database, backups, attachments, disk, destinations] = await Promise.all([
     getDatabaseStats(),
-    listBackups(),
+    cloud ? Promise.resolve([]) : listBackups(),
     attachmentsUsage(),
-    diskUsage(backupDir()),
-    destinationStatus(),
+    cloud ? Promise.resolve(null) : diskUsage(backupDir()),
+    cloud ? Promise.resolve([]) : destinationStatus(),
   ]);
 
   return {

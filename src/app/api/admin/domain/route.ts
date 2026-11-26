@@ -3,7 +3,7 @@ import { getAppSettings, updateAppSettings } from "@/lib/settings-store";
 import { normalizeDomain, TLS_MODES, SECURE_COOKIE_MODES, validTlsEmail } from "@/lib/settings";
 import type { AppSettings, TlsMode, SecureCookieMode } from "@/lib/settings";
 import { applyProxyConfig, hasCustomCert, hasPendingCert, storeCustomCert, validateCustomCert } from "@/lib/caddy";
-import { apiGuard, credentialSaveError } from "@/lib/api-auth";
+import { apiGuard, credentialSaveError, cloudRefusal } from "@/lib/api-auth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { domainState, saveDomainSettings, type DomainSaveOutcome } from "@/lib/domain-flow";
 
@@ -14,12 +14,18 @@ export const dynamic = "force-dynamic";
 const currentState = domainState;
 
 export async function GET() {
+  // 1.21.0: CompassDocs Cloud manages this (lib/cloud); 403 in cloud mode.
+  const cloud = cloudRefusal("domain");
+  if (cloud) return cloud;
   const gate = await apiGuard("admin", "workspace.domain_manage");
   if (gate instanceof NextResponse) return gate;
   return NextResponse.json(await currentState());
 }
 
 export async function PATCH(req: Request) {
+  // 1.21.0: CompassDocs Cloud manages this (lib/cloud); 403 in cloud mode.
+  const cloud = cloudRefusal("domain");
+  if (cloud) return cloud;
   const gate = await apiGuard("admin", "workspace.domain_manage");
   if (gate instanceof NextResponse) return gate;
 

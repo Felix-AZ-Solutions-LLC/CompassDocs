@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { apiGuard } from "@/lib/api-auth";
+import { apiGuard, cloudRefusal } from "@/lib/api-auth";
 import { actorFrom, ipFrom } from "@/lib/audit";
 import { discardPendingDomain, domainState, recheckPendingDomain } from "@/lib/domain-flow";
 
@@ -11,6 +11,9 @@ export const dynamic = "force-dynamic";
 // "Use it anyway" is PATCH /api/admin/domain with `force: true`.
 
 export async function POST(req: Request) {
+  // 1.21.0: CompassDocs Cloud manages this (lib/cloud); 403 in cloud mode.
+  const cloud = cloudRefusal("domain");
+  if (cloud) return cloud;
   const gate = await apiGuard("admin", "workspace.domain_manage");
   if (gate instanceof NextResponse) return gate;
   const r = await recheckPendingDomain({ manual: true, actor: actorFrom(gate), ip: ipFrom(req) });
@@ -31,6 +34,9 @@ export async function POST(req: Request) {
 }
 
 export async function DELETE(req: Request) {
+  // 1.21.0: CompassDocs Cloud manages this (lib/cloud); 403 in cloud mode.
+  const cloud = cloudRefusal("domain");
+  if (cloud) return cloud;
   const gate = await apiGuard("admin", "workspace.domain_manage");
   if (gate instanceof NextResponse) return gate;
   await discardPendingDomain(actorFrom(gate), ipFrom(req));

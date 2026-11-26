@@ -16,16 +16,19 @@ export function SettingsPage({
   href,
   children,
   actions,
+  docs: showDocs = true,
 }: {
   /** The section's /admin/... href (the settings-sections key). */
   href: string;
   children: React.ReactNode;
   /** Optional right-aligned header controls (e.g. an export button). */
   actions?: React.ReactNode;
+  /** 1.21.0: false leaves the Docs button out (a section CompassDocs Cloud manages: its docs are for self-hosting). */
+  docs?: boolean;
 }) {
   const s = settingsSection(href);
   const Icon = s?.icon;
-  const docs = s?.docs ? (
+  const docs = showDocs && s?.docs ? (
     <a
       href={s.docs}
       target="_blank"

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 import { currentSession, owesDeskDuo } from "./auth";
 import { MasterKeyError } from "./secretbox";
+import { CLOUD_MANAGED_CODE, cloudRefusalMessage, isCloud, SET_BY_PLATFORM, type CloudArea } from "./cloud";
 import { roleAtLeast } from "./types";
 import type { Role, SessionUser } from "./types";
 import type { PermissionKey } from "./permissions";
@@ -23,6 +24,25 @@ export async function credentialSaveError(save: () => Promise<unknown>): Promise
     }
     throw e;
   }
+}
+
+/**
+ * 1.21.0: the 403 an API of an area CompassDocs Cloud manages answers in
+ * cloud mode (lib/cloud CLOUD_AREAS), or null when this is not cloud mode.
+ * Checked before anything else, the session included, so the answer is the
+ * same plain sentence for everyone and nothing of the area runs.
+ */
+export function cloudRefusal(area: CloudArea): NextResponse | null {
+  if (!isCloud()) return null;
+  return NextResponse.json({ error: cloudRefusalMessage(area), code: CLOUD_MANAGED_CODE }, { status: 403 });
+}
+
+/** 1.21.0: the 403 for changing a setting the platform supplies in cloud mode (lib/cloud ENV_SECRETS). */
+export function platformSettingRefusal(what: string): NextResponse {
+  return NextResponse.json(
+    { error: `${what} is set by the platform (CompassDocs Cloud), so it can't be changed here.`, code: CLOUD_MANAGED_CODE, detail: SET_BY_PLATFORM },
+    { status: 403 }
+  );
 }
 
 /**

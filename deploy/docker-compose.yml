@@ -27,6 +27,8 @@ services:
   app:
     image: ghcr.io/mattny20/compassdocs:${COMPASSDOCS_VERSION:-latest}
     restart: unless-stopped
+    # 1.21.0: SIGTERM drains for up to 25 s (start.cjs); Docker's default 10 s would cut it short.
+    stop_grace_period: 30s
     depends_on:
       db:
         condition: service_healthy
@@ -43,6 +45,9 @@ services:
       COMPASSDOCS_ADMIN_USER: ${COMPASSDOCS_ADMIN_USER:-}
       COMPASSDOCS_ADMIN_PASSWORD: ${COMPASSDOCS_ADMIN_PASSWORD:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # 1.21.0: optional — the encryption key from .env instead of /uploads/.secret.key
+      # (README, "Moving a self-hosted install to COMPASSDOCS_SECRET_KEY"). Empty: the file, as before.
+      COMPASSDOCS_SECRET_KEY: ${COMPASSDOCS_SECRET_KEY:-}
       # 1.20.27: the workspace's address for links in mail when no custom
       # domain is set (e.g. https://docs.example.com); proxies in front of the
       # app (default 1); a fixed first-run setup token (default: derived from

@@ -1,5 +1,6 @@
 "use client";
 
+import { SetByPlatform } from "./CloudManaged";
 import { useEffect, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { buttonClass } from "@/components/Button";
@@ -18,7 +19,8 @@ interface FeatureRow {
 }
 interface LicenseView {
   edition: "enterprise" | "community";
-  source: "settings" | "env" | "none";
+  /** "platform" (1.21.0): cloud mode's COMPASSDOCS_LICENSE_KEY, read-only. */
+  source: "platform" | "settings" | "env" | "none";
   status: "none" | "invalid" | "active" | "grace" | "expired";
   reason?: string;
   daysLeft?: number;
@@ -225,7 +227,13 @@ export function LicensePanel() {
             </ul>
           </div>
 
-          {/* Key entry */}
+          {/* Key entry (1.21.0: the platform's key is shown, never replaced) */}
+          {v.source === "platform" ? (
+          <div className="rounded-xl border border-slate-200 bg-surface p-4 shadow-xs">
+            <h3 className="mb-3 font-semibold text-slate-900">License key</h3>
+            <SetByPlatform>CompassDocs Cloud keeps this workspace&rsquo;s license current.</SetByPlatform>
+          </div>
+          ) : (
           <div className="rounded-xl border border-slate-200 bg-surface p-4 shadow-xs">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="font-semibold text-slate-900">
@@ -250,6 +258,7 @@ export function LicensePanel() {
               </button>
             </div>
           </div>
+          )}
 
           {v.source === "settings" && (
             <DangerZone>

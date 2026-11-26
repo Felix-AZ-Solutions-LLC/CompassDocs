@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { needsSetup } from "@/lib/db";
 import { eePresent } from "@/lib/ee";
 import { proxyManaged } from "@/lib/caddy";
+import { isCloud, platformValue } from "@/lib/cloud";
 import { SetupForm } from "@/components/SetupForm";
 import { Brand } from "@/components/Brand";
 import { printSetupToken } from "@/lib/setup-token";
@@ -31,6 +32,9 @@ export default async function SetupPage({ searchParams }: { searchParams: Promis
           <SetupForm
             enterprise={eePresent()}
             proxyManaged={proxyManaged()}
+            cloud={isCloud()}
+            platformLicense={!!platformValue("COMPASSDOCS_LICENSE_KEY")}
+            platformAiKey={!!platformValue("ANTHROPIC_API_KEY")}
             initialToken={typeof token === "string" ? token.slice(0, 200) : ""}
           />
         </div>

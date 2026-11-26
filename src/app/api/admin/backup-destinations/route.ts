@@ -8,19 +8,25 @@ import {
   testS3,
   testAzure,
 } from "@/lib/backup-config";
-import { apiGuard, credentialSaveError } from "@/lib/api-auth";
+import { apiGuard, credentialSaveError, cloudRefusal } from "@/lib/api-auth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 export async function GET() {
+  // 1.21.0: CompassDocs Cloud manages this (lib/cloud); 403 in cloud mode.
+  const cloud = cloudRefusal("backups");
+  if (cloud) return cloud;
   const gate = await apiGuard("admin", "integration.backup_destination_read");
   if (gate instanceof NextResponse) return gate;
   return NextResponse.json(await getBackupDestState());
 }
 
 export async function PATCH(req: Request) {
+  // 1.21.0: CompassDocs Cloud manages this (lib/cloud); 403 in cloud mode.
+  const cloud = cloudRefusal("backups");
+  if (cloud) return cloud;
   const gate = await apiGuard("admin", "integration.backup_destination_manage");
   if (gate instanceof NextResponse) return gate;
 

@@ -19,6 +19,7 @@ import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { getMasterKey } from "./secretbox";
 import { logEvent } from "./log";
+import { isCloud } from "./cloud";
 
 /** The token, as the operator types it: 4 groups of 5 letters and digits. */
 export function setupToken(): string {
@@ -58,6 +59,15 @@ export function printSetupToken(reason: "boot" | "page"): void {
   const now = Date.now();
   if (reason === "page" && now - lastPrinted < 60_000) return;
   lastPrinted = now;
+  // 1.21.0: a cloud workspace's log goes to the platform's log store, which
+  // never holds a secret (lib/log). The platform hands the token to the
+  // customer (COMPASSDOCS_SETUP_TOKEN, or derived from the key it set).
+  if (isCloud()) {
+    logEvent("warn", "setup.waiting", {
+      message: "CompassDocs is not set up yet. The first administrator opens /setup with the setup token CompassDocs Cloud gave them.",
+    });
+    return;
+  }
   try {
     const token = setupToken();
     logEvent("warn", "setup.token", {

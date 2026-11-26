@@ -13,7 +13,8 @@ import {
   getOpenAiKey,
   OPENAI_DEFAULT_URL,
 } from "@/lib/ai-config";
-import { apiGuard, credentialSaveError } from "@/lib/api-auth";
+import { apiGuard, credentialSaveError, platformSettingRefusal } from "@/lib/api-auth";
+import { platformValue } from "@/lib/cloud";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +23,7 @@ export const maxDuration = 30;
 async function state() {
   const [source, providerCfg] = await Promise.all([getAiKeySource(), getAiProviderConfig()]);
   return {
-    source, // "settings" | "env" | "none"  (Anthropic key)
+    source, // "platform" | "settings" | "env" | "none"  (Anthropic key)
     has_key: source !== "none",
     model: await getAiModel(),
     default_model: DEFAULT_AI_MODEL,
@@ -49,6 +50,12 @@ export async function PATCH(req: Request) {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+  }
+
+  // 1.21.0: the platform's key (cloud mode, ANTHROPIC_API_KEY) is read-only here, refused
+  // before anything in the request is saved.
+  if ((body?.clear === true || (typeof body?.api_key === "string" && body.api_key.trim())) && platformValue("ANTHROPIC_API_KEY")) {
+    return platformSettingRefusal("The Anthropic API key");
   }
 
   // Model first (cheap, no external call).

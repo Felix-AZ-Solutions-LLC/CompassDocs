@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { apiGuard } from "@/lib/api-auth";
+import { apiGuard, cloudRefusal } from "@/lib/api-auth";
 import { audit, actorFrom } from "@/lib/audit";
 import { listBackups, createBackup, pruneBackups } from "@/lib/backup";
 import { destinationStatus } from "@/lib/backup-destinations";
@@ -9,6 +9,9 @@ export const dynamic = "force-dynamic";
 
 // List backups + which destinations are configured.
 export async function GET() {
+  // 1.21.0: CompassDocs Cloud manages this (lib/cloud); 403 in cloud mode.
+  const cloud = cloudRefusal("backups");
+  if (cloud) return cloud;
   const gate = await apiGuard("admin", "system.backup_read");
   if (gate instanceof NextResponse) return gate;
   return NextResponse.json({
@@ -19,6 +22,9 @@ export async function GET() {
 
 // Create a backup now (and prune to the retention count).
 export async function POST() {
+  // 1.21.0: CompassDocs Cloud manages this (lib/cloud); 403 in cloud mode.
+  const cloud = cloudRefusal("backups");
+  if (cloud) return cloud;
   const gate = await apiGuard("admin", "system.backup_create");
   if (gate instanceof NextResponse) return gate;
   try {

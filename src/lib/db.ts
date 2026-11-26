@@ -51,6 +51,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { SEED_SPACES, SEED_DOCS } from "./seed-data";
 import { hashPassword } from "./password";
 import { sealSecret, openSecret, isSealed, getMasterKey, MasterKeyError } from "./secretbox";
+import { separateDatabasePassword, withDatabasePassword } from "./db-url";
 import { asScope } from "./space-scope";
 import type { SpaceScope } from "./space-scope";
 // Handbooks 1.18.0 (H6): the listing filter for handbook-only documents.
@@ -137,13 +138,18 @@ declare global {
   var __compassPool: Pool | undefined;
   // eslint-disable-next-line no-var
   var __compassInit: Promise<void> | undefined;
+  // eslint-disable-next-line no-var
+  var __compassInitDone: boolean | undefined;
 }
 
 function makePool(): Pool {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
+  const rawUrl = process.env.DATABASE_URL;
+  if (!rawUrl) {
     throw new Error("DATABASE_URL is not set. Point it at a Postgres database.");
   }
+  // 1.21.0: DATABASE_PASSWORD, when set, is the URL's password (lib/db-url).
+  const connectionString = withDatabasePassword(rawUrl);
+  const password = separateDatabasePassword(rawUrl);
   // Enable SSL for remote hosts (managed Postgres); skip it for local dev.
   // Detect the host from the URL so it works whether or not a user is present
   // (e.g. both postgres://localhost/db and postgres://user@localhost/db).
@@ -162,6 +168,7 @@ function makePool(): Pool {
     process.env.DATABASE_SSL === "require" || (!isLocal && !sslDisabled);
   return new Pool({
     connectionString,
+    ...(password ? { password } : {}),
     max: Number(process.env.DATABASE_POOL_MAX) || 5,
     // A request waiting for a connection gives up instead of hanging forever
     // (a leaked or deadlocked client would otherwise stall every request).
@@ -175,6 +182,21 @@ function makePool(): Pool {
 export function pool(): Pool {
   if (!global.__compassPool) global.__compassPool = makePool();
   return global.__compassPool;
+}
+
+/**
+ * 1.21.0 (lib/shutdown): close the pool at the end of a graceful shutdown,
+ * waiting for checked-out clients to be released. Idempotent.
+ */
+export async function closePool(): Promise<void> {
+  const p = global.__compassPool;
+  global.__compassPool = undefined;
+  if (p) await p.end();
+}
+
+/** 1.21.0: the schema and its migrations are applied in this process (/readyz). */
+export function schemaReady(): boolean {
+  return global.__compassInitDone === true;
 }
 
 async function q<T = any>(text: string, params: any[] = []): Promise<T[]> {
@@ -209,9 +231,14 @@ function ready(): Promise<void> {
   if (!global.__compassInit) {
     const boot = initialize();
     global.__compassInit = boot;
-    boot.catch(() => {
-      if (global.__compassInit === boot) global.__compassInit = undefined;
-    });
+    boot.then(
+      () => {
+        if (global.__compassInit === boot) global.__compassInitDone = true;
+      },
+      () => {
+        if (global.__compassInit === boot) global.__compassInit = undefined;
+      }
+    );
   }
   return global.__compassInit;
 }

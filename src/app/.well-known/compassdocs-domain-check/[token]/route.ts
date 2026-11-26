@@ -1,4 +1,5 @@
 import { checkProof, checkTokenValid, normalHost, UNKNOWN_TOKEN_HEADER } from "@/lib/domain-check";
+import { cloudRefusal } from "@/lib/api-auth";
 
 // The custom-domain check's answer (1.20.29, lib/domain-check). Before a
 // domain is handed to the proxy, the app asks
@@ -12,6 +13,9 @@ import { checkProof, checkTokenValid, normalHost, UNKNOWN_TOKEN_HEADER } from "@
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request, ctx: { params: Promise<{ token: string }> }) {
+  // 1.21.0: CompassDocs Cloud manages this (lib/cloud); 403 in cloud mode.
+  const cloud = cloudRefusal("domain");
+  if (cloud) return cloud;
   const { token } = await ctx.params;
   const headers = { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" };
   if (!checkTokenValid(token)) {

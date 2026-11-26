@@ -3,6 +3,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { uploadDir } from "./uploads";
+import { isCloud } from "./cloud";
 
 // Envelope encryption for secrets at rest (AES-256-GCM). The master key never
 // touches the database: it comes from the COMPASSDOCS_SECRET_KEY env var
@@ -10,6 +11,14 @@ import { uploadDir } from "./uploads";
 // that is auto-generated on first boot. The default key-file location is
 // inside the uploads volume so it persists across container recreates on a
 // standard Docker install.
+//
+// 1.21.0, cloud mode (lib/cloud, COMPASSDOCS_CLOUD=1): the key comes only
+// from COMPASSDOCS_SECRET_KEY, which Container Apps fills from Key Vault.
+// No key file is ever created, written or read (not even
+// COMPASSDOCS_KEY_FILE), and the process refuses to start without the
+// variable (instrumentation, lib/cloud cloudStartupProblems). Self-hosted
+// installs keep the order above; moving one to the variable is optional
+// (README, "Moving a self-hosted install to COMPASSDOCS_SECRET_KEY").
 //
 // Sealed values are stored as "enc:v1:<base64(iv | tag | ciphertext)>", so
 // plaintext written by older versions passes through reads untouched and is
@@ -52,11 +61,27 @@ const CHOWN_HINT =
   "docker compose up -d " +
   "(https://docs.compassdocs.io/self-hosting/updating/)";
 
+/** Where the master key comes from in this process: the variable, or the key file (self-hosted only). */
+export function masterKeySource(): "env" | "file" {
+  return process.env.COMPASSDOCS_SECRET_KEY || isCloud() ? "env" : "file";
+}
+
+/** Tests: forget the cached key, so the next call reads the environment again. */
+export function resetMasterKeyForTests(): void {
+  cachedKey = null;
+}
+
 /** The 32-byte master key. Env var wins; otherwise a key file is read or
- * created (0600). Throws only if the key file can't be read *or* written. */
+ * created (0600). Throws only if the key file can't be read *or* written.
+ * In cloud mode only the env var counts: without it this throws. */
 export function getMasterKey(): Buffer {
   if (cachedKey) return cachedKey;
   const env = process.env.COMPASSDOCS_SECRET_KEY;
+  if (!env && isCloud()) {
+    throw new MasterKeyError(
+      "COMPASSDOCS_SECRET_KEY is not set. In cloud mode (COMPASSDOCS_CLOUD=1) the encryption key comes only from the environment; no key file is created or read."
+    );
+  }
   if (env) {
     const parsed = parseKeyMaterial(env);
     if (!parsed) {

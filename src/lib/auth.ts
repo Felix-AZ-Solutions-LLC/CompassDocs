@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isCloud, sectionHiddenInMode } from "./cloud";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { loginHref } from "./return-to";
@@ -119,6 +120,10 @@ function requestIsHttps(req: Request): boolean {
  * insecure in `auto` mode (config-as-code back-compat).
  */
 export async function secureCookie(req: Request): Promise<boolean> {
+  // 1.21.0: a CompassDocs Cloud workspace is only ever served over HTTPS
+  // (the platform's ingress), and the setting lives on the hidden Domain &
+  // HTTPS page, so the cookie is always Secure there.
+  if (isCloud()) return true;
   const mode = await getSecureCookieMode();
   if (mode === "always") return true;
   if (mode === "never") return false;
@@ -428,6 +433,9 @@ export async function requirePermission(
  * could call the API but not open the page that calls it.
  */
 export async function requireSettingsSection(href: string): Promise<SessionUser> {
+  // (1.21.0: a section CompassDocs Cloud manages still opens for whoever holds
+  // its permission; the page shows "Managed by CompassDocs Cloud" in place of
+  // its settings, and the rail and search leave it out: reachableSettingsSections.)
   const { settingsSection } = await import("./settings-sections");
   const section = settingsSection(href);
   if (!section) redirect("/");
@@ -469,11 +477,15 @@ export async function reachableSettingsSections(user: SessionUser): Promise<stri
   const { grantsFor, admits, legacyAuthzEnforcement } = await import("./authz");
   const ownPages = (ok: (p: import("./permissions").PermissionKey) => boolean) =>
     SETTINGS_SECTIONS.flatMap((s) => (s.pages ?? []).filter((p) => p.permission && p.href !== s.href && ok(p.permission)).map((p) => p.href));
+  // 1.21.0: in cloud mode the sections CompassDocs Cloud manages (Domain &
+  // HTTPS, Backups; lib/cloud) are left out, so the rail, its search, the
+  // desk's address link and anything else reading this never offer them.
+  const shown = (href: string) => !sectionHiddenInMode(href);
   if (legacyAuthzEnforcement()) {
-    return roleAtLeast(user.role, "admin") ? [...SETTINGS_SECTIONS.map((s) => s.href), ...ownPages(() => true)] : [];
+    return roleAtLeast(user.role, "admin") ? [...SETTINGS_SECTIONS.map((s) => s.href), ...ownPages(() => true)].filter(shown) : [];
   }
   const grants = await grantsFor(user.id);
-  return [...SETTINGS_SECTIONS.filter((s) => admits(grants, s.permission)).map((s) => s.href), ...ownPages((p) => admits(grants, p))];
+  return [...SETTINGS_SECTIONS.filter((s) => admits(grants, s.permission)).map((s) => s.href), ...ownPages((p) => admits(grants, p))].filter(shown);
 }
 
 /** The longest identifier the sign-in accepts: an email address's maximum. */

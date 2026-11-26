@@ -17,6 +17,7 @@
 import { verify } from "node:crypto";
 import { getSetting } from "./db";
 import { INCLUDED_AGENTS } from "./agent-allowance";
+import { platformValue } from "./cloud";
 
 // Vendor Ed25519 public key (SPKI PEM). This is the production CompassDocs
 // license-signing public key; the matching private key lives only in the vendor
@@ -108,14 +109,23 @@ export function evaluate(raw: string, now = new Date()): LicenseState {
   return { status: "expired", license };
 }
 
-/** The effective license string: settings value, else the env var. */
-export async function licenseKey(): Promise<string> {
-  const stored = (await getSetting("license_key"))?.trim();
-  return stored || process.env.COMPASSDOCS_LICENSE_KEY?.trim() || "";
+/**
+ * The license string in force, given the saved one: the saved key, else
+ * COMPASSDOCS_LICENSE_KEY. 1.21.0: in cloud mode (lib/cloud) the variable,
+ * when set, is the platform's and wins over a saved key.
+ */
+export function effectiveLicenseKey(stored: string | null | undefined): string {
+  return platformValue("COMPASSDOCS_LICENSE_KEY") || stored?.trim() || process.env.COMPASSDOCS_LICENSE_KEY?.trim() || "";
 }
 
-/** Where the effective license comes from (for the admin UI). */
-export async function licenseSource(): Promise<"settings" | "env" | "none"> {
+/** The effective license string: settings value, else the env var (lib/cloud: the platform's first). */
+export async function licenseKey(): Promise<string> {
+  return effectiveLicenseKey(await getSetting("license_key"));
+}
+
+/** Where the effective license comes from (for the admin UI). "platform": cloud mode's variable (read-only). */
+export async function licenseSource(): Promise<"platform" | "settings" | "env" | "none"> {
+  if (platformValue("COMPASSDOCS_LICENSE_KEY")) return "platform";
   if ((await getSetting("license_key"))?.trim()) return "settings";
   if (process.env.COMPASSDOCS_LICENSE_KEY?.trim()) return "env";
   return "none";

@@ -15,10 +15,15 @@
 //   3. none: mail links are relative, the customer portal sends no sign-in
 //      links, and the desk's setup page and portal settings say why.
 //
+// 1.21.0, cloud mode (lib/cloud): only COMPASSDOCS_BASE_URL. The platform
+// owns the workspace's address and sets it there (cloud mode warns at
+// start-up when it is missing); a custom domain saved before is ignored.
+//
 // Server-only.
 
 import "server-only";
 import { getAppSettings } from "./settings-store";
+import { isCloud } from "./cloud";
 
 /** COMPASSDOCS_BASE_URL as an origin ("https://docs.example.com"), or null when unset or not an http(s) URL. */
 export function envBaseOrigin(): string | null {
@@ -47,6 +52,7 @@ export async function mailOrigin(): Promise<string> {
 
 /** The configured workspace address, or null when none is configured. */
 export async function workspaceOrigin(): Promise<string | null> {
+  if (isCloud()) return envBaseOrigin();
   try {
     const s = await getAppSettings();
     if (s.custom_domain) return `https://${s.custom_domain}`;

@@ -34,6 +34,7 @@
 // once (503, the desk falls back) and one timer redials with a back-off.
 
 import "server-only";
+import { withDatabasePassword } from "../db-url";
 import { randomBytes } from "node:crypto";
 import { Client, type ClientConfig } from "pg";
 import { dbReady, pool } from "../db";
@@ -252,7 +253,8 @@ function clientConfig(): ClientConfig {
   const o = { ...((pool() as unknown as { options?: Record<string, unknown> }).options ?? {}) };
   for (const k of ["max", "min", "idleTimeoutMillis", "maxUses", "allowExitOnIdle", "Client", "Promise", "log", "maxLifetimeSeconds"]) delete o[k];
   const listenUrl = process.env.DATABASE_LISTEN_URL;
-  if (listenUrl) o.connectionString = listenUrl;
+  // 1.21.0: DATABASE_PASSWORD applies to it too (lib/db-url).
+  if (listenUrl) o.connectionString = withDatabasePassword(listenUrl);
   return { ...(o as ClientConfig), keepAlive: true, keepAliveInitialDelayMillis: 10_000 };
 }
 
@@ -541,6 +543,23 @@ export function liveStateForTests(): { state: ListenState; reserved: number; rec
 /** Tests: the changes this process remembers (to say which one made an answer "changed"). */
 export function liveRingForTests(): readonly (LiveChange & { at: number })[] {
   return bus().ring;
+}
+
+/**
+ * 1.21.0 (lib/shutdown): the process is stopping. Every live stream and long
+ * poll ends now (the desk reconnects, to another replica if there is one)
+ * and the LISTEN connection closes.
+ */
+export async function stopLive(): Promise<void> {
+  const b = bus();
+  for (const s of [...b.subs]) {
+    try {
+      s.end();
+    } catch {
+      /* already gone */
+    }
+  }
+  await stopLiveForTests();
 }
 
 /** Tests: end the LISTEN connection for good (the test process can exit). */

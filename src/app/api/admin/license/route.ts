@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { apiGuard } from "@/lib/api-auth";
+import { apiGuard, platformSettingRefusal } from "@/lib/api-auth";
+import { platformValue } from "@/lib/cloud";
 import { setSetting, getDatabaseStats } from "@/lib/db";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import {
@@ -66,7 +67,7 @@ async function state() {
 
   return {
     edition: eePresent() ? "enterprise" : "community",
-    source, // settings | env | none
+    source, // platform | settings | env | none
     status: s.status, // none | invalid | active | grace | expired
     reason: s.status === "invalid" ? s.reason : undefined,
     daysLeft: s.status === "active" || s.status === "grace" ? s.daysLeft : undefined,
@@ -104,6 +105,9 @@ export async function PATCH(req: Request) {
   } catch {
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });
   }
+
+  // 1.21.0: the platform's license (cloud mode, COMPASSDOCS_LICENSE_KEY) is read-only here.
+  if (platformValue("COMPASSDOCS_LICENSE_KEY")) return platformSettingRefusal("The license key");
 
   if (body?.clear === true) {
     await setSetting("license_key", "");

@@ -25,7 +25,7 @@ import "server-only";
 import { getSetting, setSetting, pool } from "./db";
 import { audit, type AuditActor } from "./audit";
 import { enterpriseLicensed } from "./ee";
-import { getSmtpConfig, smtpConfigured } from "./smtp-config";
+import { getSmtpConfig, smtpConfigured, smtpFromPlatform } from "./smtp-config";
 import { M365Error, m365TestBase, m365Token } from "./helpdesk/m365/graph";
 import { isGuid } from "./helpdesk/m365-mail-shared";
 import {
@@ -228,7 +228,8 @@ export async function mailView(): Promise<MailView> {
   return {
     method,
     configured: method === "m365" ? m365SendConfigured(m365) : smtpOk,
-    smtp: { host: smtp.host, port: smtp.port, secure: smtp.secure, user: smtp.user, has_pass: Boolean(smtp.pass), from: smtp.from, configured: smtpOk },
+    // 1.21.0: `platform`: set by the platform (cloud mode), shown read-only.
+    smtp: { host: smtp.host, port: smtp.port, secure: smtp.secure, user: smtp.user, has_pass: Boolean(smtp.pass), from: smtp.from, configured: smtpOk, platform: smtpFromPlatform() },
     m365: m365View(m365),
     one_click: oneClick ? "available" : "enterprise",
     test_base: m365TestBase(),
