@@ -231,12 +231,21 @@ function uploadRoot(env: Env = process.env): string {
   return env.COMPASSDOCS_UPLOAD_DIR || "/uploads";
 }
 
+/**
+ * A path in the uploads folder. A run-time folder, never part of the build:
+ * the ignore comment keeps the build's file tracing from copying the whole
+ * project into every route that can reach this module.
+ */
+function inUploads(...parts: string[]): string {
+  return join(/*turbopackIgnore: true*/ uploadRoot(), ...parts);
+}
+
 class LocalStore implements FileStore {
   readonly kind = "local" as const;
 
   private path(key: string): string {
     assertKey(key);
-    return join(uploadRoot(), key);
+    return inUploads(key);
   }
 
   describe(): string {
@@ -280,7 +289,7 @@ class LocalStore implements FileStore {
 
   readStream(key: string, range?: { start: number; end: number }): Readable {
     if (!isValidStoreKey(key)) return failedStream(notFound(String(key).slice(0, 80)));
-    return createReadStream(join(uploadRoot(), key), range);
+    return createReadStream(inUploads(key), range);
   }
 
   async readRange(key: string, position: number, length: number): Promise<Buffer> {
@@ -298,7 +307,7 @@ class LocalStore implements FileStore {
   async stat(key: string): Promise<{ size: number; modifiedAt: Date } | null> {
     if (!isValidStoreKey(key)) return null;
     try {
-      const s = await stat(join(uploadRoot(), key));
+      const s = await stat(inUploads(key));
       return s.isFile() ? { size: s.size, modifiedAt: s.mtime } : null;
     } catch {
       return null;
@@ -307,7 +316,7 @@ class LocalStore implements FileStore {
 
   async delete(key: string): Promise<void> {
     if (!isValidStoreKey(key)) return;
-    await unlink(join(uploadRoot(), key)).catch(() => {});
+    await unlink(inUploads(key)).catch(() => {});
   }
 
   async rename(from: string, to: string): Promise<void> {
@@ -315,11 +324,10 @@ class LocalStore implements FileStore {
   }
 
   async *list(): AsyncIterable<StoredFile> {
-    const root = uploadRoot();
     for (const dir of ["", "hd-import"]) {
       let names: string[];
       try {
-        names = (await readdir(dir ? join(root, dir) : root)).sort();
+        names = (await readdir(inUploads(dir))).sort();
       } catch {
         continue;
       }
@@ -343,12 +351,11 @@ class LocalStore implements FileStore {
   }
 
   async check(opts: { write?: boolean } = {}): Promise<void> {
-    const root = uploadRoot();
     if (!opts.write) {
-      await stat(root);
+      await stat(inUploads());
       return;
     }
-    const probe = join(root, `.diag-${process.pid}-${Date.now()}`);
+    const probe = inUploads(`.diag-${process.pid}-${Date.now()}`);
     await writeFile(probe, "ok");
     await unlink(probe);
   }

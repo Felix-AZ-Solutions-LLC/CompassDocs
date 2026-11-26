@@ -92,7 +92,7 @@ export interface MailAttachment {
 }
 
 export function mailAttachment(filename: string, storedName: string): MailAttachment {
-  return fileStoreKind() === "local" ? { filename, path: join(uploadDir(), storedName) } : { filename, storedName };
+  return fileStoreKind() === "local" ? { filename, path: join(/*turbopackIgnore: true*/ uploadDir(), storedName) } : { filename, storedName };
 }
 
 /** Attachments as nodemailer takes them: a stored name becomes its bytes; a path stays a path. */

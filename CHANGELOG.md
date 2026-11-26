@@ -58,6 +58,9 @@ folder, at the same paths, and its requests do not wait for the database.
 - Log redaction also masks `COMPASSDOCS_BLOB_CONNECTION_STRING`,
   `AZURE_CLIENT_SECRET`, `AccountKey=…`, `SharedAccessSignature=…` and a
   SAS's `sig=`.
+- **A smaller image** (about 97 MB less in the standalone build): a route
+  that can reach the uploads folder no longer makes the build list the
+  whole project in its trace file. The files shipped are the same.
 
 ## [1.21.1] - 2026-11-26
 
