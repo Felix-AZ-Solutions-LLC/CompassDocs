@@ -227,7 +227,7 @@ describe("configuration (lib/cloud)", () => {
   });
 
   test("refused: not an Ed25519 key, the license key, no workspace id, too many keys", () => {
-    const rsa = (generateKeyPairSync("rsa", { modulusLength: 1024 }).publicKey.export({ format: "der", type: "spki" }) as Buffer).toString("base64");
+    const rsa = (generateKeyPairSync("rsa", { modulusLength: 2048 }).publicKey.export({ format: "der", type: "spki" }) as Buffer).toString("base64");
     for (const [key, words] of [
       ["not-a-key", "not an Ed25519 public key"],
       [rsa, "not an Ed25519 public key"],
