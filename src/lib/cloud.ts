@@ -207,15 +207,26 @@ export function cloudStartupProblems(env: Env = process.env): { fatal: string[];
     fatal.push("COMPASSDOCS_SECRET_KEY must be 32 bytes, as 64 hex or 44 base64 characters.");
   }
   if (!env.DATABASE_URL?.trim()) fatal.push("DATABASE_URL is not set.");
+  // Every link in email, the portal's sign-in links and OAuth redirects are
+  // built from it, so without a usable address cloud mode does not start.
   const base = env.COMPASSDOCS_BASE_URL?.trim();
   if (!base) {
-    warnings.push("COMPASSDOCS_BASE_URL is not set: links in email are relative and the customer portal sends no sign-in links until it is.");
+    fatal.push(
+      "COMPASSDOCS_BASE_URL is not set. Cloud mode builds every link in email and every sign-in redirect from it: set it to the workspace's public address, e.g. https://acme.compassdocs.io."
+    );
   } else {
+    let u: URL | null = null;
     try {
-      const u = new URL(base);
-      if (u.protocol !== "https:") warnings.push(`COMPASSDOCS_BASE_URL should be an https:// address (it is ${u.protocol}//…).`);
+      u = new URL(base);
     } catch {
-      warnings.push("COMPASSDOCS_BASE_URL is not a valid URL: links in email are relative until it is.");
+      fatal.push("COMPASSDOCS_BASE_URL is not a valid URL: set it to the workspace's public address, e.g. https://acme.compassdocs.io.");
+    }
+    // Not https: fatal, except a loopback address (a developer's machine,
+    // the e2e suite), which can never be a workspace's public address.
+    if (u && u.protocol !== "https:") {
+      const loopback = u.protocol === "http:" && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname);
+      if (loopback) warnings.push(`COMPASSDOCS_BASE_URL is a plain-http loopback address (${u.origin}): fine on this machine, never for a workspace.`);
+      else fatal.push(`COMPASSDOCS_BASE_URL must be an https:// address (it is ${u.protocol}//…): set it to the workspace's public address, e.g. https://acme.compassdocs.io.`);
     }
   }
   return { fatal, warnings };

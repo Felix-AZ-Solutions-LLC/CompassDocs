@@ -12,6 +12,7 @@ import { getAppSettings } from "@/lib/settings-store";
 import { buildVCard, vcardFilename } from "@/lib/vcard";
 import { personPhotoLarge } from "@/lib/directory";
 import { personForViewer, viewerScope } from "@/lib/directory-viewer";
+import { originForDomain } from "@/lib/workspace-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +39,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const profile = officeProfileFor(offices, officeKeyOf(person.office, officeField));
   const block = profile ? officeBlock(profile, offices.fields, officeField) : null;
   const pick = (labelRe: RegExp) => block?.rows.find((r) => labelRe.test(r.label))?.value;
-  const origin = domain?.trim() ? `https://${domain.trim()}` : new URL(req.url).origin;
+  const origin = originForDomain(domain) ?? new URL(req.url).origin;
   const withPhoto = new URL(req.url).searchParams.get("photo") !== "0";
 
   const text = buildVCard({

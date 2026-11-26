@@ -27,6 +27,7 @@ import { ProfileActions } from "@/components/directory/ProfileActions";
 
 import type { Metadata } from "next";
 import { cachedPerson } from "@/lib/page-data";
+import { originForDomain } from "@/lib/workspace-origin";
 export const dynamic = "force-dynamic";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
@@ -88,7 +89,7 @@ export default async function PersonProfilePage({
 
   // The QR code carries the card itself (no photo — it would not scan), so a
   // phone camera adds the contact with no app and no account.
-  const origin = domain?.trim() ? `https://${domain.trim()}` : "";
+  const origin = originForDomain(domain) ?? "";
   const qrCard = buildVCard({
     person,
     fields,

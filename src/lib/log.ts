@@ -23,10 +23,10 @@
 // written inside a request.
 
 import "server-only";
-import { format } from "node:util";
+import { format, inspect } from "node:util";
 import { createRequire } from "node:module";
 import { join } from "node:path";
-import { ENV_SECRETS, jsonLogging, type Env } from "./cloud";
+import { ENV_SECRETS, isCloud, jsonLogging, type Env } from "./cloud";
 
 type Level = "debug" | "info" | "warn" | "error";
 
@@ -46,12 +46,22 @@ const SECRET_FIELD = /(pass(word)?|secret|token|api[_-]?key|private[_-]?key|auth
 
 const MASK = "[redacted]";
 
+/**
+ * The ways a secret's value can appear in a line: as it is, as util.inspect
+ * writes it inside a logged object (quotes and backslashes escaped, a
+ * newline as \n), and as JSON.stringify does. Longest first.
+ */
+function secretForms(v: string): string[] {
+  const forms = new Set([v, inspect(v).slice(1, -1), JSON.stringify(v).slice(1, -1)]);
+  return [...forms].filter((f) => f.length >= 6).sort((a, b) => b.length - a.length);
+}
+
 /** `text` with every secret this process knows of, and every secret-looking shape, masked. */
 export function redact(text: string, env: Env = process.env): string {
   let out = text;
   for (const name of SECRET_VARS) {
     const v = env[name];
-    if (v && v.length >= 6) out = out.split(v).join(MASK);
+    if (v && v.length >= 6) for (const form of secretForms(v)) out = out.split(form).join(MASK);
   }
   // A connection string's password: scheme://user:password@host
   out = out.replace(/\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)([^\s@/]+)@/gi, `$1${MASK}@`);
@@ -80,43 +90,71 @@ function redactValue(key: string, value: unknown, env: Env, depth = 0): unknown 
 // --- Request id -------------------------------------------------------------------
 
 type HeaderStore = { type?: string; headers?: { get(name: string): string | null } };
-let workUnitStorage: { getStore(): HeaderStore | undefined } | null | undefined;
+type WorkUnitStorage = { getStore(): HeaderStore | undefined };
+let workUnitStorage: WorkUnitStorage | null = null;
+/** When loading Next's store failed: not tried again before this (ms since epoch). */
+let retryLoadAt = 0;
+const RETRY_LOAD_MS = 60_000;
 
-/** The x-request-id of the request this code runs in, when there is one. */
+/** Next's own per-request store, loaded once; after a failure, tried again a minute later. */
+function requestStore(now = Date.now()): WorkUnitStorage | null {
+  if (workUnitStorage) return workUnitStorage;
+  if (now < retryLoadAt) return null;
+  try {
+    // Next's own per-request store (what next/headers reads): the
+    // ".external" module is never bundled, so the copy in node_modules
+    // (beside the server, which runs from its own folder) is the one Next
+    // fills. Loaded at run time so this module stays importable anywhere.
+    const req = createRequire(join(process.cwd(), "noop.js"));
+    workUnitStorage = req("next/dist/server/app-render/work-unit-async-storage.external.js").workUnitAsyncStorage ?? null;
+    if (!workUnitStorage) retryLoadAt = now + RETRY_LOAD_MS;
+  } catch {
+    retryLoadAt = now + RETRY_LOAD_MS;
+  }
+  return workUnitStorage;
+}
+
+/**
+ * The x-request-id of the request this code runs in, when there is one.
+ * One failure never turns request ids off for the rest of the process
+ * (review of #334): a store that couldn't be loaded is tried again a
+ * minute later, and a store that throws only costs this one line its id.
+ */
 export function currentRequestId(): string | undefined {
   try {
-    if (workUnitStorage === undefined) {
-      // Next's own per-request store (what next/headers reads): the
-      // ".external" module is never bundled, so the copy in node_modules
-      // (beside the server, which runs from its own folder) is the one Next
-      // fills. Loaded at run time so this module stays importable anywhere.
-      const req = createRequire(join(process.cwd(), "noop.js"));
-      workUnitStorage = req("next/dist/server/app-render/work-unit-async-storage.external.js").workUnitAsyncStorage ?? null;
-    }
-    const store = workUnitStorage?.getStore();
+    const store = requestStore()?.getStore();
     const id = store?.type === "request" ? store.headers?.get("x-request-id") : null;
     return id ? id.slice(0, 128) : undefined;
   } catch {
-    workUnitStorage = null;
     return undefined;
   }
 }
 
+/** Tests: forget the loaded store (or a failed load), or put one in its place. */
+export function setRequestStoreForTests(store: WorkUnitStorage | null, retryAt = 0): void {
+  workUnitStorage = store;
+  retryLoadAt = retryAt;
+}
+
 // --- Lines --------------------------------------------------------------------------
 
-/** One JSON log line (no newline): time, level, message, event, request id, then the fields, all redacted. */
+/**
+ * One JSON log line (no newline): time, level, message, event, request id,
+ * then the fields, all redacted, except the fields named in `reveal` (the
+ * self-hosted setup token, which the operator has to read from the log).
+ */
 export function jsonLine(
   level: Level,
   message: string,
   fields: Record<string, unknown> = {},
-  opts: { event?: string; requestId?: string; now?: Date; env?: Env } = {}
+  opts: { event?: string; requestId?: string; now?: Date; env?: Env; reveal?: string[] } = {}
 ): string {
   const env = opts.env ?? process.env;
   const time = (opts.now ?? new Date()).toISOString();
   const rest: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(fields)) {
     if (["time", "ts", "level", "message", "event", "request_id"].includes(k)) continue;
-    if (v !== undefined) rest[k] = redactValue(k, v, env);
+    if (v !== undefined) rest[k] = opts.reveal?.includes(k) ? v : redactValue(k, v, env);
   }
   const requestId = opts.requestId ?? currentRequestId();
   return JSON.stringify({
@@ -146,15 +184,22 @@ function rawWrite(level: Level, line: string): void {
 export function logEvent(
   level: Level,
   event: string,
-  fields: Record<string, unknown> = {}
+  fields: Record<string, unknown> = {},
+  opts: { reveal?: string[] } = {}
 ): void {
   if (jsonLogging()) {
     const { message, ...rest } = fields;
-    rawWrite(level, jsonLine(level, typeof message === "string" ? message : event, rest, { event }));
+    rawWrite(level, jsonLine(level, typeof message === "string" ? message : event, rest, { event, reveal: opts.reveal }));
     return;
   }
+  // Readable lines: as before, except in cloud mode (COMPASSDOCS_LOG_FORMAT=text
+  // there), where they are redacted like the JSON ones (review of #334).
+  const cloud = isCloud();
   const extras = Object.entries(fields)
-    .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
+    .map(([k, v]) => {
+      const shown = cloud && !opts.reveal?.includes(k) ? redactValue(k, v, process.env) : v;
+      return `${k}=${typeof shown === "string" ? shown : JSON.stringify(shown)}`;
+    })
     .join(" ");
   // eslint-disable-next-line no-console
   console[level === "info" || level === "debug" ? "log" : level](`[${event}]${extras ? " " + extras : ""}`);
@@ -168,11 +213,17 @@ export function splitTag(message: string): { event?: string; message: string } {
 
 /**
  * JSON mode: every console line of the process becomes one JSON object.
- * Idempotent; keeps the console's own methods for logEvent. A no-op in
- * text mode.
+ * Idempotent; keeps the console's own methods for logEvent. In text mode a
+ * no-op, except in cloud mode, where lines stay readable but are redacted.
  */
 export function installJsonConsole(): void {
-  if (!jsonLogging() || RAW.__compassJsonConsole) return;
+  if (RAW.__compassJsonConsole) return;
+  if (!jsonLogging()) {
+    // Readable lines in cloud mode (COMPASSDOCS_LOG_FORMAT=text) are still
+    // redacted (review of #334). Self-hosted readable lines are untouched.
+    if (isCloud()) installRedactingConsole();
+    return;
+  }
   const raw = RAW.__compassRawConsole ?? {
     log: console.log.bind(console),
     info: console.info.bind(console),
@@ -196,6 +247,33 @@ export function installJsonConsole(): void {
       }
     };
   console.log = make("info");
+  console.info = make("info");
+  console.warn = make("warn");
+  console.error = make("error");
+  console.debug = make("debug");
+}
+
+/** Cloud mode with readable lines: every console line as it was, redacted. */
+function installRedactingConsole(): void {
+  const raw = RAW.__compassRawConsole ?? {
+    log: console.log.bind(console),
+    info: console.info.bind(console),
+    warn: console.warn.bind(console),
+    error: console.error.bind(console),
+    debug: console.debug.bind(console),
+  };
+  RAW.__compassRawConsole = raw;
+  RAW.__compassJsonConsole = true;
+  const make =
+    (method: "log" | "info" | "warn" | "error" | "debug") =>
+    (...args: unknown[]) => {
+      try {
+        raw[method](redact(format(...args)));
+      } catch {
+        raw[method]("unprintable log line");
+      }
+    };
+  console.log = make("log");
   console.info = make("info");
   console.warn = make("warn");
   console.error = make("error");

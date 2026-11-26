@@ -18,6 +18,7 @@ import { mailConfigured } from "./mail-config";
 import { audit } from "./audit";
 import { findScopeFor, handbookFilterSql } from "./handbook-visibility";
 import type { Role } from "./types";
+import { domainOrigin } from "./workspace-origin";
 
 async function q<T = any>(sql: string, params: any[] = []): Promise<T[]> {
   return (await pool().query(sql, params)).rows as T[];
@@ -137,9 +138,8 @@ export async function maybeSendWeeklyDigests(now = new Date()): Promise<void> {
 
   // Origin for links: the configured custom domain (same fallback the
   // subscriber emails use).
-  let origin = "";
-  const domain = (await getSetting("custom_domain"))?.trim();
-  if (domain) origin = `https://${domain}`;
+  // (In cloud mode COMPASSDOCS_BASE_URL, never a stale custom domain.)
+  const origin = (await domainOrigin()) ?? "";
 
   // Zone fallback chain: personal preference → workspace zone → server zone.
   const { getAppSettings } = await import("./settings-store");

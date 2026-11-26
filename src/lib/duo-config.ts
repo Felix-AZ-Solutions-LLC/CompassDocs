@@ -9,6 +9,7 @@ import { getAllSettings, withAdvisoryLock } from "./db";
 import { openSecret, sealSecret } from "./secretbox";
 import { normalizeDomain } from "./settings";
 import { featureEnforcedFrom } from "./ee";
+import { originForDomain } from "./workspace-origin";
 import {
   DUO_BYPASS_MAX,
   DUO_KEYS,
@@ -175,8 +176,9 @@ export async function withDuoSettings<T>(fn: (tx: DuoSettingsTx) => Promise<T>):
 export type DuoReturnOrigin = { ok: true; origin: string } | { ok: false; reason: "not_tested" | "other_address"; pinned: string };
 
 export function duoReturnOrigin(map: Record<string, string>, requestOrigin: string, purpose: "signin" | "test"): DuoReturnOrigin {
-  const domain = normalizeDomain(map.custom_domain || "");
-  if (domain) return { ok: true, origin: `https://${domain}` };
+  // Cloud mode: COMPASSDOCS_BASE_URL, never a stale custom domain.
+  const fixed = originForDomain(normalizeDomain(map.custom_domain || ""));
+  if (fixed) return { ok: true, origin: fixed };
   const cfg = duoSettingsFrom(map);
   const pinned = cfg.rev && cfg.verified && cfg.verified.rev === cfg.rev ? cfg.verified.origin : "";
   if (purpose === "test") {

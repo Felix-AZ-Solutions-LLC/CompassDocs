@@ -19,7 +19,7 @@ import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { getMasterKey } from "./secretbox";
 import { logEvent } from "./log";
-import { isCloud } from "./cloud";
+import { isCloud, jsonLogging } from "./cloud";
 
 /** The token, as the operator types it: 4 groups of 5 letters and digits. */
 export function setupToken(): string {
@@ -70,6 +70,18 @@ export function printSetupToken(reason: "boot" | "page"): void {
   }
   try {
     const token = setupToken();
+    // JSON lines (COMPASSDOCS_LOG_FORMAT=json): the token only in its own
+    // field, never in `message`, which log stores index and show in lists
+    // (review of #334). Readable lines are as before.
+    if (jsonLogging()) {
+      logEvent(
+        "warn",
+        "setup.token",
+        { message: "CompassDocs is not set up yet. To create the first administrator, open /setup and enter the setup token in this line's setup_token field.", setup_token: token },
+        { reveal: ["setup_token"] }
+      );
+      return;
+    }
     logEvent("warn", "setup.token", {
       token,
       message: `CompassDocs is not set up yet. To create the first administrator, open /setup and enter this setup token: ${token}`,

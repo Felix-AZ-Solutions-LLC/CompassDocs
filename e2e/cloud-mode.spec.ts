@@ -151,6 +151,8 @@ test.describe("self-hosted: nothing changed", () => {
       const r = await page.request.get(p);
       expect(r.status(), p).toBe(200);
     }
+    await page.goto("/admin/notifications/email");
+    await expect(page.getByTestId("mail-test-hint")).not.toContainText("CompassDocs Cloud");
     for (const [name, p] of CHANGED_PAGES) {
       await page.goto(p);
       await page.waitForLoadState("networkidle");
@@ -267,6 +269,8 @@ test.describe.serial("cloud mode", () => {
     await expect(page.getByTestId("mail-smtp").getByTestId("set-by-platform")).toBeVisible();
     await expect(page.getByTestId("mail-smtp")).toContainText("no-reply@acme.compassdocs.test");
     await expect(page.getByText("platform-relay-password")).toHaveCount(0);
+    // The test row: the platform's relay, not "the settings saved above".
+    await expect(page.getByTestId("mail-test-hint")).toHaveText("Sent through CompassDocs Cloud\u2019s relay.");
     for (const [name, p] of CHANGED_PAGES) {
       await page.goto(p);
       await page.waitForLoadState("networkidle");
@@ -296,6 +300,27 @@ test.describe.serial("cloud mode", () => {
     for (const secret of [SECRET_KEY, "platform-relay-password", "sk-ant-platform-e2e", ADMIN.password]) expect(all).not.toContain(secret);
     expect(all).toContain("Running in cloud mode");
   });
+});
+
+test.describe("cloud mode refuses to start without a usable COMPASSDOCS_BASE_URL", () => {
+  test.skip(!existsSync(SERVER_JS), "needs the standalone build (npm run build)");
+
+  for (const [label, value, says] of [
+    ["unset", "", /can't start: COMPASSDOCS_BASE_URL is not set\./],
+    ["plain http", "http://acme.compassdocs.test", /can't start: COMPASSDOCS_BASE_URL must be an https:\/\/ address/],
+  ] as const) {
+    test(`${label}: one JSON error line saying why, then exit 1`, async () => {
+      test.setTimeout(90_000);
+      const s = start(STOP_PORT + 7, { COMPASSDOCS_BASE_URL: value });
+      const code = await Promise.race([s.exited, new Promise<string>((r) => setTimeout(() => r("still running"), 60_000))]);
+      if (code === "still running") s.proc.kill("SIGKILL");
+      expect(code, s.out.join("\n")).toBe(1);
+      const refusals = s.out.map((l) => JSON.parse(l) as Record<string, unknown>).filter((o) => o.event === "cloud.refused_to_start");
+      expect(refusals).toHaveLength(1);
+      expect(refusals[0].level).toBe("error");
+      expect(String(refusals[0].message)).toMatch(says);
+    });
+  }
 });
 
 test.describe.serial("graceful shutdown on SIGTERM", () => {

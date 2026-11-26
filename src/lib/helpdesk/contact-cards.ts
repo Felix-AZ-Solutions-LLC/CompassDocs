@@ -33,6 +33,7 @@ import { hq, hqOne } from "./db-core";
 import { agentTeamIds, canWorkTicket, ticketRelation } from "./access";
 import { HD_ROLE_LABEL, type HdRole } from "./roles-shared";
 import { HD_OPEN_STATUSES, type HdAvailability, type HdTicket } from "./types";
+import { originForDomain } from "../workspace-origin";
 import {
   HD_CONTACT_CARDS_KEY,
   HD_CONTACT_RELATION_LABEL,
@@ -366,7 +367,7 @@ async function contactQr(person: DirectoryPerson, fields: DirectoryField[]): Pro
     getSetting("custom_domain"),
   ]);
   const settings = await getAppSettings();
-  const origin = domain?.trim() ? `https://${domain.trim()}` : "";
+  const origin = originForDomain(domain) ?? "";
   const text = buildVCard({
     person,
     fields,

@@ -16,8 +16,9 @@
 //      links, and the desk's setup page and portal settings say why.
 //
 // 1.21.0, cloud mode (lib/cloud): only COMPASSDOCS_BASE_URL. The platform
-// owns the workspace's address and sets it there (cloud mode warns at
-// start-up when it is missing); a custom domain saved before is ignored.
+// owns the workspace's address and sets it there (cloud mode refuses to
+// start without it); a custom domain saved before is ignored, here and in
+// every other reader (originForDomain, and getAppSettings blanks it).
 //
 // Server-only.
 
@@ -53,11 +54,31 @@ export async function mailOrigin(): Promise<string> {
 /** The configured workspace address, or null when none is configured. */
 export async function workspaceOrigin(): Promise<string | null> {
   if (isCloud()) return envBaseOrigin();
+  return (await domainOrigin()) ?? envBaseOrigin();
+}
+
+/**
+ * The custom domain as an origin, for the readers that link by the custom
+ * domain alone and fall back their own way (the request's origin, a
+ * relative link, the browser's): "https://<domain>", or null when none is
+ * saved. Self-hosted, that is exactly what each of them read before 1.21.0.
+ *
+ * 1.21.0, cloud mode: COMPASSDOCS_BASE_URL's origin instead, always. A
+ * custom_domain left in the settings of a database moved from a
+ * self-hosted install is stale and is never used (review of #334).
+ */
+export function originForDomain(customDomain: string | null | undefined): string | null {
+  if (isCloud()) return envBaseOrigin();
+  const d = (customDomain ?? "").trim();
+  return d ? `https://${d}` : null;
+}
+
+/** originForDomain with the saved custom_domain; null when none is saved or the settings can't be read. */
+export async function domainOrigin(): Promise<string | null> {
+  if (isCloud()) return envBaseOrigin();
   try {
-    const s = await getAppSettings();
-    if (s.custom_domain) return `https://${s.custom_domain}`;
+    return originForDomain((await getAppSettings()).custom_domain);
   } catch {
-    /* settings unreadable: the environment's, if any */
+    return null;
   }
-  return envBaseOrigin();
 }

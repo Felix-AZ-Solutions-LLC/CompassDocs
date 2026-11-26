@@ -580,8 +580,8 @@ async function digestOrigin(): Promise<string> {
     const { helpdeskOrigin } = await import("./helpdesk/email");
     return (await helpdeskOrigin()).replace(/\/+$/, "");
   } catch {
-    const d = (await getSetting("custom_domain").catch(() => undefined))?.trim();
-    return d ? `https://${d}` : "";
+    const { domainOrigin } = await import("./workspace-origin");
+    return (await domainOrigin()) ?? "";
   }
 }
 

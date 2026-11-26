@@ -15,7 +15,9 @@
 //   change in scope or `wait` seconds → { changed, cursor }.
 // 429 past 6 streams and long polls a person (counted before anything is
 // awaited) or 30 connections a person a minute; 503 { fallback: "poll" }
-// while the server can't listen (the desk falls back).
+// while the server can't listen (the desk falls back); 503 { draining: true }
+// with Retry-After while this server shuts down (1.21.0: no new stream holds
+// it open; the desk reconnects, to another replica if there is one).
 // Helpdesk 1.20.19 (helpdesk.agent).
 
 import { NextResponse } from "next/server";
@@ -23,6 +25,7 @@ import { hdRateLimited, helpdeskGate, tooMany } from "@/lib/helpdesk/access";
 import { changedSince, deskSessionValid, ensureListening, liveCursor, reserveLive, scheduleLiveSignal, subscribeLive } from "@/lib/helpdesk/live";
 import { LIVE_LIMITS } from "@/lib/helpdesk/live-shared";
 import { SESSION_COOKIE } from "@/lib/auth";
+import { isDraining } from "@/lib/shutdown";
 
 export const dynamic = "force-dynamic";
 
@@ -43,7 +46,14 @@ function sessionToken(req: Request): string | null {
   return null;
 }
 
+const draining = () =>
+  NextResponse.json(
+    { error: "This server is restarting. Live updates resume in a moment.", fallback: "poll", draining: true },
+    { status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "2" } }
+  );
+
 export async function GET(req: Request) {
+  if (isDraining()) return draining();
   const gate = await helpdeskGate("agent");
   if (gate instanceof NextResponse) return gate;
   // From here to the reservation nothing is awaited: parallel connects can't slip past the caps.
@@ -53,7 +63,8 @@ export async function GET(req: Request) {
   if (release === "process") return unavailable();
   let handedOff = false;
   try {
-    if (!(await ensureListening())) return unavailable();
+    if (isDraining()) return draining();
+    if (!(await ensureListening())) return isDraining() ? draining() : unavailable();
 
     const url = new URL(req.url);
     const since = req.headers.get("last-event-id") || url.searchParams.get("since") || null;

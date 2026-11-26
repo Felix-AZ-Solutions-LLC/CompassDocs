@@ -61,6 +61,13 @@ function earlyJsonLine(level, text, now = new Date()) {
   return JSON.stringify({ time, level, message, event: "server", ts: time });
 }
 
+/** --no-warnings (on the command line or in NODE_OPTIONS) or NODE_NO_WARNINGS=1: Node prints no warnings. */
+function warningsSilenced(env = process.env, execArgv = process.execArgv) {
+  if (env.NODE_NO_WARNINGS === "1") return true;
+  const flags = [...execArgv, ...String(env.NODE_OPTIONS || "").split(/\s+/)];
+  return flags.includes("--no-warnings");
+}
+
 /** JSON mode: patch the console now, so Next's banner is JSON too. lib/log replaces this once the app loads. */
 function installEarlyJsonConsole() {
   const raw = {
@@ -83,7 +90,9 @@ function installEarlyJsonConsole() {
   console.error = make("error", "error");
   console.debug = make("debug", "log");
   // Node's own warnings ("(node:1) Warning: …") are written to stderr
-  // directly, not through the console: route them through it.
+  // directly, not through the console: route them through it. Silenced, as
+  // before, with --no-warnings or NODE_NO_WARNINGS=1.
+  if (warningsSilenced()) return;
   process.emitWarning = function emitWarning(warning, ...rest) {
     const type = typeof rest[0] === "string" ? rest[0] : rest[0]?.type || "Warning";
     const text = warning instanceof Error ? `${warning.name}: ${warning.message}` : `${type}: ${warning}`;
@@ -151,8 +160,15 @@ function installShutdown({ exit = process.exit.bind(process), now = Date.now } =
     return realExit(code);
   };
 
+  const handlers = {};
+
   async function shutdown(signal) {
     if (stopping) return;
+    // Next registers its handler once its server is set up. A signal that
+    // comes before that (a container stopped while it is still starting)
+    // has nobody else to close the servers: this does it, and the process
+    // exits at once as it did before 1.21.0 (review of #334).
+    const nextHandles = !manual && process.listeners(signal).some((l) => l !== handlers[signal]);
     stopping = true;
     const started = now();
     const timeoutMs = shutdownTimeoutMs();
@@ -163,10 +179,11 @@ function installShutdown({ exit = process.exit.bind(process), now = Date.now } =
     // Keep-alive connections that finish their request close at once.
     const idle = setInterval(() => servers.forEach((s) => s.closeIdleConnections?.()), 100);
     servers.forEach((s) => s.closeIdleConnections?.());
-    // Without Next's handler (NEXT_MANUAL_SIG_HANDLE), close the servers here.
-    const serversDone = manual
-      ? Promise.all(servers.map((s) => new Promise((resolve) => (s.listening ? s.close(() => resolve()) : resolve()))))
-      : nextDone;
+    // Without Next's handler (NEXT_MANUAL_SIG_HANDLE, or not registered
+    // yet), close the servers here.
+    const serversDone = nextHandles
+      ? nextDone
+      : Promise.all(servers.map((s) => new Promise((resolve) => (s.listening ? s.close(() => resolve()) : resolve()))));
     const drain =
       typeof globalThis.__compassAppDrain === "function"
         ? globalThis.__compassAppDrain(deadlineAt).catch((e) => ({ clean: false, pending: [`drain failed: ${e?.message || e}`] }))
@@ -209,8 +226,10 @@ function installShutdown({ exit = process.exit.bind(process), now = Date.now } =
     exit(clean ? 0 : 1);
   }
 
-  process.on("SIGTERM", () => void shutdown("SIGTERM"));
-  process.on("SIGINT", () => void shutdown("SIGINT"));
+  handlers.SIGTERM = () => void shutdown("SIGTERM");
+  handlers.SIGINT = () => void shutdown("SIGINT");
+  process.on("SIGTERM", handlers.SIGTERM);
+  process.on("SIGINT", handlers.SIGINT);
   return shutdown;
 }
 
@@ -226,4 +245,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { cloudMode, jsonLogging, shutdownTimeoutMs, earlyJsonLine };
+module.exports = { cloudMode, jsonLogging, shutdownTimeoutMs, earlyJsonLine, warningsSilenced };

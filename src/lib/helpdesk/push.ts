@@ -28,6 +28,7 @@ import { getSetting } from "../db";
 import { safeFetch } from "../safe-fetch";
 import { openSecret, sealSecret } from "../secretbox";
 import { hq, hqOne } from "./db-core";
+import { domainOrigin } from "../workspace-origin";
 import {
   describeDevice,
   deviceLabel,
@@ -117,8 +118,9 @@ async function vapidSubject(): Promise<string> {
   const env = process.env.COMPASSDOCS_PUSH_SUBJECT?.trim();
   if (env && /^(https:\/\/|mailto:)\S+$/.test(env)) return env;
   try {
-    const domain = (await getSetting("custom_domain"))?.trim();
-    if (domain && /^[a-z0-9.-]+$/i.test(domain)) return `https://${domain}`;
+    // Cloud mode: COMPASSDOCS_BASE_URL, never a stale custom domain.
+    const origin = await domainOrigin();
+    if (origin && /^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(origin)) return origin;
   } catch {
     /* fall through */
   }

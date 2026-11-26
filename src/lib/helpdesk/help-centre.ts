@@ -473,7 +473,7 @@ export async function helpCentreOwnHosts(requestHost: string | null | undefined)
   };
   for (const h of (requestHost ?? "").split(",")) add(h);
   try {
-    add((await getAppSettings()).custom_domain);
+    add((await getAppSettings()).custom_domain); // "" in cloud mode (settings-store)
   } catch {
     /* no settings: the request's host only */
   }

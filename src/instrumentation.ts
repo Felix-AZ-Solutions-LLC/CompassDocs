@@ -18,6 +18,18 @@ export async function register() {
   const { isCloud } = await import("./lib/cloud");
   // Cloud mode without its encryption key (or database) exits here, saying why.
   if (isCloud()) await (await import("./lib/shutdown")).checkCloudStartup(logEvent);
+  // Self-hosted: an encryption key in the environment that differs from the
+  // key file exits here too, saying which to keep (lib/secretbox).
+  else
+    await (await import("./lib/secretbox")).checkSelfHostedKey(logEvent, undefined, async () => {
+      // One sealed value says which key this install has been using (no
+      // settings table yet: nothing is sealed).
+      const { pool } = await import("./lib/db");
+      const t = await pool().query<{ t: string | null }>("SELECT to_regclass('settings')::text AS t");
+      if (!t.rows[0]?.t) return null;
+      const r = await pool().query<{ value: string }>("SELECT value FROM settings WHERE value LIKE 'enc:v1:%' LIMIT 1");
+      return r.rows[0]?.value ?? null;
+    });
 
   const { every, after, runJob, onDrain, onClose, exposeLifecycle } = await import("./lib/shutdown");
   exposeLifecycle();
@@ -35,10 +47,7 @@ export async function register() {
   // The origin for links sent from the background: the custom domain (as
   // before), or in cloud mode the platform's COMPASSDOCS_BASE_URL.
   const backgroundOrigin = async (): Promise<string> => {
-    if (isCloud()) return (await import("./lib/workspace-origin")).mailOrigin();
-    const { getSetting } = await import("./lib/db");
-    const domain = (await getSetting("custom_domain"))?.trim();
-    return domain ? `https://${domain}` : "";
+    return ((await (await import("./lib/workspace-origin")).domainOrigin()) ?? "").replace(/\/+$/, "");
   };
 
   const CHECK_INTERVAL_MS = 60 * 60 * 1000; // hourly

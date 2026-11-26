@@ -50,7 +50,7 @@ import { HD_DESK_DEPARTMENTS_SCHEMA } from "./helpdesk/desk-departments-schema";
 import { createHash, randomBytes } from "node:crypto";
 import { SEED_SPACES, SEED_DOCS } from "./seed-data";
 import { hashPassword } from "./password";
-import { sealSecret, openSecret, isSealed, getMasterKey, MasterKeyError } from "./secretbox";
+import { sealSecret, openSecret, isSealed, getMasterKey, MasterKeyError, noteSealedData } from "./secretbox";
 import { separateDatabasePassword, withDatabasePassword } from "./db-url";
 import { asScope } from "./space-scope";
 import type { SpaceScope } from "./space-scope";
@@ -137,6 +137,10 @@ declare global {
   // eslint-disable-next-line no-var
   var __compassPool: Pool | undefined;
   // eslint-disable-next-line no-var
+  var __compassPoolClosed: boolean | undefined;
+  // eslint-disable-next-line no-var
+  var __compassInitFailure: { error: string; at: number; attempts: number } | undefined;
+  // eslint-disable-next-line no-var
   var __compassInit: Promise<void> | undefined;
   // eslint-disable-next-line no-var
   var __compassInitDone: boolean | undefined;
@@ -180,23 +184,46 @@ function makePool(): Pool {
 }
 
 export function pool(): Pool {
+  // 1.21.0 (review of #334): after closePool, no quiet new pool (and so no
+  // new connection) while the process is stopping.
+  if (global.__compassPoolClosed) throw new Error("The database pool is closed: the server is shutting down.");
   if (!global.__compassPool) global.__compassPool = makePool();
   return global.__compassPool;
 }
 
 /**
  * 1.21.0 (lib/shutdown): close the pool at the end of a graceful shutdown,
- * waiting for checked-out clients to be released. Idempotent.
+ * waiting for checked-out clients to be released. Idempotent. From then on
+ * pool() throws (reopenPoolForTests undoes it).
  */
 export async function closePool(): Promise<void> {
   const p = global.__compassPool;
   global.__compassPool = undefined;
+  global.__compassPoolClosed = true;
   if (p) await p.end();
+}
+
+/** Tests: let pool() make a pool again after closePool. */
+export function reopenPoolForTests(): void {
+  global.__compassPoolClosed = false;
 }
 
 /** 1.21.0: the schema and its migrations are applied in this process (/readyz). */
 export function schemaReady(): boolean {
   return global.__compassInitDone === true;
+}
+
+/**
+ * 1.21.0 (review of #334): the last boot failed and none is running now,
+ * so /readyz reports that failure instead of starting the whole boot again
+ * on every probe: until `retryAt` (5 s after the first failure, doubling to
+ * a minute). Null when a boot may start (or one is running, or it is done).
+ */
+export function schemaBootFailure(now = Date.now()): { error: string; retryAt: number } | null {
+  const f = global.__compassInitFailure;
+  if (!f || global.__compassInit || global.__compassInitDone) return null;
+  const retryAt = f.at + Math.min(60_000, 5_000 * 2 ** (f.attempts - 1));
+  return now < retryAt ? { error: f.error, retryAt } : null;
 }
 
 async function q<T = any>(text: string, params: any[] = []): Promise<T[]> {
@@ -234,9 +261,12 @@ function ready(): Promise<void> {
     boot.then(
       () => {
         if (global.__compassInit === boot) global.__compassInitDone = true;
+        global.__compassInitFailure = undefined;
       },
-      () => {
+      (e: unknown) => {
         if (global.__compassInit === boot) global.__compassInit = undefined;
+        const attempts = (global.__compassInitFailure?.attempts ?? 0) + 1;
+        global.__compassInitFailure = { error: e instanceof Error ? e.message : String(e), at: Date.now(), attempts };
       }
     );
   }
@@ -257,13 +287,26 @@ async function initialize(): Promise<void> {
   // volume chown after the 0.59 non-root upgrade) is one loud, actionable log
   // line at boot — not a scatter of decrypt failures later. Non-fatal: the
   // app still serves everything that doesn't need sealed credentials.
+  //
+  // 1.21.0 (review of #334): first, whether the settings already hold sealed
+  // values. If they do, a missing key file is not replaced by a new one
+  // (lib/secretbox), which would open none of them.
+  const client = await pool().connect();
+  try {
+    const sealed = await client.query("SELECT 1 FROM settings WHERE value LIKE '%enc:v1:%' LIMIT 1");
+    noteSealedData((sealed.rowCount ?? 0) > 0);
+  } catch {
+    /* a fresh database: no settings table yet, nothing sealed */
+  }
   try {
     getMasterKey();
   } catch (e) {
     if (e instanceof MasterKeyError) console.error(`[secretbox] ${e.message}`);
-    else throw e;
+    else {
+      client.release();
+      throw e;
+    }
   }
-  const client = await pool().connect();
   try {
     await client.query("SELECT pg_advisory_lock(id) FROM (SELECT 728341 AS id) t");
     await client.query(guardCreateIndexes(guardAddColumns(SCHEMA_SQL)));

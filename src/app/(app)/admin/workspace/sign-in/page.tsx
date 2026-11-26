@@ -6,6 +6,7 @@ import { getSignInArt, getSignInText } from "@/lib/sign-in-art";
 import { signInRoutingSummary } from "@/lib/sign-in-routing-summary";
 import { settingsMetadata } from "@/lib/settings-sections";
 import { SignInPageSettings } from "@/components/SignInPageSettings";
+import { originForDomain } from "@/lib/workspace-origin";
 
 export const dynamic = "force-dynamic";
 export const metadata = settingsMetadata("/admin/workspace", "Sign-in page");
@@ -28,7 +29,7 @@ export default async function WorkspaceSignInPage() {
     const h = await headers();
     const proto = h.get("x-forwarded-proto")?.split(",")[0].trim() || "http";
     const host = h.get("x-forwarded-host")?.split(",")[0].trim() || h.get("host") || "localhost";
-    const origin = settings.custom_domain ? `https://${settings.custom_domain}` : `${proto}://${host}`;
+    const origin = originForDomain(settings.custom_domain) ?? `${proto}://${host}`;
     routing = await signInRoutingSummary(origin);
   }
 

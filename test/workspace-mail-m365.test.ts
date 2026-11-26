@@ -711,6 +711,24 @@ describe("newsletters through Microsoft 365: in the background, paced", () => {
     assert.equal((await delivery.newsletterDelivery(nid))!.queued, 5);
   });
 
+  test("shutting down (1.21.0): the batch stops between sends, the rest stays queued and the claim is let go", async () => {
+    const g = globalThis as { __compassDraining?: boolean };
+    const before = sent.length;
+    g.__compassDraining = true;
+    try {
+      const t = await tick();
+      assert.equal(t.newsletter, nid);
+      assert.equal(t.sent, 0);
+    } finally {
+      g.__compassDraining = false;
+    }
+    assert.equal(sent.length, before);
+    const d = (await delivery.newsletterDelivery(nid))!;
+    assert.deepEqual([d.state, d.queued], ["sending", 5]);
+    const job = (await pool().query("SELECT claimed_until FROM newsletter_send_jobs WHERE newsletter_id = $1", [nid])).rows[0];
+    assert.equal(job.claimed_until, null);
+  });
+
   test("Microsoft asks to slow down: the job pauses, nobody is lost or sent twice", async () => {
     let once = true;
     behave = () => {

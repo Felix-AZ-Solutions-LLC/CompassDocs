@@ -24,6 +24,7 @@ import { getAppSettings } from "@/lib/settings-store";
 import { exportRateLimited } from "@/lib/rate-limit";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import type { SessionUser } from "@/lib/types";
+import { originForDomain } from "@/lib/workspace-origin";
 
 export const dynamic = "force-dynamic";
 // The renderer is Node-only (fontkit, streams); never let this route drift to
@@ -140,8 +141,8 @@ async function run(user: SessionUser, req: Request, params: Record<string, unkno
       details: { format, preset: preset.id, people: people.length, ...(viaLink ? { via: "link" } : {}) },
       ip: ipFrom(req),
     });
-    const domain = (await getSetting("custom_domain"))?.trim();
-    const text = await renderDirectoryVcf({ preset, people, fields, company, origin: domain ? `https://${domain}` : new URL(req.url).origin });
+    const domain = await getSetting("custom_domain");
+    const text = await renderDirectoryVcf({ preset, people, fields, company, origin: originForDomain(domain) ?? new URL(req.url).origin });
     return new Response(text, {
       headers: {
         "Content-Type": "text/vcard; charset=utf-8",

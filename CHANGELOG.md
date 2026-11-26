@@ -24,8 +24,10 @@ in.
   is required (the app refuses to start without it and says why) and no key
   file is ever created or read. A license key, an Anthropic API key or an
   SMTP relay (`COMPASSDOCS_SMTP_*`) set by the platform wins over a saved
-  one and shows as "Set by the platform", read-only. Links in email come
-  from `COMPASSDOCS_BASE_URL`, and the session cookie is always Secure.
+  one and shows as "Set by the platform", read-only. Every link and redirect
+  comes from `COMPASSDOCS_BASE_URL`, which is required too (an https://
+  address); a custom domain left in the settings of a database moved from a
+  self-hosted install is never used. The session cookie is always Secure.
 - **`DATABASE_PASSWORD`** (any install, optional): the database password
   apart from `DATABASE_URL`, for secret stores.
 - **JSON logs** in cloud mode, or anywhere with `COMPASSDOCS_LOG_FORMAT=json`:
@@ -42,15 +44,39 @@ in.
 - **`/readyz` waits for the migrations**: it answers 503 "migrations in
   progress" after an upgrade until the schema is ready, and 503 "draining"
   while shutting down. `/healthz` is unchanged (no database).
-- With `COMPASSDOCS_LOG_FORMAT=json`, every log line is now JSON (before,
-  only some were), leading with `time` and `message`; `ts` and `event` are
-  still there.
+- **For installs that set `COMPASSDOCS_LOG_FORMAT=json`** (readable lines,
+  the default, are unchanged):
+  - every console line is now one JSON object, not only some (a stack trace
+    is one line), and Node's own warnings are JSON lines too (written
+    through the console, so a `process.on("warning")` listener no longer
+    sees them); `--no-warnings` and `NODE_NO_WARNINGS=1` still silence them;
+  - `message` is always present, and lines lead with `time` and `message`;
+    `ts` and `event` are still there;
+  - fields named like a secret (`password`, `token`, `secret`, `api_key`,
+    `authorization`, `cookie`, `credential`…) are written as `[redacted]`,
+    and so are the secret variables' values, URL passwords and bearer
+    tokens wherever they appear;
+  - the first-run setup token is in the line's `setup_token` field, no
+    longer inside `message`.
 
 ### Upgrading
 - **Nothing to do.** Update as usual. If you start the container with your
-  own command, use `node start.cjs` to get the clean shutdown. To keep the
-  encryption key in `.env` instead of the uploads volume (optional), follow
-  the README, "Moving a self-hosted install to COMPASSDOCS_SECRET_KEY".
+  own command, use `node start.cjs` to get the clean shutdown.
+- **The encryption key stays where it is.** The compose files don't pass
+  `COMPASSDOCS_SECRET_KEY`, so a key that sits unused in `.env` doesn't take
+  over from `/uploads/.secret.key`. To move the key into `.env` (optional),
+  follow the README, "Moving a self-hosted install to
+  COMPASSDOCS_SECRET_KEY".
+- **If you already set `COMPASSDOCS_SECRET_KEY` yourself** (an override
+  file, `env_file`) and a key file with a different key is also there,
+  CompassDocs now checks which key the database's credentials were
+  encrypted with. When it is the variable's, it starts as before and logs
+  that the file is unused. Otherwise it refuses to start, and its log says
+  which key to keep, so credentials are never silently left unreadable.
+  And when the key file is missing but the database holds encrypted
+  credentials, no new key file is written: restore the file, or set the
+  variable to the old key (lost for good: set it to a new key and enter
+  those credentials again).
 
 ## [1.20.41] - 2026-11-22
 

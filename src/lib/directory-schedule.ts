@@ -17,6 +17,7 @@ import { mailConfigured } from "./mail-config";
 import type { DirectorySyncProvider, DirectorySyncSummary } from "@/ee-contract";
 import { getSyncReport } from "./directory";
 import { SYNC_FREQUENCIES, isSyncDue, parseRecipients, syncReportEmail, type SyncFrequency, type SyncSchedule } from "./directory-schedule-rules";
+import { domainOrigin } from "./workspace-origin";
 
 export { SYNC_FREQUENCIES, isSyncDue, parseRecipients, syncReportEmail };
 export type { SyncFrequency, SyncSchedule };
@@ -107,8 +108,7 @@ export async function runScheduledDirectorySyncs(now: Date = new Date()): Promis
     const got = await client.query("SELECT pg_try_advisory_lock($1) AS ok", [ADVISORY_LOCK]);
     if (!got.rows[0].ok) return ran;
     try {
-      const domain = (await getSetting("custom_domain"))?.trim();
-      const origin = domain ? `https://${domain}` : "";
+      const origin = (await domainOrigin()) ?? "";
       for (const provider of PROVIDERS) {
         if (!isSyncDue(schedule[provider], schedule.hour, schedule.last[provider]?.at, now)) continue;
         let summary: DirectorySyncSummary | undefined;

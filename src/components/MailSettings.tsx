@@ -183,7 +183,7 @@ export function MailSettings({ initial, outbox = null }: { initial: MailView; ou
               <M365Form v={v} use={v.method !== "m365"} onSaved={setV} />
             )}
           </div>
-          <TestRow method={shown} enabled={shownConfigured} />
+          <TestRow method={shown} enabled={shownConfigured} platform={shown === "smtp" && v.smtp.platform} />
         </div>
       </Card>
       <MailOutbox initial={outbox} m365={v.method === "m365"} />
@@ -193,7 +193,8 @@ export function MailSettings({ initial, outbox = null }: { initial: MailView; ou
 
 // --- Test email --------------------------------------------------------------------------
 
-function TestRow({ method, enabled }: { method: MailMethod; enabled: boolean }) {
+/** `platform`: SMTP is CompassDocs Cloud's relay (1.21.0), so there are no settings "saved above". */
+function TestRow({ method, enabled, platform = false }: { method: MailMethod; enabled: boolean; platform?: boolean }) {
   const [to, setTo] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -220,7 +221,7 @@ function TestRow({ method, enabled }: { method: MailMethod; enabled: boolean }) 
           Send test email
         </Button>
       </div>
-      <p className="mt-1 text-xs text-slate-500">{enabled ? `Sent ${goesOut(method)}, with the settings saved above.` : `Save the ${methodLabel(method)} settings first.`}</p>
+      <p className="mt-1 text-xs text-slate-500" data-testid="mail-test-hint">{platform ? "Sent through CompassDocs Cloud\u2019s relay." : enabled ? `Sent ${goesOut(method)}, with the settings saved above.` : `Save the ${methodLabel(method)} settings first.`}</p>
       <FormError className="mt-2">{error}</FormError>
     </div>
   );

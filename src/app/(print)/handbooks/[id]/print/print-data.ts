@@ -16,6 +16,7 @@ import { formatDate, settingsForUser } from "@/lib/format";
 import { DOC_TYPE_LABEL, type SessionUser } from "@/lib/types";
 import type { PaperSize, PrintHandbook, PrintPolicy, PrintSection } from "@/components/handbooks/print/print-model";
 import { handbookTypeCounts } from "@/lib/handbook-shared";
+import { originForDomain } from "@/lib/workspace-origin";
 
 /** The paper a workspace prints on unless the reader picks: Letter for US dates, else A4. */
 export function defaultPaper(dateFormat: string): PaperSize {
@@ -24,7 +25,8 @@ export function defaultPaper(dateFormat: string): PaperSize {
 
 /** Where the handbook lives: the configured domain, else the request's own origin. */
 async function readerUrl(id: number, customDomain: string): Promise<string> {
-  if (customDomain) return `https://${customDomain}/handbooks/${id}`;
+  const fixed = originForDomain(customDomain); // cloud mode: COMPASSDOCS_BASE_URL
+  if (fixed) return `${fixed}/handbooks/${id}`;
   const h = await headers();
   const proto = h.get("x-forwarded-proto")?.split(",")[0].trim() || "http";
   const host = h.get("x-forwarded-host")?.split(",")[0].trim() || h.get("host") || "localhost";

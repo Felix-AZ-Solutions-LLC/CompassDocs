@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { dbReady, pool, schemaReady } from "@/lib/db";
+import { dbReady, pool, schemaBootFailure, schemaReady } from "@/lib/db";
 import { isDraining } from "@/lib/shutdown";
 import { logEvent } from "@/lib/log";
 
@@ -21,11 +21,22 @@ let lastFailure = "";
  *   - the schema and its migrations applied in this process (lib/db
  *     dbReady; the first probe starts them if nothing has yet);
  *   - the database answering a query, within 3 seconds.
- * A failure is logged once per distinct reason, not on every probe.
+ * A failure is logged once per distinct reason, not on every probe. After
+ * the migrations failed, a probe reports that failure (with when the next
+ * try is) rather than starting them again, until the back-off is over
+ * (lib/db schemaBootFailure: 5 s, doubling to a minute).
  */
 export async function GET() {
   if (isDraining()) {
     return NextResponse.json({ status: "draining" }, { status: 503, headers: { "Cache-Control": "no-store" } });
+  }
+  const failed = schemaReady() ? null : schemaBootFailure();
+  if (failed) {
+    return NextResponse.json(
+      // The error itself is in the log (once), not in this public answer.
+      { status: "unavailable", reason: "migrations could not run", retry_at: new Date(failed.retryAt).toISOString() },
+      { status: 503, headers: { "Cache-Control": "no-store" } }
+    );
   }
   const started = Date.now();
   let timer: ReturnType<typeof setTimeout> | undefined;

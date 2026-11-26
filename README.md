@@ -281,16 +281,18 @@ pooled connection string) when deploying to serverless platforms, and keep
 | Path | Probe | Answers |
 | --- | --- | --- |
 | `/healthz` | liveness and startup | 200 while the process serves requests. Never touches the database, so a database outage never restarts a healthy process. |
-| `/readyz` | readiness | 200 `{"status":"ready","migrations":"applied"}` once the schema and its migrations are applied and the database answers within 3 s; 503 with the reason otherwise (`migrations in progress`, `migrations could not run`, `database unreachable`), and 503 `{"status":"draining"}` from the moment the process is told to stop. |
+| `/readyz` | readiness | 200 `{"status":"ready","migrations":"applied"}` once the schema and its migrations are applied and the database answers within 3 s; 503 with the reason otherwise (`migrations in progress`, `migrations could not run`, `database unreachable`; after a failed migration it reports that failure with a `retry_at` instead of starting the migrations again on every probe), and 503 `{"status":"draining"}` from the moment the process is told to stop. |
 
 The image starts the app with `node start.cjs` (since 1.21.0). On `SIGTERM`
 (what `docker stop`, Kubernetes and Azure Container Apps send) it stops
 accepting connections, lets the requests in flight finish, stops the
-schedulers, ends the helpdesk's live streams (browsers reconnect), waits for
-background jobs that are running, closes the database pool and exits `0`,
+schedulers, ends the helpdesk's live streams (browsers reconnect; new ones
+get 503 until the process exits), waits for background jobs that are running
+(a newsletter going out through Microsoft 365 stops between two sends), closes the database pool and exits `0`,
 all within `COMPASSDOCS_SHUTDOWN_TIMEOUT` seconds (default `25`, under the
 30 s most platforms wait before killing). Past it, open connections are cut,
-the log says what was still running, and the exit code is `1`. Running
+the log says what was still running, and the exit code is `1`. A `SIGTERM`
+that comes while the server is still starting stops it at once. Running
 `node server.js` directly still works, without these steps.
 
 ## Cloud mode (COMPASSDOCS_CLOUD)
@@ -326,7 +328,7 @@ secret reference.
 | `DATABASE_URL` | yes | **Required.** The PostgreSQL connection string. |
 | `DATABASE_PASSWORD` | yes | Optional: the database password kept apart from `DATABASE_URL` (it replaces any password in the URL, and in `DATABASE_LISTEN_URL`). Works self-hosted too. |
 | `DATABASE_LISTEN_URL` | yes | Optional: a direct connection for the helpdesk's live updates when `DATABASE_URL` is a transaction-mode pooler. |
-| `COMPASSDOCS_BASE_URL` | | The workspace's public address, e.g. `https://acme.compassdocs.io`. Every link in email is built from it (a custom domain saved earlier is ignored). Missing or not `https://`, start-up logs a warning. |
+| `COMPASSDOCS_BASE_URL` | | **Required.** The workspace's public address, e.g. `https://acme.compassdocs.io`. Every link in email, the portal's sign-in links and OAuth redirects are built from it (a custom domain saved earlier is ignored). Missing, not a valid URL or not `https://`, the process logs `Cloud mode (COMPASSDOCS_CLOUD=1) can't start: COMPASSDOCS_BASE_URL …` and exits 1 (a plain-http loopback address, such as `http://localhost:3000` on a developer's machine, only logs a warning). Self-hosted, it stays optional. |
 | `COMPASSDOCS_LICENSE_KEY` | yes | When set, the platform's license: it wins over a saved key, and Settings → License shows it read-only, "Set by the platform". |
 | `ANTHROPIC_API_KEY` | yes | When set, the platform's AI key: it wins over a saved key and Settings → AI shows it read-only. |
 | `COMPASSDOCS_SMTP_HOST`, `COMPASSDOCS_SMTP_PORT` (587), `COMPASSDOCS_SMTP_SECURE` (`starttls`, `tls` or `none`), `COMPASSDOCS_SMTP_USER`, `COMPASSDOCS_SMTP_PASSWORD` (secret), `COMPASSDOCS_SMTP_FROM` | password | When `COMPASSDOCS_SMTP_HOST` is set, the platform's mail relay: Settings → Email shows SMTP read-only, and the workspace can still choose Microsoft 365 instead. Read only in cloud mode. |
@@ -334,7 +336,7 @@ secret reference.
 | `COMPASSDOCS_ADMIN_USER`, `COMPASSDOCS_ADMIN_PASSWORD` | password | Optional: create the first administrator without the setup page. |
 | `COMPASSDOCS_METRICS_TOKEN` | yes | Optional: a bearer token for `/metrics`. |
 | `COMPASSDOCS_UPLOAD_DIR` | | Where attachments live: a persistent mount (Azure Files). |
-| `COMPASSDOCS_LOG_FORMAT` | | Cloud mode logs JSON; `text` switches back to readable lines. |
+| `COMPASSDOCS_LOG_FORMAT` | | Cloud mode logs JSON; `text` switches back to readable lines, redacted the same way. |
 | `COMPASSDOCS_SHUTDOWN_TIMEOUT` | | Seconds to drain on `SIGTERM` (default 25). |
 
 The workspace's own integration secrets (its Microsoft 365, Slack, Teams,
@@ -365,22 +367,33 @@ Self-hosted installs keep working as they are: without
 `COMPASSDOCS_SECRET_KEY`, the key lives in a file on the uploads volume
 (`/uploads/.secret.key`), created on first start. Moving it into the
 environment is optional (it lets you keep the key in a secret store, and
-back it up apart from the data it protects):
+back it up apart from the data it protects). The compose files don't pass
+the variable, so nothing changes until you opt in:
 
 1. Read the current key: `docker compose exec app cat /uploads/.secret.key`.
-2. Put it in `.env` as `COMPASSDOCS_SECRET_KEY=<that value>`. The compose
-   files pass it to the app from 1.21.0; with an older `docker-compose.yml`,
-   add `COMPASSDOCS_SECRET_KEY: ${COMPASSDOCS_SECRET_KEY:-}` under the app's
-   `environment:`.
-3. `docker compose up -d`. With the variable set, the file is no longer
-   read. Check that a saved credential still works (Settings → System →
-   Diagnostics, or send a test email).
-4. Keep a copy of the key somewhere safe. You may delete the file once you
+2. Put it in `.env` as `COMPASSDOCS_SECRET_KEY=<that value>`.
+3. Pass it to the app in a `docker-compose.override.yml` next to
+   `docker-compose.yml` (the installer's updates never touch that file):
+
+   ```yaml
+   services:
+     app:
+       environment:
+         COMPASSDOCS_SECRET_KEY: ${COMPASSDOCS_SECRET_KEY}
+   ```
+
+4. `docker compose up -d`. Check that a saved credential still works
+   (Settings → System → Diagnostics, or send a test email).
+5. Keep a copy of the key somewhere safe. You may delete the file once you
    are sure; backups made before then still need the same key to restore.
 
 Use the file's value, not a new key: everything already encrypted (SMTP,
 SSO, Microsoft 365 and other credentials, backups) can only be opened with
-it.
+it. If the variable and the file hold different keys, CompassDocs refuses
+to start and its log says which to keep. If the key file is missing while
+the database holds encrypted credentials, no new key file is written:
+restore the file, or set the variable to the old key (if that key is lost
+for good, set the variable to a new one and enter the credentials again).
 
 ## How it fits together
 

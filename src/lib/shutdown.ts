@@ -173,8 +173,8 @@ export function exposeLifecycle(): void {
 
 /**
  * Cloud mode's start-up check (instrumentation): warnings are logged; a
- * missing or unusable COMPASSDOCS_SECRET_KEY or DATABASE_URL is one clear
- * error line each, and the process exits 1 before it serves anything. The
+ * missing or unusable COMPASSDOCS_SECRET_KEY, DATABASE_URL or
+ * COMPASSDOCS_BASE_URL is one clear error line each, and the process exits 1 before it serves anything. The
  * platform shows the line beside the failed revision.
  */
 export async function checkCloudStartup(

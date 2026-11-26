@@ -5,9 +5,10 @@
 // the same notifications a manual publish would. Server-only.
 
 import "server-only";
-import { pool, getSetting, resetAcknowledgements, keepAcknowledgements, resolveAutoAckPolicy } from "./db";
+import { pool, resetAcknowledgements, keepAcknowledgements, resolveAutoAckPolicy } from "./db";
 import { audit, auditAckDecision } from "./audit";
 import { changeSummary, suggestReconfirm } from "./diff";
+import { domainOrigin } from "./workspace-origin";
 
 async function q<T = any>(sql: string, params: any[] = []): Promise<T[]> {
   return (await pool().query(sql, params)).rows as T[];
@@ -44,12 +45,8 @@ interface DuePublish {
  * drain then falls back the same way the subscriber notice does).
  */
 async function scheduleOrigin(): Promise<string> {
-  try {
-    const domain = (await getSetting("custom_domain"))?.trim();
-    return domain ? `https://${domain}` : "";
-  } catch {
-    return "";
-  }
+  // (In cloud mode COMPASSDOCS_BASE_URL, never a stale custom domain.)
+  return (await domainOrigin()) ?? "";
 }
 
 // Known benign race: a PUT in flight while the tick publishes the same doc

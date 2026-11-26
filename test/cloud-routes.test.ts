@@ -292,6 +292,63 @@ describe("the address and the session cookie", () => {
     assert.equal(self, saved ? `https://${saved}` : "https://env.example", "self-hosted: the custom domain, else the variable, as before");
   });
 
+  test("cloud mode: a stale custom_domain from a self-hosted database is never used; links are on COMPASSDOCS_BASE_URL", async () => {
+    const before = await db.getSetting("custom_domain");
+    await db.setSetting("custom_domain", "stale.example.com");
+    try {
+      const wo = await import("../src/lib/workspace-origin");
+      const { getAppSettings } = await import("../src/lib/settings-store");
+      const { duoReturnOrigin } = await import("../src/lib/duo-config");
+      const { renderEmail } = await import("../src/lib/email-templates");
+      const BASE = "https://acme.compassdocs.io";
+      await inCloud(async () => {
+        assert.equal((await getAppSettings()).custom_domain, "");
+        assert.equal(await wo.workspaceOrigin(), BASE);
+        assert.equal(await wo.mailOrigin(), BASE);
+        assert.equal(await wo.domainOrigin(), BASE);
+        assert.equal(wo.originForDomain("stale.example.com"), BASE);
+        assert.deepEqual(duoReturnOrigin(await db.getAllSettings(), "https://other.example", "signin"), { ok: true, origin: BASE });
+        // A background mail (no request origin): the frame's links.
+        const mail = await renderEmail("training_assigned", {}, "");
+        assert.match(mail.html, /https:\/\/acme\.compassdocs\.io\//);
+        assert.doesNotMatch(mail.html + mail.text, /stale\.example\.com/);
+      });
+      // Self-hosted: the saved custom domain, exactly as before.
+      await withEnv({ COMPASSDOCS_CLOUD: undefined, COMPASSDOCS_BASE_URL: undefined }, async () => {
+        assert.equal((await getAppSettings()).custom_domain, "stale.example.com");
+        assert.equal(await wo.domainOrigin(), "https://stale.example.com");
+        assert.equal(await wo.workspaceOrigin(), "https://stale.example.com");
+        assert.equal(wo.originForDomain(""), null);
+        assert.deepEqual(duoReturnOrigin(await db.getAllSettings(), "https://other.example", "signin"), { ok: true, origin: "https://stale.example.com" });
+      });
+    } finally {
+      await db.setSetting("custom_domain", before ?? "");
+    }
+  });
+
+  test("no link is built from custom_domain outside the origin helpers", async () => {
+    const { readdirSync, readFileSync, statSync } = await import("node:fs");
+    const root = path.join(__dirname, "..", "src");
+    // The domain settings themselves (refused in cloud mode), and the client pages fed "" in cloud mode.
+    const allowed = new Set(["lib/workspace-origin.ts", "components/SetupForm.tsx", "components/helpdesk/desk/settings/PortalSettings.tsx"]);
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const full = path.join(dir, name);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(name)) {
+          const rel = path.relative(root, full).split(path.sep).join("/");
+          if (allowed.has(rel)) continue;
+          readFileSync(full, "utf8").split("\n").forEach((line, i) => {
+            if (/`https:\/\/\$\{[^}]*[dD]omain/.test(line)) offenders.push(`${rel}:${i + 1}`);
+          });
+        }
+      }
+    };
+    walk(root);
+    assert.deepEqual(offenders, [], "use originForDomain/domainOrigin (lib/workspace-origin): in cloud mode they give COMPASSDOCS_BASE_URL");
+  });
+
   test("cloud mode: the session cookie is always Secure; self-hosted follows its setting", async () => {
     const { secureCookie } = await import("../src/lib/auth");
     const plain = new Request("http://ws.example/api/auth/login");
@@ -325,10 +382,57 @@ describe("/readyz", () => {
     }
   });
 
+  test("migrations that keep failing: the probe reports the last failure and doesn't start them again until the back-off is over", async () => {
+    const { GET } = await import("../src/app/readyz/route");
+    const g = globalThis as { __compassInitDone?: boolean; __compassInit?: Promise<void>; __compassInitFailure?: { error: string; at: number; attempts: number } };
+    const saved = { done: g.__compassInitDone, init: g.__compassInit, failure: g.__compassInitFailure };
+    g.__compassInitDone = undefined;
+    g.__compassInit = undefined;
+    g.__compassInitFailure = { error: "relation \"x\" does not exist", at: Date.now(), attempts: 1 };
+    try {
+      const res = await GET();
+      assert.equal(res.status, 503);
+      const body = await res.json();
+      assert.equal(body.reason, "migrations could not run");
+      assert.ok(Date.parse(body.retry_at) > Date.now());
+      assert.equal(JSON.stringify(body).includes("relation"), false, "the error stays in the log");
+      assert.equal(g.__compassInit, undefined, "no boot was started");
+      // The back-off doubles to a minute; past it, a probe may start one again.
+      assert.ok(db.schemaBootFailure(Date.now() + 4_000));
+      assert.equal(db.schemaBootFailure(Date.now() + 6_000), null);
+      g.__compassInitFailure = { error: "e", at: Date.now(), attempts: 9 };
+      assert.ok(db.schemaBootFailure(Date.now() + 59_000));
+      assert.equal(db.schemaBootFailure(Date.now() + 61_000), null);
+    } finally {
+      g.__compassInitDone = saved.done;
+      g.__compassInit = saved.init;
+      g.__compassInitFailure = saved.failure;
+    }
+  });
+
   test("/healthz never touches the database", async () => {
     const { GET } = await import("../src/app/healthz/route");
     const res = await GET();
     assert.equal(res.status, 200);
     assert.equal((await res.json()).status, "ok");
+  });
+});
+
+describe("the desk's live stream while shutting down", () => {
+  test("503 draining, before anything else; the listener is not redialled", async () => {
+    const live = await import("../src/lib/helpdesk/live");
+    const route = await load("../src/app/api/helpdesk/live/route");
+    const g = globalThis as { __compassDraining?: boolean };
+    g.__compassDraining = true;
+    try {
+      const r = await call(route.GET!, `${ORIGIN}/api/helpdesk/live`, "GET");
+      assert.equal(r.status, 503);
+      assert.equal(r.body?.draining, true);
+      assert.equal(r.body?.fallback, "poll");
+      assert.equal(await live.ensureListening(), false);
+      assert.equal(live.liveStateForTests().reconnecting, false);
+    } finally {
+      g.__compassDraining = undefined;
+    }
   });
 });
