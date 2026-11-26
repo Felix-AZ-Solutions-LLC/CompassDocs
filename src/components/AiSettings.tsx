@@ -9,8 +9,10 @@ import { confirmDialog } from "@/components/Dialog";
 import { SaveRow } from "@/components/SaveRow";
 import { useLeaveGuard, useUnsavedChanges } from "@/lib/use-unsaved";
 import { DangerAction, DangerZone, Field, TextInput, Select } from "@/components/form";
+import { SetByPlatform } from "@/components/CloudManaged";
 
-type AiKeySource = "settings" | "env" | "none";
+/** "platform" (1.21.0): cloud mode's ANTHROPIC_API_KEY, read-only. */
+type AiKeySource = "platform" | "settings" | "env" | "none";
 type AiProvider = "anthropic" | "openai";
 
 interface AiState {
@@ -144,7 +146,9 @@ export function AiSettings({ initial }: { initial: AiState }) {
         <div className="notice-ok rounded-lg border px-3 py-2 text-sm">
           <Check className="mr-1 inline h-4 w-4 align-text-bottom" aria-hidden />AI features are <strong>on</strong>
           {provider === "anthropic"
-            ? source === "env"
+            ? source === "platform"
+              ? " — Anthropic, with a key set by the platform."
+              : source === "env"
               ? " — Anthropic, using the ANTHROPIC_API_KEY environment variable."
               : " — Anthropic, using the key saved here."
             : ` — OpenAI-compatible endpoint (${oaModel}).`}
@@ -223,6 +227,10 @@ export function AiSettings({ initial }: { initial: AiState }) {
               </p>
             )}
 
+            {/* 1.21.0: cloud mode's key (ANTHROPIC_API_KEY) is the platform's: shown, never replaced. */}
+            {source === "platform" ? (
+              <SetByPlatform>CompassDocs Cloud supplies this key; choose the model below.</SetByPlatform>
+            ) : (
             <div>
               <Field label={hasKey ? "Replace key" : "API key"} size="lg">
                 <TextInput
@@ -236,6 +244,7 @@ export function AiSettings({ initial }: { initial: AiState }) {
                 />
               </Field>
             </div>
+            )}
           </div>
 
           {/* Model */}

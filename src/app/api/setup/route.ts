@@ -10,7 +10,8 @@ import { parseLicense } from "@/lib/license";
 import { setAnthropicKey } from "@/lib/ai-config";
 import { saveDomainSettings } from "@/lib/domain-flow";
 import { actorFrom, ipFrom } from "@/lib/audit";
-import { credentialSaveError } from "@/lib/api-auth";
+import { cloudRefusal, credentialSaveError, platformSettingRefusal } from "@/lib/api-auth";
+import { isCloud, platformValue } from "@/lib/cloud";
 import { printSetupToken, setupTokenMatches } from "@/lib/setup-token";
 
 export const dynamic = "force-dynamic";
@@ -35,7 +36,9 @@ export async function POST(req: Request) {
     printSetupToken("page");
     return NextResponse.json(
       {
-        error: "Enter the setup token from the server log (docker compose logs app).",
+        error: isCloud()
+          ? "Enter the setup token CompassDocs Cloud gave you with your workspace's address."
+          : "Enter the setup token from the server log (docker compose logs app).",
         code: "setup_token",
       },
       { status: 403 }
@@ -64,6 +67,18 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
+
+  // 1.21.0: in cloud mode the address, HTTPS and the session cookie are the
+  // platform's (lib/cloud); the wizard doesn't offer them, and a request that
+  // sends them is refused before the admin is created.
+  if (["custom_domain", "tls_mode", "tls_email", "secure_cookies"].some((k) => body?.[k] !== undefined)) {
+    const cloud = cloudRefusal("domain");
+    if (cloud) return cloud;
+  }
+
+  // ...and so are the license and the AI key, when it supplies them.
+  if (String(body?.license_key ?? "").trim() && platformValue("COMPASSDOCS_LICENSE_KEY")) return platformSettingRefusal("The license key");
+  if (String(body?.anthropic_api_key ?? "").trim() && platformValue("ANTHROPIC_API_KEY")) return platformSettingRefusal("The Anthropic API key");
 
   // Validate the optional license key BEFORE creating the admin, so a bad key
   // doesn't half-complete setup (the admin exists but the request errored).
@@ -115,7 +130,7 @@ export async function POST(req: Request) {
   // Cookie-security choice from the wizard (defaults to "auto", which matches
   // the request protocol — so plain-HTTP setups don't hit a login loop).
   const secureMode = String(body?.secure_cookies ?? "auto") as SecureCookieMode;
-  if (SECURE_COOKIE_MODES.includes(secureMode)) {
+  if (!isCloud() && SECURE_COOKIE_MODES.includes(secureMode)) {
     await setSetting("secure_cookies", secureMode);
   }
 

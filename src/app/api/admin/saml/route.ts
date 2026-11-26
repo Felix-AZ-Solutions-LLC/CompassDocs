@@ -11,6 +11,7 @@ import { featureEnabled, eePresent } from "@/lib/ee";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { getAppSettings } from "@/lib/settings-store";
 import type { Role } from "@/lib/types";
+import { originForDomain } from "@/lib/workspace-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,7 @@ async function view(req: Request) {
   ]);
   const proto = req.headers.get("x-forwarded-proto") || "https";
   const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
-  const origin = app.custom_domain ? `https://${app.custom_domain}` : host ? `${proto}://${host}` : "";
+  const origin = originForDomain(app.custom_domain) ?? (host ? `${proto}://${host}` : "");
   const sp = samlSpUrls(origin || "https://your-domain");
   return {
     enabled, // bundled AND licensed ("sso" entitlement, shared with OIDC)

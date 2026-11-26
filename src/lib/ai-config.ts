@@ -11,6 +11,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getSetting, setSetting } from "./db";
 import { metric } from "./metrics";
 import { safeFetch } from "./safe-fetch";
+import { platformValue } from "./cloud";
 
 const KEY_SETTING = "anthropic_api_key";
 const MODEL_SETTING = "ai_model";
@@ -94,7 +95,8 @@ export class AiRefusalError extends Error {
   }
 }
 
-export type AiKeySource = "settings" | "env" | "none";
+/** "platform": cloud mode's ANTHROPIC_API_KEY, which wins and is read-only (lib/cloud, 1.21.0). */
+export type AiKeySource = "platform" | "settings" | "env" | "none";
 
 let testAi: { key?: string; model?: string; provider?: "anthropic" | "openai" } | null = null;
 /** Tests: answer these instead of the stored key, model and provider in this process (null = the stored ones). */
@@ -109,11 +111,12 @@ async function storedKey(): Promise<string> {
 /** The effective API key: the GUI-stored one, else the environment variable. */
 export async function getAnthropicKey(): Promise<string | undefined> {
   if (testAi?.key !== undefined) return testAi.key || undefined;
-  return (await storedKey()) || process.env.ANTHROPIC_API_KEY || undefined;
+  return platformValue("ANTHROPIC_API_KEY") || (await storedKey()) || process.env.ANTHROPIC_API_KEY || undefined;
 }
 
 /** Where the effective key comes from (for showing status in the GUI). */
 export async function getAiKeySource(): Promise<AiKeySource> {
+  if (platformValue("ANTHROPIC_API_KEY")) return "platform";
   if (await storedKey()) return "settings";
   if (process.env.ANTHROPIC_API_KEY) return "env";
   return "none";

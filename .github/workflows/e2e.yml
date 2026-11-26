@@ -96,13 +96,27 @@ jobs:
           retention-days: 7
       - run: npm run build
       - run: npx playwright install --with-deps chromium
+      # 1.21.0: started the way the image starts it (start.cjs beside
+      # server.js). /readyz waits for the migrations, so it is polled too.
+      # e2e/cloud-mode.spec.ts starts its own cloud-mode servers from the
+      # same build, on their own database.
       - name: Start server
         run: |
           cp -r .next/static .next/standalone/.next/
           mkdir -p .next/standalone/public && cp -r public/* .next/standalone/public/
-          COMPASSDOCS_UPLOAD_DIR="$RUNNER_TEMP/uploads" node .next/standalone/server.js &
+          cp scripts/start.cjs .next/standalone/start.cjs
+          # The integration tests above sealed values in this database, and
+          # a server never writes a new key file over sealed data (1.21.0):
+          # give it its key file, as an install has one on its uploads volume.
+          mkdir -p "$RUNNER_TEMP/uploads"
+          openssl rand -hex 32 > "$RUNNER_TEMP/uploads/.secret.key"
+          COMPASSDOCS_UPLOAD_DIR="$RUNNER_TEMP/uploads" node .next/standalone/start.cjs &
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:3998/healthz && break
+            sleep 1
+          done
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:3998/readyz && break
             sleep 1
           done
           curl -sf http://127.0.0.1:3998/readyz

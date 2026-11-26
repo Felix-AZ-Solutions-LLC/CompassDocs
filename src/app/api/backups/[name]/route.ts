@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { Readable } from "stream";
-import { apiGuard } from "@/lib/api-auth";
+import { apiGuard, cloudRefusal } from "@/lib/api-auth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { backupReadStream, deleteBackup, isValidBackupFile, isValidBackupName } from "@/lib/backup";
 
@@ -8,6 +8,9 @@ export const dynamic = "force-dynamic";
 
 // Download a backup file: the database dump, or (1.20.27) its uploads archive.
 export async function GET(req: Request, { params }: { params: Promise<{ name: string }> }) {
+  // 1.21.0: CompassDocs Cloud manages this (lib/cloud); 403 in cloud mode.
+  const cloud = cloudRefusal("backups");
+  if (cloud) return cloud;
   const gate = await apiGuard("admin", "system.backup_download");
   if (gate instanceof NextResponse) return gate;
   const { name } = await params;
@@ -35,6 +38,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ name: st
 
 // Delete a backup set's local files. 1.20.27 (security review M12): off-site copies are never deleted from here.
 export async function DELETE(req: Request, { params }: { params: Promise<{ name: string }> }) {
+  // 1.21.0: CompassDocs Cloud manages this (lib/cloud); 403 in cloud mode.
+  const cloud = cloudRefusal("backups");
+  if (cloud) return cloud;
   const gate = await apiGuard("admin", "system.backup_delete");
   if (gate instanceof NextResponse) return gate;
   const { name } = await params;

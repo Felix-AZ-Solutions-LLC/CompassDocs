@@ -118,6 +118,8 @@ export interface SmtpView {
   has_pass: boolean;
   from: string;
   configured: boolean;
+  /** 1.21.0: set by the platform (cloud mode, COMPASSDOCS_SMTP_*): read-only. */
+  platform?: boolean;
 }
 
 /** GET /api/admin/mail. */

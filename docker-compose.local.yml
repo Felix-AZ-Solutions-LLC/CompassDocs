@@ -26,6 +26,8 @@ services:
   app:
     build: .
     restart: unless-stopped
+    # 1.21.0: SIGTERM drains for up to 25 s (start.cjs); Docker's default 10 s would cut it short.
+    stop_grace_period: 30s
     depends_on:
       db:
         condition: service_healthy

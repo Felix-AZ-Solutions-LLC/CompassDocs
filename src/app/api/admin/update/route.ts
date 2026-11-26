@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { apiGuard } from "@/lib/api-auth";
+import { apiGuard, cloudRefusal } from "@/lib/api-auth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import type { SessionUser } from "@/lib/types";
 
@@ -15,6 +15,9 @@ export const dynamic = "force-dynamic";
 // mid-update, so a response would never arrive. The admin UI polls the
 // version endpoint until the app comes back newer.
 export async function POST(req: Request) {
+  // 1.21.0: CompassDocs Cloud manages this (lib/cloud); 403 in cloud mode.
+  const cloud = cloudRefusal("updates");
+  if (cloud) return cloud;
   const gate = await apiGuard("admin", "system.update_apply");
   if (gate instanceof NextResponse) return gate;
   const user = gate as SessionUser;

@@ -41,6 +41,7 @@ import { audit } from "./audit";
 import { sendMail } from "./mailer";
 import { MailSendError, refusalRepeats } from "./mail-m365";
 import { classifySendError } from "./mail-outbox-shared";
+import { isDraining } from "./shutdown";
 import { pauseOutboxForRate, releaseMailSlot, takeMailSlot } from "./mail-outbox";
 import type { NewsletterDeliveryView } from "./newsletter-delivery-shared";
 
@@ -166,6 +167,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 async function slotForOne(deadline: number): Promise<number | null> {
   for (;;) {
+    // 1.21.0 (review of #334): shutting down, the batch stops between sends.
+    if (isDraining()) return null;
     const d = await takeMailSlot({ recipients: 1, source: "newsletter" });
     if (d.ok) return d.slotId ?? 0;
     if (d.why === "paused" || d.why === "daily" || d.waitMs > 5_000 || Date.now() + d.waitMs > deadline) return null;
@@ -209,7 +212,8 @@ export async function newsletterDeliveryTick(): Promise<{ newsletter: number | n
     // A batch ends within the minute it was claimed for.
     const deadline = Date.now() + 55_000;
     for (const r of rows) {
-      const slot = await slotForOne(deadline);
+      // Shutting down: what is left stays queued for the next batch (any replica's).
+      const slot = isDraining() ? null : await slotForOne(deadline);
       if (slot === null) {
         await release();
         return out;

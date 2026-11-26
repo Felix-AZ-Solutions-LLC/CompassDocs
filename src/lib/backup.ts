@@ -1,4 +1,5 @@
 import { spawn } from "child_process";
+import { withDatabasePassword } from "./db-url";
 import { createReadStream } from "fs";
 import { mkdir, readdir, stat, unlink } from "fs/promises";
 import { join, basename } from "path";
@@ -52,7 +53,8 @@ function pgEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   const raw = process.env.DATABASE_URL;
   if (!raw) throw new Error("DATABASE_URL is not set.");
-  const url = new URL(raw);
+  // 1.21.0: with DATABASE_PASSWORD (lib/db-url).
+  const url = new URL(withDatabasePassword(raw));
   env.PGHOST = url.hostname;
   env.PGPORT = url.port || "5432";
   if (url.username) env.PGUSER = decodeURIComponent(url.username);

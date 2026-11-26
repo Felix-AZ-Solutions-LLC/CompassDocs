@@ -31,6 +31,7 @@ import { DUE_NUMBER_KEYS, daysLeft, resolveDefaults } from "./ack-due";
 import type { PolicyDefaultsLayer } from "./ack-due";
 import { isoWeekId, monthId } from "./periodic";
 import type { AppSettings } from "./settings";
+import { originForDomain } from "./workspace-origin";
 
 /** The settings-table claim of the weekly summary (one message per hook per ISO week, across instances). */
 export const WEEKLY_HOOK_CLAIM_KEY = "ack_weekly_hook";
@@ -114,10 +115,9 @@ async function workspaceNumbers(): Promise<AckSweepDefaults> {
   };
 }
 
-/** The links' origin: the custom_domain setting when there is one, else the request's (a sweep has none: no link). */
+/** The links' origin: the custom_domain setting when there is one (cloud mode: COMPASSDOCS_BASE_URL), else the request's (a sweep has none: no link). */
 function originFor(settings: AppSettings, requestOrigin?: string): string {
-  if (settings.custom_domain) return `https://${settings.custom_domain}`;
-  return requestOrigin ?? "";
+  return originForDomain(settings.custom_domain) ?? requestOrigin ?? "";
 }
 
 /** "2026-10-29": the calendar day of an instant in the workspace's zone (UTC when the zone is unusable). */

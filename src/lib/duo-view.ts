@@ -8,11 +8,12 @@ import { duoDisabledByEnv, duoPolicyFromSettings, duoTestApiBase, duoVerifiedBy 
 import { duoConfigured, duoSettingsFrom } from "./duo-policy";
 import { eePresent, featureEnabled } from "./ee";
 import { normalizeDomain } from "./settings";
+import { originForDomain } from "./workspace-origin";
 
 export async function duoView(userId: number, sid: string) {
   const [map, licensed] = await Promise.all([getAllSettings(), featureEnabled("sso")]);
   const cfg = duoSettingsFrom(map);
-  const domain = normalizeDomain(map.custom_domain || "");
+  const fixed = originForDomain(normalizeDomain(map.custom_domain || ""));
   return {
     enabled: licensed, // bundled AND licensed
     bundled: eePresent(),
@@ -34,7 +35,7 @@ export async function duoView(userId: number, sid: string) {
      * duoReturnOrigin): the custom domain, else where the test was run.
      * Empty until a test has passed.
      */
-    return_origin: domain ? `https://${domain}` : cfg.rev && cfg.verified?.rev === cfg.rev ? cfg.verified.origin : "",
+    return_origin: fixed ? fixed : cfg.rev && cfg.verified?.rev === cfg.rev ? cfg.verified.origin : "",
     /** A rule is on and really being enforced right now. */
     enforcing: duoPolicyFromSettings(map) !== null,
     disabled_by_env: duoDisabledByEnv(),

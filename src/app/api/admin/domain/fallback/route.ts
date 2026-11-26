@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { apiGuard } from "@/lib/api-auth";
+import { apiGuard, cloudRefusal } from "@/lib/api-auth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { applyProxyConfig, proxyManaged } from "@/lib/caddy";
 import { domainState } from "@/lib/domain-flow";
@@ -11,6 +11,9 @@ export const dynamic = "force-dynamic";
 // proxy stops serving it. Addresses from COMPASSDOCS_FALLBACK_HOSTS are the
 // server's and change only there.
 export async function DELETE(req: Request) {
+  // 1.21.0: CompassDocs Cloud manages this (lib/cloud); 403 in cloud mode.
+  const cloud = cloudRefusal("domain");
+  if (cloud) return cloud;
   const gate = await apiGuard("admin", "workspace.domain_manage");
   if (gate instanceof NextResponse) return gate;
   let body: any;

@@ -31,16 +31,32 @@
 //    (lib/helpdesk/help-centre isPrefetch). One a client sent itself is
 //    dropped on every path, like the page header.
 //
+// 4. (1.21.0) In JSON logging mode (cloud mode, or COMPASSDOCS_LOG_FORMAT=json;
+//    lib/cloud jsonLogging) every request carries an x-request-id: the
+//    platform's own when it sent a well-formed one, else a new UUID. Routes
+//    and the log lines they write (lib/log request_id) see it, and the
+//    response carries it back. Readable-log installs are untouched.
+//
 // No authentication happens here — the session check stays in requireUser,
 // where it can read the database.
 
 import { NextResponse, type NextRequest } from "next/server";
+import { jsonLogging } from "@/lib/cloud";
 
 /** The request header that carries the page's path and query. */
 export const RETURN_PATH_HEADER = "x-compass-path";
 
 /** The request header that says the router asked for this page as a prefetch (lib/helpdesk/help-centre PREFETCH_HEADER). */
 export const PREFETCH_HEADER = "x-compass-prefetch";
+
+/** The request id header (1.21.0, lib/log). */
+export const REQUEST_ID_HEADER = "x-request-id";
+
+/** A request id worth keeping: the platform's, when it looks like one. */
+export function requestIdFrom(headers: Headers): string {
+  const given = headers.get(REQUEST_ID_HEADER)?.trim();
+  return given && /^[A-Za-z0-9._:-]{8,128}$/.test(given) ? given : crypto.randomUUID();
+}
 
 /** Request kinds a page can make of another site without CORS (Sec-Fetch-Dest). */
 const NO_CORS_SUBRESOURCES = new Set(["image", "audio", "video", "track", "font", "style", "script", "object", "embed"]);
@@ -69,14 +85,18 @@ export function proxy(req: NextRequest) {
   // path: the root layout reads it to decide the dark style (and the sign-in
   // return path before it), so only the proxy may write it.
   const forged = req.headers.has(RETURN_PATH_HEADER) || req.headers.has(PREFETCH_HEADER);
-  if (!page && !anonymous && !forged) return NextResponse.next();
+  const requestId = jsonLogging() ? requestIdFrom(req.headers) : null;
+  if (!page && !anonymous && !forged && !requestId) return NextResponse.next();
   const headers = new Headers(req.headers);
+  if (requestId) headers.set(REQUEST_ID_HEADER, requestId);
   headers.delete(RETURN_PATH_HEADER);
   headers.delete(PREFETCH_HEADER);
   if (page) headers.set(RETURN_PATH_HEADER, `${pathname}${search}`);
   if (page && req.headers.has("next-router-prefetch")) headers.set(PREFETCH_HEADER, "1");
   if (anonymous) headers.delete("cookie");
-  return NextResponse.next({ request: { headers } });
+  const res = NextResponse.next({ request: { headers } });
+  if (requestId) res.headers.set(REQUEST_ID_HEADER, requestId);
+  return res;
 }
 
 export const config = {

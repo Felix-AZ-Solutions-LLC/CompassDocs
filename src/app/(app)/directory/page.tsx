@@ -11,6 +11,7 @@ import { PageContainer } from "@/components/PageWidth";
 import { PageHeader } from "@/components/PageHeader";
 import { getAppSettings } from "@/lib/settings-store";
 import { formatDate } from "@/lib/format";
+import { originForDomain } from "@/lib/workspace-origin";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Directory" };
@@ -65,7 +66,7 @@ export default async function DirectoryPage({ searchParams }: { searchParams: Pr
           focus={Number.isInteger(focus) && focus > 0 ? focus : undefined}
           hiddenColumns={hiddenColumns}
           presence={presence}
-          linkOrigin={settings.custom_domain ? `https://${settings.custom_domain}` : undefined}
+          linkOrigin={originForDomain(settings.custom_domain) ?? undefined}
         />
       </div>
 

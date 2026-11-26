@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { apiGuard } from "@/lib/api-auth";
+import { apiGuard, cloudRefusal } from "@/lib/api-auth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { restoreBackup, isValidBackupName, RestoreError } from "@/lib/backup";
 
@@ -9,6 +9,9 @@ export const dynamic = "force-dynamic";
 // Since 1.20.27 the set's uploads come back too, and the audit log keeps its
 // rows newer than the backup (lib/backup restoreBackup).
 export async function POST(req: Request, { params }: { params: Promise<{ name: string }> }) {
+  // 1.21.0: CompassDocs Cloud manages this (lib/cloud); 403 in cloud mode.
+  const cloud = cloudRefusal("backups");
+  if (cloud) return cloud;
   const gate = await apiGuard("admin", "system.backup_restore");
   if (gate instanceof NextResponse) return gate;
   const { name } = await params;

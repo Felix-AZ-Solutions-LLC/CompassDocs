@@ -47,7 +47,12 @@ RUN addgroup -g 1001 -S nodejs \
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# 1.21.0: the server entry beside Next's server.js: graceful shutdown on
+# SIGTERM (requests and background jobs finish, the database pool closes,
+# exit 0, within COMPASSDOCS_SHUTDOWN_TIMEOUT seconds) and JSON logs from the
+# first line in cloud mode. `node server.js` still works without them.
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/start.cjs ./start.cjs
 
 USER nextjs
 EXPOSE 3000
-CMD ["node", "server.js"]
+CMD ["node", "start.cjs"]

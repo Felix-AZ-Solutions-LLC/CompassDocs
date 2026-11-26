@@ -770,6 +770,30 @@ focus):
   above it listing the only changes that save; every other control is
   `disabled` (a toggle that may only be turned off is disabled while
   off), and the one-click setup is hidden.
+- **An area the platform manages** (1.21.0, cloud mode, `lib/cloud`;
+  `components/CloudManaged`). In a CompassDocs Cloud workspace the parts
+  that manage hosting or install software (Domain & HTTPS, the update
+  check, Backups) are the platform's. A whole section leaves the rail, its
+  search and the palette; a page reached by an old link keeps its
+  `SettingsPage` header, without the Docs button (its docs are for
+  self-hosting), over the page-level `EmptyState` (`CloudManagedPage`:
+  lucide `Cloud`, "Managed by CompassDocs Cloud", one sentence on what the
+  platform does and where to ask, no action: there is nothing in the
+  workspace to go to). A card's worth inside a page (System's Version &
+  updates; the backup rows of its Storage card) is the section tier,
+  `CloudManagedNote`: a `SectionEmpty` whose first words, "Managed by
+  CompassDocs Cloud.", are `font-medium text-slate-700`, in the card that
+  held the controls (Version & updates keeps its title and a `neutral`
+  version chip). Never a disabled form: nothing there is the admin's to
+  change.
+- **A setting the platform supplies** (1.21.0: the license key, the
+  Anthropic key, SMTP; cloud mode with the variable set) keeps its card and
+  heading; its input gives way to `SetByPlatform`: an `info` chip with
+  lucide `Cloud`, "Set by the platform", then one `text-xs text-slate-500`
+  sentence (what it does for them, or the non-secret value worth seeing,
+  such as the From address). The secret itself is never shown, and the
+  card's Save and Remove are left out; a choice that stays the workspace's
+  (the AI model, sending by Microsoft 365 instead) stays editable beside it.
 - **A choice of how something works, with a configuration per choice**
   (1.20.31, Settings → Notifications → Email: SMTP or Microsoft 365,
   `components/MailSettings`) is one `Card` whose status chip is the

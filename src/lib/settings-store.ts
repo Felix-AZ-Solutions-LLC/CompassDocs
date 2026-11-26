@@ -1,4 +1,5 @@
 import { getAllSettings, setSetting } from "./db";
+import { isCloud } from "./cloud";
 import {
   AppSettings,
   SETTINGS_DEFAULTS,
@@ -25,7 +26,11 @@ import { sanitizeDarkStyle } from "./dark-style";
 
 /** Load all settings, filling in defaults and coercing to valid values. */
 export async function getAppSettings(): Promise<AppSettings> {
-  return normalizeSettings(await getAllSettings());
+  const s = normalizeSettings(await getAllSettings());
+  // 1.21.0, cloud mode: the platform owns the address (COMPASSDOCS_BASE_URL);
+  // a custom domain left from a self-hosted database is never used.
+  if (isCloud()) s.custom_domain = "";
+  return s;
 }
 
 /** Persist a partial update; unknown/invalid values are ignored or clamped. */

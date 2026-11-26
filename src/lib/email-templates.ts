@@ -3,6 +3,7 @@ import { getAppSettings } from "./settings-store";
 import type { AppSettings } from "./settings";
 import { renderBodyHtml } from "./newsletter";
 import { NOTIFY_EVENTS } from "./notify-policy-shared";
+import { originForDomain } from "./workspace-origin";
 
 // Editable templates for every alert email CompassDocs sends. Admins customize
 // the subject and body (markdown, written in the doc editor) under Settings →
@@ -1309,7 +1310,7 @@ function manageNotificationsUrl(base: string, eventKey: string): string {
 
 /** The tags every part gets: workspace, links, accent and the logo placeholder. A value the sender passes wins. */
 function frameVars(key: string, vars: Record<string, string>, settings: AppSettings, origin: string): Record<string, string> {
-  const base = origin || (settings.custom_domain ? `https://${settings.custom_domain}` : "");
+  const base = origin || (originForDomain(settings.custom_domain) ?? "");
   const brand: Record<string, string> = {
     org_name: settings.company_name || "CompassDocs",
     workspace_url: `${base}/`,

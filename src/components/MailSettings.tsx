@@ -47,6 +47,7 @@ import type { OutboxView } from "@/lib/mail-outbox-shared";
 import { Segmented } from "@/components/Segmented";
 import { useFormatDate } from "@/components/SettingsProvider";
 import { toast } from "@/components/Toasts";
+import { SetByPlatform } from "@/components/CloudManaged";
 import { confirmDialog } from "@/components/Dialog";
 import {
   MAIL_M365_APP_NAME,
@@ -182,7 +183,7 @@ export function MailSettings({ initial, outbox = null }: { initial: MailView; ou
               <M365Form v={v} use={v.method !== "m365"} onSaved={setV} />
             )}
           </div>
-          <TestRow method={shown} enabled={shownConfigured} />
+          <TestRow method={shown} enabled={shownConfigured} platform={shown === "smtp" && v.smtp.platform} />
         </div>
       </Card>
       <MailOutbox initial={outbox} m365={v.method === "m365"} />
@@ -192,7 +193,8 @@ export function MailSettings({ initial, outbox = null }: { initial: MailView; ou
 
 // --- Test email --------------------------------------------------------------------------
 
-function TestRow({ method, enabled }: { method: MailMethod; enabled: boolean }) {
+/** `platform`: SMTP is CompassDocs Cloud's relay (1.21.0), so there are no settings "saved above". */
+function TestRow({ method, enabled, platform = false }: { method: MailMethod; enabled: boolean; platform?: boolean }) {
   const [to, setTo] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -219,7 +221,7 @@ function TestRow({ method, enabled }: { method: MailMethod; enabled: boolean }) 
           Send test email
         </Button>
       </div>
-      <p className="mt-1 text-xs text-slate-500">{enabled ? `Sent ${goesOut(method)}, with the settings saved above.` : `Save the ${methodLabel(method)} settings first.`}</p>
+      <p className="mt-1 text-xs text-slate-500" data-testid="mail-test-hint">{platform ? "Sent through CompassDocs Cloud\u2019s relay." : enabled ? `Sent ${goesOut(method)}, with the settings saved above.` : `Save the ${methodLabel(method)} settings first.`}</p>
       <FormError className="mt-2">{error}</FormError>
     </div>
   );
@@ -231,6 +233,21 @@ function SmtpForm({ v, use, onSaved }: { v: MailView; use: boolean; onSaved: (v:
   const [s, setS] = useState(v.smtp);
   const [pass, setPass] = useState("");
   const [busy, setBusy] = useState(false);
+
+  /** The platform's SMTP (1.21.0): only `use`, nothing about the relay. */
+  async function switchToPlatform() {
+    setBusy(true);
+    const r = await withConfirm({ use: true }, "/api/admin/smtp");
+    setBusy(false);
+    if (!r) return;
+    if (!r.ok || r.data?.error) {
+      toast("error", r.data?.error || "Could not switch.");
+      return;
+    }
+    const fresh = await fetch(URL_).then((x) => (x.ok ? x.json() : null), () => null);
+    if (fresh) onSaved(fresh);
+    toast("ok", "Email now goes out by SMTP.");
+  }
 
   async function save() {
     setBusy(true);
@@ -251,6 +268,26 @@ function SmtpForm({ v, use, onSaved }: { v: MailView; use: boolean; onSaved: (v:
     setPass("");
     if (r.data?.error) toast("error", r.data.error);
     else toast("ok", r.data?.method_changed ? "SMTP settings saved. Email now goes out by SMTP." : "SMTP settings saved.");
+  }
+
+  // 1.21.0: SMTP set by the platform (cloud mode, COMPASSDOCS_SMTP_*): the
+  // relay and the From address are shown, nothing is editable, and choosing
+  // SMTP as the way mail goes out still works.
+  if (v.smtp.platform) {
+    return (
+      <div id="smtp" className="scroll-mt-6" data-testid="mail-smtp">
+        <SetByPlatform>
+          Email goes out through CompassDocs Cloud&rsquo;s relay{v.smtp.from ? <> from <span className="font-medium text-slate-700">{v.smtp.from}</span></> : null}.
+        </SetByPlatform>
+        {use && (
+          <div className="mt-4 flex items-center gap-3">
+            <Button busy={busy} onClick={() => void switchToPlatform()}>
+              Send by SMTP
+            </Button>
+          </div>
+        )}
+      </div>
+    );
   }
 
   return (

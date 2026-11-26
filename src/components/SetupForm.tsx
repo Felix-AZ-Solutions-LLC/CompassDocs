@@ -12,10 +12,18 @@ const optional = <span className="font-normal text-slate-500">(optional)</span>;
 export function SetupForm({
   enterprise = false,
   proxyManaged = false,
+  cloud = false,
+  platformLicense = false,
+  platformAiKey = false,
   initialToken = "",
 }: {
   enterprise?: boolean;
   proxyManaged?: boolean;
+  /** 1.21.0: cloud mode (lib/cloud): no address, HTTPS or cookie choices; the platform owns them. */
+  cloud?: boolean;
+  /** 1.21.0: the license key / AI key is set by the platform, so the field is left out. */
+  platformLicense?: boolean;
+  platformAiKey?: boolean;
   /** 1.20.27: a token passed in the address (/setup?token=…) fills the field. */
   initialToken?: string;
 }) {
@@ -76,10 +84,10 @@ export function SetupForm({
           email,
           password,
           company_name: companyName,
-          secure_cookies: secureCookies,
-          ...(enterprise && licenseKey.trim() ? { license_key: licenseKey.trim() } : {}),
-          ...(anthropicKey.trim() ? { anthropic_api_key: anthropicKey.trim() } : {}),
-          ...(proxyManaged
+          ...(cloud ? {} : { secure_cookies: secureCookies }),
+          ...(enterprise && !platformLicense && licenseKey.trim() ? { license_key: licenseKey.trim() } : {}),
+          ...(!platformAiKey && anthropicKey.trim() ? { anthropic_api_key: anthropicKey.trim() } : {}),
+          ...(proxyManaged && !cloud
             ? { custom_domain: domain.trim(), tls_mode: tlsMode, tls_email: tlsEmail.trim() }
             : {}),
         }),
@@ -122,10 +130,14 @@ export function SetupForm({
       <Field
         label="Setup token"
         help={
-          <>
-            Printed in the server log when CompassDocs starts. Run{" "}
-            <code className="font-mono">docker compose logs app</code> on the server and look for &ldquo;setup token&rdquo;.
-          </>
+          cloud ? (
+            "The setup token CompassDocs Cloud gave you with your workspace's address."
+          ) : (
+            <>
+              Printed in the server log when CompassDocs starts. Run{" "}
+              <code className="font-mono">docker compose logs app</code> on the server and look for &ldquo;setup token&rdquo;.
+            </>
+          )
         }
       >
         <TextInput
@@ -203,6 +215,7 @@ export function SetupForm({
         </div>
       </div>
 
+      {!platformAiKey && (
       <div className="border-t border-slate-100 pt-4">
         <Field
           label={<>Anthropic API key {optional}</>}
@@ -218,8 +231,9 @@ export function SetupForm({
           />
         </Field>
       </div>
+      )}
 
-      {enterprise && (
+      {enterprise && !platformLicense && (
         <div className="border-t border-slate-100 pt-4">
           <Field label={<>Enterprise license key {optional}</>}>
             <Textarea
@@ -233,7 +247,7 @@ export function SetupForm({
         </div>
       )}
 
-      {proxyManaged && (
+      {proxyManaged && !cloud && (
         <div className="border-t border-slate-100 pt-4">
           <p className="mb-1 text-sm font-medium text-slate-700">Domain &amp; HTTPS (optional)</p>
           <p className="mb-3 text-xs text-slate-500">
@@ -285,7 +299,7 @@ export function SetupForm({
         </div>
       )}
 
-      {!proxyManaged && (
+      {!proxyManaged && !cloud && (
         <div className="border-t border-slate-100 pt-4">
           <Field
             label="How will you reach this server?"

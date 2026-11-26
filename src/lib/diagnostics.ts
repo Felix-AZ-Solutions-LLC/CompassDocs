@@ -3,6 +3,7 @@
 // subsystem yields a "fail" result, never an exception. Server-only.
 
 import "server-only";
+import { isCloud } from "./cloud";
 import { writeFile, unlink } from "fs/promises";
 import { join } from "path";
 import { pool } from "./db";
@@ -391,7 +392,8 @@ async function checkMcpConnector(req: Request): Promise<DiagnosticCheck> {
       label,
       status,
       detail: problems.length ? `${summary} ${problems.join(" ")}` : `${summary} Discovery, authorize, and token endpoints all line up.`,
-      ...(status !== "pass" ? { fix: FIX.domain } : {}),
+      // (1.21.0: not in cloud mode, where the platform owns the address: lib/cloud.)
+      ...(status !== "pass" && !isCloud() ? { fix: FIX.domain } : {}),
     };
   } catch (e) {
     return { key, label, status: "fail", detail: e instanceof Error ? e.message : String(e) };

@@ -8,6 +8,7 @@ import { getMailMethod, mailConfigured } from "@/lib/mail-config";
 import { DirectoryExportPanel } from "@/components/directory-admin/DirectoryExportPanel";
 
 import { settingsMetadata } from "@/lib/settings-sections";
+import { originForDomain } from "@/lib/workspace-origin";
 export const dynamic = "force-dynamic";
 export const metadata = settingsMetadata("/admin/directory", "Export");
 
@@ -26,7 +27,7 @@ export default async function DirectoryExportPage() {
   // Download links go out by email, so they carry the address people know
   // the workspace by (the custom domain, as other emailed links do); without
   // one the editor uses the browser's own origin.
-  const linkOrigin = domain?.trim() ? `https://${domain.trim()}` : undefined;
+  const linkOrigin = originForDomain(domain) ?? undefined;
   return (
     <DirectoryExportPanel
       fields={fields}

@@ -3,6 +3,7 @@
 
 import "server-only";
 import { getSetting, setSetting } from "./db";
+import { envSmtp } from "./cloud";
 
 const KEYS = {
   host: "smtp_host",
@@ -26,7 +27,14 @@ export function smtpConfigured(cfg: SmtpConfig): boolean {
   return Boolean(cfg.host && cfg.port && cfg.from);
 }
 
+/** 1.21.0: SMTP comes from the platform (cloud mode with COMPASSDOCS_SMTP_HOST set, lib/cloud envSmtp): read-only in Settings. */
+export function smtpFromPlatform(): boolean {
+  return envSmtp() !== null;
+}
+
 export async function getSmtpConfig(): Promise<SmtpConfig> {
+  const platform = envSmtp();
+  if (platform) return platform;
   const [host, port, secure, user, pass, from] = await Promise.all([
     getSetting(KEYS.host),
     getSetting(KEYS.port),

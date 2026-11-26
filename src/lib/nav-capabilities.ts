@@ -1,4 +1,5 @@
 import "server-only";
+import { sectionHiddenInMode } from "./cloud";
 
 // What this user is allowed to see in navigation, resolved once per request.
 // The sidebar and the command palette both consume it, so the two can't drift
@@ -110,5 +111,6 @@ export function allowedNavHrefs(caps: NavCapabilities): string[] {
  * so a gated action can't be surfaced — or invoked — from the client.
  */
 export function allowedCommandIds(caps: NavCapabilities): string[] {
-  return PALETTE_COMMANDS.filter((c) => capAllowed(caps, c.cap)).map((c) => c.id);
+  // 1.21.0: no command opens a settings section CompassDocs Cloud manages (lib/cloud).
+  return PALETTE_COMMANDS.filter((c) => capAllowed(caps, c.cap) && !(c.href && sectionHiddenInMode(c.href))).map((c) => c.id);
 }

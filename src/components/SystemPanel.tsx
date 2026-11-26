@@ -3,6 +3,7 @@ import type { AppSettings } from "@/lib/settings";
 import { formatDateTime } from "@/lib/format";
 import { RefreshButton } from "./RefreshButton";
 import { Check, Circle } from "lucide-react";
+import { CloudManagedNote } from "./CloudManaged";
 
 function bytes(n: number | null): string {
   if (n == null) return "—";
@@ -58,7 +59,7 @@ function Meter({ used, total }: { used: number; total: number }) {
   );
 }
 
-export function SystemPanel({ info, settings }: { info: SystemInfo; settings: AppSettings }) {
+export function SystemPanel({ info, settings, cloud = false }: { info: SystemInfo; settings: AppSettings; /** 1.21.0: cloud mode, where backups are CompassDocs Cloud's. */ cloud?: boolean }) {
   const s = info.storage;
   const r = info.resources;
   const diskUsed =
@@ -99,6 +100,13 @@ export function SystemPanel({ info, settings }: { info: SystemInfo; settings: Ap
         </Card>
 
         <Card title="Storage">
+          {cloud ? (
+            <>
+              <Row label="Attachments" value={`${s.attachmentCount} · ${bytes(s.attachmentBytes)}`} />
+              <CloudManagedNote area="backups" className="pt-2" />
+            </>
+          ) : (
+          <>
           <Row label="Backups" value={`${s.backupCount} · ${bytes(s.backupBytes)}`} />
           <Row label="Attachments" value={`${s.attachmentCount} · ${bytes(s.attachmentBytes)}`} />
           <Row label="Backup path" value={<code className="text-xs">{s.backupDir}</code>} />
@@ -122,6 +130,8 @@ export function SystemPanel({ info, settings }: { info: SystemInfo; settings: Ap
               </span>
             ))}
           </div>
+          </>
+          )}
         </Card>
 
         <Card title="Resources">

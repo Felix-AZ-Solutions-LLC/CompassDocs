@@ -1,27 +1,73 @@
 import { NextResponse } from "next/server";
-import { pool } from "@/lib/db";
+import { dbReady, pool, schemaBootFailure, schemaReady } from "@/lib/db";
+import { isDraining } from "@/lib/shutdown";
 import { logEvent } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 
+/** How long the probe waits for the database (Container Apps' probe timeout must be longer). */
+const TIMEOUT_MS = 3000;
+
+let lastFailure = "";
+
 /**
- * Readiness probe: 200 only when the app can actually serve traffic (database
- * reachable). Load balancers should route on this; orchestrators should
- * restart on /healthz.
+ * Readiness probe: 200 only when this replica can serve traffic. Load
+ * balancers route on this (Container Apps: the readiness probe);
+ * orchestrators restart on /healthz.
+ *
+ * 1.21.0: ready means all three of
+ *   - not shutting down (lib/shutdown: after SIGTERM it answers 503
+ *     "draining", so the platform stops routing here while requests finish);
+ *   - the schema and its migrations applied in this process (lib/db
+ *     dbReady; the first probe starts them if nothing has yet);
+ *   - the database answering a query, within 3 seconds.
+ * A failure is logged once per distinct reason, not on every probe. After
+ * the migrations failed, a probe reports that failure (with when the next
+ * try is) rather than starting them again, until the back-off is over
+ * (lib/db schemaBootFailure: 5 s, doubling to a minute).
  */
 export async function GET() {
+  if (isDraining()) {
+    return NextResponse.json({ status: "draining" }, { status: 503, headers: { "Cache-Control": "no-store" } });
+  }
+  const failed = schemaReady() ? null : schemaBootFailure();
+  if (failed) {
+    return NextResponse.json(
+      // The error itself is in the log (once), not in this public answer.
+      { status: "unavailable", reason: "migrations could not run", retry_at: new Date(failed.retryAt).toISOString() },
+      { status: 503, headers: { "Cache-Control": "no-store" } }
+    );
+  }
   const started = Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("timeout")), TIMEOUT_MS);
+  });
+  const at: { stage: "migrations" | "database" } = { stage: "migrations" };
   try {
     await Promise.race([
-      pool().query("SELECT 1"),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 3000)),
+      (async () => {
+        if (!schemaReady()) await dbReady();
+        at.stage = "database";
+        await pool().query("SELECT 1");
+      })(),
+      timeout,
     ]);
-    return NextResponse.json({ status: "ready", db_latency_ms: Date.now() - started });
-  } catch (e) {
-    logEvent("error", "readyz.db_unreachable", { error: e instanceof Error ? e.message : String(e) });
+    lastFailure = "";
     return NextResponse.json(
-      { status: "unavailable", reason: "database unreachable" },
-      { status: 503 }
+      { status: "ready", migrations: "applied", db_latency_ms: Date.now() - started },
+      { headers: { "Cache-Control": "no-store" } }
     );
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    const reason =
+      at.stage === "database" ? "database unreachable" : error === "timeout" ? "migrations in progress" : "migrations could not run";
+    if (lastFailure !== `${reason}|${error}`) {
+      lastFailure = `${reason}|${error}`;
+      logEvent("error", at.stage === "migrations" ? "readyz.not_migrated" : "readyz.db_unreachable", { reason, error });
+    }
+    return NextResponse.json({ status: "unavailable", reason }, { status: 503, headers: { "Cache-Control": "no-store" } });
+  } finally {
+    clearTimeout(timer);
   }
 }

@@ -3,8 +3,10 @@ import { listBackups } from "@/lib/backup";
 import { destinationStatus } from "@/lib/backup-destinations";
 import { getBackupDestState } from "@/lib/backup-config";
 import { getAppSettings } from "@/lib/settings-store";
+import { isCloud } from "@/lib/cloud";
 import { BackupsClient } from "@/components/BackupsClient";
 import { BackupDestinations } from "@/components/BackupDestinations";
+import { CloudManagedPage } from "@/components/CloudManaged";
 import { SettingsPage } from "@/components/SettingsPage";
 
 import { settingsMetadata } from "@/lib/settings-sections";
@@ -13,6 +15,15 @@ export const metadata = settingsMetadata("/admin/backups");
 
 export default async function BackupsPage() {
   await requireSettingsSection("/admin/backups");
+  // 1.21.0: CompassDocs Cloud backs the workspace up (lib/cloud); the section
+  // is out of the rail, and an old link lands on this note.
+  if (isCloud()) {
+    return (
+      <SettingsPage href="/admin/backups" docs={false}>
+        <CloudManagedPage area="backups" />
+      </SettingsPage>
+    );
+  }
   const [backups, settings, destinations, destState] = await Promise.all([
     listBackups(),
     getAppSettings(),

@@ -17,6 +17,7 @@ import { renderExportFile } from "./directory-export-run";
 import { mailConfigured } from "./mail-config";
 import { sendMail } from "./mailer";
 import { getAppSettings } from "./settings-store";
+import { originForDomain } from "./workspace-origin";
 
 const LAST_KEY = "directory_export_schedule_last";
 const ADVISORY_LOCK = 728343;
@@ -50,7 +51,7 @@ export async function runScheduledDirectoryExports(now: Date = new Date()): Prom
       const mailReady = await mailConfigured();
       const [fields, people, settings, domain] = await Promise.all([listFields(), listPeople(), getAppSettings(), getSetting("custom_domain")]);
       const company = settings.company_name || "CompassDocs";
-      const origin = domain?.trim() ? `https://${domain.trim()}` : "";
+      const origin = originForDomain(domain) ?? "";
       for (const preset of due) {
         let ok = true;
         let detail = "";

@@ -67,9 +67,8 @@ export async function notifySpaceSubscribers(ev: SubscriberEvent): Promise<void>
     // provide one — a bare-path href renders as a dead link in mail clients.
     let origin = ev.origin ?? "";
     if (!origin) {
-      const { getAppSettings } = await import("./settings-store");
-      const domain = (await getAppSettings()).custom_domain;
-      if (domain) origin = `https://${domain}`;
+      const { domainOrigin } = await import("./workspace-origin");
+      origin = (await domainOrigin()) ?? "";
     }
     const { subject, text, html } = await renderEmail(
       "doc_update",

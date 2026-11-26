@@ -4,6 +4,80 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.21.0] - 2026-11-26
+
+Cloud mode, the first part of CompassDocs Cloud on Azure; and, for every
+install, clean shutdowns and a readiness check that waits for the
+database's migrations. Self-hosted installs change nothing unless they opt
+in.
+
+### Added
+- **Cloud mode (`COMPASSDOCS_CLOUD=1`)** for workspaces run by CompassDocs
+  Cloud as Azure Container Apps. Domain & HTTPS, the update check and
+  one-click updater, and Backups (schedule, destinations, restore) are the
+  platform's: they leave the settings rail, its search and the command
+  palette, an old link shows "Managed by CompassDocs Cloud", and their APIs
+  answer 403 with a plain sentence. The setup wizard asks for no domain,
+  HTTPS or cookie choice. See the README, "Cloud mode (COMPASSDOCS_CLOUD)",
+  for every variable and API.
+- **Secrets from the environment in cloud mode.** `COMPASSDOCS_SECRET_KEY`
+  is required (the app refuses to start without it and says why) and no key
+  file is ever created or read. A license key, an Anthropic API key or an
+  SMTP relay (`COMPASSDOCS_SMTP_*`) set by the platform wins over a saved
+  one and shows as "Set by the platform", read-only. Every link and redirect
+  comes from `COMPASSDOCS_BASE_URL`, which is required too (an https://
+  address); a custom domain left in the settings of a database moved from a
+  self-hosted install is never used. The session cookie is always Secure.
+- **`DATABASE_PASSWORD`** (any install, optional): the database password
+  apart from `DATABASE_URL`, for secret stores.
+- **JSON logs** in cloud mode, or anywhere with `COMPASSDOCS_LOG_FORMAT=json`:
+  every line on stdout and stderr is one JSON object with time, level,
+  message, event and the request's `x-request-id`, and secrets are written
+  as `[redacted]`. Readable lines stay the default.
+
+### Changed
+- **Clean shutdowns.** The image now starts with `node start.cjs`. On
+  SIGTERM CompassDocs stops taking new requests and background work, lets
+  what is running finish, closes the database connections and exits 0,
+  within 25 seconds (`COMPASSDOCS_SHUTDOWN_TIMEOUT`). The compose files give
+  it 30 seconds (`stop_grace_period`) instead of Docker's 10.
+- **`/readyz` waits for the migrations**: it answers 503 "migrations in
+  progress" after an upgrade until the schema is ready, and 503 "draining"
+  while shutting down. `/healthz` is unchanged (no database).
+- **For installs that set `COMPASSDOCS_LOG_FORMAT=json`** (readable lines,
+  the default, are unchanged):
+  - every console line is now one JSON object, not only some (a stack trace
+    is one line), and Node's own warnings are JSON lines too (written
+    through the console, so a `process.on("warning")` listener no longer
+    sees them); `--no-warnings` and `NODE_NO_WARNINGS=1` still silence them;
+  - `message` is always present, and lines lead with `time` and `message`;
+    `ts` and `event` are still there;
+  - fields named like a secret (`password`, `token`, `secret`, `api_key`,
+    `authorization`, `cookie`, `credential`…) are written as `[redacted]`,
+    and so are the secret variables' values, URL passwords and bearer
+    tokens wherever they appear;
+  - the first-run setup token is in the line's `setup_token` field, no
+    longer inside `message`.
+
+### Upgrading
+- **Nothing to do.** Update as usual. If you start the container with your
+  own command, use `node start.cjs` to get the clean shutdown.
+- **The encryption key stays where it is.** The compose files don't pass
+  `COMPASSDOCS_SECRET_KEY`, so a key that sits unused in `.env` doesn't take
+  over from `/uploads/.secret.key`. To move the key into `.env` (optional),
+  follow the README, "Moving a self-hosted install to
+  COMPASSDOCS_SECRET_KEY".
+- **If you already set `COMPASSDOCS_SECRET_KEY` yourself** (an override
+  file, `env_file`) and a key file with a different key is also there,
+  CompassDocs now checks which key the database's credentials were
+  encrypted with. When it is the variable's, it starts as before and logs
+  that the file is unused. Otherwise it refuses to start, and its log says
+  which key to keep, so credentials are never silently left unreadable.
+  And when the key file is missing but the database holds encrypted
+  credentials, no new key file is written: restore the file, or set the
+  variable to the old key (lost for good: set it to a new key and enter
+  those credentials again).
+
 ## [1.20.41] - 2026-11-22
 
 Security hardening from a full code-scanning review.

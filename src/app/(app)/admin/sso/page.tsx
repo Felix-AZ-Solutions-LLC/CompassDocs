@@ -15,6 +15,7 @@ import { DuoSettings } from "@/components/DuoSettings";
 import { SettingsPage } from "@/components/SettingsPage";
 
 import { settingsMetadata } from "@/lib/settings-sections";
+import { originForDomain } from "@/lib/workspace-origin";
 export const dynamic = "force-dynamic";
 export const metadata = settingsMetadata("/admin/sso");
 
@@ -50,7 +51,7 @@ export default async function SsoAdminPage() {
   const breakGlassUsers = people
     .filter((u) => u.status === "active" || breakGlass.includes(u.id))
     .map((u) => ({ id: u.id, label: u.name || u.username, sublabel: `${u.username} · ${u.role}${u.status === "active" ? "" : " · disabled"}` }));
-  const origin = app.custom_domain ? `https://${app.custom_domain}` : `${proto}://${host}`;
+  const origin = originForDomain(app.custom_domain) ?? `${proto}://${host}`;
   const sp = samlSpUrls(origin);
 
   return (

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { setSetting } from "@/lib/db";
 import { getAppSettings, updateAppSettings } from "@/lib/settings-store";
 import type { AppSettings } from "@/lib/settings";
-import { apiGuard } from "@/lib/api-auth";
+import { apiGuard, cloudRefusal } from "@/lib/api-auth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { sanitizeDarkStyle } from "@/lib/dark-style";
 
@@ -29,6 +29,12 @@ export async function PATCH(req: Request) {
   // before anything is written: it changes what everyone on Workspace default sees.
   if (body?.dark_style !== undefined && !sanitizeDarkStyle(body.dark_style)) {
     return NextResponse.json({ error: "dark_style must be slate, graphite or black." }, { status: 400 });
+  }
+
+  // 1.21.0: the backup schedule is CompassDocs Cloud's in cloud mode (lib/cloud), refused before anything is written.
+  if (body?.backup_frequency !== undefined || body?.backup_keep !== undefined) {
+    const cloud = cloudRefusal("backups");
+    if (cloud) return cloud;
   }
 
   if (body?.approval_mode !== undefined) {
