@@ -11,10 +11,11 @@
 
 import { randomBytes } from "node:crypto";
 
-/** Azurite's published development account (not a secret: it is in Microsoft's documentation). */
-export const AZURITE_CONNECTION_STRING =
-  process.env.AZURITE_CONNECTION_STRING ||
-  "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;";
+/**
+ * Azurite's development account at 127.0.0.1:10000. The SDK knows its
+ * published key, so no key is written here (secret scanners flag it).
+ */
+export const AZURITE_CONNECTION_STRING = process.env.AZURITE_CONNECTION_STRING || "UseDevelopmentStorage=true";
 
 let reachable: Promise<boolean> | null = null;
 

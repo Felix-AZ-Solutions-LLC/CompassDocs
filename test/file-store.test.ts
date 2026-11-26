@@ -358,17 +358,18 @@ describe("the blob store as the app uses it", () => {
 
     lines.length = 0;
     code = null;
-    // Nothing listens on port 9: no answer.
+    // Nothing listens on port 9: no answer. (A made-up key: never the point here, never logged.)
+    const KEY = Buffer.from("made-up-development-key").toString("base64");
     setEnv({
       COMPASSDOCS_FILE_STORE: "blob",
       COMPASSDOCS_BLOB_CONTAINER: "acme",
-      COMPASSDOCS_BLOB_CONNECTION_STRING: AZURITE_CONNECTION_STRING.replace("127.0.0.1:10000", "127.0.0.1:9"),
+      COMPASSDOCS_BLOB_CONNECTION_STRING: `DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=${KEY};BlobEndpoint=http://127.0.0.1:9/devstoreaccount1;`,
     });
     assert.equal(await checkFileStoreStartup(log, (c) => (code = c)), true);
     assert.equal(code, null);
     assert.equal(lines.length, 1);
     assert.equal(lines[0].event, "file_store.unreachable");
-    assert.doesNotMatch(lines[0].message, /Eby8vdM02/, "never the account key");
+    assert.ok(!lines[0].message.includes(KEY), "never the account key");
 
     lines.length = 0;
     setEnv({});
