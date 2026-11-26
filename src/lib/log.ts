@@ -21,12 +21,17 @@
 // whole. The request id is the x-request-id header (the platform's, or one
 // the proxy gives each request in JSON mode, proxy.ts), when the line is
 // written inside a request.
+//
+// 1.21.1: with telemetry on (lib/telemetry-config), a line written while a
+// sampled span is active carries its trace_id and span_id, so a log line in
+// Log Analytics leads to its trace in Application Insights (or a collector).
 
 import "server-only";
 import { format, inspect } from "node:util";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { ENV_SECRETS, isCloud, jsonLogging, type Env } from "./cloud";
+import { telemetryHooks } from "./telemetry-hooks";
 
 type Level = "debug" | "info" | "warn" | "error";
 
@@ -39,6 +44,11 @@ const SECRET_VARS = [
   ...ENV_SECRETS.map((s) => s.env).filter((v) => v !== "DATABASE_URL" && v !== "DATABASE_LISTEN_URL"),
   "COMPASSDOCS_UPDATER_TOKEN",
   "COMPASSDOCS_SMTP_PASSWORD",
+  // 1.21.1: telemetry's credentials (a collector's API-key header; Application Insights' key).
+  "OTEL_EXPORTER_OTLP_HEADERS",
+  "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+  "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+  "APPLICATIONINSIGHTS_CONNECTION_STRING",
 ];
 
 /** A field whose name says it holds a secret: its value is masked whole. */
@@ -138,31 +148,43 @@ export function setRequestStoreForTests(store: WorkUnitStorage | null, retryAt =
 
 // --- Lines --------------------------------------------------------------------------
 
+/** The active sampled span's ids (1.21.1), or nothing: telemetry off, no span, or a failure. */
+function activeTraceIds(): { trace_id: string; span_id: string } | null {
+  try {
+    return telemetryHooks()?.traceIds() ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * One JSON log line (no newline): time, level, message, event, request id,
- * then the fields, all redacted, except the fields named in `reveal` (the
+ * trace and span ids (1.21.1, while a sampled span is active), then the
+ * fields, all redacted, except the fields named in `reveal` (the
  * self-hosted setup token, which the operator has to read from the log).
  */
 export function jsonLine(
   level: Level,
   message: string,
   fields: Record<string, unknown> = {},
-  opts: { event?: string; requestId?: string; now?: Date; env?: Env; reveal?: string[] } = {}
+  opts: { event?: string; requestId?: string; traceIds?: { trace_id: string; span_id: string } | null; now?: Date; env?: Env; reveal?: string[] } = {}
 ): string {
   const env = opts.env ?? process.env;
   const time = (opts.now ?? new Date()).toISOString();
   const rest: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(fields)) {
-    if (["time", "ts", "level", "message", "event", "request_id"].includes(k)) continue;
+    if (["time", "ts", "level", "message", "event", "request_id", "trace_id", "span_id"].includes(k)) continue;
     if (v !== undefined) rest[k] = opts.reveal?.includes(k) ? v : redactValue(k, v, env);
   }
   const requestId = opts.requestId ?? currentRequestId();
+  const ids = opts.traceIds === undefined ? activeTraceIds() : opts.traceIds;
   return JSON.stringify({
     time,
     level,
     message: redact(message, env),
     ...(opts.event ? { event: opts.event } : {}),
     ...(requestId ? { request_id: requestId } : {}),
+    ...(ids ? { trace_id: ids.trace_id, span_id: ids.span_id } : {}),
     ...rest,
     ts: time,
   });

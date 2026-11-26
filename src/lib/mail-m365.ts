@@ -43,6 +43,7 @@ import { M365Error, graph, m365Token, userPath, type M365Credentials } from "./h
 import { SECRET_UNREADABLE, entraGrantsSend, getM365SendConfig, graphUserOf, m365SendConfigured, recordM365Check, type M365SendConfig } from "./mail-config";
 import { m365SendSentence } from "./mail-m365-errors";
 import { MAIL_M365_MAX_MIME, MAIL_NOT_SET_UP, cleanSendingMailbox, m365FromFor, mailTooLarge, type MailM365Check } from "./mail-m365-shared";
+import { countMail } from "./telemetry-hooks";
 
 /** A message as the transports take it (the helpdesk's carries threading headers; the rest a subset). */
 export interface OutgoingMail {
@@ -150,7 +151,9 @@ export async function postMimeM365(mime: Buffer, c: M365SendConfig): Promise<voi
   assertSendable(c, mime);
   try {
     await graph(creds(c), { method: "POST", path: `${userPath(graphUserOf(c))}/sendMail`, text: { value: mime.toString("base64"), type: "text/plain" }, what: "send mail as this mailbox", timeoutMs: 60_000 });
+    countMail("m365", true);
   } catch (e) {
+    countMail("m365", false);
     if (e instanceof M365Error) throw asSendError(e, c.mailbox);
     throw e;
   }

@@ -30,6 +30,7 @@ import "server-only";
 import nodemailer from "nodemailer";
 import { audit } from "../../audit";
 import { logEvent } from "../../log";
+import { countMail } from "../../telemetry-hooks";
 import { hq, hqOne } from "../db-core";
 import type { HelpdeskOutgoingMail } from "../email";
 import { cleanMailboxAddress } from "../mailboxes-shared";
@@ -102,8 +103,18 @@ async function credentials(): Promise<M365Credentials> {
   return { tenant: c.tenant, clientId: c.client_id, secret: c.secret };
 }
 
+/** 1.21.1: counted as mail sent or failed when telemetry is on. */
 const post = (creds: M365Credentials, link: Link, mime: Buffer) =>
-  graph(creds, { method: "POST", path: `${userPath(link.m365_user)}/sendMail`, text: { value: mime.toString("base64"), type: "text/plain" }, what: "send mail as this mailbox" });
+  graph(creds, { method: "POST", path: `${userPath(link.m365_user)}/sendMail`, text: { value: mime.toString("base64"), type: "text/plain" }, what: "send mail as this mailbox" }).then(
+    (r) => {
+      countMail("m365", true);
+      return r;
+    },
+    (e: unknown) => {
+      countMail("m365", false);
+      throw e;
+    }
+  );
 
 /**
  * Send one mail through Graph when its help address chose that. "sent": it

@@ -21,6 +21,7 @@ import { getMailMethod, getM365SendConfig, m365SendConfigured, workspaceFrom, SE
 import { MAIL_NOT_SET_UP, type MailMethod } from "./mail-m365-shared";
 import { MailSendError, buildMime, mimeForM365, sendMimeM365, sendViaM365, type OutgoingMail } from "./mail-m365";
 import type { OutboxMeta } from "./mail-outbox";
+import { telemetryHooks } from "./telemetry-hooks";
 
 export type { OutgoingMail, OutboxMeta };
 
@@ -46,9 +47,12 @@ export interface SendMailOptions extends OutboxMeta {
   noWait?: boolean;
 }
 
-/** An SMTP transport for the saved settings (also the outbox's, for rows left after a switch to SMTP). */
+/**
+ * An SMTP transport for the saved settings (also the outbox's, for rows left after a switch to SMTP).
+ * 1.21.1: with telemetry on, each send is one "smtp send" span and counts as mail sent or failed.
+ */
 export function smtpTransportFor(cfg: SmtpConfig) {
-  return nodemailer.createTransport({
+  const transport = nodemailer.createTransport({
     host: cfg.host,
     port: cfg.port,
     secure: cfg.secure === "tls",
@@ -58,6 +62,12 @@ export function smtpTransportFor(cfg: SmtpConfig) {
     connectionTimeout: 8000,
     socketTimeout: 10000,
   });
+  const send = transport.sendMail.bind(transport) as (m: Parameters<typeof transport.sendMail>[0]) => Promise<unknown>;
+  (transport as { sendMail: unknown }).sendMail = (m: Parameters<typeof transport.sendMail>[0]) => {
+    const t = telemetryHooks();
+    return t ? t.smtp({ host: cfg.host, port: cfg.port }, () => send(m)) : send(m);
+  };
+  return transport;
 }
 
 /** Send one email with a given method, now (the settings page's test of the method on screen). Throws with a useful message. */
