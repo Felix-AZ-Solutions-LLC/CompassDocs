@@ -11,9 +11,13 @@
 //      (no new background work), ends its live streams (the desk's live
 //      queue reconnects to another replica) and waits for the background
 //      jobs already running — while the requests in flight finish;
-//   2. close: the database pool (and the LISTEN connection) is closed once
+//   2. flush (1.21.1): telemetry, when it is on (lib/telemetry), sends what
+//      it holds, for at most FLUSH_MAX_MS and never past the deadline; a
+//      flush that doesn't finish is given up on, logged, and never makes the
+//      shutdown unclean;
+//   3. close: the database pool (and the LISTEN connection) is closed once
 //      no request or job can use it;
-//   3. exit 0. A shutdown the deadline cut short exits 1 and logs what was
+//   4. exit 0. A shutdown the deadline cut short exits 1 and logs what was
 //      still running.
 //
 // The state lives on globalThis because the server entry, instrumentation
@@ -25,6 +29,7 @@
 
 import "server-only";
 import { cloudStartupProblems } from "./cloud";
+import { telemetryHooks } from "./telemetry-hooks";
 
 export interface Lifecycle {
   /** SIGTERM received: refuse new work, /readyz says so. */
@@ -35,6 +40,8 @@ export interface Lifecycle {
   timers: Set<ReturnType<typeof setInterval>>;
   /** Run when draining starts (end live streams). */
   onDrain: { name: string; fn: () => void | Promise<void> }[];
+  /** Run after the drain, before the close hooks, bounded (flush telemetry). */
+  onFlush: { name: string; fn: () => void | Promise<void> }[];
   /** Run after the drain, last (close the pool). */
   onClose: { name: string; fn: () => void | Promise<void> }[];
 }
@@ -51,7 +58,7 @@ const g = globalThis as unknown as {
 
 export function lifecycle(): Lifecycle {
   if (!g.__compassLifecycle) {
-    g.__compassLifecycle = { draining: false, jobs: new Map(), timers: new Set(), onDrain: [], onClose: [] };
+    g.__compassLifecycle = { draining: false, jobs: new Map(), timers: new Set(), onDrain: [], onFlush: [], onClose: [] };
   }
   return g.__compassLifecycle;
 }
@@ -80,14 +87,17 @@ export function after(ms: number, fn: () => unknown): void {
 /**
  * Run a background job, tracked so the drain waits for it. Not started once
  * draining (resolves undefined). Never rejects: a failure is logged with
- * the job's name, the way the schedulers always have.
+ * the job's name, the way the schedulers always have. With telemetry on
+ * (1.21.1), each run is one span named "job <name>" and counts as a run (and
+ * a failure, when it throws).
  */
 export async function runJob<T>(name: string, fn: () => Promise<T>): Promise<T | undefined> {
   if (isDraining()) return undefined;
   const l = lifecycle();
   const p = (async () => {
     try {
-      return await fn();
+      const t = telemetryHooks();
+      return await (t ? t.job(name, fn) : fn());
     } catch (e) {
       console.error(`[${name}] error:`, e);
       return undefined;
@@ -105,6 +115,17 @@ export async function runJob<T>(name: string, fn: () => Promise<T>): Promise<T |
 export function onDrain(name: string, fn: () => void | Promise<void>): void {
   const l = lifecycle();
   if (!l.onDrain.some((h) => h.name === name)) l.onDrain.push({ name, fn });
+}
+
+/**
+ * Register a flush for after the drain and before the close hooks
+ * (telemetry, 1.21.1). It gets at most FLUSH_MAX_MS, ends early enough to
+ * leave the close hooks CLOSE_RESERVE_MS, and is never counted as unfinished
+ * work: a flush that hangs is given up on and logged.
+ */
+export function onFlush(name: string, fn: () => void | Promise<void>): void {
+  const l = lifecycle();
+  if (!l.onFlush.some((h) => h.name === name)) l.onFlush.push({ name, fn });
 }
 
 /** Register work for the very end (close the database pool). */
@@ -159,9 +180,27 @@ export async function appDrain(deadlineAt: number): Promise<DrainResult> {
   return { clean: pending.length === 0, pending };
 }
 
-/** The last step: the close hooks (the database pool), until `deadlineAt`. */
+/** The longest a flush may take, and the time it always leaves the close hooks. */
+export const FLUSH_MAX_MS = 5_000;
+export const CLOSE_RESERVE_MS = 1_000;
+
+/** When the flush must be done by: FLUSH_MAX_MS from now at most, CLOSE_RESERVE_MS before the deadline, never in the past. */
+export function flushDeadline(deadlineAt: number, now = Date.now()): number {
+  return Math.min(now + FLUSH_MAX_MS, Math.max(now + 250, deadlineAt - CLOSE_RESERVE_MS));
+}
+
+/**
+ * The last steps: the flush hooks (telemetry), bounded by flushDeadline, then
+ * the close hooks (the database pool), until `deadlineAt`. A flush cut short
+ * is logged and never pending.
+ */
 export async function appClose(deadlineAt: number): Promise<DrainResult> {
-  const pending = await runHooks(lifecycle().onClose, deadlineAt);
+  const l = lifecycle();
+  if (l.onFlush.length) {
+    const late = await runHooks(l.onFlush, flushDeadline(deadlineAt));
+    for (const name of late) console.warn(`[shutdown] ${name}: not flushed in time, exiting without it.`);
+  }
+  const pending = await runHooks(l.onClose, deadlineAt);
   return { clean: pending.length === 0, pending };
 }
 

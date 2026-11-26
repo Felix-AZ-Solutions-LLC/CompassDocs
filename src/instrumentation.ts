@@ -8,12 +8,20 @@
 // becomes a JSON object (lib/log); and every scheduler and background job
 // goes through lib/shutdown (every / after / runJob), so SIGTERM stops new
 // work, waits for what runs and then closes the database pool (start.cjs).
+//
+// 1.21.1: OpenTelemetry traces and metrics start first, before anything loads
+// the Postgres driver, and only when APPLICATIONINSIGHTS_CONNECTION_STRING or
+// OTEL_EXPORTER_OTLP_ENDPOINT is set (lib/telemetry-config); without one,
+// nothing of it is loaded.
 export async function register() {
   // Only in the Node.js server runtime — not during build or on the edge.
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
   const { installJsonConsole, logEvent } = await import("./lib/log");
   installJsonConsole();
+
+  // Never fatal: a malformed setting or an SDK that fails to start is one warning, and the app runs without it.
+  await (await import("./lib/telemetry-config")).startTelemetryIfConfigured(logEvent);
 
   const { isCloud } = await import("./lib/cloud");
   // Cloud mode without its encryption key (or database) exits here, saying why.

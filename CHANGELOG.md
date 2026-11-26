@@ -4,6 +4,49 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.21.1] - 2026-11-26
+
+OpenTelemetry traces and metrics, to Azure Application Insights or any OTLP
+collector, for cloud workspaces and self-hosted installs alike. Off unless
+an exporter is set: an install that sets neither variable loads none of it.
+
+### Added
+- **Telemetry (OpenTelemetry).** `APPLICATIONINSIGHTS_CONNECTION_STRING`
+  sends traces and metrics to Application Insights,
+  `OTEL_EXPORTER_OTLP_ENDPOINT` to any OTLP/HTTP collector (both: to both);
+  `OTEL_SDK_DISABLED=true` turns it off. Logs are not exported: stdout
+  already reaches the platform's log store. See the README, "Telemetry
+  (OpenTelemetry)", for the variables and what is and isn't recorded.
+  - **Traces**: one span per request, named by its route (`GET
+    /docs/[slug]`), with Next.js's spans, outgoing HTTP (Microsoft Graph,
+    the Anthropic API, Azure Blob, S3, webhooks) and the Postgres queries
+    (statement text, never parameter values) beneath it; one span per
+    background job run (`job <name>`) and per SMTP send. `/healthz` and
+    `/readyz` are never traced.
+  - **Sampling**: parent-based, every trace self-hosted and one in five in
+    cloud mode, or as `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` say.
+  - **Metrics** every 60 s: request duration by route, the database pool's
+    used, idle and waiting counts, background job runs and failures, mail
+    sent and failed.
+  - **Privacy**: no headers beyond user-agent, content type and length and
+    the request id; no cookies, query strings, request paths (the route
+    instead), bodies, SQL parameters, email addresses or client IPs; secret
+    values, bearer tokens and API keys masked as in the logs.
+  - Every span and metric carries `service.name=compassdocs`, the version,
+    the replica, `OTEL_RESOURCE_ATTRIBUTES` and, in cloud mode, the
+    workspace (`COMPASSDOCS_WORKSPACE_ID`).
+- **`trace_id` and `span_id` on JSON log lines** written inside a traced
+  request or job, and the request's `request_id` on its span, so a log line
+  leads to its trace.
+
+### Changed
+- **Shutdown**: with telemetry on, what it holds is sent during the drain,
+  before the database pool closes, for at most 5 s and never past
+  `COMPASSDOCS_SHUTDOWN_TIMEOUT`. A collector that hangs or is down never
+  holds up the exit or stops the app; its errors are logged once each.
+- A malformed `APPLICATIONINSIGHTS_CONNECTION_STRING` is one warning at
+  start-up, never fatal.
+
 ## [1.21.0] - 2026-11-26
 
 Cloud mode, the first part of CompassDocs Cloud on Azure; and, for every

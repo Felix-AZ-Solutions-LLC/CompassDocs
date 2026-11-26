@@ -45,7 +45,29 @@ const nextConfig = {
   // renderer likewise: it carries its own font and image decoders that do not
   // survive bundling. DOMPurify (1.20.8) is required by the email sanitiser's
   // worker from node_modules, so the build's file tracing must ship it there.
-  serverExternalPackages: ["pg", "@react-pdf/renderer", "dompurify"],
+  // 1.21.1: OpenTelemetry (lib/telemetry) is loaded from node_modules as well, only when it is
+  // configured: its instrumentations patch modules as Node loads them (pg among them), which
+  // works only for packages Node itself requires, and the SDK and exporters stay out of every chunk.
+  serverExternalPackages: [
+    "pg",
+    "@react-pdf/renderer",
+    "dompurify",
+    "@opentelemetry/api",
+    "@opentelemetry/core",
+    "@opentelemetry/resources",
+    "@opentelemetry/sdk-trace-base",
+    "@opentelemetry/context-async-hooks",
+    "@opentelemetry/sdk-metrics",
+    "@opentelemetry/instrumentation",
+    "@opentelemetry/instrumentation-http",
+    "@opentelemetry/instrumentation-undici",
+    "@opentelemetry/instrumentation-pg",
+    "@opentelemetry/exporter-trace-otlp-proto",
+    "@opentelemetry/exporter-trace-otlp-http",
+    "@opentelemetry/exporter-metrics-otlp-proto",
+    "@opentelemetry/exporter-metrics-otlp-http",
+    "@azure/monitor-opentelemetry-exporter",
+  ],
   // 1.20.8: the "View original" sanitiser runs in a worker thread loaded by its path
   // (lib/helpdesk/email-html-sanitize workerFile), never bundled: ship the file to the
   // standalone folder. jsdom (external by default) and dompurify (above) come from its node_modules.

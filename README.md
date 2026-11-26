@@ -338,6 +338,8 @@ secret reference.
 | `COMPASSDOCS_UPLOAD_DIR` | | Where attachments live: a persistent mount (Azure Files). |
 | `COMPASSDOCS_LOG_FORMAT` | | Cloud mode logs JSON; `text` switches back to readable lines, redacted the same way. |
 | `COMPASSDOCS_SHUTDOWN_TIMEOUT` | | Seconds to drain on `SIGTERM` (default 25). |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | yes | Optional: traces and metrics to the workspace's Application Insights. See [Telemetry](#telemetry-opentelemetry). |
+| `COMPASSDOCS_WORKSPACE_ID` | | Optional: the workspace's id, set by the console; with telemetry on, every span and metric carries it as `compassdocs.workspace.id`. |
 
 The workspace's own integration secrets (its Microsoft 365, Slack, Teams,
 single sign-on, SCIM, Duo, directory and helpdesk connections, an
@@ -356,7 +358,8 @@ every line on stdout and stderr is one JSON object:
 `{"time","level","message","event","request_id",…,"ts"}`. `request_id` is
 the request's `x-request-id` (the platform's own, or one the app gives each
 request and sends back in the response), on lines written while serving
-it. Secrets never appear: the values of the secret variables above, passwords
+it. With [telemetry](#telemetry-opentelemetry) on, a line written inside a
+traced request or job also has `trace_id` and `span_id`. Secrets never appear: the values of the secret variables above, passwords
 in connection strings, bearer tokens, API keys and fields named like a secret
 are written as `[redacted]`. (`ts` repeats `time` for parsers of the
 pre-1.21.0 JSON lines.)
@@ -394,6 +397,69 @@ to start and its log says which to keep. If the key file is missing while
 the database holds encrypted credentials, no new key file is written:
 restore the file, or set the variable to the old key (if that key is lost
 for good, set the variable to a new one and enter the credentials again).
+
+## Telemetry (OpenTelemetry)
+
+Since 1.21.1 CompassDocs can send **traces and metrics** over OpenTelemetry,
+to Azure Application Insights or to any OTLP collector (Grafana, Honeycomb,
+Datadog, Jaeger, an OpenTelemetry Collector…). It is **off unless you set
+an exporter**, in both modes: with neither variable below set, none of the
+telemetry code is even loaded. **Logs are never exported**: they stay on
+stdout, where your platform already collects them (Container Apps sends
+them to Log Analytics), so sending them again would only double the cost.
+
+| Variable | What it does |
+| --- | --- |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Send to Application Insights (the resource's connection string, `InstrumentationKey=…;IngestionEndpoint=https://…`). A malformed one is one warning in the log, and the app runs without it. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Send to an OTLP/HTTP collector, e.g. `http://otel-collector:4318` (traces to `/v1/traces`, metrics to `/v1/metrics`). |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` (default) or `http/json`. gRPC is not included. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Headers for the collector, e.g. its API key: `x-api-key=…`. Treated as a secret (never logged). |
+| `OTEL_SDK_DISABLED` | `true` turns telemetry off, whatever else is set. |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | Sampling. Default: `parentbased_traceidratio`, keeping **every trace self-hosted** and **one in five (0.2) in cloud mode**. `always_on`, `always_off`, `traceidratio` and the `parentbased_*` forms are accepted. |
+| `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_SERVICE_NAME` | Extra resource attributes (`deployment.environment.name=prod,…`), and a service name other than `compassdocs`. |
+| `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER` | `none` turns off just traces or just metrics. |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Milliseconds between metric exports (default 60000). |
+
+With both exporters set, both receive the same data. Every span and metric
+carries `service.name=compassdocs`, `service.version`, `service.instance.id`
+(the replica) and `compassdocs.mode`, and in cloud mode
+`compassdocs.workspace.id` (`COMPASSDOCS_WORKSPACE_ID`). The Application
+Insights exporter's own usage reports to Microsoft (statsbeat) are off and it
+keeps nothing on disk; it does fetch its configuration from
+`settings.sdk.monitor.azure.com`.
+
+**Traces.** Each request is one span named by its route (`GET /docs/[slug]`,
+`POST /api/auth/login`), with Next.js's own spans, the outgoing HTTP calls
+(Microsoft Graph, the Anthropic API, Azure Blob, S3, webhooks) and the
+Postgres queries beneath it. Each background job run is a span named
+`job <name>`, and each SMTP send `smtp send`. `/healthz` and `/readyz` are
+never traced. A JSON log line written inside a traced request or job carries
+its `trace_id` and `span_id`, and the request span carries the log lines'
+`request_id`.
+
+**Metrics** (every 60 s): `http.server.request.duration` (by method,
+status code and route; the probes left out), `db.client.connection.count`
+(the database pool's `used` and `idle` connections) and
+`db.client.connection.pending_requests` (requests waiting for one),
+`compassdocs.job.runs` and `compassdocs.job.failures` (by job), and
+`compassdocs.mail.sent` and `compassdocs.mail.failed` (by `smtp` or `m365`).
+
+**What is recorded, and what never is**
+
+| Recorded | Never recorded |
+| --- | --- |
+| The route template (`/docs/[slug]`), method and status code of each request | The request's actual path or query string (they can hold tokens, search terms, return paths) |
+| The `user-agent`, `content-type`, `content-length` and `x-request-id` headers | Any other header: no cookies, no `Authorization`, no session |
+| Outgoing calls' method, host, status and path | Their query strings, the password in a URL; an email address in a path becomes `[email]` |
+| Postgres statement text (`SELECT … WHERE id = $1`) | The query's parameter values |
+| Errors' messages and stacks, masked like log lines | Request and response bodies; secret values, bearer tokens and API keys (masked as `[redacted]`, as in the logs); email addresses (`[email]`); client IP addresses |
+| Job names, run and failure counts; mail counts by transport | Recipients, subjects or any message content |
+
+**On shutdown** the telemetry still held is sent during the drain, before
+the database pool closes, for at most 5 s and never past
+`COMPASSDOCS_SHUTDOWN_TIMEOUT`: a collector that hangs never holds up the
+exit, and one that is down never stops the app. Export errors are logged
+once per distinct error (`"event":"telemetry.error"`), not on every batch.
 
 ## How it fits together
 
