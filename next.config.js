@@ -67,6 +67,10 @@ const nextConfig = {
     "@opentelemetry/exporter-metrics-otlp-proto",
     "@opentelemetry/exporter-metrics-otlp-http",
     "@azure/monitor-opentelemetry-exporter",
+    // 1.21.2: the blob file store (lib/file-store), loaded only when COMPASSDOCS_FILE_STORE=blob, and
+    // shipped in the image's node_modules for the copy command (scripts/copy-uploads-to-blob.cjs).
+    "@azure/storage-blob",
+    "@azure/identity",
   ],
   // 1.20.8: the "View original" sanitiser runs in a worker thread loaded by its path
   // (lib/helpdesk/email-html-sanitize workerFile), never bundled: ship the file to the

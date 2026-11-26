@@ -4,10 +4,8 @@
 //   or WebP); served with its sniffed type, nosniff.
 // Customer portal (Helpdesk 1.19.1).
 
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { getPortalSettings, portalNotFound, portalOpen } from "@/lib/helpdesk/portal";
-import { isValidStoredName, sniffImage, uploadDir } from "@/lib/uploads";
+import { isValidStoredName, readUpload, sniffImage } from "@/lib/uploads";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +14,7 @@ export async function GET() {
   if (!(await portalOpen(s)) || !s.brand_logo || !isValidStoredName(s.brand_logo)) return portalNotFound();
   let buf: Buffer;
   try {
-    buf = await readFile(join(uploadDir(), s.brand_logo));
+    buf = await readUpload(s.brand_logo);
   } catch {
     return portalNotFound();
   }

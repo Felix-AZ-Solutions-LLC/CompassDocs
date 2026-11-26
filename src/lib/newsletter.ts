@@ -400,7 +400,7 @@ export interface NewsletterSendInput {
   /** Optional From override (admin-curated list); '' = the workspace default. */
   from?: string;
   /** Files sent WITH the email as real attachments. */
-  attachments?: { filename: string; path: string }[];
+  attachments?: import("./uploads").MailAttachment[];
 }
 
 /** Who a send reaches: explicit addresses as given, else the audience the policies allow (at most MAX_RECIPIENTS). */

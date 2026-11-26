@@ -29,6 +29,7 @@
 
 import "server-only";
 import { cloudStartupProblems } from "./cloud";
+import { isConnectionError } from "./db-errors";
 import { telemetryHooks } from "./telemetry-hooks";
 
 export interface Lifecycle {
@@ -50,6 +51,8 @@ const g = globalThis as unknown as {
   __compassLifecycle?: Lifecycle;
   /** Set by start.cjs before draining starts, so /readyz turns 503 at once. */
   __compassDraining?: boolean;
+  /** 1.21.2: when the drain must be done by (lib/db-retry stops waiting before it). */
+  __compassDrainDeadline?: number;
   /** Called by start.cjs: the app's half of the drain. */
   __compassAppDrain?: (deadlineAt: number) => Promise<DrainResult>;
   /** Called by start.cjs once the server and the jobs are done. */
@@ -85,11 +88,31 @@ export function after(ms: number, fn: () => unknown): void {
 }
 
 /**
+ * 1.21.2: a background step failed. A database outage (lib/db-errors) is
+ * not logged again: lib/db-retry logs one warning for the whole outage and
+ * counts the skipped runs in its "database is back" line; the scheduler's
+ * next run is the retry. Anything else is logged as the schedulers always
+ * have ("[name] … error:", e).
+ */
+export function jobError(label: string, e: unknown): void {
+  if (isConnectionError(e)) {
+    // lib/db-retry's counter, read through globalThis (no Postgres driver in this module's graph).
+    const o = (globalThis as unknown as { __compassDbOutage?: { jobsSkipped: number } | null }).__compassDbOutage;
+    if (o) {
+      o.jobsSkipped++;
+      return;
+    }
+  }
+  console.error(label, e);
+}
+
+/**
  * Run a background job, tracked so the drain waits for it. Not started once
  * draining (resolves undefined). Never rejects: a failure is logged with
- * the job's name, the way the schedulers always have. With telemetry on
- * (1.21.1), each run is one span named "job <name>" and counts as a run (and
- * a failure, when it throws).
+ * the job's name, the way the schedulers always have; a database outage is
+ * a skipped run instead (jobError), tried again at the next run. With
+ * telemetry on (1.21.1), each run is one span named "job <name>" and counts
+ * as a run (and a failure, when it throws).
  */
 export async function runJob<T>(name: string, fn: () => Promise<T>): Promise<T | undefined> {
   if (isDraining()) return undefined;
@@ -99,7 +122,7 @@ export async function runJob<T>(name: string, fn: () => Promise<T>): Promise<T |
       const t = telemetryHooks();
       return await (t ? t.job(name, fn) : fn());
     } catch (e) {
-      console.error(`[${name}] error:`, e);
+      jobError(`[${name}] error:`, e);
       return undefined;
     }
   })();
@@ -171,6 +194,7 @@ async function runHooks(hooks: Lifecycle["onDrain"], deadlineAt: number): Promis
 export async function appDrain(deadlineAt: number): Promise<DrainResult> {
   const l = lifecycle();
   l.draining = true;
+  g.__compassDrainDeadline = deadlineAt;
   for (const t of l.timers) clearInterval(t);
   l.timers.clear();
   const hookPending = await runHooks(l.onDrain, deadlineAt);
@@ -239,4 +263,5 @@ export function resetLifecycleForTests(): void {
   for (const t of l.timers) clearInterval(t);
   g.__compassLifecycle = undefined;
   g.__compassDraining = undefined;
+  g.__compassDrainDeadline = undefined;
 }

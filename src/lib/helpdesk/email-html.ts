@@ -42,11 +42,9 @@
 // may read (same origin, still no script: originalInlineHeaders says why).
 
 import "server-only";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { PoolClient } from "pg";
 import { logEvent } from "../log";
-import { isValidStoredName, sniffImage, uploadDir } from "../uploads";
+import { isValidStoredName, readUpload, sniffImage } from "../uploads";
 import { hq, hqOne } from "./db-core";
 import { EMAIL_HTML_LIMITS, EMAIL_HTML_SANITIZER_VERSION, HD_ORIGINAL_COPY, type HdOriginalInfo } from "./email-html-shared";
 import { cidKey, sanitizeEmailHtml } from "./email-html-sanitize";
@@ -175,7 +173,7 @@ async function cidPictures(messageId: number, stored: StoredOriginal): Promise<M
     if (r.size > budget || !isValidStoredName(r.stored_name)) continue;
     let buf: Buffer;
     try {
-      buf = await readFile(join(uploadDir(), r.stored_name));
+      buf = await readUpload(r.stored_name);
     } catch {
       continue;
     }

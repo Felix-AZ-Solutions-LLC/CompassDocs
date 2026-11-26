@@ -3,18 +3,66 @@
 // then streams an entry's bytes from the file through inflate. Pure Node:
 // no database, no Next.
 //
+// 1.21.2: the zip is a ZipSource, a file read by position: a path on disk
+// (as before), or a stored file in the workspace's file store (lib/helpdesk/
+// import: an Azure blob, read by byte range).
+//
 // Safety: entry names are only ever compared, never used as paths (nothing
 // is extracted to disk under its own name); encrypted entries and methods
 // other than stored (0) and deflate (8) are refused; every entry is capped
 // at `maxBytes` of output as it inflates, so a zip bomb stops at the cap
 // whatever its header claims.
 
-import { open } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { Transform, pipeline, type Readable } from "node:stream";
 import { createInflateRaw } from "node:zlib";
 
 export class ZipError extends Error {}
+
+/** A file read by position (1.21.2). */
+export interface ZipSource {
+  size(): Promise<number>;
+  /** Up to `length` bytes from `position` (fewer at the end of the file). */
+  read(position: number, length: number): Promise<Buffer>;
+  /** Bytes start..end inclusive, as a stream. */
+  stream(start: number, end: number): Readable;
+}
+
+/** A zip on disk. */
+export function fileZipSource(path: string): ZipSource {
+  return {
+    async size() {
+      return (await stat(path)).size;
+    },
+    async read(position, length) {
+      const fh = await open(path, "r");
+      try {
+        const b = Buffer.alloc(length);
+        const { bytesRead } = await fh.read(b, 0, length, position);
+        return b.subarray(0, bytesRead);
+      } finally {
+        await fh.close();
+      }
+    },
+    stream(start, end) {
+      return createReadStream(path, { start, end });
+    },
+  };
+}
+
+function sourceOf(z: string | ZipSource): ZipSource {
+  return typeof z === "string" ? fileZipSource(z) : z;
+}
+
+/** `length` bytes from `position`, zero-filled past the end of the file (as a fresh Buffer.alloc read into). */
+async function readFull(src: ZipSource, position: number, length: number): Promise<Buffer> {
+  const got = await src.read(position, length);
+  if (got.length >= length) return got.subarray(0, length);
+  const b = Buffer.alloc(length);
+  got.copy(b);
+  return b;
+}
 
 export interface ZipEntry {
   name: string;
@@ -40,26 +88,19 @@ function u64(buf: Buffer, at: number): number {
 }
 
 /** Is this file a zip (local header signature first)? */
-export async function isZipFile(path: string): Promise<boolean> {
-  const fh = await open(path, "r");
-  try {
-    const b = Buffer.alloc(4);
-    const { bytesRead } = await fh.read(b, 0, 4, 0);
-    return bytesRead === 4 && b.readUInt32LE(0) === 0x04034b50;
-  } finally {
-    await fh.close();
-  }
+export async function isZipFile(path: string | ZipSource): Promise<boolean> {
+  const b = await sourceOf(path).read(0, 4);
+  return b.length === 4 && b.readUInt32LE(0) === 0x04034b50;
 }
 
 /** The archive's entries, from its central directory. */
-export async function readZipDirectory(path: string): Promise<ZipEntry[]> {
-  const fh = await open(path, "r");
-  try {
-    const { size } = await fh.stat();
+export async function readZipDirectory(path: string | ZipSource): Promise<ZipEntry[]> {
+  const src = sourceOf(path);
+  {
+    const size = await src.size();
     if (size < 22) throw new ZipError("That isn't a zip file.");
     const tailLen = Math.min(size, 65_557 + 20);
-    const tail = Buffer.alloc(tailLen);
-    await fh.read(tail, 0, tailLen, size - tailLen);
+    const tail = await readFull(src, size - tailLen, tailLen);
     let eocd = -1;
     for (let i = tailLen - 22; i >= 0; i--) {
       if (tail.readUInt32LE(i) === 0x06054b50) {
@@ -75,8 +116,7 @@ export async function readZipDirectory(path: string): Promise<ZipEntry[]> {
       const loc = eocd - 20;
       if (loc < 0 || tail.readUInt32LE(loc) !== 0x07064b50) throw new ZipError("The zip's directory can't be read.");
       const z64At = u64(tail, loc + 8);
-      const z64 = Buffer.alloc(56);
-      await fh.read(z64, 0, 56, z64At);
+      const z64 = await readFull(src, z64At, 56);
       if (z64.readUInt32LE(0) !== 0x06064b50) throw new ZipError("The zip's directory can't be read.");
       total = u64(z64, 32);
       cdSize = u64(z64, 40);
@@ -84,8 +124,7 @@ export async function readZipDirectory(path: string): Promise<ZipEntry[]> {
     }
     if (total > ZIP_LIMITS.entries) throw new ZipError(`The zip has more than ${ZIP_LIMITS.entries} files.`);
     if (cdSize > ZIP_LIMITS.directoryBytes || cdOffset + cdSize > size) throw new ZipError("The zip's directory can't be read.");
-    const cd = Buffer.alloc(cdSize);
-    await fh.read(cd, 0, cdSize, cdOffset);
+    const cd = await readFull(src, cdOffset, cdSize);
     const out: ZipEntry[] = [];
     let p = 0;
     for (let n = 0; n < total; n++) {
@@ -126,30 +165,28 @@ export async function readZipDirectory(path: string): Promise<ZipEntry[]> {
       p += 46 + nameLen + extraLen + commentLen;
     }
     return out;
-  } finally {
-    await fh.close();
   }
 }
 
 /** Where an entry's data starts (after its local header). */
-async function dataStart(path: string, entry: ZipEntry): Promise<number> {
-  const fh = await open(path, "r");
-  try {
-    const h = Buffer.alloc(30);
-    const { bytesRead } = await fh.read(h, 0, 30, entry.localHeaderOffset);
-    if (bytesRead < 30 || h.readUInt32LE(0) !== 0x04034b50) throw new ZipError(`The zip entry ${entry.name} is damaged.`);
-    return entry.localHeaderOffset + 30 + h.readUInt16LE(26) + h.readUInt16LE(28);
-  } finally {
-    await fh.close();
-  }
+async function dataStart(src: ZipSource, entry: ZipEntry): Promise<number> {
+  const h = await src.read(entry.localHeaderOffset, 30);
+  if (h.length < 30 || h.readUInt32LE(0) !== 0x04034b50) throw new ZipError(`The zip entry ${entry.name} is damaged.`);
+  return entry.localHeaderOffset + 30 + h.readUInt16LE(26) + h.readUInt16LE(28);
 }
 
 /** A stream of an entry's uncompressed bytes, stopped with a ZipError past `maxBytes`. */
-export async function openZipEntry(path: string, entry: ZipEntry, maxBytes: number): Promise<Readable> {
+export async function openZipEntry(path: string | ZipSource, entry: ZipEntry, maxBytes: number): Promise<Readable> {
   if (entry.encrypted) throw new ZipError(`${entry.name} is encrypted.`);
   if (entry.method !== 0 && entry.method !== 8) throw new ZipError(`${entry.name} uses a compression this import can't read.`);
-  const start = await dataStart(path, entry);
-  const src = createReadStream(path, entry.compressedSize > 0 ? { start, end: start + entry.compressedSize - 1 } : { start, end: start - 1 });
+  const zip = sourceOf(path);
+  const start = await dataStart(zip, entry);
+  if (entry.compressedSize === 0) {
+    const empty = new Transform({ transform: (c, _e, cb) => cb(null, c) });
+    empty.end();
+    return empty;
+  }
+  const src = zip.stream(start, start + entry.compressedSize - 1);
   let seen = 0;
   const limiter = new Transform({
     transform(chunk: Buffer, _enc, cb) {
@@ -158,18 +195,13 @@ export async function openZipEntry(path: string, entry: ZipEntry, maxBytes: numb
       else cb(null, chunk);
     },
   });
-  if (entry.compressedSize === 0) {
-    src.destroy();
-    limiter.end();
-    return limiter;
-  }
   if (entry.method === 8) pipeline(src, createInflateRaw(), limiter, () => {});
   else pipeline(src, limiter, () => {});
   return limiter;
 }
 
 /** An entry read whole (attachments): refused past `maxBytes`. */
-export async function readZipEntry(path: string, entry: ZipEntry, maxBytes: number): Promise<Buffer> {
+export async function readZipEntry(path: string | ZipSource, entry: ZipEntry, maxBytes: number): Promise<Buffer> {
   const parts: Buffer[] = [];
   for await (const chunk of await openZipEntry(path, entry, maxBytes)) parts.push(chunk as Buffer);
   return Buffer.concat(parts);

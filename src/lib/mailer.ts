@@ -21,6 +21,7 @@ import { getMailMethod, getM365SendConfig, m365SendConfigured, workspaceFrom, SE
 import { MAIL_NOT_SET_UP, type MailMethod } from "./mail-m365-shared";
 import { MailSendError, buildMime, mimeForM365, sendMimeM365, sendViaM365, type OutgoingMail } from "./mail-m365";
 import type { OutboxMeta } from "./mail-outbox";
+import { mailAttachmentsForSend, type MailAttachment } from "./uploads";
 import { telemetryHooks } from "./telemetry-hooks";
 
 export type { OutgoingMail, OutboxMeta };
@@ -33,7 +34,7 @@ export interface SendMailInput {
   /** Override the configured From (newsletters with a chosen sender). */
   fromOverride?: string;
   /** Real MIME attachments (newsletter files). */
-  attachments?: { filename: string; path: string }[];
+  attachments?: MailAttachment[];
 }
 
 export interface SendMailOptions extends OutboxMeta {
@@ -84,7 +85,7 @@ export async function sendMailWith(method: MailMethod, m: SendMailInput, opts: {
     subject: m.subject,
     text: m.text,
     html: m.html,
-    attachments: m.attachments?.length ? m.attachments : undefined,
+    attachments: await mailAttachmentsForSend(m.attachments),
   });
 }
 
@@ -101,7 +102,7 @@ export async function sendMail(
   /** Override the configured From (newsletters with a chosen sender). */
   fromOverride?: string,
   /** Real MIME attachments (newsletter files). */
-  attachments?: { filename: string; path: string }[],
+  attachments?: MailAttachment[],
   opts: SendMailOptions = {}
 ): Promise<void> {
   const method = await getMailMethod();
@@ -162,7 +163,7 @@ export async function workspaceTransport(): Promise<WorkspaceTransport | null> {
       messageId: m.messageId,
       references: m.references,
       headers: m.headers,
-      attachments: m.attachments?.length ? m.attachments : undefined,
+      attachments: await mailAttachmentsForSend(m.attachments),
     });
   };
   return { method, from: cfg.from, send, sendNow: send };

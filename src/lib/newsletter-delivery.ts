@@ -55,7 +55,7 @@ export interface NewsletterJobPayload {
   text: string;
   html: string;
   from: string;
-  attachments: { filename: string; path: string }[];
+  attachments: import("./uploads").MailAttachment[];
 }
 
 export type { NewsletterDeliveryView };

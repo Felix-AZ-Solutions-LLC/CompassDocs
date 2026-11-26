@@ -8,6 +8,7 @@ import { writeFile, unlink } from "fs/promises";
 import { join } from "path";
 import { pool } from "./db";
 import { uploadDir } from "./uploads";
+import { fileStore, fileStoreKind, storeProblem } from "./file-store";
 import { getSmtpConfig, smtpConfigured } from "./smtp-config";
 import { SECRET_UNREADABLE, getM365SendConfig, getMailMethod, m365SendConfigured } from "./mail-config";
 import { probeM365Send } from "./mail-m365";
@@ -64,6 +65,16 @@ async function checkDatabase(): Promise<DiagnosticCheck> {
 }
 
 async function checkUploads(): Promise<DiagnosticCheck> {
+  // 1.21.2: the blob store (lib/file-store): a probe blob written and removed.
+  if (fileStoreKind() === "blob") {
+    const store = fileStore();
+    try {
+      await store.check({ write: true, timeoutMs: 10_000 });
+      return { key: "uploads", label: "Upload storage", status: "pass", detail: `Writable in ${store.describe()}.` };
+    } catch (e) {
+      return { key: "uploads", label: "Upload storage", status: "fail", detail: storeProblem(e, store).message };
+    }
+  }
   const dir = uploadDir();
   const probe = join(dir, `.diag-${process.pid}-${Date.now()}`);
   try {

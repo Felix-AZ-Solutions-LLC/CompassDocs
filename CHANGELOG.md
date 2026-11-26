@@ -4,6 +4,61 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.21.2] - 2026-11-26
+
+Cloud mode, part three: a workspace's files in Azure Blob Storage, and
+requests that ride out a database restart or failover. A self-hosted
+install changes nothing unless it opts in: its files stay in the uploads
+folder, at the same paths, and its requests do not wait for the database.
+
+### Added
+- **Azure Blob Storage for files (`COMPASSDOCS_FILE_STORE=blob`).** Every
+  attachment, image, logo, newsletter file and helpdesk upload (the desk
+  import's staging files included) goes through one file store
+  (lib/file-store): the uploads folder by default, unchanged, or one
+  private container per workspace (`COMPASSDOCS_BLOB_ACCOUNT_URL`,
+  `COMPASSDOCS_BLOB_CONTAINER`). Signs in with the managed identity
+  (Microsoft Entra, or workload identity), never a key; a connection
+  string is for Azurite only and refused in cloud mode unless it is a
+  loopback address. Files keep their random names, checked on every call,
+  and are only ever served through the app's own routes (video byte ranges
+  included); no public or SAS URL is made. The Azure SDK and
+  `@azure/identity` (new, 4.14.1) load only in blob mode. See the README,
+  "File storage".
+- **Start-up and readiness for blob mode.** A missing or invalid setting
+  is one error line each and exit 1; a container that is missing, refused
+  or unreachable is one error line, and `/readyz` answers 503 `file storage
+  unreachable` until it has answered once.
+- **`copy-uploads-to-blob.cjs`**, in the image: copies an install's
+  uploads folder into its container, verified by size and MD5; idempotent,
+  resumable, never overwrites different content, never copies the key file.
+- **Stored usage** (`storedUsage()`): the workspace's files and bytes, one
+  listing call per 5000 files, for usage metering.
+- **Riding out a database restart.** With `DATABASE_RETRY_WINDOW_MS`
+  (60 s by default in cloud mode, 0 self-hosted) requests wait through a
+  restart or failover with backoff: getting a connection is retried, and so
+  is a statement pg refused to send; a statement that was sent is never
+  re-run, and a transaction that broke is never resumed. A request never
+  waits past the outage's own window or the drain deadline. See the README,
+  "Riding out a database restart".
+- Telemetry: `compassdocs.db.outages` and `compassdocs.db.retried_requests`.
+
+### Changed
+- **Backups** are made from, and restore into, whichever file store is in
+  use; an uploads-folder backup restores into a container and the other way
+  round.
+- **One log line per database outage** (`db.unavailable`, then
+  `db.available` with what waited and what gave up), in both modes. An idle
+  connection the server closed is noted, not an uncaught error; a broken
+  connection is closed, never handed out again. A background task that meets
+  an outage skips its run quietly and tries again at the next one.
+- `/readyz` never waits for the database.
+- Newsletter attachments in blob mode are read from the store when the mail
+  is built (queued sends keep working: an uploads-folder path still is one).
+- Log redaction also masks `COMPASSDOCS_BLOB_CONNECTION_STRING`,
+  `AZURE_CLIENT_SECRET`, `AccountKey=…`, `SharedAccessSignature=…` and a
+  SAS's `sig=`.
+
 ## [1.21.1] - 2026-11-26
 
 OpenTelemetry traces and metrics, to Azure Application Insights or any OTLP

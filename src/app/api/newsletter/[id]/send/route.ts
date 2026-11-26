@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiGuard } from "@/lib/api-auth";
 import { mailOrigin } from "@/lib/workspace-origin";
-import { join } from "path";
 import {
   getNewsletter,
   getNewsletterApproverIds,
@@ -11,7 +10,7 @@ import {
   listGroups,
   listNewsletterFiles,
 } from "@/lib/db";
-import { uploadDir } from "@/lib/uploads";
+import { mailAttachment } from "@/lib/uploads";
 import { canSend, canComment } from "@/lib/newsletter-access";
 import { sendNewsletter, archiveNewsletter } from "@/lib/newsletter";
 import { queueM365Send } from "@/lib/newsletter-delivery-start";
@@ -55,10 +54,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   const settings = await getAppSettings();
-  const attachments = (await listNewsletterFiles(n.id)).map((f) => ({
-    filename: f.filename,
-    path: join(uploadDir(), f.stored_name),
-  }));
+  // 1.21.2: by path in the uploads folder as before, or by stored name from the blob store (lib/uploads).
+  const attachments = (await listNewsletterFiles(n.id)).map((f) => mailAttachment(f.filename, f.stored_name));
   const base = {
     subject: n.subject,
     markdown: n.body,

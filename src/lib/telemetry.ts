@@ -478,6 +478,9 @@ export async function startTelemetry(plan: TelemetryPlan, log: Log, opts: StartO
   const jobFailures = meter.createCounter("compassdocs.job.failures", { unit: "{run}", description: "Background job runs that failed, by job." });
   const mailSent = meter.createCounter("compassdocs.mail.sent", { unit: "{message}", description: "Email handed to the SMTP relay or Microsoft 365." });
   const mailFailed = meter.createCounter("compassdocs.mail.failed", { unit: "{message}", description: "Email the SMTP relay or Microsoft 365 refused, or that could not be sent." });
+  // 1.21.2 (lib/db-retry): database outages, and the requests that waited through one.
+  const dbOutages = meter.createCounter("compassdocs.db.outages", { unit: "{outage}", description: "Database outages: the first connection error after the database last answered." });
+  const dbRetries = meter.createCounter("compassdocs.db.retried_requests", { unit: "{request}", description: "Requests that waited for the database, by outcome (recovered, gave_up)." });
   const connections = meter.createObservableUpDownCounter("db.client.connection.count", { unit: "{connection}", description: "Database pool connections, by state." });
   const pending = meter.createObservableUpDownCounter("db.client.connection.pending_requests", { unit: "{request}", description: "Requests waiting for a database pool connection." });
   meter.addBatchObservableCallback(
@@ -538,6 +541,12 @@ export async function startTelemetry(plan: TelemetryPlan, log: Log, opts: StartO
     },
     mail(transport, ok) {
       (ok ? mailSent : mailFailed).add(1, { "compassdocs.mail.transport": transport });
+    },
+    dbOutage() {
+      dbOutages.add(1);
+    },
+    dbRetry(outcome) {
+      dbRetries.add(1, { "compassdocs.db.retry.outcome": outcome });
     },
   };
   G.__compassTelemetry = hooks;

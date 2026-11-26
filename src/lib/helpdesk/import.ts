@@ -47,19 +47,17 @@
 // Waiting and on-hold tickets start paused.
 
 import "server-only";
-import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, unlink, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { Readable } from "node:stream";
 import { randomBytes, createHash } from "node:crypto";
-import { once } from "node:events";
 import type { PoolClient } from "pg";
 import { hq, hqOne, withTx } from "./db-core";
-import { uploadDir, saveUpload, deleteUpload } from "../uploads";
+import { saveUpload, deleteUpload } from "../uploads";
+import { fileStore } from "../file-store";
 import { getSetting, setSetting } from "../db";
 import { audit } from "../audit";
 import { logEvent } from "../log";
 import { csvRows, csvLine } from "./import-csv";
-import { isZipFile, openZipEntry, readZipDirectory, readZipEntry, ZipError, type ZipEntry } from "./import-zip";
+import { isZipFile, openZipEntry, readZipDirectory, readZipEntry, ZipError, type ZipEntry, type ZipSource } from "./import-zip";
 import { importBodyToMarkdown } from "./import-body";
 import { textToSafeMarkdown } from "./inbound-parse";
 import { AttachmentRejectedError, ATTACHMENT_LIMITS, classifyUpload, cleanFilename } from "./attachments";
@@ -159,13 +157,32 @@ export async function saveImportSettings(input: Partial<ImportSettings>): Promis
 
 const STORED_RE = /^[a-f0-9]{32}\.(zip|csv)$/;
 
-function importDir(): string {
-  return join(uploadDir(), "hd-import");
+// 1.21.2: an upload waiting to be imported is a stored file under hd-import/
+// in the workspace's file store (lib/file-store): the uploads folder's
+// hd-import directory, as before, or the blob container, read by range.
+
+function importKey(name: string): string {
+  if (!STORED_RE.test(name)) throw new ImportError("That upload is not available.", 404);
+  return `hd-import/${name}`;
 }
 
-function storedPath(name: string): string {
-  if (!STORED_RE.test(name)) throw new ImportError("That upload is not available.", 404);
-  return join(importDir(), name);
+/** A stored import file, read by position (the zip reader) or whole (a CSV). */
+interface StoredImportFile extends ZipSource {
+  whole(): Readable;
+}
+
+function importSource(key: string): StoredImportFile {
+  const store = fileStore();
+  return {
+    async size() {
+      const s = await store.stat(key);
+      if (!s) throw new ImportError("This import's file is no longer available. Upload it again.", 410);
+      return s.size;
+    },
+    read: (position, length) => store.readRange(key, position, length),
+    stream: (start, end) => store.readStream(key, { start, end }),
+    whole: () => store.readStream(key),
+  };
 }
 
 export interface ImportFiles {
@@ -179,37 +196,37 @@ export interface ImportFiles {
 }
 
 /**
- * Stream a request body to the import folder, refusing it past `maxBytes`
- * (the partial file is removed). Returns the stored name and size.
+ * Stream a request body to the import folder (the file store's hd-import/),
+ * refusing it past `maxBytes` (the partial file is removed). Returns the
+ * stored name and size.
  */
 export async function saveImportUpload(body: ReadableStream<Uint8Array> | null, maxBytes: number, ext: "zip" | "csv" | "bin"): Promise<{ name: string; size: number }> {
   if (!body) throw new ImportError("Choose a file to upload.");
-  await mkdir(importDir(), { recursive: true });
   const name = `${randomBytes(16).toString("hex")}.${ext === "bin" ? "csv" : ext}`;
-  const path = join(importDir(), name);
-  const out = createWriteStream(path);
+  const key = importKey(name);
+  const store = fileStore();
+  const reader = body.getReader();
   let size = 0;
-  try {
-    const reader = body.getReader();
+  async function* chunks(): AsyncGenerator<Buffer> {
     for (;;) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) return;
       size += value.byteLength;
       if (size > maxBytes) {
         await reader.cancel().catch(() => {});
         throw new ImportError(`That file is larger than the ${Math.round(maxBytes / 1024 / 1024)} MB limit.`, 413);
       }
-      if (!out.write(value)) await once(out, "drain");
+      yield Buffer.from(value.buffer, value.byteOffset, value.byteLength);
     }
-    out.end();
-    await once(out, "finish");
+  }
+  try {
+    await store.writeStream(key, Readable.from(chunks(), { objectMode: false }));
   } catch (e) {
-    out.destroy();
-    await unlink(path).catch(() => {});
+    await store.delete(key).catch(() => {});
     throw e;
   }
   if (size === 0) {
-    await unlink(path).catch(() => {});
+    await store.delete(key).catch(() => {});
     throw new ImportError("The file is empty.");
   }
   return { name, size };
@@ -217,7 +234,7 @@ export async function saveImportUpload(body: ReadableStream<Uint8Array> | null, 
 
 async function removeStored(name: string | undefined): Promise<void> {
   if (!name || !STORED_RE.test(name)) return;
-  await unlink(join(importDir(), name)).catch(() => {});
+  await fileStore().delete(importKey(name)).catch(() => {});
 }
 
 async function removeJobFiles(files: ImportFiles | Record<string, never>): Promise<void> {
@@ -313,8 +330,8 @@ export async function createImportJob(input: {
   stored: { name: string; size: number };
   actor: { id: number; name: string };
 }): Promise<JobRow> {
-  const path = storedPath(input.stored.name);
-  const zip = await isZipFile(path);
+  const key = importKey(input.stored.name);
+  const zip = await isZipFile(importSource(key));
   if (input.source === "zoho" && !zip) {
     await removeStored(input.stored.name);
     throw new ImportError("A Zoho Desk export is a .zip file. Download the export again, or choose CSV.");
@@ -324,8 +341,7 @@ export async function createImportJob(input: {
   const wantExt = zip ? "zip" : "csv";
   if (!mainName.endsWith(`.${wantExt}`)) {
     const renamed = mainName.replace(/\.(zip|csv)$/, `.${wantExt}`);
-    const { rename } = await import("node:fs/promises");
-    await rename(path, storedPath(renamed));
+    await fileStore().rename(key, importKey(renamed));
     mainName = renamed;
   }
   const files: ImportFiles = { main: mainName, main_kind: zip ? "zip" : "csv", size: input.stored.size };
@@ -355,7 +371,7 @@ export async function attachMessagesFile(
   assertNotChecking(job);
   if (!["uploaded", "ready"].includes(job.status)) throw new ImportError("This import has already started.", 409);
   if (job.source !== "csv") throw new ImportError("Only a CSV import takes a separate messages file.");
-  if (await isZipFile(storedPath(stored.name))) {
+  if (await isZipFile(importSource(importKey(stored.name)))) {
     await removeStored(stored.name);
     throw new ImportError("The messages file must be a CSV file.");
   }
@@ -431,9 +447,10 @@ export async function discardImportJob(id: number): Promise<JobRow | undefined> 
 
 interface Layout {
   source: ImportSource;
-  path: string;
+  /** The main upload (1.21.2: a stored file, no longer a path). */
+  path: StoredImportFile;
   kind: "zip" | "csv";
-  messagesPath?: string;
+  messagesPath?: StoredImportFile;
   /** Per kind, the CSV entries (zip) in order. */
   entries: Partial<Record<ImportFileKind, ZipEntry[]>>;
   /** Non-CSV entries by lower-cased base name. */
@@ -449,18 +466,18 @@ const baseName = (p: string) => (p.split("/").pop() ?? p).toLowerCase();
 async function openLayout(job: JobRow): Promise<Layout> {
   const files = job.files as Partial<ImportFiles>;
   if (!files.main) throw new ImportError("This import's file is no longer available. Upload it again.", 410);
-  const path = storedPath(files.main);
-  try {
-    await stat(path);
-  } catch {
-    throw new ImportError("This import's file is no longer available. Upload it again.", 410);
-  }
+  const mainKey = importKey(files.main);
+  const found = await fileStore()
+    .stat(mainKey)
+    .catch(() => null);
+  if (!found) throw new ImportError("This import's file is no longer available. Upload it again.", 410);
+  const path = importSource(mainKey);
   const { max_upload_mb } = await getImportSettings();
   const layout: Layout = {
     source: job.source,
     path,
     kind: files.main_kind ?? "csv",
-    messagesPath: files.messages ? storedPath(files.messages) : undefined,
+    messagesPath: files.messages ? importSource(importKey(files.messages)) : undefined,
     entries: {},
     attachments: new Map(),
     attachmentCount: 0,
@@ -507,7 +524,7 @@ async function* rowsOf(layout: Layout, kind: ImportFileKind, onHeaders?: (h: str
     const path = kind === "tickets" ? layout.path : kind === "threads" ? layout.messagesPath : undefined;
     if (!path) return;
     const file = kind === "tickets" ? "tickets.csv" : "messages.csv";
-    for await (const r of csvRows(createReadStream(path), onHeaders)) yield { file, line: r.line, values: r.values };
+    for await (const r of csvRows(path.whole(), onHeaders)) yield { file, line: r.line, values: r.values };
     return;
   }
   let first = true;

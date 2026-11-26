@@ -56,6 +56,9 @@ function earlyJsonLine(level, text, now = new Date()) {
   const message = String(text)
     .replace(ANSI, "")
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)([^\s@/]+)@/gi, "$1[redacted]@")
+    // 1.21.2: an Azure Storage key or SAS (lib/log redact does the same once the app is up).
+    .replace(/\b(AccountKey|SharedAccessSignature)=[^;\s"']+/gi, "$1=[redacted]")
+    .replace(/([?&]sig=)[^&\s"'#]+/gi, "$1[redacted]")
     .trim();
   const time = now.toISOString();
   return JSON.stringify({ time, level, message, event: "server", ts: time });
@@ -174,6 +177,8 @@ function installShutdown({ exit = process.exit.bind(process), now = Date.now } =
     const timeoutMs = shutdownTimeoutMs();
     const deadlineAt = started + timeoutMs;
     globalThis.__compassDraining = true;
+    // 1.21.2: a request waiting for the database (lib/db-retry) stops before this.
+    globalThis.__compassDrainDeadline = deadlineAt;
     say("info", "shutdown", `${signal} received: draining for up to ${timeoutMs / 1000} s.`, { signal });
 
     // Keep-alive connections that finish their request close at once.

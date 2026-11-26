@@ -1,17 +1,24 @@
-import { createReadStream } from "fs";
-import { mkdir, stat, unlink, writeFile } from "fs/promises";
 import { join, extname } from "path";
 import { randomBytes } from "crypto";
+import { fileStore, fileStoreKind } from "./file-store";
 
-// Local storage for document attachments. Files are written to a mounted
-// volume with an opaque random name; the original filename is kept in the DB.
+// Document attachments and every other uploaded file. Each is stored under
+// an opaque random name; the original filename is kept in the DB. 1.21.2:
+// the bytes live in the workspace's file store (lib/file-store): the
+// uploads folder by default, exactly as before, or an Azure Blob Storage
+// container (COMPASSDOCS_FILE_STORE=blob).
 
+/**
+ * The uploads folder: the local store's files, and (self-hosted) the master
+ * key file's default home (lib/secretbox). In blob mode no user file is
+ * kept here.
+ */
 export function uploadDir(): string {
   return process.env.COMPASSDOCS_UPLOAD_DIR || "/uploads";
 }
 
 // Stored names are 32 hex chars + an optional short extension — validated on
-// every read to block path traversal.
+// every read to block path traversal (lib/file-store checks every key again).
 const STORED_RE = /^[a-f0-9]{32}(\.[a-z0-9]{1,12})?$/;
 export function isValidStoredName(n: string): boolean {
   return STORED_RE.test(n);
@@ -23,23 +30,21 @@ export function safeExt(filename: string): string {
 }
 
 export async function saveUpload(buf: Buffer, ext: string): Promise<string> {
-  const dir = uploadDir();
-  await mkdir(dir, { recursive: true });
   const name = randomBytes(16).toString("hex") + (ext || "");
-  const path = join(dir, name);
-  try {
-    await writeFile(path, buf);
-  } catch (e) {
-    // A write cut short (a full volume) is removed: no caller learns its name.
-    await unlink(path).catch(() => {});
-    throw e;
-  }
+  // A write cut short (a full volume, a dropped connection) leaves nothing: no caller learns its name.
+  await fileStore().write(name, buf);
   return name;
 }
 
 export function uploadReadStream(storedName: string, range?: { start: number; end: number }) {
   if (!isValidStoredName(storedName)) return null;
-  return createReadStream(join(uploadDir(), storedName), range);
+  return fileStore().readStream(storedName, range);
+}
+
+/** A stored file, whole (1.21.2: in place of reading the uploads folder directly). Rejects when it is missing. */
+export async function readUpload(storedName: string): Promise<Buffer> {
+  if (!isValidStoredName(storedName)) throw Object.assign(new Error("Not a stored file name."), { code: "ENOENT" });
+  return fileStore().read(storedName);
 }
 
 /** Mime types the attachment endpoint serves inline as playable video. */
@@ -51,7 +56,7 @@ export function isInlineVideo(mime: string): boolean {
 export async function uploadExists(storedName: string): Promise<boolean> {
   if (!isValidStoredName(storedName)) return false;
   try {
-    return (await stat(join(uploadDir(), storedName))).isFile();
+    return (await fileStore().stat(storedName)) !== null;
   } catch {
     return false;
   }
@@ -60,10 +65,42 @@ export async function uploadExists(storedName: string): Promise<boolean> {
 export async function deleteUpload(storedName: string): Promise<void> {
   if (!isValidStoredName(storedName)) return;
   try {
-    await unlink(join(uploadDir(), storedName));
+    await fileStore().delete(storedName);
   } catch {
     /* already gone */
   }
+}
+
+/**
+ * 1.21.2: the workspace's stored files and bytes, for usage metering: the
+ * uploads folder's stored files, or every blob in the workspace's
+ * container. One directory walk, or one listing call per 5000 blobs.
+ */
+export async function storedUsage(): Promise<{ files: number; bytes: number }> {
+  return fileStore().usage();
+}
+
+/**
+ * A mail attachment for a stored file (newsletters): by its path in the
+ * uploads folder, as before 1.21.2, or (blob store) by its stored name,
+ * read when the mail is built (mailAttachmentsForSend).
+ */
+export interface MailAttachment {
+  filename: string;
+  path?: string;
+  storedName?: string;
+}
+
+export function mailAttachment(filename: string, storedName: string): MailAttachment {
+  return fileStoreKind() === "local" ? { filename, path: join(uploadDir(), storedName) } : { filename, storedName };
+}
+
+/** Attachments as nodemailer takes them: a stored name becomes its bytes; a path stays a path. */
+export async function mailAttachmentsForSend(list: MailAttachment[] | undefined): Promise<{ filename: string; path?: string; content?: Buffer }[] | undefined> {
+  if (!list?.length) return undefined;
+  return Promise.all(
+    list.map(async (a) => (a.storedName ? { filename: a.filename, content: await readUpload(a.storedName) } : { filename: a.filename, path: a.path }))
+  );
 }
 
 // Only these image types are served inline; everything else (incl. SVG, HTML,

@@ -4,7 +4,6 @@
 // without double-sending. Server-only.
 
 import "server-only";
-import { join } from "path";
 import {
   claimDueNewsletters,
   markNewsletterSent,
@@ -14,7 +13,7 @@ import {
 } from "./db";
 import { sendNewsletter, archiveNewsletter } from "./newsletter";
 import { getAppSettings } from "./settings-store";
-import { uploadDir } from "./uploads";
+import { mailAttachment } from "./uploads";
 import { audit } from "./audit";
 import { getMailMethod } from "./mail-config";
 import { queueM365Send } from "./newsletter-delivery-start";
@@ -37,10 +36,7 @@ export async function sendDueNewsletters(): Promise<void> {
         authorName: n.author_name,
         to: n.mode === "groups" ? groupIds : ("all" as const),
         from: n.from_address || undefined,
-        attachments: (await listNewsletterFiles(n.id)).map((f) => ({
-          filename: f.filename,
-          path: join(uploadDir(), f.stored_name),
-        })),
+        attachments: (await listNewsletterFiles(n.id)).map((f) => mailAttachment(f.filename, f.stored_name)),
       };
       // 1.20.31: through Microsoft 365 the send is queued and paced in the background (lib/newsletter-delivery).
       if ((await getMailMethod()) === "m365") {
