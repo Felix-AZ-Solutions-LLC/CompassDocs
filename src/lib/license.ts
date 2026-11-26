@@ -17,7 +17,7 @@
 import { verify } from "node:crypto";
 import { getSetting } from "./db";
 import { INCLUDED_AGENTS } from "./agent-allowance";
-import { platformValue } from "./cloud";
+import { licensePullConfig, platformValue } from "./cloud";
 
 // Vendor Ed25519 public key (SPKI PEM). This is the production CompassDocs
 // license-signing public key; the matching private key lives only in the vendor
@@ -62,6 +62,12 @@ export interface License {
   issued: string;
   /** ISO date the license expires. */
   expires: string;
+  /**
+   * 1.21.3: the CompassDocs Cloud workspace the license is for
+   * (COMPASSDOCS_WORKSPACE_ID). A license fetched from the console
+   * (lib/license-pull) is accepted only when it names this workspace.
+   */
+  workspace?: string;
 }
 
 export type LicenseState =
@@ -109,24 +115,121 @@ export function evaluate(raw: string, now = new Date()): LicenseState {
   return { status: "expired", license };
 }
 
+// --- The license from the console (1.21.3, lib/license-pull) ---------------------
+
+/** The setting that keeps the last good license fetched from the console (so a restart survives a console outage). */
+export const CLOUD_LICENSE_SETTING = "license_cloud";
+
+type Parse = (raw: string) => { license?: License; error?: string };
+
+/** Does license `a` rank at or above `b`: it runs at least as long, and, running as long, was issued no earlier? */
+export function licenseRanksAbove(a: Pick<License, "issued" | "expires">, b: Pick<License, "issued" | "expires">): boolean {
+  const ae = Date.parse(a.expires);
+  const be = Date.parse(b.expires);
+  if (ae !== be) return ae > be;
+  return Date.parse(a.issued) >= Date.parse(b.issued);
+}
+
+/** A license string that verifies (parse) and names `workspaceId`; null otherwise. */
+export function workspaceLicense(raw: string | null | undefined, workspaceId: string, parse: Parse = parseLicense): License | null {
+  const token = raw?.trim();
+  if (!token || !workspaceId) return null;
+  const { license } = parse(token);
+  return license && license.workspace === workspaceId ? license : null;
+}
+
+export interface LicenseCandidates {
+  /** The saved key (Settings → License). */
+  stored?: string | null;
+  /** The last good license from the console (CLOUD_LICENSE_SETTING). */
+  managed?: string | null;
+  /** COMPASSDOCS_LICENSE_KEY in cloud mode (the platform's bootstrap). */
+  platform?: string | null;
+  /** COMPASSDOCS_LICENSE_KEY self-hosted. */
+  envKey?: string | null;
+  /** The workspace a console license must name, when the console is the source (licensePullConfig); else null. */
+  pullWorkspace?: string | null;
+}
+
 /**
- * The license string in force, given the saved one: the saved key, else
- * COMPASSDOCS_LICENSE_KEY. 1.21.0: in cloud mode (lib/cloud) the variable,
- * when set, is the platform's and wins over a saved key.
+ * Which license string is in force, given every candidate. With the console
+ * configured (cloud mode, COMPASSDOCS_LICENSE_URL): the console's last good
+ * license when it verifies, names this workspace and ranks at or above the
+ * platform's bootstrap (licenseRanksAbove); otherwise exactly as before
+ * 1.21.3: the platform's variable (cloud mode), the saved key, the
+ * variable. Pure: `parse` is only ever this module's own parseLicense in the
+ * app; whatever is chosen is verified again by evaluate().
  */
-export function effectiveLicenseKey(stored: string | null | undefined): string {
-  return platformValue("COMPASSDOCS_LICENSE_KEY") || stored?.trim() || process.env.COMPASSDOCS_LICENSE_KEY?.trim() || "";
+export function pickLicenseKey(c: LicenseCandidates, parse: Parse = parseLicense): string {
+  const platform = c.platform?.trim() || "";
+  const managed = c.managed?.trim() || "";
+  if (managed && c.pullWorkspace) {
+    const m = workspaceLicense(managed, c.pullWorkspace, parse);
+    if (m) {
+      const p = platform ? parse(platform).license : undefined;
+      if (!p || licenseRanksAbove(m, p)) return managed;
+    }
+  }
+  return platform || c.stored?.trim() || c.envKey?.trim() || "";
 }
 
-/** The effective license string: settings value, else the env var (lib/cloud: the platform's first). */
+/** The candidates as this process sees them: the saved ones given, the environment's read now. */
+export function licenseCandidates(stored: string | null | undefined, managed?: string | null): LicenseCandidates {
+  const pull = licensePullConfig();
+  return {
+    stored,
+    managed: pull ? managed : null,
+    platform: platformValue("COMPASSDOCS_LICENSE_KEY"),
+    envKey: process.env.COMPASSDOCS_LICENSE_KEY,
+    pullWorkspace: pull?.workspaceId ?? null,
+  };
+}
+
+// One pick remembered per set of inputs: lib/ee and lib/license-enforcement ask on every request.
+let pickMemo: { key: string; until: number; out: string } | null = null;
+
+/**
+ * The license string in force, given the saved one (and, 1.21.3, the
+ * console's last good one): the saved key, else COMPASSDOCS_LICENSE_KEY.
+ * 1.21.0: in cloud mode (lib/cloud) the variable, when set, is the
+ * platform's and wins over a saved key. 1.21.3: with the console configured,
+ * its license wins over the variable when it is at least as new
+ * (pickLicenseKey).
+ */
+export function effectiveLicenseKey(stored: string | null | undefined, managed?: string | null): string {
+  const c = licenseCandidates(stored, managed);
+  if (!c.managed) return pickLicenseKey(c);
+  const memoKey = JSON.stringify([c.stored ?? "", c.managed, c.platform ?? "", c.pullWorkspace]);
+  const now = Date.now();
+  if (pickMemo && pickMemo.key === memoKey && now < pickMemo.until) return pickMemo.out;
+  const out = pickLicenseKey(c);
+  pickMemo = { key: memoKey, until: now + 60_000, out };
+  return out;
+}
+
+/** The saved key and, with the console configured, its last good license (one query). */
+async function savedLicenses(): Promise<{ stored?: string; managed?: string }> {
+  if (!licensePullConfig()) return { stored: await getSetting("license_key") };
+  const [stored, managed] = await Promise.all([getSetting("license_key"), getSetting(CLOUD_LICENSE_SETTING)]);
+  return { stored, managed };
+}
+
+/** The effective license string: settings value, else the env var (lib/cloud: the console's, then the platform's first). */
 export async function licenseKey(): Promise<string> {
-  return effectiveLicenseKey(await getSetting("license_key"));
+  const { stored, managed } = await savedLicenses();
+  return effectiveLicenseKey(stored, managed);
 }
 
-/** Where the effective license comes from (for the admin UI). "platform": cloud mode's variable (read-only). */
-export async function licenseSource(): Promise<"platform" | "settings" | "env" | "none"> {
+/**
+ * Where the effective license comes from (for the admin UI). "platform":
+ * cloud mode's variable (read-only); "cloud" (1.21.3): the console's, fetched
+ * from COMPASSDOCS_LICENSE_URL (read-only).
+ */
+export async function licenseSource(): Promise<"cloud" | "platform" | "settings" | "env" | "none"> {
+  const { stored, managed } = await savedLicenses();
+  if (managed?.trim() && effectiveLicenseKey(stored, managed) === managed.trim()) return "cloud";
   if (platformValue("COMPASSDOCS_LICENSE_KEY")) return "platform";
-  if ((await getSetting("license_key"))?.trim()) return "settings";
+  if (stored?.trim()) return "settings";
   if (process.env.COMPASSDOCS_LICENSE_KEY?.trim()) return "env";
   return "none";
 }

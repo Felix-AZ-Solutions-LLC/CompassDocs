@@ -59,6 +59,9 @@ function earlyJsonLine(level, text, now = new Date()) {
     // 1.21.2: an Azure Storage key or SAS (lib/log redact does the same once the app is up).
     .replace(/\b(AccountKey|SharedAccessSignature)=[^;\s"']+/gi, "$1=[redacted]")
     .replace(/([?&]sig=)[^&\s"'#]+/gi, "$1[redacted]")
+    // 1.21.3: a bearer token or a JWT (a Microsoft Entra access token).
+    .replace(/\b(Bearer)\s+[A-Za-z0-9._~+/=-]{8,}/g, "$1 [redacted]")
+    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g, "[redacted]")
     .trim();
   const time = now.toISOString();
   return JSON.stringify({ time, level, message, event: "server", ts: time });

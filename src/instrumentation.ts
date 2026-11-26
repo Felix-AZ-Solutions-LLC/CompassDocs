@@ -20,6 +20,11 @@ export async function register() {
   const { installJsonConsole, logEvent } = await import("./lib/log");
   installJsonConsole();
 
+  // 1.21.3: DATABASE_AUTH (lib/db-auth), in both modes: a setting that can't work
+  // (entra with a password, without SSL, or without a role in DATABASE_URL)
+  // exits here, saying which. Unset, nothing is said and nothing changes.
+  if (!(await (await import("./lib/db-auth")).checkDatabaseAuthStartup(logEvent))) return;
+
   // Never fatal: a malformed setting or an SDK that fails to start is one warning, and the app runs without it.
   await (await import("./lib/telemetry-config")).startTelemetryIfConfigured(logEvent);
 
@@ -254,6 +259,11 @@ export async function register() {
   };
   after(30_000, () => runJob("minutely", newsletterTick));
   every(60_000, () => runJob("minutely", newsletterTick));
+
+  // 1.21.3: the license from the CompassDocs console (cloud mode with
+  // COMPASSDOCS_LICENSE_URL, lib/license-pull): shortly after start, then about
+  // every 6 hours; a console that can't be reached keeps the license in force.
+  if (isCloud()) (await import("./lib/license-pull")).startLicensePull();
 
   // The domain and the reverse proxy are CompassDocs Cloud's in cloud mode
   // (lib/cloud): no domain re-checks, nothing pushed to a proxy.

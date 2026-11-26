@@ -325,11 +325,16 @@ secret reference.
 | --- | --- | --- |
 | `COMPASSDOCS_CLOUD` | | `1` switches cloud mode on. |
 | `COMPASSDOCS_SECRET_KEY` | yes | **Required.** The encryption key for secrets at rest, 32 bytes as 64 hex or 44 base64 characters. Without it (or with a malformed one) the process logs `Cloud mode (COMPASSDOCS_CLOUD=1) can't start: …` and exits 1. No key file is ever created, written or read (not `/uploads/.secret.key`, not `COMPASSDOCS_KEY_FILE`). |
-| `DATABASE_URL` | yes | **Required.** The PostgreSQL connection string. |
-| `DATABASE_PASSWORD` | yes | Optional: the database password kept apart from `DATABASE_URL` (it replaces any password in the URL, and in `DATABASE_LISTEN_URL`). Works self-hosted too. |
+| `DATABASE_URL` | yes | **Required.** The PostgreSQL connection string. With `DATABASE_AUTH=entra`, a `postgres://` URL whose user is the managed identity's PostgreSQL role and which has no password, e.g. `postgres://ws-acme-app@cdcloud-pg.postgres.database.azure.com/ws_acme`. |
+| `DATABASE_AUTH` | | `entra` signs in to PostgreSQL with the managed identity's Microsoft Entra token: no database password exists anywhere (see [Signing in to PostgreSQL with Microsoft Entra](#signing-in-to-postgresql-with-microsoft-entra)). Unset (or `password`): `DATABASE_URL` and `DATABASE_PASSWORD` as before. Works self-hosted too. |
+| `DATABASE_SSL` | | With `DATABASE_AUTH=entra`, SSL is always on and the server's certificate is verified; `no-verify` keeps the encryption and skips the check. `disable` is refused. |
+| `DATABASE_PASSWORD` | yes | Optional: the database password kept apart from `DATABASE_URL` (it replaces any password in the URL, and in `DATABASE_LISTEN_URL`). Works self-hosted too. Refused with `DATABASE_AUTH=entra`. |
 | `DATABASE_LISTEN_URL` | yes | Optional: a direct connection for the helpdesk's live updates when `DATABASE_URL` is a transaction-mode pooler. |
 | `COMPASSDOCS_BASE_URL` | | **Required.** The workspace's public address, e.g. `https://acme.compassdocs.io`. Every link in email, the portal's sign-in links and OAuth redirects are built from it (a custom domain saved earlier is ignored). Missing, not a valid URL or not `https://`, the process logs `Cloud mode (COMPASSDOCS_CLOUD=1) can't start: COMPASSDOCS_BASE_URL …` and exits 1 (a plain-http loopback address, such as `http://localhost:3000` on a developer's machine, only logs a warning). Self-hosted, it stays optional. |
-| `COMPASSDOCS_LICENSE_KEY` | yes | When set, the platform's license: it wins over a saved key, and Settings → License shows it read-only, "Set by the platform". |
+| `COMPASSDOCS_LICENSE_KEY` | yes | When set, the platform's license: it wins over a saved key, and Settings → License shows it read-only, "Managed by CompassDocs Cloud". With `COMPASSDOCS_LICENSE_URL`, it is the bootstrap: the license the workspace starts with until the console's arrives. |
+| `COMPASSDOCS_LICENSE_URL` | | Optional: the console's license endpoint for this workspace. The app fetches the workspace's license from it shortly after start and about every 6 hours, so a renewal needs no restart (see [License from the console](#license-from-the-console)). Must be `https://`. Needs `COMPASSDOCS_WORKSPACE_ID` and one of the two below; without them cloud mode doesn't start. |
+| `COMPASSDOCS_LICENSE_AUDIENCE` | | With `COMPASSDOCS_LICENSE_URL` (**recommended**): the console's app ID URI, e.g. `api://compassdocs-console`. The app asks for a Microsoft Entra token for `<audience>/.default` as its managed identity: no secret to store or rotate. Wins over `COMPASSDOCS_LICENSE_TOKEN`. |
+| `COMPASSDOCS_LICENSE_TOKEN` | yes | With `COMPASSDOCS_LICENSE_URL`, when the managed identity isn't used: a bearer token the console issued to this workspace. |
 | `ANTHROPIC_API_KEY` | yes | When set, the platform's AI key: it wins over a saved key and Settings → AI shows it read-only. |
 | `COMPASSDOCS_SMTP_HOST`, `COMPASSDOCS_SMTP_PORT` (587), `COMPASSDOCS_SMTP_SECURE` (`starttls`, `tls` or `none`), `COMPASSDOCS_SMTP_USER`, `COMPASSDOCS_SMTP_PASSWORD` (secret), `COMPASSDOCS_SMTP_FROM` | password | When `COMPASSDOCS_SMTP_HOST` is set, the platform's mail relay: Settings → Email shows SMTP read-only, and the workspace can still choose Microsoft 365 instead. Read only in cloud mode. |
 | `COMPASSDOCS_SETUP_TOKEN` | yes | The first-run setup token the platform hands the customer. Cloud mode never prints a setup token to the log. |
@@ -338,14 +343,14 @@ secret reference.
 | `COMPASSDOCS_FILE_STORE` | | `blob` keeps the workspace's files in Azure Blob Storage (see [File storage](#file-storage)). Unset, files stay in `COMPASSDOCS_UPLOAD_DIR`, which must then be a persistent volume every replica shares (cloud mode logs a warning). |
 | `COMPASSDOCS_BLOB_ACCOUNT_URL` | | With `blob`: the storage account's address, e.g. `https://cdcloud.blob.core.windows.net` (no SAS, no path). The app signs in with the container app's managed identity. |
 | `COMPASSDOCS_BLOB_CONTAINER` | | With `blob`: the workspace's own container, e.g. `ws-acme`. |
-| `AZURE_CLIENT_ID` | | Optional: the client id of the user-assigned managed identity to sign in with (unset: the system-assigned one). |
+| `AZURE_CLIENT_ID` | | Optional: the client id of the user-assigned managed identity to sign in with (unset: the system-assigned one). One identity for everything the app signs in to: Blob Storage, PostgreSQL (`DATABASE_AUTH=entra`) and the console's license endpoint (`COMPASSDOCS_LICENSE_AUDIENCE`). |
 | `COMPASSDOCS_BLOB_CONNECTION_STRING` | yes | Development only (Azurite). Cloud mode refuses one that is not a loopback address. |
 | `DATABASE_RETRY_WINDOW_MS` | | How long a request waits for the database through a restart or failover (default `60000` in cloud mode; see [Riding out a database restart](#riding-out-a-database-restart)). |
 | `COMPASSDOCS_UPLOAD_DIR` | | Where attachments live without `COMPASSDOCS_FILE_STORE=blob`: a persistent mount (Azure Files). |
 | `COMPASSDOCS_LOG_FORMAT` | | Cloud mode logs JSON; `text` switches back to readable lines, redacted the same way. |
 | `COMPASSDOCS_SHUTDOWN_TIMEOUT` | | Seconds to drain on `SIGTERM` (default 25). |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | yes | Optional: traces and metrics to the workspace's Application Insights. See [Telemetry](#telemetry-opentelemetry). |
-| `COMPASSDOCS_WORKSPACE_ID` | | Optional: the workspace's id, set by the console; with telemetry on, every span and metric carries it as `compassdocs.workspace.id`. |
+| `COMPASSDOCS_WORKSPACE_ID` | | The workspace's id, set by the console. Required with `COMPASSDOCS_LICENSE_URL`: a license from the console is used only when its `workspace` claim is this id. With telemetry on, every span and metric carries it as `compassdocs.workspace.id`. |
 
 The workspace's own integration secrets (its Microsoft 365, Slack, Teams,
 single sign-on, SCIM, Duo, directory and helpdesk connections, an
@@ -366,7 +371,7 @@ the request's `x-request-id` (the platform's own, or one the app gives each
 request and sends back in the response), on lines written while serving
 it. With [telemetry](#telemetry-opentelemetry) on, a line written inside a
 traced request or job also has `trace_id` and `span_id`. Secrets never appear: the values of the secret variables above, passwords
-in connection strings, bearer tokens, API keys and fields named like a secret
+in connection strings, bearer tokens, JWTs (an Entra access token), API keys and fields named like a secret
 are written as `[redacted]`. (`ts` repeats `time` for parsers of the
 pre-1.21.0 JSON lines.)
 
@@ -483,6 +488,169 @@ again with backoff (250 ms doubling to 5 s), instead of failing.
   outage skips that run quietly and tries again at its next one. With
   telemetry on, `compassdocs.db.outages` and
   `compassdocs.db.retried_requests` count them. `/readyz` never waits.
+
+### Signing in to PostgreSQL with Microsoft Entra
+
+`DATABASE_AUTH=entra` (1.21.3) signs in to an Azure Database for
+PostgreSQL flexible server with the container app's managed identity, so
+no database password exists anywhere: not in Key Vault, not in the
+environment, not in a URL. Self-hosted installs (and cloud workspaces
+without it) are unchanged: `DATABASE_URL` and `DATABASE_PASSWORD` work
+exactly as before.
+
+- **How it signs in.** The user in `DATABASE_URL` is the identity's
+  PostgreSQL role; the password of each new connection is a Microsoft Entra
+  access token for `https://ossrdbms-aad.database.windows.net/.default`,
+  for the user-assigned identity named by `AZURE_CLIENT_ID` (or the
+  system-assigned one; workload identity when `AZURE_FEDERATED_TOKEN_FILE`,
+  `AZURE_TENANT_ID` and `AZURE_CLIENT_ID` are set), the same identity the
+  [file store](#file-storage) uses. The token is cached and renewed in the
+  background well before it expires (at the earlier of half its life and 30
+  minutes before expiry), so every new connection gets a valid one at once,
+  and open connections never need one again: PostgreSQL checks it only at
+  sign-in. `@azure/identity` loads only in this mode.
+- **Every connection**: the pool (every query, the schema boot and its
+  migrations), the helpdesk's LISTEN connection (`DATABASE_LISTEN_URL`, or
+  `DATABASE_URL`), and `pg_dump`/`pg_restore` for backups (the token goes in
+  their environment as `PGPASSWORD`, never their arguments). The image's
+  scripts (`start.cjs`, `copy-uploads-to-blob.cjs`) never connect to the
+  database.
+- **SSL** is required and the server's certificate verified (flexible
+  servers chain to DigiCert and Microsoft roots, which Node and the image
+  trust; `pg_dump` uses `sslmode=verify-full` with the system roots).
+  `DATABASE_SSL=no-verify` encrypts without the check; `sslrootcert=<file>`
+  in the URL verifies against your own CA.
+- **Start-up.** A setting that can't work is one line,
+  `The database sign-in can't start: …`, and exit 1: a password in the URL,
+  `DATABASE_PASSWORD` set, SSL turned off, no role in the URL, or a
+  key=value connection string. Otherwise one line says how it signs in
+  (which identity, which role, whether the certificate is verified).
+- **When there is no token.** One line names the identity and the scope
+  (`Could not get a Microsoft Entra token for https://ossrdbms-aad.database.windows.net/.default as the user-assigned managed identity <id>: …`),
+  never the token. A token service that doesn't answer (network, timeout,
+  429, 5xx) while a cached token is still good costs nothing; with none
+  left, it counts as the database being unavailable, so requests wait
+  through it like a [database restart](#riding-out-a-database-restart). An
+  identity that is refused (not assigned to the app, unknown) fails at once:
+  waiting won't fix it. Tokens never appear in a log line: JWTs are masked
+  wherever they appear.
+
+**The Azure side**, once per server and once per workspace:
+
+1. On the flexible server, turn on Microsoft Entra authentication
+   (*Security → Authentication*: "PostgreSQL and Microsoft Entra
+   authentication") and add a Microsoft Entra admin there (*Add Microsoft
+   Entra Admin*: a group the platform team is in, or the console's own
+   identity), or with
+   `az postgres flexible-server microsoft-entra-admin create -g <rg> -s <server> -u <admin-group-name> -i <admin-object-id> -t Group`
+   (`ad-admin create` on older Azure CLIs).
+2. Signed in as that admin (`PGPASSWORD=$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)`),
+   connect to the `postgres` database (the function exists only there)
+   and create a role for the workspace's managed identity. Its name must
+   be the identity's name (a user-assigned identity's resource name, or
+   for a system-assigned one the container app's name), and it is the
+   user in `DATABASE_URL`:
+
+   ```sql
+   SELECT * FROM pgaadauth_create_principal('ws-acme-app', false, false);
+   -- or, naming the role yourself and binding it to the identity's object id:
+   -- SELECT * FROM pgaadauth_create_principal_with_oid('ws-acme-app', '<principal-object-id>', 'service', false, false);
+   ```
+
+3. Give it the workspace's database and nothing else:
+
+   ```sql
+   CREATE DATABASE ws_acme OWNER "ws-acme-app";
+   REVOKE ALL ON DATABASE ws_acme FROM PUBLIC;
+   GRANT CONNECT, TEMPORARY ON DATABASE ws_acme TO "ws-acme-app";
+   -- An existing database (moved from password sign-in): hand it and its objects over.
+   -- ALTER DATABASE ws_acme OWNER TO "ws-acme-app";
+   -- \c ws_acme
+   -- REASSIGN OWNED BY old_app_user TO "ws-acme-app";
+   ```
+
+   The app creates and migrates its own schema, so it needs to own the
+   database (or `CREATE` on it and ownership of its tables).
+4. Set `DATABASE_AUTH=entra`, `DATABASE_URL=postgres://ws-acme-app@<server>.postgres.database.azure.com/ws_acme`
+   (and `AZURE_CLIENT_ID` for a user-assigned identity); remove
+   `DATABASE_PASSWORD` and its Key Vault secret. A user-assigned identity's
+   PostgreSQL role must name *that* identity.
+
+### License from the console
+
+In cloud mode, `COMPASSDOCS_LICENSE_URL` (1.21.3) has the app fetch the
+workspace's signed license from the CompassDocs console, so a renewal
+reaches a running workspace without a restart. `COMPASSDOCS_LICENSE_KEY`
+stays the bootstrap. Self-hosted installs never read these variables.
+
+**When.** About 15 seconds after start, then every 6 hours ± 36 minutes. A
+replica skips a scheduled check when another one checked successfully in
+the last 4½ hours (5 minutes at start). An administrator can press
+**Check now** on Settings → License (once per 30 s). A console that can't
+be reached is tried again after 1, 2, 4… minutes, at most an hour apart
+(or after its `Retry-After`, between 1 minute and 6 hours).
+
+**What is used.** A fetched license replaces the one in force only when:
+
+1. it verifies with the vendor's public key (the same check as every
+   license; nothing weaker);
+2. its `workspace` claim is `COMPASSDOCS_WORKSPACE_ID` (a license without
+   one is refused);
+3. it is active (not past its `expires`; its grace period doesn't count);
+4. it is not older or shorter than the license in force: its `expires` is
+   no earlier, and its `issued` no earlier.
+
+Otherwise nothing changes: the license in force stays, and Settings →
+License says why. The last good license is kept in the database
+(`license_cloud` in `settings`), so a restart during a console outage keeps
+it; the bootstrap is used only while it is newer (the console redeployed
+the workspace with a later one) or while nothing better was fetched.
+Every installed renewal is in the audit log ("Installed a renewed license
+from CompassDocs Cloud") and the log (`license.renewed`); a run of
+failures is one line (`license.console_unreachable`,
+`license.console_rejected`, `license.console_unauthorized`,
+`license.console_error`) until it changes.
+
+**The HTTP contract** (what the console implements):
+
+- **Request.** `GET <COMPASSDOCS_LICENSE_URL>`, exactly as configured (the
+  console decides its shape, e.g.
+  `https://console.compassdocs.io/api/workspaces/<id>/license`). Headers:
+  - `Authorization: Bearer <credential>`: with `COMPASSDOCS_LICENSE_AUDIENCE`,
+    a Microsoft Entra access token for the workspace's managed identity,
+    audience = that app ID URI (the console validates issuer, audience and
+    expiry, and maps the token's `oid` / `xms_mirid` to the workspace);
+    otherwise `COMPASSDOCS_LICENSE_TOKEN`. **The console must identify the
+    workspace from the credential**, never from the URL or headers alone,
+    and answer only with that workspace's license.
+  - `Accept: text/plain`
+  - `X-CompassDocs-Workspace: <COMPASSDOCS_WORKSPACE_ID>` (informational;
+    the console may check it matches the credential's workspace)
+  - `User-Agent: CompassDocs/<version>`, `X-CompassDocs-Version: <version>`
+  - `If-None-Match: <ETag>`, when the app holds a license it got from the
+    console with an `ETag`.
+- **Responses.**
+
+  | Status | Body | The app |
+  | --- | --- | --- |
+  | `200` | `text/plain`: the license token, `base64url(payload).base64url(signature)`, at most 16 KB (surrounding whitespace ignored). The payload is the usual claims plus `"workspace": "<COMPASSDOCS_WORKSPACE_ID>"`. Send `ETag` (any opaque value, ≤ 200 characters). | Checks it as above; installs it or keeps the one in force. |
+  | `304` | none | Unchanged (only when `If-None-Match` was sent). |
+  | `204` or `404` | none | The console has no license for this workspace yet; keeps the one in force. |
+  | `401` or `403` | any | The credential was refused; keeps the license, logs an error, backs off. |
+  | `429`, `5xx` | any | Unreachable; honours `Retry-After` (seconds or a date). |
+  | `3xx` | `Location` | Followed only to the same origin (scheme, host and port), at most twice; a redirect to another host is not followed and the credential is never sent there. |
+  | anything else | | An error; keeps the license, backs off. |
+
+- **Limits.** 15 seconds for the whole exchange (redirects and body
+  included), 16 KB of body, one request at a time per replica.
+- **Caching.** The app keeps no HTTP cache of its own: its conditional
+  request (`If-None-Match`) is how the console says "nothing new" (`304`).
+  The console should send `Cache-Control: no-store` so no proxy between
+  them keeps a license.
+- **The license.** The console signs it with the vendor's Ed25519 key as
+  today, with one more claim, `workspace`. A license for a cloud workspace
+  without that claim is refused by the pull (it still works as
+  `COMPASSDOCS_LICENSE_KEY`).
 
 ### Moving a self-hosted install to COMPASSDOCS_SECRET_KEY
 

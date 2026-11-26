@@ -5,7 +5,7 @@
 
 import edition from "@ee";
 import type { EnterpriseEdition } from "@/ee-contract";
-import { effectiveFeatures, effectiveLicenseKey, evaluate, licenseGrants, licenseState } from "./license";
+import { CLOUD_LICENSE_SETTING, effectiveFeatures, effectiveLicenseKey, evaluate, licenseGrants, licenseState } from "./license";
 import type { EntitlementFeature } from "./license";
 import { licenceEnforces, licenceEnforcesFrom } from "./license-enforcement";
 
@@ -54,7 +54,7 @@ let fromMemo: { key: string; until: number; features: EntitlementFeature[] } | n
  */
 export function featureEnabledFrom(feature: EntitlementFeature, settings: Record<string, string>): boolean {
   if (!ee().features.includes(feature)) return false;
-  const key = effectiveLicenseKey(settings.license_key);
+  const key = effectiveLicenseKey(settings.license_key, settings[CLOUD_LICENSE_SETTING]);
   const now = Date.now();
   if (!fromMemo || fromMemo.key !== key || now >= fromMemo.until) {
     const state = evaluate(key);

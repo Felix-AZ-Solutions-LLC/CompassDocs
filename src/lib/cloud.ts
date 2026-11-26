@@ -133,12 +133,88 @@ export const ENV_SECRETS: readonly EnvSecret[] = [
   { env: "DATABASE_PASSWORD", label: "PostgreSQL password, when it is kept apart from DATABASE_URL", kind: "env" },
   { env: "DATABASE_LISTEN_URL", label: "Direct connection for the helpdesk's live updates (LISTEN), when DATABASE_URL is a pooler", kind: "env" },
   { env: "COMPASSDOCS_LICENSE_KEY", label: "Enterprise license key", kind: "platform", setting: "license_key", where: "/admin/license" },
+  // 1.21.3: the bearer token for the console's licence endpoint, when it is not reached with the managed identity (lib/license-pull).
+  { env: "COMPASSDOCS_LICENSE_TOKEN", label: "Bearer token for the CompassDocs console's license endpoint (COMPASSDOCS_LICENSE_URL), when it is not reached with the managed identity", kind: "env" },
   { env: "ANTHROPIC_API_KEY", label: "Anthropic API key for AI answers", kind: "platform", setting: "anthropic_api_key", where: "/admin/ai" },
   { env: "COMPASSDOCS_SMTP_PASSWORD", label: "SMTP relay password (with COMPASSDOCS_SMTP_HOST and the other SMTP variables)", kind: "platform", setting: "smtp_pass", where: "/admin/notifications/email" },
   { env: "COMPASSDOCS_SETUP_TOKEN", label: "First-run setup token", kind: "env" },
   { env: "COMPASSDOCS_ADMIN_PASSWORD", label: "First administrator's password (headless set-up)", kind: "env" },
   { env: "COMPASSDOCS_METRICS_TOKEN", label: "Bearer token for /metrics", kind: "env" },
 ];
+
+// --- The license from the console (1.21.3, lib/license-pull) ----------------
+
+/** How the workspace signs in to the console's license endpoint. */
+export type LicensePullAuth = { kind: "entra"; audience: string; scope: string } | { kind: "token"; token: string };
+
+export interface LicensePullConfig {
+  /** COMPASSDOCS_LICENSE_URL: where the signed license is fetched from (GET). */
+  url: URL;
+  /** COMPASSDOCS_WORKSPACE_ID: the license must name it (its `workspace` claim). */
+  workspaceId: string;
+  auth: LicensePullAuth;
+}
+
+/** The scope of an access token for an app ID URI (`api://…` or `https://…`): its /.default. */
+export function audienceScope(audience: string): string {
+  const a = audience.trim();
+  return a.endsWith("/.default") ? a : `${a.replace(/\/+$/, "")}/.default`;
+}
+
+function loopbackHost(host: string): boolean {
+  return /^(localhost|127\.0\.0\.1|\[::1\])$/.test(host);
+}
+
+/**
+ * The console's license endpoint, in cloud mode with COMPASSDOCS_LICENSE_URL
+ * set: the URL, the workspace and the credential
+ * (COMPASSDOCS_LICENSE_AUDIENCE: an Entra token for the managed identity,
+ * recommended; else COMPASSDOCS_LICENSE_TOKEN, a bearer token). Null when it
+ * is not configured, self-hosted, or misconfigured (cloudStartupProblems
+ * says why, and cloud mode does not start).
+ */
+export function licensePullConfig(env: Env = process.env): LicensePullConfig | null {
+  const raw = platformValue("COMPASSDOCS_LICENSE_URL", env);
+  if (!raw || licensePullProblems(env).length) return null;
+  const audience = env.COMPASSDOCS_LICENSE_AUDIENCE?.trim();
+  const token = env.COMPASSDOCS_LICENSE_TOKEN?.trim();
+  return {
+    url: new URL(raw),
+    workspaceId: env.COMPASSDOCS_WORKSPACE_ID!.trim(),
+    auth: audience ? { kind: "entra", audience, scope: audienceScope(audience) } : { kind: "token", token: token! },
+  };
+}
+
+/** Why the license endpoint's settings can't work (cloud mode with COMPASSDOCS_LICENSE_URL set); empty otherwise. */
+export function licensePullProblems(env: Env = process.env): string[] {
+  const raw = platformValue("COMPASSDOCS_LICENSE_URL", env);
+  if (!raw) return [];
+  const out: string[] = [];
+  let u: URL | null = null;
+  try {
+    u = new URL(raw);
+  } catch {
+    out.push("COMPASSDOCS_LICENSE_URL is not a valid URL.");
+  }
+  if (u && u.protocol !== "https:" && !(u.protocol === "http:" && loopbackHost(u.hostname))) {
+    out.push(`COMPASSDOCS_LICENSE_URL must be an https:// address (it is ${u.protocol}//…).`);
+  }
+  if (u && (u.username || u.password)) out.push("COMPASSDOCS_LICENSE_URL must not carry a user name or password: use COMPASSDOCS_LICENSE_AUDIENCE or COMPASSDOCS_LICENSE_TOKEN.");
+  if (!env.COMPASSDOCS_WORKSPACE_ID?.trim()) {
+    out.push("COMPASSDOCS_WORKSPACE_ID is not set. A license fetched from COMPASSDOCS_LICENSE_URL is accepted only when it names this workspace.");
+  }
+  if (!env.COMPASSDOCS_LICENSE_AUDIENCE?.trim() && !env.COMPASSDOCS_LICENSE_TOKEN?.trim()) {
+    out.push(
+      "COMPASSDOCS_LICENSE_URL is set without a credential: set COMPASSDOCS_LICENSE_AUDIENCE to the console's app ID URI (the managed identity signs in) or COMPASSDOCS_LICENSE_TOKEN."
+    );
+  }
+  return out;
+}
+
+/** In cloud mode, is the license CompassDocs Cloud's (from the environment or the console), so read-only here? */
+export function licenseManagedByCloud(env: Env = process.env): boolean {
+  return !!(platformValue("COMPASSDOCS_LICENSE_KEY", env) || platformValue("COMPASSDOCS_LICENSE_URL", env));
+}
 
 /** The value of a platform secret's variable in cloud mode, or null (self-hosted, or the variable unset). */
 export function platformValue(envName: string, env: Env = process.env): string | null {
@@ -207,6 +283,11 @@ export function cloudStartupProblems(env: Env = process.env): { fatal: string[];
     fatal.push("COMPASSDOCS_SECRET_KEY must be 32 bytes, as 64 hex or 44 base64 characters.");
   }
   if (!env.DATABASE_URL?.trim()) fatal.push("DATABASE_URL is not set.");
+  // 1.21.3: the license from the console (lib/license-pull).
+  fatal.push(...licensePullProblems(env));
+  if (env.COMPASSDOCS_LICENSE_AUDIENCE?.trim() && env.COMPASSDOCS_LICENSE_TOKEN?.trim()) {
+    warnings.push("COMPASSDOCS_LICENSE_AUDIENCE and COMPASSDOCS_LICENSE_TOKEN are both set: the license endpoint is reached with the managed identity, and the token is not used.");
+  }
   // Every link in email, the portal's sign-in links and OAuth redirects are
   // built from it, so without a usable address cloud mode does not start.
   const base = env.COMPASSDOCS_BASE_URL?.trim();

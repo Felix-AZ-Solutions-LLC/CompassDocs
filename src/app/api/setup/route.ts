@@ -11,7 +11,7 @@ import { setAnthropicKey } from "@/lib/ai-config";
 import { saveDomainSettings } from "@/lib/domain-flow";
 import { actorFrom, ipFrom } from "@/lib/audit";
 import { cloudRefusal, credentialSaveError, platformSettingRefusal } from "@/lib/api-auth";
-import { isCloud, platformValue } from "@/lib/cloud";
+import { isCloud, licenseManagedByCloud, platformValue } from "@/lib/cloud";
 import { printSetupToken, setupTokenMatches } from "@/lib/setup-token";
 
 export const dynamic = "force-dynamic";
@@ -77,7 +77,8 @@ export async function POST(req: Request) {
   }
 
   // ...and so are the license and the AI key, when it supplies them.
-  if (String(body?.license_key ?? "").trim() && platformValue("COMPASSDOCS_LICENSE_KEY")) return platformSettingRefusal("The license key");
+  // 1.21.3: or the console's (COMPASSDOCS_LICENSE_URL): either way the license is CompassDocs Cloud's.
+  if (String(body?.license_key ?? "").trim() && licenseManagedByCloud()) return platformSettingRefusal("The license key");
   if (String(body?.anthropic_api_key ?? "").trim() && platformValue("ANTHROPIC_API_KEY")) return platformSettingRefusal("The Anthropic API key");
 
   // Validate the optional license key BEFORE creating the admin, so a bad key

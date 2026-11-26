@@ -35,6 +35,7 @@
 
 import "server-only";
 import { withDatabasePassword } from "../db-url";
+import { databaseAuth, entraClientConfig } from "../db-auth";
 import { randomBytes } from "node:crypto";
 import { Client, type ClientConfig } from "pg";
 import { dbReady, pool } from "../db";
@@ -251,13 +252,28 @@ function clientConfig(): ClientConfig {
   // reaches the same database the same way; DATABASE_LISTEN_URL replaces the
   // address (a direct or session-mode connection where DATABASE_URL is a
   // transaction-mode pooler).
-  const o = { ...((pool() as unknown as { options?: Record<string, unknown> }).options ?? {}) };
+  const po = (pool() as unknown as { options?: Record<string, unknown> }).options ?? {};
+  const o = { ...po };
+  // pg-pool keeps a password it was given as a hidden (non-enumerable) option, which a spread
+  // leaves behind: the pool's separate DATABASE_PASSWORD (key=value DSN), or the Entra token function.
+  if ("password" in po) o.password = po.password;
   for (const k of ["max", "min", "idleTimeoutMillis", "maxUses", "allowExitOnIdle", "Client", "Promise", "log", "maxLifetimeSeconds"]) delete o[k];
   const listenUrl = process.env.DATABASE_LISTEN_URL;
-  // 1.21.0: DATABASE_PASSWORD applies to it too (lib/db-url).
-  if (listenUrl) o.connectionString = withDatabasePassword(listenUrl);
+  if (listenUrl && databaseAuth() === "entra") {
+    // 1.21.3 (lib/db-auth): the listen address taken apart like the pool's, with
+    // the managed identity's token as its password and verified SSL (a
+    // connection string here would replace the token with its empty password).
+    delete o.connectionString;
+    Object.assign(o, entraClientConfig(listenUrl));
+  } else if (listenUrl) {
+    // 1.21.0: DATABASE_PASSWORD applies to it too (lib/db-url).
+    o.connectionString = withDatabasePassword(listenUrl);
+  }
   return { ...(o as ClientConfig), keepAlive: true, keepAliveInitialDelayMillis: 10_000 };
 }
+
+/** Tests (1.21.3): the LISTEN connection's driver settings. */
+export const listenClientConfigForTests = clientConfig;
 
 /** Live updates can be offered right now (the listener is up and proven). */
 export function liveAvailable(): boolean {

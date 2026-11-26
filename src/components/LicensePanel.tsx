@@ -2,8 +2,10 @@
 
 import { SetByPlatform } from "./CloudManaged";
 import { useEffect, useState } from "react";
-import { ExternalLink } from "lucide-react";
-import { buttonClass } from "@/components/Button";
+import { ExternalLink, RefreshCw } from "lucide-react";
+import { Button, buttonClass } from "@/components/Button";
+import { RelativeTime } from "@/components/RelativeTime";
+import { CLOUD_MANAGED_TITLE } from "@/lib/cloud";
 import { confirmDialog } from "@/components/Dialog";
 import { LoadingRow } from "@/components/Spinner";
 import { toast } from "@/components/Toasts";
@@ -19,8 +21,15 @@ interface FeatureRow {
 }
 interface LicenseView {
   edition: "enterprise" | "community";
-  /** "platform" (1.21.0): cloud mode's COMPASSDOCS_LICENSE_KEY, read-only. */
-  source: "platform" | "settings" | "env" | "none";
+  /** "platform" (1.21.0): cloud mode's COMPASSDOCS_LICENSE_KEY, read-only; "cloud" (1.21.3): fetched from the console. */
+  source: "cloud" | "platform" | "settings" | "env" | "none";
+  /** 1.21.3: cloud mode, the license is CompassDocs Cloud's (null otherwise). */
+  cloud: {
+    /** The console is asked for it (COMPASSDOCS_LICENSE_URL): Check now. */
+    pull: boolean;
+    /** The last check's outcome (any replica). */
+    check: { checkedAt: string; result: CheckResult; message: string; updatedAt: string | null } | null;
+  } | null;
   status: "none" | "invalid" | "active" | "grace" | "expired";
   reason?: string;
   daysLeft?: number;
@@ -41,6 +50,10 @@ interface LicenseView {
   buyAgentsUrl: string;
   features: FeatureRow[];
 }
+
+type CheckResult = "updated" | "unchanged" | "none" | "rejected" | "unreachable" | "unauthorized" | "error";
+/** Outcomes that are fine: the license in force is the console's latest (or the console has none yet). */
+const CHECK_OK: CheckResult[] = ["updated", "unchanged", "none"];
 
 const field = controlClass(false);
 
@@ -227,12 +240,9 @@ export function LicensePanel() {
             </ul>
           </div>
 
-          {/* Key entry (1.21.0: the platform's key is shown, never replaced) */}
-          {v.source === "platform" ? (
-          <div className="rounded-xl border border-slate-200 bg-surface p-4 shadow-xs">
-            <h3 className="mb-3 font-semibold text-slate-900">License key</h3>
-            <SetByPlatform>CompassDocs Cloud keeps this workspace&rsquo;s license current.</SetByPlatform>
-          </div>
+          {/* Key entry (1.21.0: the platform's key is shown, never replaced; 1.21.3: and the console's, with its last check) */}
+          {v.cloud ? (
+            <CloudLicense v={v} onState={setV} />
           ) : (
           <div className="rounded-xl border border-slate-200 bg-surface p-4 shadow-xs">
             <div className="mb-3 flex items-center justify-between">
@@ -260,7 +270,7 @@ export function LicensePanel() {
           </div>
           )}
 
-          {v.source === "settings" && (
+          {v.source === "settings" && !v.cloud && (
             <DangerZone>
               <DangerAction
                 label="Remove license"
@@ -277,6 +287,86 @@ export function LicensePanel() {
             </DangerZone>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The license card in cloud mode (1.21.3, STYLEGUIDE §Settings pages, "A
+ * setting the platform renews"): "Managed by CompassDocs Cloud", when the
+ * license expires and, when the console is asked for it, when it last was,
+ * what it said, and Check now.
+ */
+function CloudLicense({ v, onState }: { v: LicenseView; onState: (v: LicenseView) => void }) {
+  const [checking, setChecking] = useState(false);
+  const cloud = v.cloud!;
+  const check = cloud.check;
+  const ok = !check || CHECK_OK.includes(check.result);
+
+  async function checkNow() {
+    setChecking(true);
+    const res = await fetch("/api/admin/license/check", { method: "POST" });
+    setChecking(false);
+    const data = await res.json().catch(() => ({}));
+    if (data?.state) onState(data.state);
+    if (!res.ok) {
+      toast("error", data?.error || "Could not check for a renewed license.");
+      return;
+    }
+    if (data.result === "updated") toast("ok", "Installed the renewed license.");
+    else if (CHECK_OK.includes(data.result)) toast("ok", "The license is up to date.");
+    else toast("error", "The license couldn't be checked. The license in force is kept.");
+  }
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-surface p-4 shadow-xs" data-testid="license-cloud">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <h3 className="font-semibold text-slate-900">License key</h3>
+        {cloud.pull && (
+          <Button variant="secondary" size="sm" icon={<RefreshCw />} busy={checking} onClick={checkNow} className="print:hidden">
+            Check now
+          </Button>
+        )}
+      </div>
+      <SetByPlatform label={CLOUD_MANAGED_TITLE}>
+        CompassDocs Cloud keeps this workspace&rsquo;s license current{cloud.pull ? " and checks for a renewal about every 6 hours" : ""}.
+      </SetByPlatform>
+      <dl className="mt-3 grid gap-x-8 gap-y-1.5 text-sm sm:grid-cols-2">
+        <Row
+          label="Expires"
+          value={
+            v.license ? (
+              <span data-testid="license-cloud-expires">
+                {v.license.expires}
+                {(v.status === "active" || v.status === "grace") && v.daysLeft != null && (
+                  <span className="font-normal text-slate-500"> · {v.daysLeft}d left</span>
+                )}
+              </span>
+            ) : (
+              "Not installed yet"
+            )
+          }
+        />
+        {cloud.pull && (
+          <Row
+            label="Last checked"
+            value={
+              check ? (
+                <span data-testid="license-cloud-checked">
+                  <RelativeTime value={check.checkedAt} />
+                </span>
+              ) : (
+                "Not yet"
+              )
+            }
+          />
+        )}
+      </dl>
+      {cloud.pull && check && (
+        <p role="status" data-testid="license-cloud-check" className={`mt-2 text-xs ${ok ? "text-slate-500" : "ink-warn"}`}>
+          {check.message}
+        </p>
       )}
     </div>
   );

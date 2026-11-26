@@ -1,98 +1,17 @@
 import { NextResponse } from "next/server";
 import { apiGuard, platformSettingRefusal } from "@/lib/api-auth";
-import { platformValue } from "@/lib/cloud";
-import { setSetting, getDatabaseStats } from "@/lib/db";
+import { licenseManagedByCloud } from "@/lib/cloud";
+import { setSetting } from "@/lib/db";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
-import {
-  licenseState,
-  licenseSource,
-  parseLicense,
-  effectiveFeatures,
-  agentsClaim,
-  agentAllowanceFor,
-  BUY_AGENTS_URL,
-} from "@/lib/license";
-import type { EntitlementFeature } from "@/lib/license";
-import { ee, eePresent, featureEnabled } from "@/lib/ee";
+import { parseLicense } from "@/lib/license";
+import { licenseView } from "@/lib/license-view";
 
 export const dynamic = "force-dynamic";
-
-// All entitlements the product knows about, with friendly labels for the UI.
-const ALL_FEATURES: { key: EntitlementFeature; label: string }[] = [
-  { key: "helpdesk", label: "Helpdesk" },
-  { key: "sso", label: "Single sign-on (SSO)" },
-  { key: "scim", label: "SCIM provisioning" },
-  { key: "audit_export", label: "Audit-log export" },
-  { key: "priority_support", label: "Dedicated support (48-hour response)" },
-  { key: "directory_sync", label: "Microsoft 365 directory sync" },
-  { key: "policy_ack", label: "Policy acknowledgments" },
-  { key: "training", label: "Training & onboarding" },
-];
-
-// How many people count against the helpdesk agent allowance (everyone on
-// Settings → Agents); null when the helpdesk isn't on (not in this build,
-// or not licensed), so there are no agents to count. Loaded lazily.
-async function deskAgentsUsed(): Promise<number | null> {
-  if (!(await featureEnabled("helpdesk"))) return null;
-  const { countDeskAgents } = await import("@/lib/helpdesk/roles-agents");
-  return countDeskAgents();
-}
-
-// Build a client-safe view. The raw license token is never echoed back; its
-// (non-secret) decoded claims are fine to display.
-async function state() {
-  const [s, source, stats, agentsUsed] = await Promise.all([
-    licenseState(),
-    licenseSource(),
-    getDatabaseStats(),
-    deskAgentsUsed(),
-  ]);
-  const bundled = ee().features;
-  const licensed =
-    s.status === "active" || s.status === "grace" ? effectiveFeatures(s.license) : [];
-
-  const license =
-    "license" in s
-      ? {
-          customer: s.license.customer,
-          plan: s.license.plan,
-          seats: s.license.seats,
-          // The key's agent allowance whatever the licence's state (null =
-          // unlimited); agentsAllowed below is the one in force.
-          agents: agentsClaim(s.license),
-          issued: s.license.issued,
-          expires: s.license.expires,
-        }
-      : null;
-
-  return {
-    edition: eePresent() ? "enterprise" : "community",
-    source, // platform | settings | env | none
-    status: s.status, // none | invalid | active | grace | expired
-    reason: s.status === "invalid" ? s.reason : undefined,
-    daysLeft: s.status === "active" || s.status === "grace" ? s.daysLeft : undefined,
-    license,
-    seatsUsed: stats.users,
-    // The helpdesk agent allowance in force (null = unlimited: no limit on
-    // the key, or the licence is in grace) and how many count against it
-    // (null when the helpdesk isn't licensed in this build).
-    agentsAllowed: agentAllowanceFor(s),
-    agentsUsed,
-    buyAgentsUrl: BUY_AGENTS_URL,
-    features: ALL_FEATURES.map((f) => ({
-      key: f.key,
-      label: f.label,
-      bundled: bundled.includes(f.key), // present in this build
-      licensed: licensed.includes(f.key), // granted by the license
-      active: bundled.includes(f.key) && licensed.includes(f.key),
-    })),
-  };
-}
 
 export async function GET() {
   const gate = await apiGuard("admin", "license.read");
   if (gate instanceof NextResponse) return gate;
-  return NextResponse.json(await state());
+  return NextResponse.json(await licenseView());
 }
 
 export async function PATCH(req: Request) {
@@ -106,13 +25,14 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });
   }
 
-  // 1.21.0: the platform's license (cloud mode, COMPASSDOCS_LICENSE_KEY) is read-only here.
-  if (platformValue("COMPASSDOCS_LICENSE_KEY")) return platformSettingRefusal("The license key");
+  // 1.21.0: the platform's license (cloud mode, COMPASSDOCS_LICENSE_KEY) is read-only here;
+  // 1.21.3: so is one the console delivers (COMPASSDOCS_LICENSE_URL).
+  if (licenseManagedByCloud()) return platformSettingRefusal("The license key");
 
   if (body?.clear === true) {
     await setSetting("license_key", "");
     await audit({ actor: actorFrom(gate), action: "license.removed", ip: ipFrom(req) });
-    return NextResponse.json({ ok: true, state: await state() });
+    return NextResponse.json({ ok: true, state: await licenseView() });
   }
 
   const key = typeof body?.license_key === "string" ? body.license_key.trim() : "";
@@ -132,5 +52,5 @@ export async function PATCH(req: Request) {
     });
   }
 
-  return NextResponse.json({ ok: true, state: await state() });
+  return NextResponse.json({ ok: true, state: await licenseView() });
 }
