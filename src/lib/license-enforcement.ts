@@ -13,7 +13,7 @@
 // Nothing here touches lib/license; it reads only its exports. Server-only.
 
 import "server-only";
-import { effectiveFeatures, effectiveLicenseKey, evaluate, licenseKey, type EntitlementFeature, type LicenseState } from "./license";
+import { CLOUD_LICENSE_SETTING, effectiveFeatures, effectiveLicenseKey, evaluate, licenseKey, type EntitlementFeature, type LicenseState } from "./license";
 
 /** The enforcement answer for a licence state (pure; exported for tests). */
 export function stateEnforces(state: LicenseState, feature: EntitlementFeature): boolean {
@@ -32,7 +32,7 @@ let memo: { key: string; until: number; state: LicenseState } | null = null;
 
 /** licenceEnforces for a caller that already holds the settings map: no query. */
 export function licenceEnforcesFrom(feature: EntitlementFeature, settings: Record<string, string>): boolean {
-  const key = effectiveLicenseKey(settings.license_key);
+  const key = effectiveLicenseKey(settings.license_key, settings[CLOUD_LICENSE_SETTING]);
   const now = Date.now();
   if (!memo || memo.key !== key || now >= memo.until) memo = { key, until: now + 60_000, state: evaluate(key) };
   return stateEnforces(memo.state, feature);

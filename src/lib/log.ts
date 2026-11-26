@@ -16,7 +16,7 @@
 //
 // Never secrets: values of the secret variables (lib/cloud ENV_SECRETS and
 // the SMTP and updater ones) are masked wherever they appear, so are
-// passwords in connection strings, bearer tokens and API-key shapes, and
+// passwords in connection strings, bearer tokens, JWTs (1.21.3) and API-key shapes, and
 // fields named like a secret (password, token, secret, key…) are masked
 // whole. The request id is the x-request-id header (the platform's, or one
 // the proxy gives each request in JSON mode, proxy.ts), when the line is
@@ -81,6 +81,10 @@ export function redact(text: string, env: Env = process.env): string {
   out = out.replace(/\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)([^\s@/]+)@/gi, `$1${MASK}@`);
   // Authorization headers and bearer tokens.
   out = out.replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/g, `$1 ${MASK}`);
+  // 1.21.3: a JWT wherever it appears, with or without "Bearer" (a Microsoft
+  // Entra access token: the database's password with DATABASE_AUTH=entra, the
+  // licence endpoint's credential): header.payload.signature, base64url.
+  out = out.replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g, MASK);
   // API-key shapes: Anthropic, OpenAI, Slack, GitHub.
   out = out.replace(/\b(sk-ant-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|gh[pousr]_[A-Za-z0-9]{20,})/g, MASK);
   // 1.21.2: Azure Storage credentials: a connection string's AccountKey or

@@ -4,6 +4,69 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.21.3] - 2026-11-26
+
+Cloud mode, part four: no database password anywhere, and a license the
+console renews without a restart. Both are opt-in; a self-hosted install
+(and a cloud workspace that sets neither) behaves exactly as before.
+
+### Added
+- **Signing in to PostgreSQL with Microsoft Entra (`DATABASE_AUTH=entra`).**
+  The user in `DATABASE_URL` is the managed identity's PostgreSQL role and
+  each new connection's password is an Entra access token for
+  `https://ossrdbms-aad.database.windows.net/.default` (the user-assigned
+  identity named by `AZURE_CLIENT_ID`, or the system-assigned one; workload
+  identity when its variables are set), for every connection the app makes:
+  the pool and the schema boot, the helpdesk's LISTEN connection
+  (`DATABASE_LISTEN_URL` too) and `pg_dump`/`pg_restore` (token in their
+  environment only). The token is cached and renewed in the background well
+  before it expires, so a token service that blips while a token is good
+  costs nothing; with none left, an unreachable token service is waited for
+  like a database restart (1.21.2's rules) and a refused identity fails at
+  once, each with one line naming the identity and the scope. SSL is
+  required and the server's certificate verified (`DATABASE_SSL=no-verify`
+  to only encrypt). A setting that can't work (a password in the URL,
+  `DATABASE_PASSWORD`, SSL off, no role) stops start-up with one line each.
+  The README says what to set up on the Azure side
+  (`pgaadauth_create_principal`, the database's owner and grants).
+- **The license from the console (`COMPASSDOCS_LICENSE_URL`, cloud mode).**
+  The app fetches the workspace's signed license shortly after start, about
+  every 6 hours with jitter (one replica's check spares the others), and on
+  **Check now** (Settings → License, once per 30 s). It signs in with the
+  managed identity (`COMPASSDOCS_LICENSE_AUDIENCE`, recommended) or a bearer
+  token (`COMPASSDOCS_LICENSE_TOKEN`). A fetched license is used only when it
+  verifies with the vendor's key, names this workspace
+  (`COMPASSDOCS_WORKSPACE_ID`, a new `workspace` claim), is active, and is
+  not older or shorter than the license in force; the last good one is kept
+  in the database, so a restart survives a console outage, and
+  `COMPASSDOCS_LICENSE_KEY` stays the bootstrap. The request is limited to
+  15 s and 16 KB, follows redirects only to the same origin, and a console
+  that is down is retried with backoff (or its `Retry-After`), logged once.
+  The HTTP contract is in the README, "License from the console". Renewals
+  are audited ("Installed a renewed license from CompassDocs Cloud"), and
+  so is Check now.
+- `POST /api/admin/license/check` (Check now; `429` with `Retry-After`
+  inside 30 s).
+
+### Changed
+- **Settings → License in cloud mode** shows the license as "Managed by
+  CompassDocs Cloud", with its expiry, when it was last checked and what the
+  console said; no box to paste one and no Remove. A license the console
+  delivers is refused by `PATCH /api/admin/license` and the setup wizard,
+  like the platform's.
+- One credential per process for everything the app signs in to with its
+  managed identity (Blob Storage, PostgreSQL, the console), in
+  `lib/azure-credential`.
+- Log redaction also masks JWTs (an Entra access token) wherever they
+  appear, in the app's lines and in `start.cjs`'s early ones, and
+  `COMPASSDOCS_LICENSE_TOKEN`.
+
+### Fixed
+- The helpdesk's LISTEN connection lost the database password when it was
+  given separately (`DATABASE_PASSWORD` with a key=value connection
+  string): pg-pool keeps a password it was given as a hidden option, which
+  the listener's copy of the pool's settings left behind.
+
 ## [1.21.2] - 2026-11-26
 
 Cloud mode, part three: a workspace's files in Azure Blob Storage, and

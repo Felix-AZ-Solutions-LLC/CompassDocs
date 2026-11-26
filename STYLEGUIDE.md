@@ -794,6 +794,24 @@ focus):
   such as the From address). The secret itself is never shown, and the
   card's Save and Remove are left out; a choice that stays the workspace's
   (the AI model, sending by Microsoft 365 instead) stays editable beside it.
+- **A setting the platform supplies and renews** (1.21.3: the license in
+  cloud mode, `components/LicensePanel` `CloudLicense`). The card keeps its
+  heading ("License key") and a `secondary` `sm` **Check now** (`RefreshCw`,
+  `busy` while it runs, `print:hidden`) at the right of the heading row,
+  shown only when the platform is asked for it. Under the heading,
+  `SetByPlatform` with `label` "Managed by CompassDocs Cloud" (the value is
+  the platform's *and* it keeps it current, so the chip says who manages it,
+  not only who set it) and one sentence on what it does and how often. Then
+  a `dl` in the page's `Row` recipe: **Expires** (the date, and "· Nd left"
+  in `text-slate-500`; "Not installed yet" in the value's own ink when there
+  is none, never a muted "No …" line, which is an empty state) and **Last
+  checked** (`RelativeTime`). Under it, the platform's last answer as one
+  `text-xs` `role="status"` sentence: `text-slate-500` when all is well,
+  `ink-warn` when its answer was not used (refused, unreachable), saying
+  that the license in force is kept. Toasts: `ok` "Installed the renewed
+  license." or "The license is up to date."; `error` for anything else, and
+  the server's sentence for a check refused as too soon. No paste box, no
+  Remove.
 - **A choice of how something works, with a configuration per choice**
   (1.20.31, Settings → Notifications → Email: SMTP or Microsoft 365,
   `components/MailSettings`) is one `Card` whose status chip is the

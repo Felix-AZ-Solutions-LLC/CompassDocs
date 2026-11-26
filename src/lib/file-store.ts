@@ -37,6 +37,7 @@ import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { PassThrough, Transform, pipeline, type Readable } from "node:stream";
 import { pipeline as pipelineAsync } from "node:stream/promises";
+import { sharedAzureCredential } from "./azure-credential";
 
 export type Env = Record<string, string | undefined>;
 export type FileStoreKind = "local" | "blob";
@@ -379,24 +380,6 @@ function isMissing(e: unknown): boolean {
   return r.status === 404 || r.code === "BlobNotFound";
 }
 
-/**
- * The credential the app signs in to Azure Storage with: workload identity
- * (AZURE_FEDERATED_TOKEN_FILE, AZURE_TENANT_ID, AZURE_CLIENT_ID), then the
- * managed identity (user-assigned by AZURE_CLIENT_ID, or system-assigned).
- * Never a key; never the developer credentials DefaultAzureCredential would
- * also try.
- */
-async function azureCredential(env: Env = process.env) {
-  const id = await import("@azure/identity");
-  const clientId = env.AZURE_CLIENT_ID?.trim() || undefined;
-  const chain: import("@azure/identity").TokenCredential[] = [];
-  const tokenFile = env.AZURE_FEDERATED_TOKEN_FILE?.trim();
-  const tenantId = env.AZURE_TENANT_ID?.trim();
-  if (tokenFile && tenantId && clientId) chain.push(new id.WorkloadIdentityCredential({ clientId, tenantId, tokenFilePath: tokenFile }));
-  chain.push(clientId ? new id.ManagedIdentityCredential({ clientId }) : new id.ManagedIdentityCredential());
-  return chain.length === 1 ? chain[0] : new id.ChainedTokenCredential(...chain);
-}
-
 const BLOB_HEADERS = { blobContentType: "application/octet-stream" };
 /** Block size and parallel blocks for streamed uploads. */
 const UPLOAD_BLOCK = 4 * 1024 * 1024;
@@ -419,7 +402,12 @@ class BlobStore implements FileStore {
         };
         const service = this.cfg.connectionString
           ? BlobServiceClient.fromConnectionString(this.cfg.connectionString, options)
-          : new BlobServiceClient(this.cfg.accountUrl, await azureCredential(), options);
+          : new BlobServiceClient(
+              this.cfg.accountUrl,
+              // 1.21.3: the process's one credential (lib/azure-credential), shared with the database's Entra sign-in.
+              (await sharedAzureCredential()) as import("@azure/identity").TokenCredential,
+              options
+            );
         return service.getContainerClient(this.cfg.container);
       })();
       this.client = made;

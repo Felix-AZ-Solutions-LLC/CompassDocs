@@ -53,6 +53,7 @@ import { SEED_SPACES, SEED_DOCS } from "./seed-data";
 import { hashPassword } from "./password";
 import { sealSecret, openSecret, isSealed, getMasterKey, MasterKeyError, noteSealedData } from "./secretbox";
 import { separateDatabasePassword, withDatabasePassword } from "./db-url";
+import { databaseAuth, entraClientConfig } from "./db-auth";
 import { asScope } from "./space-scope";
 import type { SpaceScope } from "./space-scope";
 // Handbooks 1.18.0 (H6): the listing filter for handbook-only documents.
@@ -152,6 +153,21 @@ function makePool(): Pool {
   if (!rawUrl) {
     throw new Error("DATABASE_URL is not set. Point it at a Postgres database.");
   }
+  const common = {
+    max: Number(process.env.DATABASE_POOL_MAX) || 5,
+    // A request waiting for a connection gives up instead of hanging forever
+    // (a leaked or deadlocked client would otherwise stall every request).
+    connectionTimeoutMillis: Number(process.env.DATABASE_POOL_WAIT_MS) || 30_000,
+    // Always speak UTC so timestamp strings are unambiguous.
+    options: "-c timezone=UTC",
+  };
+  // 1.21.3: DATABASE_AUTH=entra (lib/db-auth): no password anywhere; every new
+  // connection signs in with the managed identity's Entra token, over SSL
+  // that verifies the server.
+  if (databaseAuth() === "entra") {
+    const entra = entraClientConfig(rawUrl);
+    return new RetryingPool({ ...entra, ...common, options: [entra.options, common.options].filter(Boolean).join(" ") });
+  }
   // 1.21.0: DATABASE_PASSWORD, when set, is the URL's password (lib/db-url).
   const connectionString = withDatabasePassword(rawUrl);
   const password = separateDatabasePassword(rawUrl);
@@ -176,13 +192,8 @@ function makePool(): Pool {
   return new RetryingPool({
     connectionString,
     ...(password ? { password } : {}),
-    max: Number(process.env.DATABASE_POOL_MAX) || 5,
-    // A request waiting for a connection gives up instead of hanging forever
-    // (a leaked or deadlocked client would otherwise stall every request).
-    connectionTimeoutMillis: Number(process.env.DATABASE_POOL_WAIT_MS) || 30_000,
+    ...common,
     ssl: useSsl ? { rejectUnauthorized: false } : undefined,
-    // Always speak UTC so timestamp strings are unambiguous.
-    options: "-c timezone=UTC",
   });
 }
 

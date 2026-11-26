@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
 import { withDatabasePassword } from "./db-url";
+import { databaseAuth, entraLibpqEnv } from "./db-auth";
 import { createReadStream } from "fs";
 import { mkdir, readdir, stat, unlink } from "fs/promises";
 import { join, basename } from "path";
@@ -49,10 +50,18 @@ function pgBin(name: "pg_dump" | "pg_restore"): string {
 }
 
 // Derive libpq PG* env from DATABASE_URL so credentials never hit the argv/ps.
-function pgEnv(): NodeJS.ProcessEnv {
+// 1.21.3: with DATABASE_AUTH=entra (lib/db-auth), the managed identity's
+// token is PGPASSWORD and SSL verifies the server. Exported for its test.
+export async function pgEnv(): Promise<NodeJS.ProcessEnv> {
   const env: NodeJS.ProcessEnv = { ...process.env };
   const raw = process.env.DATABASE_URL;
   if (!raw) throw new Error("DATABASE_URL is not set.");
+  if (databaseAuth() === "entra") {
+    delete env.PGPASSWORD;
+    delete env.PGSSLMODE;
+    delete env.PGSSLROOTCERT;
+    return { ...env, ...(await entraLibpqEnv(raw)) };
+  }
   // 1.21.0: with DATABASE_PASSWORD (lib/db-url).
   const url = new URL(withDatabasePassword(raw));
   env.PGHOST = url.hostname;
@@ -83,9 +92,10 @@ export function onlyUnknownSettingErrors(stderr: string): boolean {
   return commands.every((l) => /^\s*Command was:\s*SET\s+[a-z_.]+\s*(=|TO)/i.test(l));
 }
 
-function run(cmd: string, args: string[], tolerate?: (stderr: string) => boolean): Promise<void> {
+async function run(cmd: string, args: string[], tolerate?: (stderr: string) => boolean): Promise<void> {
+  const env = await pgEnv();
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { env: pgEnv() });
+    const child = spawn(cmd, args, { env });
     let stderr = "";
     child.stderr.on("data", (d) => (stderr += d.toString()));
     child.on("error", reject);
@@ -359,7 +369,7 @@ export async function restoreBackup(name: string): Promise<RestoreResult> {
     await keeper.query("DROP TABLE IF EXISTS pg_temp.audit_keep");
     await keeper.query("CREATE TEMP TABLE audit_keep AS SELECT * FROM audit_log");
     try {
-      const env = pgEnv();
+      const env = await pgEnv();
       await run(pgBin("pg_restore"), [
         "--clean",
         "--if-exists",

@@ -662,6 +662,9 @@ export const AUDIT_LABELS: Record<string, string> = {
   "scim.setup_with_microsoft_failed": "Could not set up SCIM provisioning with Microsoft",
   "license.set": "Installed license",
   "license.removed": "Removed license",
+  // 1.21.3: Check now on Settings → License (cloud mode, the console's license).
+  "license.checked": "Checked for a renewed license",
+  "license.renewed": "Installed a renewed license from CompassDocs Cloud",
   "backup.create": "Created backup",
   "backup.delete": "Deleted backup",
   "backup.restore": "Restored backup",

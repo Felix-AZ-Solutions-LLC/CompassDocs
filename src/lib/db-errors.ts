@@ -54,12 +54,19 @@ function asErrorLike(e: unknown): ErrorLike | null {
  * out, terminated by the server (restart, failover, scale) or by the
  * driver. Never a statement's own error (a constraint, a syntax error, a
  * deadlock, a cancelled query), never authentication or a missing
- * database: those are not an outage and waiting does not fix them.
+ * database: those are not an outage and waiting does not fix them. With
+ * DATABASE_AUTH=entra, a token service that did not answer counts; a token
+ * that was refused does not.
  */
 export function isConnectionError(e: unknown, depth = 0): boolean {
   const x = asErrorLike(e);
   if (!x) return false;
   if (x.name === "DatabaseUnavailableError") return true;
+  // 1.21.3 (DATABASE_AUTH=entra, lib/db-auth): no token for the connection.
+  // The token service not answering is an outage like the database's own
+  // (waited for); an identity that is missing or may not have the token is
+  // not, and fails at once.
+  if (x.name === "EntraTokenError") return x.code === "ENTRA_TOKEN_UNAVAILABLE";
   const code = typeof x.code === "string" ? x.code : "";
   if (NETWORK_CODES.has(code) || SERVER_CODES.has(code)) return true;
   const message = typeof x.message === "string" ? x.message : "";
