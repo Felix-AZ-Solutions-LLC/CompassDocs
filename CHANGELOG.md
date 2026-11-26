@@ -4,6 +4,90 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.21.4] - 2026-11-26
+
+Cloud mode, part five: CompassDocs staff get into a customer's workspace
+only when the customer approves, for a few hours, with every step in the
+customer's own audit log; and a customer can take a full copy of their
+workspace with them. Both exist only in a CompassDocs Cloud workspace
+(support access also needs `COMPASSDOCS_SUPPORT_PUBLIC_KEY`); a
+self-hosted install sees no new page, setting or route, and its backups
+work as before (a restore also reads an unencrypted files half, below).
+
+### Added
+- **Support access (`COMPASSDOCS_SUPPORT_PUBLIC_KEY`, cloud mode).** No
+  standing access for anyone at CompassDocs. The console asks
+  (`POST /api/support/requests` with a request token signed by its signing
+  service, Ed25519: the staff member, the reason, read-only or
+  administrator, 15 minutes to 8 hours); the workspace's administrators see
+  it in **Settings → Support access** (new, People & access) and in their
+  notifications, and approve or deny it there. The staff member then opens
+  `/login/support#<grant token>` (the token in the fragment: never sent to
+  a server, never in a log), signs in once with it, and works in a support
+  session that ends at the earlier of the token's end and the approved
+  window. Tokens are verified with the support key only (never the license
+  key; up to three keys for rotation), must name this workspace
+  (`COMPASSDOCS_WORKSPACE_ID`), are used once (their ids are remembered
+  past their expiry), and are refused if expired, not yet valid, longer
+  than 8 hours, changed after signing or of the other kind; 60 s of clock
+  skew is tolerated. The token format and the console's HTTP contract are
+  in the README, "Support access".
+- **The support session** is its own service account named "<staff>
+  (CompassDocs support)", never one of the customer's: not listed in Users,
+  not counted as an administrator or a seat, no password, no email, no
+  sign-in step or Duo check (the staff member signed in to the console). A
+  banner on every page (and in the desk) says it is a support session, at
+  which level, whose, and until when, with **End session**. Read-only
+  changes nothing: the request proxy refuses every request that is not a
+  read (pages' server actions included) and the session holds only read
+  permissions. Neither level can see or change support access, export or
+  back up the workspace, open account security or OAuth consent, make API
+  tokens, or (administrator level) change sign-in, single sign-on, Duo,
+  SCIM, people, roles, groups or the license; the permissions behind them
+  are taken away as well. An administrator can revoke access at any moment
+  (its sessions end at once); sessions also end at their time, when support
+  access is switched off, and when the staff member signs out.
+- **Emergency access**, off by default: a workspace can let support sign in
+  without waiting for approval (read-only, or read-only and administrator)
+  with a recorded reason. Administrators are told at once, and every
+  settings page says so until one of them marks it reviewed.
+- **Audit.** Every request, approval, denial, revocation, lapse, sign-in,
+  refused sign-in, page viewed, change made and session end is in the
+  workspace's audit log (category "support"); Settings → Support access
+  lists waiting, active and past access with pages viewed and changes made,
+  and links to the audit log filtered to support (`/admin/audit?category=`
+  now opens the log on a category).
+- **Workspace export (cloud mode).** Settings → Import & export → **Workspace
+  export**: one archive of the whole workspace, the database (`pg_dump`
+  custom format, live sign-in state left out) and every stored file, with a
+  README saying how to bring it into a self-hosted CompassDocs and a
+  manifest with sizes and SHA-256. The two data files are a backup set, so
+  a self-hosted install restores the export from Settings → Backups. Made in
+  the background with progress on the page, streamed into the workspace's
+  own file store (its blob container, or the uploads folder), never the
+  app's local disk, with bounded memory; downloadable for 7 days by
+  administrators (`system.export`) from the app only (byte ranges for
+  resuming; never a public or signed URL; a download another site starts is
+  refused), never by a support session. One export at a time, three a
+  day; every start, finish, failure, download and deletion is audited.
+  Settings → Backups (managed by CompassDocs Cloud) links to it.
+- Routes: `POST /api/support/requests`, `GET /api/support/requests/<id>`,
+  `POST`/`DELETE /api/support/session`, `GET`/`PATCH /api/admin/support`,
+  `POST /api/admin/support/requests/<id>`, `GET`/`POST
+  /api/admin/workspace-export`, `GET`/`DELETE
+  /api/admin/workspace-export/<id>`. All answer 404 outside cloud mode
+  (the support ones also without the key).
+
+### Changed
+- **A backup set's files half may be unencrypted** (`compassdocs-<stamp>.files.tar`,
+  as a workspace export carries it): Settings → Backups lists, downloads,
+  deletes and restores it like the encrypted `.files.tar.enc`.
+- Backups of the uploads folder leave out `exports/` (workspace exports
+  being made or kept).
+- Cloud mode refuses to start when `COMPASSDOCS_SUPPORT_PUBLIC_KEY` is not
+  an Ed25519 public key, is the license key, holds more than three keys, or
+  is set without `COMPASSDOCS_WORKSPACE_ID` (one line each).
+
 ## [1.21.3] - 2026-11-26
 
 Cloud mode, part four: no database password anywhere, and a license the

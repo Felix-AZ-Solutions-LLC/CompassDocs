@@ -33,6 +33,7 @@ import { firstSettingsHref } from "@/components/helpdesk/desk/settings/settings-
 import { agentAvailability, agentReadingPrefs, deskAccess, deskRoleCaps } from "./desk-access";
 import { deskLookFor } from "@/lib/helpdesk/appearance";
 import { claudeDeskClientProps } from "@/lib/helpdesk/claude/desk-props";
+import { SupportBanner } from "@/components/support/SupportBanner";
 
 export const dynamic = "force-dynamic";
 
@@ -147,6 +148,8 @@ export default async function DeskLayout({ children }: { children: React.ReactNo
           <DialogHost />
           {/* 1.20.5: shown only when a desk request is refused for want of a Duo approval. */}
           <DuoDeskPrompt />
+          {/* 1.21.4: a CompassDocs support session says so in the desk too (lib/support). */}
+          {user.support && <SupportBanner support={user.support} floating />}
         </DeskKeysProvider>
       </WidthProvider>
     </SettingsProvider>

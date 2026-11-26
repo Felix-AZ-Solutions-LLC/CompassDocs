@@ -239,6 +239,8 @@ export async function currentSession(): Promise<CurrentSession | null> {
   if (!token) return null;
   const session = await getSessionUser(token);
   if (!session) return null;
+  // 1.21.4: a CompassDocs support session (lib/support) is checked on its own terms.
+  if (session.support_session_id) return supportSession(session, token);
 
   // One settings read serves the idle timeout, the absolute lifetime, the
   // two-step rule and the Duo rules.
@@ -268,6 +270,41 @@ export async function currentSession(): Promise<CurrentSession | null> {
   duoStandings.set(user, standing);
   // Duo at sign-in is still to come: it is the second factor, so it is asked first (M6).
   return { user, token, duo: standing.verdict, pending: pending === "two_step" && standing.verdict.signIn ? null : pending };
+}
+
+/**
+ * A CompassDocs support session (1.21.4, lib/support): valid only while
+ * support access is on, its support session has not ended and its request
+ * is still approved; its end never slides (the access window is the
+ * limit, not activity), it owes no sign-in step and no Duo check (the
+ * staff member signed in to the console; the workspace's own rules are for
+ * its own people), and what the proxy tagged this request with (a page
+ * viewed, a change) goes in the audit log.
+ */
+async function supportSession(session: User & { support_session_id: number | null }, token: string): Promise<CurrentSession | null> {
+  const { liveSupportSession, recordSupportActivity, SUPPORT_ACTIVITY_HEADER } = await import("./support");
+  const live = await liveSupportSession(session.support_session_id!, session.id);
+  if (!live) return null;
+  const user = toSessionUser(session);
+  user.newsletter_role = "none";
+  user.email = "";
+  user.support = {
+    session_id: live.sessionId,
+    level: live.level,
+    staff_name: live.staffName,
+    staff_email: live.staffEmail,
+    reason: live.reason,
+    emergency: live.emergency,
+    expires_at: live.expiresAt,
+  };
+  let tag: string | null = null;
+  try {
+    tag = (await headers()).get(SUPPORT_ACTIVITY_HEADER);
+  } catch {
+    /* outside a request */
+  }
+  await recordSupportActivity(live, session.id, tag);
+  return { user, token, duo: DUO_NOTHING_OWED, pending: null };
 }
 
 // What the Duo check says about the session a SessionUser came from, kept

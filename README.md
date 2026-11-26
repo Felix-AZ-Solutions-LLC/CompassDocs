@@ -350,7 +350,8 @@ secret reference.
 | `COMPASSDOCS_LOG_FORMAT` | | Cloud mode logs JSON; `text` switches back to readable lines, redacted the same way. |
 | `COMPASSDOCS_SHUTDOWN_TIMEOUT` | | Seconds to drain on `SIGTERM` (default 25). |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | yes | Optional: traces and metrics to the workspace's Application Insights. See [Telemetry](#telemetry-opentelemetry). |
-| `COMPASSDOCS_WORKSPACE_ID` | | The workspace's id, set by the console. Required with `COMPASSDOCS_LICENSE_URL`: a license from the console is used only when its `workspace` claim is this id. With telemetry on, every span and metric carries it as `compassdocs.workspace.id`. |
+| `COMPASSDOCS_WORKSPACE_ID` | | The workspace's id, set by the console. Required with `COMPASSDOCS_LICENSE_URL` and `COMPASSDOCS_SUPPORT_PUBLIC_KEY`: a license from the console, and a support token, is used only when it names this id. With telemetry on, every span and metric carries it as `compassdocs.workspace.id`. |
+| `COMPASSDOCS_SUPPORT_PUBLIC_KEY` | | Optional: switches on [support access](#support-access). The public half of the console signing service's Ed25519 support key, as base64 (SubjectPublicKeyInfo, `MCowBQYDK2VwAyEA…`) or PEM; up to three, comma-separated, while the signing key is rotated. Never the license key (refused). Not a valid Ed25519 key, the license key, more than three, or set without `COMPASSDOCS_WORKSPACE_ID`: the process logs `Cloud mode (COMPASSDOCS_CLOUD=1) can't start: COMPASSDOCS_SUPPORT_PUBLIC_KEY …` and exits 1. Read only in cloud mode. |
 
 The workspace's own integration secrets (its Microsoft 365, Slack, Teams,
 single sign-on, SCIM, Duo, directory and helpdesk connections, an
@@ -651,6 +652,183 @@ failures is one line (`license.console_unreachable`,
   today, with one more claim, `workspace`. A license for a cloud workspace
   without that claim is refused by the pull (it still works as
   `COMPASSDOCS_LICENSE_KEY`).
+
+### Support access
+
+Nobody at CompassDocs has standing access to a cloud workspace. With
+`COMPASSDOCS_SUPPORT_PUBLIC_KEY` set (1.21.4), a staff member gets in only
+with a workspace administrator's approval, for at most 8 hours, and
+everything they do is in the workspace's own audit log. Without it (and in
+every self-hosted install) none of this exists: no page, no setting, and
+the routes below answer `404`.
+
+**The flow.**
+
+1. **The console asks.** Its signing service signs a *request token*; the
+   console `POST`s it to the workspace (below). The request waits, for 24
+   hours at most, on **Settings → Support access** (People & access, for
+   whoever may change users' roles: `user.update_role`, the
+   Administrators) and in those administrators' notifications. A workspace
+   can turn requests off there ("Let CompassDocs support ask for access").
+2. **An administrator approves or denies it.** Approval opens the *window*:
+   from now, for the duration the request asked for. They can revoke it at
+   any moment: every session it opened ends at once.
+3. **The staff member signs in.** The signing service signs a *grant token*
+   naming the request, and the staff member's browser opens
+   `<COMPASSDOCS_BASE_URL>/login/support#<grant token>`. The token is in
+   the fragment, which a browser never sends to a server or puts in a
+   referrer, so it is in no log; the page takes it out of the address bar,
+   shows who it is for and, on **Sign in as CompassDocs support**, posts it
+   (same-origin JSON) to `/api/support/session`. A token works once. The
+   session ends at the earlier of the token's `exp` and the window's end.
+4. **Emergency access** (off by default; Settings → Support access →
+   "Emergency access without approval": read-only, or read-only and
+   administrator): a grant token with an `emergency` reason and no request
+   opens a session without waiting. The administrators are told at once,
+   and every settings page says so until one of them marks it reviewed.
+
+**The support session** is its own service account, "<staff name>
+(CompassDocs support)" (`users.status` `service`, `auth_provider`
+`compassdocs_support`), never one of the customer's accounts: it isn't
+listed in Users, counted as a seat or an administrator, has no password and
+no email, and owes no two-step or Duo step. Every page shows a banner: a
+CompassDocs support session, read-only or administrator, whose, ending
+when, and **End session**.
+
+| | Read-only | Administrator |
+| --- | --- | --- |
+| Sees | What an administrator sees | The same |
+| Changes | Nothing: every request that isn't `GET`/`HEAD`/`OPTIONS` is refused before any route runs (pages' server actions included), and the session holds read permissions only | What an administrator can, except below |
+| Never | Its own support access; a workspace export, backups, the Markdown export; account security, API tokens and app (OAuth) connections; the desk's API tokens and webhooks | The same, and changing sign-in, single sign-on, SCIM, Duo, passwords, people, roles, groups, section delegation, the license, webhooks, mail and AI credentials, the directory sync, the public site and share links |
+
+A refused API request answers `403` with `code` `support_read_only` or
+`support_not_allowed`; a refused page shows "Not available in a support
+session" at its own address.
+
+**Audit.** In the workspace's audit log, category `support`: the request
+(`support.requested`), the decision (`support.approved`, `support.denied`,
+`support.revoked`, `support.request_expired`), each sign-in
+(`support.signed_in`, `support.emergency_access`,
+`support.sign_in_refused` with the reason), every page viewed
+(`support.page_viewed`) and every change asked for (`support.action`, its
+method and path, beside the change's own audit row, whose actor is the
+support account), the end of each session (`support.session_ended`: why,
+how long, pages viewed, changes), reviews and settings changes. Settings →
+Support access lists waiting, active and the last 50 requests, with pages
+viewed and changes per request, and opens the log filtered to support.
+
+**The tokens.** A token is the license's shape,
+`base64url(payload).base64url(signature)`: the payload is UTF-8 JSON, the
+signature is Ed25519 over the payload's bytes exactly as sent, made with the
+signing service's private key, and checked against
+`COMPASSDOCS_SUPPORT_PUBLIC_KEY` (any of its keys). At most 8 KB.
+
+| Claim | Request token | Grant token |
+| --- | --- | --- |
+| `typ` | `"compassdocs.support_request"` | `"compassdocs.support_grant"` |
+| `v` | `1` | `1` |
+| `jti` | The token's id, 16–64 of `A–Z a–z 0–9 _ -`; it becomes the request's id | The token's id; used once |
+| `workspace` | `COMPASSDOCS_WORKSPACE_ID`, exactly | The same |
+| `staff` | `{"name": "…", "email": "…"}` (1–120 and up to 254 characters; no control or bidi characters) | The same; must be the request's staff member (email, case-insensitive) |
+| `reason` | Why, 1–500 characters (shown to administrators) | The same |
+| `level` | `"read_only"` (the default) or `"admin"` | At most the request's level (an emergency: at most what the workspace allows) |
+| `duration_minutes` | 15–480: how long the access lasts once approved | |
+| `request` | | The approved request's id (its request token's `jti`) |
+| `emergency` | | Instead of `request`: why it can't wait, 1–500 characters |
+| `iat`, `nbf`, `exp` | Unix seconds. `exp` − `iat` ≤ 1 hour (the request is a message, sent once) | Unix seconds: the sign-in can be used between `nbf` and `exp`, and the session ends by `exp`; `exp` − `nbf` ≤ 8 hours |
+
+Refused: a signature that doesn't verify (any byte of payload or signature
+changed), the other `typ`, another or no `workspace`, `exp` past or `nbf`
+(or `iat`) in the future by more than 60 s, longer than allowed, any claim
+missing or malformed, both or neither of `request` and `emergency`, and a
+grant token's `jti` already used. A refused sign-in is audited with its
+reason; a refusal that depends on the request (not approved yet, a closed
+window, another staff member) doesn't spend the token.
+
+**The console's HTTP contract.** Requests are authenticated by the signed
+token alone (no cookie, no other credential), are limited to 30 a minute per
+address (`429` with `Retry-After`) and every answer is JSON with
+`Cache-Control: no-store`. An error is `{"error": "<one sentence>", "code": "<code>"}`.
+
+- `POST /api/support/requests`, body: the request token as `text/plain` (or
+  `{"token": "…"}` as `application/json`).
+
+  | Status | Body | When |
+  | --- | --- | --- |
+  | `201` | `{"request": {"id", "status": "pending", "level", "duration_minutes", "requested_at", "expires_at", "decided_at": null, "window_starts": null, "window_ends": null}}` | Created |
+  | `200` | the same | That token's request already exists (a retry is safe) |
+  | `401` | `code`: `bad_signature`, `malformed`, `wrong_kind`, `wrong_workspace`, `expired`, `not_yet_valid`, `too_long`, `invalid_claims` | The token was refused |
+  | `403` | `code`: `support_requests_off` | The workspace turned requests off |
+  | `404` | | Not a cloud workspace with support access |
+  | `413`, `415` | | Larger than 8 KB; another content type |
+  | `429` | `code`: `too_many_pending` (10 waiting), `too_many_requests` (30 a day), `rate_limited` | |
+
+- `GET /api/support/requests/<id>`, `Authorization: Bearer <that request's
+  token>` (valid until its `exp`): `200 {"request": {…}}`, the same fields;
+  `status` is `pending`, `approved`, `denied`, `revoked`, `expired` (nobody
+  decided in 24 hours) or `ended` (the window closed). `window_starts` and
+  `window_ends` say when an approved request's grant tokens can be used.
+  `401` (`wrong_request` for another request's token), `404`.
+- The sign-in itself is the browser's, never the console's: open
+  `<COMPASSDOCS_BASE_URL>/login/support#<grant token>` in the staff member's
+  browser. (Its page calls `POST /api/support/session`, same-origin JSON
+  `{"token": "…"}`; `DELETE /api/support/session` ends the session.)
+  Refusals the staff member sees: `replayed` (`409`), `not_approved`,
+  `request_denied`, `request_revoked`, `request_expired`, `wrong_staff`,
+  `level_too_high`, `window_closed`, `unknown_request`, `emergency_off`
+  (`403`), and the token's own refusals (`401`).
+
+**Key rotation.** Add the new public key beside the old one
+(`COMPASSDOCS_SUPPORT_PUBLIC_KEY=<new>,<old>`), roll the revision, switch the
+signing service to the new key, then remove the old one. Removing the
+variable switches support access off: every support session stops at its
+next request.
+
+### Workspace export
+
+A CompassDocs Cloud workspace's administrators (whoever holds
+`system.export`) can take a full copy of their workspace, to keep or to
+move to a self-hosted CompassDocs (1.21.4): **Settings → Import & export →
+Workspace export**. Settings → Backups, which CompassDocs Cloud manages,
+links there. Self-hosted installs don't have it; they have Backups.
+
+**What it is.** One POSIX tar archive,
+`compassdocs-export-<YYYYMMDD-HHMMSS>.tar`:
+
+| Entry | |
+| --- | --- |
+| `compassdocs-export-<stamp>/README.md` | How to import it (below), the sizes and SHA-256 of the two data files |
+| `compassdocs-export-<stamp>/manifest.json` | `{"format": "compassdocs-workspace-export", "version": 1, "created_at", "compassdocs_version", "workspace_id", "database": {"file", "format", "size", "sha256", "rows_left_out_of"}, "files": {"file", "format", "size", "sha256", "count", "bytes", "skipped_while_exporting"}, "file_store"}` |
+| `compassdocs-export-<stamp>/compassdocs-<stamp>.dump` | The database: `pg_dump --format=custom --no-owner --no-privileges`, the same as a backup's, without the rows of `sessions`, `duo_states`, `support_token_uses` and `saml_seen_responses` (who was signed in) |
+| `compassdocs-export-<stamp>/compassdocs-<stamp>.files.tar` | Every stored file (attachments, images, logos, newsletter and helpdesk files) under its stored name, in a backup's files format |
+
+The two `compassdocs-<stamp>.*` files are a backup set, unencrypted (a
+self-hosted restore reads an unencrypted files half since 1.21.4): copy
+them into a self-hosted install's backups volume and restore them from
+Settings → Backups, or use them by hand (`pg_restore`, `tar -x` into the
+uploads folder). The README in the archive has the commands. Integration
+credentials saved in the workspace are encrypted with its
+`COMPASSDOCS_SECRET_KEY`, which is not in the export: ask CompassDocs
+support for it, or enter them again after importing.
+
+**How it is made.** In the background, in three stages shown on the page
+with progress (the database, the files, the archive). Nothing touches the
+app's local disk: the dump and the files archive are streamed into the
+workspace's file store (its blob container with `COMPASSDOCS_FILE_STORE=blob`,
+else the uploads folder, under `exports/`), then the archive is streamed
+from them into the store and they are deleted. Memory stays bounded however
+large the workspace. The store holds up to about twice the workspace's size
+while an export is made. A restart during an export fails it (it says so,
+and its pieces are removed); start it again.
+
+**Who and how often.** One export at a time, three started in any 24
+hours. A ready export can be downloaded for 7 days, by administrators only,
+only through `GET /api/admin/workspace-export/<id>` (single byte ranges, so a
+download can resume; `X-Content-SHA256` carries its hash), never from a
+public or signed URL, never by a support session, and not when another site
+starts the download. It can be deleted sooner. After 7 days it is removed.
+Each start, finish, failure, download and deletion is in the audit log
+(category `workspace`).
 
 ### Moving a self-hosted install to COMPASSDOCS_SECRET_KEY
 

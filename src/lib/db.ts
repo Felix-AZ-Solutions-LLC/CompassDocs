@@ -4,6 +4,7 @@ import { HD_ROLES_SCHEMA } from "./helpdesk/roles-schema";
 import { HD_CALENDARS_SCHEMA } from "./helpdesk/calendars-schema";
 import { EMAIL_PARTS_SCHEMA } from "./email-parts-schema";
 import { NOTIFY_POLICY_SCHEMA } from "./notify-policy-schema";
+import { SUPPORT_SCHEMA, WORKSPACE_EXPORT_SCHEMA } from "./support-schema";
 import { HD_INTAKE_SCHEMA } from "./helpdesk/intake-schema";
 import { HD_ANALYTICS_SCHEMA } from "./helpdesk/analytics/schema";
 import { HD_ASSIGNMENT_SCHEMA } from "./helpdesk/assignment-schema";
@@ -2648,6 +2649,9 @@ const SCHEMA_SQL = `
   --- end Helpdesk 1.19.0 ---------------------------------------------------
   ${EMAIL_PARTS_SCHEMA}
   ${NOTIFY_POLICY_SCHEMA}
+  -- Support access and workspace exports (1.21.4, lib/support-schema; after users and sessions).
+  ${SUPPORT_SCHEMA}
+  ${WORKSPACE_EXPORT_SCHEMA}
 `;
 
 /**
@@ -16798,6 +16802,26 @@ export async function createSession(
   ]);
 }
 
+/**
+ * 1.21.4: the browser session of a CompassDocs support sign-in (lib/support):
+ * its service account, its support session, auth_method "support", and an
+ * expiry that never slides (lib/auth currentSession).
+ */
+export async function createSupportBrowserSession(
+  client: Queryable,
+  token: string,
+  userId: number,
+  expiresAt: Date,
+  supportSessionId: number,
+  ip?: string | null,
+  userAgent?: string | null
+): Promise<void> {
+  await client.query(
+    "INSERT INTO sessions (token, user_id, expires_at, ip, user_agent, auth_method, support_session_id) VALUES ($1,$2,$3,$4,$5,'support',$6)",
+    [sessionKey(token), userId, expiresAt.toISOString(), ip || null, (userAgent || "").slice(0, 300) || null, supportSessionId]
+  );
+}
+
 export interface SessionInfo {
   sid: string; // md5 of the token — an identifier, never a credential
   created_at: string;
@@ -16945,6 +16969,8 @@ export interface SessionFacts {
   session_created_at: string;
   /** sessions.auth_method (1.20.27). */
   session_auth_method: string | null;
+  /** 1.21.4: the support session this browser session belongs to (lib/support), else null. */
+  support_session_id: number | null;
 }
 
 /**
@@ -16971,9 +16997,14 @@ export async function getSessionUser(
   return (
     await q<User & SessionFacts>(
       `SELECT ${cols}, s.expires_at, s.mfa_at, s.mfa_method, s.mfa_bypass_at,
-              s.created_at AS session_created_at, s.auth_method AS session_auth_method
+              s.created_at AS session_created_at, s.auth_method AS session_auth_method,
+              s.support_session_id
        FROM sessions s JOIN users u ON u.id = s.user_id
-       WHERE s.token = $1 AND s.expires_at > now() AND u.status = 'active'`,
+       WHERE s.token = $1 AND s.expires_at > now()
+         AND ((u.status = 'active' AND s.support_session_id IS NULL)
+           -- 1.21.4: a CompassDocs support session (lib/support) is its own service account,
+           -- and only a session the support sign-in opened can be one; lib/auth checks the rest.
+           OR (u.status = 'service' AND u.auth_provider = 'compassdocs_support' AND s.support_session_id IS NOT NULL))`,
       [sessionKey(token)]
     )
   )[0];

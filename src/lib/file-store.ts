@@ -45,6 +45,20 @@ export type FileStoreKind = "local" | "blob";
 /** A file's key: an upload's stored name, or a desk import's upload under hd-import/. */
 const KEY_RE = /^(?:hd-import\/)?[a-f0-9]{32}(?:\.[a-z0-9]{1,12})?$/;
 
+/**
+ * 1.21.4: a workspace export's objects (lib/workspace-export): the archive
+ * and its two parts while it is made, "exports/<32 hex>.tar|dump|files".
+ * Only exportStore() reads or writes these; they are never a stored file
+ * (isValidStoreKey says no), so no file route, listing, usage count, backup
+ * or copy ever sees one.
+ */
+const EXPORT_KEY_RE = /^exports\/[a-f0-9]{32}\.(?:tar|dump|files)$/;
+
+/** Is this a workspace export's object key? */
+export function isExportKey(key: string): boolean {
+  return typeof key === "string" && EXPORT_KEY_RE.test(key);
+}
+
 /** Is this a key a stored file may have? Checked on every call. */
 export function isValidStoreKey(key: string): boolean {
   return typeof key === "string" && KEY_RE.test(key);
@@ -97,8 +111,21 @@ function failedStream(e: Error): Readable {
   return s;
 }
 
-function assertKey(key: string): void {
-  if (!isValidStoreKey(key)) throw notFound(String(key).slice(0, 80));
+/** The keys a store instance answers for: stored files (the default), or a workspace export's objects. */
+interface KeySpace {
+  re: RegExp;
+  /** The folders a local store lists. */
+  dirs: readonly string[];
+}
+const FILE_KEYS: KeySpace = { re: KEY_RE, dirs: ["", "hd-import"] };
+const EXPORT_KEYS: KeySpace = { re: EXPORT_KEY_RE, dirs: ["exports"] };
+
+function validIn(space: KeySpace, key: string): boolean {
+  return typeof key === "string" && space.re.test(key);
+}
+
+function assertKey(key: string, space: KeySpace = FILE_KEYS): void {
+  if (!validIn(space, key)) throw notFound(String(key).slice(0, 80));
 }
 
 // --- Configuration -------------------------------------------------------------------
@@ -244,8 +271,10 @@ function inUploads(...parts: string[]): string {
 class LocalStore implements FileStore {
   readonly kind = "local" as const;
 
+  constructor(private readonly space: KeySpace = FILE_KEYS) {}
+
   private path(key: string): string {
-    assertKey(key);
+    assertKey(key, this.space);
     return inUploads(key);
   }
 
@@ -289,7 +318,7 @@ class LocalStore implements FileStore {
   }
 
   readStream(key: string, range?: { start: number; end: number }): Readable {
-    if (!isValidStoreKey(key)) return failedStream(notFound(String(key).slice(0, 80)));
+    if (!validIn(this.space, key)) return failedStream(notFound(String(key).slice(0, 80)));
     return createReadStream(inUploads(key), range);
   }
 
@@ -306,7 +335,7 @@ class LocalStore implements FileStore {
   }
 
   async stat(key: string): Promise<{ size: number; modifiedAt: Date } | null> {
-    if (!isValidStoreKey(key)) return null;
+    if (!validIn(this.space, key)) return null;
     try {
       const s = await stat(inUploads(key));
       return s.isFile() ? { size: s.size, modifiedAt: s.mtime } : null;
@@ -316,7 +345,7 @@ class LocalStore implements FileStore {
   }
 
   async delete(key: string): Promise<void> {
-    if (!isValidStoreKey(key)) return;
+    if (!validIn(this.space, key)) return;
     await unlink(inUploads(key)).catch(() => {});
   }
 
@@ -325,7 +354,7 @@ class LocalStore implements FileStore {
   }
 
   async *list(): AsyncIterable<StoredFile> {
-    for (const dir of ["", "hd-import"]) {
+    for (const dir of this.space.dirs) {
       let names: string[];
       try {
         names = (await readdir(inUploads(dir))).sort();
@@ -334,7 +363,7 @@ class LocalStore implements FileStore {
       }
       for (const n of names) {
         const key = dir ? `${dir}/${n}` : n;
-        if (!isValidStoreKey(key)) continue;
+        if (!validIn(this.space, key)) continue;
         const s = await this.stat(key);
         if (s) yield { key, size: s.size, modifiedAt: s.modifiedAt };
       }
@@ -389,7 +418,10 @@ class BlobStore implements FileStore {
   readonly kind = "blob" as const;
   private client: Promise<ContainerClient> | null = null;
 
-  constructor(private readonly cfg: BlobConfig) {}
+  constructor(
+    private readonly cfg: BlobConfig,
+    private readonly space: KeySpace = FILE_KEYS
+  ) {}
 
   private container(): Promise<ContainerClient> {
     if (!this.client) {
@@ -419,7 +451,7 @@ class BlobStore implements FileStore {
   }
 
   private async blob(key: string) {
-    assertKey(key);
+    assertKey(key, this.space);
     return (await this.container()).getBlockBlobClient(key);
   }
 
@@ -519,7 +551,7 @@ class BlobStore implements FileStore {
   }
 
   async stat(key: string): Promise<{ size: number; modifiedAt: Date } | null> {
-    if (!isValidStoreKey(key)) return null;
+    if (!validIn(this.space, key)) return null;
     try {
       const p = await (await this.blob(key)).getProperties();
       return { size: p.contentLength ?? 0, modifiedAt: p.lastModified ?? new Date(0) };
@@ -530,7 +562,7 @@ class BlobStore implements FileStore {
   }
 
   async delete(key: string): Promise<void> {
-    if (!isValidStoreKey(key)) return;
+    if (!validIn(this.space, key)) return;
     await (await this.blob(key)).deleteIfExists();
   }
 
@@ -549,8 +581,9 @@ class BlobStore implements FileStore {
   }
 
   async *list(): AsyncIterable<StoredFile> {
-    for await (const b of (await this.container()).listBlobsFlat()) {
-      if (!isValidStoreKey(b.name)) continue;
+    const prefix = this.space === FILE_KEYS ? undefined : `${this.space.dirs[0]}/`;
+    for await (const b of (await this.container()).listBlobsFlat(prefix ? { prefix } : undefined)) {
+      if (!validIn(this.space, b.name)) continue;
       yield { key: b.name, size: b.properties.contentLength ?? 0, modifiedAt: b.properties.lastModified };
     }
   }
@@ -597,6 +630,8 @@ class BlobStore implements FileStore {
 
 const G = globalThis as unknown as {
   __compassFileStore?: { config: string; store: FileStore };
+  /** 1.21.4: the same backend, for a workspace export's objects. */
+  __compassExportStore?: { config: string; store: FileStore };
   /** The blob store answered once (start-up or /readyz): from then on it is "verified". */
   __compassFileStoreVerified?: string;
   __compassFileStoreCheck?: Promise<StoreProblem | null>;
@@ -622,8 +657,25 @@ export function fileStore(env: Env = process.env): FileStore {
   return G.__compassFileStore.store;
 }
 
+/**
+ * 1.21.4: where a workspace export's archive is made and kept
+ * (lib/workspace-export): the same store as the workspace's files (the
+ * uploads folder, or the workspace's container: never the app's local disk
+ * in blob mode), answering only for export keys (isExportKey). In the
+ * uploads folder they are under exports/, which backups leave out
+ * (lib/backup-files excluded).
+ */
+export function exportStore(env: Env = process.env): FileStore {
+  const config = configKey(env);
+  if (G.__compassExportStore?.config !== config) {
+    G.__compassExportStore = { config, store: config === "local" ? new LocalStore(EXPORT_KEYS) : new BlobStore(blobConfig(env), EXPORT_KEYS) };
+  }
+  return G.__compassExportStore.store;
+}
+
 /** Tests: forget the store, the verification and the last problem. */
 export function resetFileStoreForTests(): void {
+  G.__compassExportStore = undefined;
   G.__compassFileStore = undefined;
   G.__compassFileStoreVerified = undefined;
   G.__compassFileStoreCheck = undefined;

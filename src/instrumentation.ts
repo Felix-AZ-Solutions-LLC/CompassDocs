@@ -265,6 +265,31 @@ export async function register() {
   // every 6 hours; a console that can't be reached keeps the license in force.
   if (isCloud()) (await import("./lib/license-pull")).startLicensePull();
 
+  // 1.21.4: support access (lib/support) and workspace exports
+  // (lib/workspace-export), cloud mode only. Each minute: support requests
+  // nobody decided lapse and sessions past their end end (in the audit log);
+  // exports past their time are removed and one a restart cut short fails.
+  // A drain stops an export being made (it is marked failed, its pieces removed).
+  if (isCloud()) {
+    onDrain("workspace-export", async () => {
+      await (await import("./lib/workspace-export")).abortWorkspaceExports();
+    });
+    const cloudTick = async () => {
+      try {
+        await (await import("./lib/support")).sweepSupport();
+      } catch (e) {
+        jobError("[support] sweep error:", e);
+      }
+      try {
+        await (await import("./lib/workspace-export")).sweepWorkspaceExports();
+      } catch (e) {
+        jobError("[workspace-export] sweep error:", e);
+      }
+    };
+    after(20_000, () => runJob("cloud-minutely", cloudTick));
+    every(60_000, () => runJob("cloud-minutely", cloudTick));
+  }
+
   // The domain and the reverse proxy are CompassDocs Cloud's in cloud mode
   // (lib/cloud): no domain re-checks, nothing pushed to a proxy.
   if (isCloud()) return;

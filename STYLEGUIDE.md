@@ -778,14 +778,67 @@ focus):
   `SettingsPage` header, without the Docs button (its docs are for
   self-hosting), over the page-level `EmptyState` (`CloudManagedPage`:
   lucide `Cloud`, "Managed by CompassDocs Cloud", one sentence on what the
-  platform does and where to ask, no action: there is nothing in the
-  workspace to go to). A card's worth inside a page (System's Version &
+  platform does and where to ask, and no action, since there is nothing in
+  the workspace to go to; the one exception (1.21.4) is Backups, whose
+  `action` is **Export your workspace** (`PackageOpen`, to Import & export's
+  Workspace export card), the copy the customer can take themselves). A
+  card's worth inside a page (System's Version &
   updates; the backup rows of its Storage card) is the section tier,
   `CloudManagedNote`: a `SectionEmpty` whose first words, "Managed by
   CompassDocs Cloud.", are `font-medium text-slate-700`, in the card that
   held the controls (Version & updates keeps its title and a `neutral`
   version chip). Never a disabled form: nothing there is the admin's to
   change.
+- **Support access** (1.21.4, cloud mode with a support key; Settings →
+  Support access, `components/support/SupportAccessPanel`). Stacked cards
+  in the order an administrator acts: first, one `notice-warn` card per
+  unreviewed emergency access (`rounded-xl border p-4`, `role="note"`, a
+  bold first line with `ShieldAlert` naming who and when, their reason in
+  quotes, a `text-xs` facts line, then **Mark reviewed** (`secondary` `sm`,
+  `Check`) and **See what they did** (`ghost` `sm`, the audit log filtered
+  to support)); then **Requests waiting** (`Inbox`), **Active access**
+  (`ShieldCheck`), **Settings** (`SlidersHorizontal`) and **Past access**
+  (`History`, its header action **Open the audit log**), each with an `id`
+  and `scroll-mt-6` registered as a topic. The three lists are
+  `padding="none"` cards holding a `divide-y` `ul role="list"`; a row is
+  the person (name in `font-semibold`, email in `text-slate-500`), a
+  `text-xs` facts line of `sm` chips (level: **Read-only** `info`,
+  **Administrator** `warn`; **Emergency** `error`; in Past access the state
+  first: **Active** `ok`, **Revoked** `warn`, **Denied**, **Lapsed**,
+  **Ended** `neutral`) and times as `RelativeTime`, the reason as a
+  `text-sm` line, and the row's actions on the right: **Approve**
+  (`primary` `sm`, asks with a plain `confirmDialog` saying what the level
+  allows, for how long, that it is audited and revocable) and **Deny**
+  (`secondary` `sm`, acts at once: the console can ask again), or
+  **Revoke** (`danger` `sm`, `Ban`, behind a `danger` `confirmDialog`).
+  Empty lists are `SectionEmpty` lines saying what would appear. Settings
+  is a `Toggle` and a `Select` with one Save and the saved state beside it,
+  then a two-row `dl` (`text-xs`) saying what each level may do.
+- **A security event the administrators must see** (1.21.4, emergency
+  support access) is one `notice-warn` line with `ShieldAlert` on every
+  settings page (`admin/layout.tsx`, beside the server switches and the
+  license notice), for whoever can open the page that clears it, with a
+  link there ("Review it in Support access"), until one of them acts on
+  it. Never a dismissible strip: it is state, not news.
+- **Workspace export** (1.21.4, cloud mode, Settings → Import & export,
+  `components/WorkspaceExport`) is the "work that runs in the background"
+  card (below) for a file: a `Card` with `PackageOpen`, the export being
+  made as one `role="status"` `aria-live` sentence of its stage ("Adding
+  files: 120 of 400 (1.2 GB of 3.4 GB)…") over a `role="progressbar"`
+  (`h-1.5 max-w-md`; a pulsing third, `motion-reduce:animate-none`, while
+  the database stage has no total), then each export kept in a bordered
+  `divide-y` list: a state chip (**Being made** `accent`, **Ready** `ok`,
+  **Failed** `error`, **Expired** `neutral`), the file name, a `text-xs`
+  facts line (who, when, size, available until, downloads), the SHA-256 in
+  `font-mono text-2xs`, a failure's reason in `ink-warn` with
+  `TriangleAlert`, and **Download** (a `secondary` `sm` link with
+  `download`, never `Button href`: next/link could prefetch it) and
+  **Delete** (`danger` `sm` behind a `danger` `confirmDialog`). The one
+  primary **Export the workspace** sits at the bottom-left with the limits
+  in a `text-xs` line, asks first (the archive is the whole workspace,
+  unencrypted) and is disabled while one is made. The card reads itself
+  again every 3 seconds while one is made and toasts when it is ready or
+  failed.
 - **A setting the platform supplies** (1.21.0: the license key, the
   Anthropic key, SMTP; cloud mode with the variable set) keeps its card and
   heading; its input gives way to `SetByPlatform`: an `info` chip with
@@ -1218,6 +1271,20 @@ mechanical and comes later.
   above it. `requireUser(…, { allowPending })` lets exactly this page (and
   the forced password change) render while its step is owed; every other
   page and API is refused until it is done.
+- **The support sign-in** (`/login/support`, 1.21.4, cloud mode with
+  support access) is a sign-in surface: `AuthShell`, `AuthHeading`
+  ("CompassDocs support sign-in", one sentence saying it is for
+  CompassDocs staff with access the workspace approved, and audited), then
+  (`components/support/SupportSignIn`) what the link's token says about
+  itself in a `dl` panel (`rounded-lg border bg-canvas`: Staff, Access,
+  Reason; display only, the server checks everything), the `FormError`,
+  one `lg` full-width primary **Sign in as CompassDocs support**
+  (`aria-disabled` while busy) and one `text-xs text-slate-500` sentence on
+  what happens to a session already in the browser and when this one ends.
+  The token arrives in the address's fragment and the page removes it from
+  the address bar at once (`history.replaceState`). Nothing happens without
+  the click. Without a token the column is one sentence saying to open the
+  page from the console.
 - **The first-run setup token** (1.20.27): `/setup`'s first field is
   **Setup token**, a monospace `TextInput` whose help says where it is
   (`docker compose logs app`); `/setup?token=…` fills it. A wrong token
@@ -1826,6 +1893,25 @@ like this, and nothing else in the app invents its own way:
   sentence) to remove the address the request came in on. A closing
   `text-xs` line says which address links in email use; links follow the
   live TLS mode, never the form's.
+- **A support session** (1.21.4, `components/support/SupportBanner`):
+  while a CompassDocs staff member works in a customer's workspace, every
+  page says so. A `notice-warn` strip, `role="region"` named "CompassDocs
+  support session": in the app shell it is the first thing in the content
+  column, `sticky top-0` with a `border-b` and the page's gutters; in the
+  desk it is `floating`, fixed above the bottom edge (`shadow-float`,
+  centered and `max-w-3xl` from `sm`) so the desk's top bar keeps working.
+  One sentence (LifeBuoy first): "CompassDocs support session", "(emergency
+  access)" when it is one, the level ("Read-only: nothing here can be
+  changed" / "Administrator"), the staff member's name and "ends in 2 h 05
+  min" as a `time` whose `data-tt` is the exact end (`tabIndex={0}`), then
+  one `secondary` `sm` **End session** (`LogOut`, `print:hidden`). It reads
+  the clock every 30 seconds and goes to the sign-in page at the end. Never
+  shown to the customer's own accounts, and never dismissible.
+- **A page a session may not open** (1.21.4: a support session's own
+  access, account security, exports): the request proxy shows
+  `(app)/support/not-allowed` at the page's own address, a `PageHeader`
+  (`ShieldOff`, "Not available in a support session") over an `EmptyState`
+  saying what support can't open, with **Go to the dashboard**.
 - **Prerequisite states** ("SMTP is not set up", "this role is built in")
   are `notice-warn` banners with the action that clears them — never a
   bare amber sentence (it reads as a validation error and fails AA in

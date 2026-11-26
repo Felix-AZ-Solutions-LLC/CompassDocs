@@ -104,6 +104,24 @@ export interface SessionUser {
   date_format: "auto" | "medium" | "long" | "iso" | "us" | "eu";
   /** Small data: URL avatar; empty = initials. */
   avatar: string;
+  /**
+   * 1.21.4: set when this is a CompassDocs support session (lib/support):
+   * the app shell shows the support banner from it. Never set for one of
+   * the customer's accounts.
+   */
+  support?: SupportSessionFacts;
+}
+
+/** What the support banner shows (lib/support LiveSupportSession, client-safe). */
+export interface SupportSessionFacts {
+  session_id: number;
+  level: "read_only" | "admin";
+  staff_name: string;
+  staff_email: string;
+  reason: string;
+  emergency: boolean;
+  /** ISO: the session ends then. */
+  expires_at: string;
 }
 
 export interface Suggestion {
