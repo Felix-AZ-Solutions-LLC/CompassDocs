@@ -52,9 +52,33 @@
 //
 // The worker runs in every instance (instrumentation, every minute, and on
 // each enqueue); nothing it logs holds a message or a secret. Server-only.
+//
+// 1.21.5: Azure Communication Services (lib/mail-acs, chosen by the operator
+// with COMPASSDOCS_MAIL_TRANSPORT=acs) goes through the same queue, budget,
+// pauses, notices and admin actions, with these differences:
+//
+//   limits    the configured share of ACS's quota (lib/mail-outbox-shared
+//             acsPace): per minute AND per hour, at most 50 recipients and
+//             10 MB a message, no daily recipient cap.
+//   send      the stored MIME is read back into ACS's JSON (lib/mail-acs-mime)
+//             at send time, From the platform's sender; a sign-in first (as
+//             for Microsoft 365), then posted_at and our own Operation-Id are
+//             stamped, then one POST.
+//   accepted  ACS answers 202: the row becomes `accepted` (handed over, the
+//             result not known yet) and its operation is looked up later
+//             (checkAcceptedAcs: the minute tick and each drain, at most 20 a
+//             run, first after ACS's Retry-After or 5 to 60 seconds, then
+//             backing off). Succeeded: `sent`. Failed or Canceled: `failed`
+//             with ACS's reason. Still running after two hours: `uncertain`.
+//             ACS also limits status lookups (60 a minute, 200 an hour per
+//             subscription): one lookup per message is the usual case.
+//   no answer after the post: `uncertain`, and since the Operation-Id is
+//             ours, settleUncertain looks it up (three tries): found, it is
+//             settled as above; never found, an admin decides.
+//   429       as Microsoft's: everything waits, nothing is failed.
 
 import "server-only";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import type { PoolClient } from "pg";
 import addressparser from "nodemailer/lib/addressparser";
@@ -63,11 +87,18 @@ import { audit, type AuditActor } from "./audit";
 import { openSecret, sealSecret } from "./secretbox";
 import { getM365SendConfig, getMailMethod } from "./mail-config";
 import { MailSendError, MailTooLargeError, assertSendable, buildMime, findInSentItems, postMimeM365, signInForSend, type OutgoingMail } from "./mail-m365";
-import { MAIL_M365_MAX_MIME, MAIL_NOT_SET_UP, bareAddress, cleanFromName, type MailMethod } from "./mail-m365-shared";
+import { MAIL_M365_MAX_MIME, MAIL_NOT_SET_UP, bareAddress, cleanFromName, pacedMethod, type MailMethod } from "./mail-m365-shared";
+import { ACS_DEFAULT_PER_HOUR, ACS_DEFAULT_PER_MINUTE, MAIL_ACS_MAX_BYTES, MAIL_ACS_MAX_RECIPIENTS, acsConfig, acsSelected } from "./mail-acs-config";
+import { decodeWords } from "./mail-acs-mime";
+import { isCloud } from "./cloud";
+import { countMail } from "./telemetry-hooks";
 import type { M365SendConfig } from "./mail-config";
 import {
+  ACS_NO_RESULT_REASON,
+  ACS_UNCERTAIN_REASON,
   DEFAULT_PACE,
   MAIL_DAILY_RECIPIENT_LIMIT,
+  acsPace,
   MAIL_MAX_RECIPIENTS,
   MAIL_REFUSAL_ATTEMPTS,
   MAIL_OUTBOX_CLAIM_MS,
@@ -121,7 +152,16 @@ let hooks: TestHooks = {};
 export function setOutboxForTests(h: TestHooks | null): void {
   hooks = h ?? {};
 }
-const limits = (): PaceLimits => ({ ...DEFAULT_PACE, ...(hooks.limits ?? {}) });
+/** The method whose limits apply when none is named: ACS while the operator chose it, else Microsoft 365. */
+const currentPaced = (): MailMethod => (acsSelected() ? "acs" : "m365");
+function paceFor(method: MailMethod): PaceLimits {
+  if (method !== "acs") return DEFAULT_PACE;
+  const c = acsConfig();
+  return acsPace(c?.perMinute ?? ACS_DEFAULT_PER_MINUTE, c?.perHour ?? ACS_DEFAULT_PER_HOUR);
+}
+const limits = (method: MailMethod = currentPaced()): PaceLimits => ({ ...paceFor(method), ...(hooks.limits ?? {}) });
+/** The service the outbox sends through, as the admins' notices say it. */
+const serviceName = (method: MailMethod = currentPaced()) => (method === "acs" ? (isCloud() ? "CompassDocs Cloud's email service" : "Azure Communication Services") : "Microsoft 365");
 const autoDrain = () => hooks.autoDrain !== false;
 
 // --- MIME --------------------------------------------------------------------------------------
@@ -195,21 +235,6 @@ export function addressList(v: string | string[] | undefined | null): string[] {
   return out;
 }
 
-/** A header value with its RFC 2047 encoded words decoded (a From name in UTF-8). */
-function decodeWords(v: string): string {
-  return v.replace(/=\?([^?]+)\?([bBqQ])\?([^?]*)\?=(?:\s+(?==\?))?/g, (_m, charset: string, enc: string, text: string) => {
-    const bytes =
-      enc.toUpperCase() === "B"
-        ? Buffer.from(text, "base64")
-        : Buffer.from(text.replace(/_/g, " ").replace(/=([0-9A-Fa-f]{2})/g, (_x, h: string) => String.fromCharCode(parseInt(h, 16))), "latin1");
-    try {
-      return new TextDecoder(charset.toLowerCase()).decode(bytes);
-    } catch {
-      return bytes.toString("utf8");
-    }
-  });
-}
-
 /**
  * The message From the CURRENT sending mailbox. A message is built with the
  * mailbox of the moment it was queued; if the admin changed the mailbox
@@ -247,7 +272,7 @@ export async function enqueueOutgoing(m: OutgoingMail, meta: OutboxMeta = {}): P
 }
 
 /** The most recipients one queued message may have: what Graph takes in one send, and never more than the day's cap. */
-export const recipientCap = () => Math.min(MAIL_MAX_RECIPIENTS, limits().safeCap);
+export const recipientCap = (method: MailMethod = currentPaced()) => Math.min(method === "acs" ? MAIL_ACS_MAX_RECIPIENTS : MAIL_MAX_RECIPIENTS, limits(method).safeCap);
 
 /**
  * Queue one built message. `recipients` as the caller gave them (bare
@@ -257,12 +282,18 @@ export const recipientCap = () => Math.min(MAIL_MAX_RECIPIENTS, limits().safeCap
  * the Outbox (and the desk on its message), not only the log.
  */
 export async function enqueueMime(mime: Buffer, info: { recipients: string[]; subject: string }, meta: OutboxMeta = {}): Promise<number> {
-  if (mime.length > MAIL_M365_MAX_MIME) throw new MailTooLargeError(mime.length);
+  // 1.21.5: each service's own limits (ACS: 10 MB and 50 recipients; Microsoft 365: about 2.9 MB and 500).
+  const method = acsSelected() ? "acs" : "m365";
+  if (method === "acs" && mime.length > MAIL_ACS_MAX_BYTES) {
+    const { acsTooLargeSentence } = await import("./mail-acs");
+    throw new MailTooLargeError(mime.length, acsTooLargeSentence(mime.length));
+  }
+  if (method === "m365" && mime.length > MAIL_M365_MAX_MIME) throw new MailTooLargeError(mime.length);
   const given = info.recipients.map((r) => String(r ?? "").trim()).filter(Boolean);
   if (!given.length) throw new MailSendError("This email has no recipients.", 400, "no_recipients");
   const rcpt = addressList(given);
-  const cap = recipientCap();
-  if (rcpt.length > cap) throw new MailSendError(tooManyRecipients(rcpt.length, cap), 400, "too_many_recipients");
+  const cap = recipientCap(method);
+  if (rcpt.length > cap) throw new MailSendError(tooManyRecipients(rcpt.length, cap, method), 400, "too_many_recipients");
   const unusable = rcpt.length === 0;
   const priority = meta.priority ?? mailPriority(meta.kind);
   const shown = (unusable ? given : rcpt).join(", ").slice(0, 4000);
@@ -315,7 +346,7 @@ async function controlRow(client: PoolClient): Promise<{ pausedMs: number | null
  * control row is locked). Wall-clock time (clock_timestamp), not the
  * transaction's start, since a claim may wait for the lock.
  */
-async function budget(client: PoolClient, nowMs: number, pausedMs: number | null, recipients: number, priority: MailPriority): Promise<PaceDecision> {
+async function budget(client: PoolClient, nowMs: number, pausedMs: number | null, recipients: number, priority: MailPriority, lim: PaceLimits = limits()): Promise<PaceDecision> {
   const s = (
     await client.query<{ last_ms: number | null; day: number; minute: number[] | null }>(
       `SELECT (extract(epoch FROM max(at)) * 1000)::float8 AS last_ms,
@@ -324,9 +355,19 @@ async function budget(client: PoolClient, nowMs: number, pausedMs: number | null
          FROM mail_send_ledger WHERE at > clock_timestamp() - interval '24 hours'`
     )
   ).rows[0];
-  const lim = limits();
+  // 1.21.5: an hourly limit (ACS) needs the hour's sends too.
+  const hour = Number.isFinite(lim.perHour)
+    ? (
+        // Only the hour's last perHour sends matter (the oldest of them is the one that must age out).
+        await client.query<{ at_ms: number }>(
+          `SELECT at_ms FROM (SELECT (extract(epoch FROM at) * 1000)::float8 AS at_ms FROM mail_send_ledger
+              WHERE at > clock_timestamp() - interval '60 minutes' ORDER BY at DESC LIMIT $1) last ORDER BY at_ms`,
+          [Math.min(lim.perHour, 1_000_000)]
+        )
+      ).rows.map((x) => Number(x.at_ms))
+    : undefined;
   const d = paceDecision(
-    { nowMs, pausedUntilMs: pausedMs, lastAtMs: s?.last_ms == null ? null : Number(s.last_ms), minute: (s?.minute ?? []).map(Number), dayRecipients: Number(s?.day ?? 0) },
+    { nowMs, pausedUntilMs: pausedMs, lastAtMs: s?.last_ms == null ? null : Number(s.last_ms), minute: (s?.minute ?? []).map(Number), dayRecipients: Number(s?.day ?? 0), hour },
     recipients,
     priority,
     lim
@@ -425,7 +466,7 @@ export async function pauseOutboxForRefusal(reason: string): Promise<void> {
     [text, String(MAIL_REFUSAL_PAUSE_MS)]
   );
   console.error(`[mail-outbox] paused: ${text}`);
-  if (r.rows[0]?.tell) await noticeAdmins("Email is paused", `Email through Microsoft 365 is paused: ${text} Messages wait in the outbox and go out once it is fixed.`);
+  if (r.rows[0]?.tell) await noticeAdmins("Email is paused", `Email through ${serviceName()} is paused: ${text} Messages wait in the outbox and go out once it is fixed.`);
 }
 
 const RATE_REASON = "Microsoft 365 asked this mailbox to slow down.";
@@ -459,7 +500,7 @@ async function noticeFailures(): Promise<void> {
   const n = (await pool().query<{ n: number }>("SELECT count(*)::int AS n FROM mail_outbox WHERE status IN ('failed', 'uncertain') AND updated_at > now() - interval '1 hour'")).rows[0]?.n ?? 1;
   await noticeAdmins(
     n === 1 ? "An email wasn't sent" : `${n} emails weren't sent`,
-    `${n === 1 ? "An email" : `${n} emails`} through Microsoft 365 failed or may not have gone out. Open Settings, Notifications, Email to see why, then retry or discard ${n === 1 ? "it" : "them"}.`
+    `${n === 1 ? "An email" : `${n} emails`} through ${serviceName()} failed or may not have gone out. Open Settings, Notifications, Email to see why, then retry or discard ${n === 1 ? "it" : "them"}.`
   );
 }
 
@@ -498,10 +539,10 @@ async function claimNext(method: MailMethod): Promise<Claim> {
       const next = (await client.query<{ ms: number | null }>("SELECT (extract(epoch FROM min(next_attempt_at) - clock_timestamp()) * 1000)::float8 AS ms FROM mail_outbox WHERE status = 'queued'")).rows[0];
       return { kind: "none", nextMs: next?.ms == null ? null : Math.max(0, Number(next.ms)) } as Claim;
     }
-    // Microsoft 365's limits are the mailbox's; a leftover row going out by SMTP after a switch is not paced.
+    // Microsoft 365's limits are the mailbox's, ACS's the subscription's; a leftover row going out by SMTP after a switch is not paced.
     let ledgerId: number | null = null;
-    if (method === "m365") {
-      const d = await budget(client, nowMs, pausedMs, row.recipient_count, row.priority as MailPriority);
+    if (pacedMethod(method)) {
+      const d = await budget(client, nowMs, pausedMs, row.recipient_count, row.priority as MailPriority, limits(method));
       if (!d.ok) return { kind: "wait", waitMs: d.waitMs } as Claim;
       ledgerId = await takeLedger(client, row.recipient_count, "outbox");
     }
@@ -577,7 +618,7 @@ async function settle(row: ClaimedRow, status: "failed" | "uncertain", error: st
 }
 
 /** What to do with a send that did not go through. `posted`: the request may have left. */
-async function handleFailure(row: ClaimedRow, e: unknown, posted: boolean): Promise<void> {
+async function handleFailure(row: ClaimedRow, e: unknown, posted: boolean, method: MailMethod = "m365"): Promise<void> {
   const msg = oneLine(e);
   let outcome = classifySendError(e as { status?: number; code?: string; kind?: string; name?: string });
   // Nothing left (the sign-in got no answer): try again with a growing wait (1, 2, 4… up to 10 minutes), its slot given back.
@@ -613,7 +654,7 @@ async function handleFailure(row: ClaimedRow, e: unknown, posted: boolean): Prom
       return pauseOutboxForRefusal(msg);
     }
     case "uncertain":
-      await settle(row, "uncertain", UNCERTAIN_REASON);
+      await settle(row, "uncertain", method === "acs" ? ACS_UNCERTAIN_REASON : UNCERTAIN_REASON);
       return;
     case "transient": {
       const n = row.transient_attempts + 1;
@@ -631,8 +672,8 @@ async function handleFailure(row: ClaimedRow, e: unknown, posted: boolean): Prom
 }
 
 /** Stamp the claim as about to post, if it is still ours (refreshing it). False: someone took it back; send nothing. */
-async function stampPosting(id: number): Promise<boolean> {
-  const r = await pool().query(`UPDATE mail_outbox SET posted_at = clock_timestamp(), claimed_at = clock_timestamp() WHERE id = $1 AND ${MINE} RETURNING id`, [id, INSTANCE]);
+async function stampPosting(id: number, providerOp = ""): Promise<boolean> {
+  const r = await pool().query(`UPDATE mail_outbox SET posted_at = clock_timestamp(), claimed_at = clock_timestamp(), provider_op = $3 WHERE id = $1 AND ${MINE} RETURNING id`, [id, INSTANCE, providerOp]);
   return Boolean(r.rowCount);
 }
 
@@ -652,6 +693,7 @@ async function deliver(id: number, method: MailMethod): Promise<void> {
   }
   let mime: Buffer = Buffer.from(b64, "base64");
   if (method === "smtp") return deliverSmtp(row, mime);
+  if (method === "acs") return deliverAcs(row, mime);
   const cfg = await getM365SendConfig();
   try {
     assertSendable(cfg, mime);
@@ -670,6 +712,191 @@ async function deliver(id: number, method: MailMethod): Promise<void> {
     return handleFailure(row, e, true);
   }
   await markSent(id);
+}
+
+// --- Azure Communication Services (1.21.5) -----------------------------------------------------
+
+const ACS_NOT_SET_UP = "Azure Communication Services isn't set up: set COMPASSDOCS_ACS_ENDPOINT and COMPASSDOCS_ACS_SENDER.";
+/** The first look at an accepted send's result: ACS's Retry-After, within these bounds. */
+const ACS_FIRST_CHECK_MIN_MS = 5_000;
+const ACS_FIRST_CHECK_MAX_MS = 60_000;
+/** Then looked at again after these waits (the last one repeats). */
+const ACS_CHECK_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000];
+/** Still running this long after it was handed over: uncertain, for an admin. */
+const ACS_RESULT_GIVE_UP_MS = 2 * 3_600_000;
+/** Lookups in one run (ACS limits them: 60 a minute, 200 an hour per subscription). */
+const ACS_CHECKS_PER_RUN = 20;
+
+/** One message through ACS: read back into ACS's JSON, a sign-in, then one POST with our own Operation-Id. */
+async function deliverAcs(row: ClaimedRow, mime: Buffer): Promise<void> {
+  const cfg = acsConfig();
+  if (!cfg) {
+    await requeue(row, MAIL_REFUSAL_PAUSE_MS, ACS_NOT_SET_UP, { release: true });
+    return pauseOutboxForRefusal(ACS_NOT_SET_UP);
+  }
+  const acs = await import("./mail-acs");
+  let req: Awaited<ReturnType<typeof acs.acsRequestFor>>;
+  try {
+    const { effectiveReplyTo } = await import("./mail-config");
+    req = acs.acsRequestFor(mime, cfg, { rcpt: row.rcpt, replyTo: await effectiveReplyTo() });
+    await acs.acsSignIn(cfg);
+  } catch (e) {
+    return handleFailure(row, e, false, "acs");
+  }
+  const operationId = randomUUID();
+  await hooks.beforePost?.(row.id);
+  if (!(await stampPosting(row.id, operationId))) return;
+  let op: Awaited<ReturnType<typeof acs.postAcsEmail>>;
+  try {
+    op = await acs.postAcsEmail(req, cfg, operationId);
+    countMail("acs", true);
+  } catch (e) {
+    countMail("acs", false);
+    return handleFailure(row, e, true, "acs");
+  }
+  if (op.status === "Succeeded") {
+    await markSent(row.id);
+    return;
+  }
+  if (op.status === "Failed" || op.status === "Canceled") {
+    await settle(row, "failed", acs.operationSentence(op));
+    return;
+  }
+  const firstMs = Math.min(ACS_FIRST_CHECK_MAX_MS, Math.max(ACS_FIRST_CHECK_MIN_MS, op.retryAfterMs ?? 10_000));
+  // Handed over: the budget slot stays spent (ACS counted it), the claim ends, the result is looked up later.
+  await pool().query(
+    `UPDATE mail_outbox SET status = 'accepted', provider_op = $3, provider_check_at = now() + ($4 || ' milliseconds')::interval, settle_checks = 0,
+            last_error = '', claimed_by = NULL, claimed_at = NULL, ledger_id = NULL, updated_at = now()
+      WHERE id = $1 AND ${MINE}`,
+    [row.id, INSTANCE, op.id, String(firstMs)]
+  );
+  scheduleKick(firstMs);
+}
+
+/** Sent, from a row that is no longer claimed (accepted, or uncertain and found). */
+async function resolveSent(id: number, from: "accepted" | "uncertain"): Promise<boolean> {
+  const r = await pool().query(
+    `UPDATE mail_outbox SET status = 'sent', sent_at = COALESCE(posted_at, now()), mime = NULL, last_error = '', provider_check_at = NULL, updated_at = now()
+      WHERE id = $1 AND status = $2 RETURNING id`,
+    [id, from]
+  );
+  return Boolean(r.rowCount);
+}
+
+/** Failed with ACS's reason (or uncertain, given up on), from a row that is no longer claimed. */
+async function resolveProblem(id: number, from: "accepted" | "uncertain", status: "failed" | "uncertain", reason: string): Promise<void> {
+  const r = await pool().query(
+    `UPDATE mail_outbox SET status = $3, last_error = $4, provider_check_at = NULL, settle_checks = CASE WHEN $3 = 'uncertain' THEN 3 ELSE settle_checks END, updated_at = now()
+      WHERE id = $1 AND status = $2 RETURNING id`,
+    [id, from, status, reason.slice(0, 1000)]
+  );
+  if (!r.rowCount) return;
+  console.error(`[mail-outbox] #${id} ${status}: ${reason}`);
+  await noticeFailures();
+}
+
+type AcsLookup = Awaited<ReturnType<typeof import("./mail-acs").getAcsOperation>>;
+
+/** What a looked-up operation means for a row in `from`. Answers false while it is still running. */
+async function applyOperation(id: number, from: "accepted" | "uncertain", op: AcsLookup): Promise<boolean> {
+  if (op.status === "Succeeded") {
+    await resolveSent(id, from);
+    return true;
+  }
+  if (op.status === "Failed" || op.status === "Canceled") {
+    const { operationSentence } = await import("./mail-acs");
+    await resolveProblem(id, from, "failed", operationSentence(op));
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Look up the result of sends ACS accepted whose time has come (at most
+ * ACS_CHECKS_PER_RUN, each row leased for two minutes so one instance looks
+ * at a time). A 429 puts every waiting look off by its Retry-After. Answers
+ * how many were settled. Never throws for one row.
+ */
+export async function checkAcceptedAcs(): Promise<number> {
+  const cfg = acsConfig();
+  if (!cfg) return 0;
+  const rows = (
+    await pool().query<{ id: string; provider_op: string; settle_checks: number; posted_ms: number | null }>(
+      `UPDATE mail_outbox SET provider_check_at = now() + interval '2 minutes'
+        WHERE id IN (SELECT id FROM mail_outbox WHERE status = 'accepted' AND provider_check_at <= now() ORDER BY provider_check_at LIMIT $1 FOR UPDATE SKIP LOCKED)
+        RETURNING id, provider_op, settle_checks, (extract(epoch FROM posted_at) * 1000)::float8 AS posted_ms`,
+      [ACS_CHECKS_PER_RUN]
+    )
+  ).rows;
+  if (!rows.length) return 0;
+  const { getAcsOperation } = await import("./mail-acs");
+  let settled = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const id = Number(r.id);
+    const later = async (ms: number, note = "") =>
+      pool().query(
+        `UPDATE mail_outbox SET settle_checks = settle_checks + 1, provider_check_at = now() + ($2 || ' milliseconds')::interval, last_error = $3, updated_at = now() WHERE id = $1 AND status = 'accepted'`,
+        [id, String(ms), note.slice(0, 500)]
+      );
+    const tooOld = r.posted_ms != null && Date.now() - Number(r.posted_ms) > ACS_RESULT_GIVE_UP_MS;
+    const backoff = ACS_CHECK_BACKOFF_MS[Math.min(r.settle_checks, ACS_CHECK_BACKOFF_MS.length - 1)];
+    try {
+      const op = await getAcsOperation(r.provider_op, cfg);
+      if (await applyOperation(id, "accepted", op)) settled++;
+      else if (tooOld) await resolveProblem(id, "accepted", "uncertain", ACS_NO_RESULT_REASON);
+      else await later(Math.max(backoff, op.retryAfterMs ?? 0));
+    } catch (e) {
+      const err = e as { status?: number; retryAfterMs?: number | null; code?: string };
+      if (err.status === 429) {
+        // ACS's status lookups are limited too: this one and every other in the run wait.
+        const ms = Math.max(MAIL_RATE_PAUSE_MIN_MS, err.retryAfterMs ?? MAIL_RATE_PAUSE_MIN_MS);
+        const ids = rows.slice(i).map((x) => x.id);
+        await pool().query("UPDATE mail_outbox SET provider_check_at = now() + ($2 || ' milliseconds')::interval WHERE id = ANY($1::bigint[]) AND status = 'accepted'", [ids, String(ms)]);
+        break;
+      }
+      if (tooOld) await resolveProblem(id, "accepted", "uncertain", ACS_NO_RESULT_REASON);
+      else await later(backoff, err.code === "not_found" ? "" : oneLine(e));
+    }
+  }
+  return settled;
+}
+
+/**
+ * An uncertain row that went to ACS (no answer to the POST): its operation
+ * is ours, so it is looked up. Found and finished: settled; found and still
+ * running: accepted (looked up again like the rest); not found: another look
+ * a minute later, three in all, then it waits for an admin.
+ */
+async function settleUncertainAcs(): Promise<number> {
+  const cfg = acsConfig();
+  if (!cfg) return 0;
+  const rows = (
+    await pool().query<{ id: string; provider_op: string }>(
+      `SELECT id, provider_op FROM mail_outbox WHERE status = 'uncertain' AND settle_checks < 3 AND provider_op <> ''
+          AND updated_at < now() - interval '1 minute' ORDER BY id LIMIT 5`
+    )
+  ).rows;
+  if (!rows.length) return 0;
+  const { getAcsOperation } = await import("./mail-acs");
+  let settled = 0;
+  for (const r of rows) {
+    const id = Number(r.id);
+    try {
+      const op = await getAcsOperation(r.provider_op, cfg);
+      if (await applyOperation(id, "uncertain", op)) settled++;
+      else {
+        await pool().query(
+          "UPDATE mail_outbox SET status = 'accepted', last_error = '', settle_checks = 0, provider_check_at = now() + interval '30 seconds', updated_at = now() WHERE id = $1 AND status = 'uncertain'",
+          [id]
+        );
+      }
+    } catch (e) {
+      if ((e as { status?: number }).status === 429) break;
+      await pool().query("UPDATE mail_outbox SET settle_checks = settle_checks + 1, updated_at = now() WHERE id = $1 AND status = 'uncertain'", [id]);
+    }
+  }
+  return settled;
 }
 
 /** A leftover row after a switch to SMTP: the same message, From the SMTP From, to the same people. */
@@ -740,6 +967,12 @@ async function drain(): Promise<{ sent: number; waitMs: number | null }> {
   let handled = 0;
   let waitMs: number | null = null;
   try {
+    // 1.21.5: the results ACS owes us first (cheap when there are none).
+    if (acsSelected()) {
+      await checkAcceptedAcs().catch((e) => console.error("[mail-outbox] ACS result lookup failed:", oneLine(e)));
+      const next = (await pool().query<{ ms: number | null }>("SELECT (extract(epoch FROM min(provider_check_at) - clock_timestamp()) * 1000)::float8 AS ms FROM mail_outbox WHERE status = 'accepted'")).rows[0];
+      if (next?.ms != null) scheduleKick(Math.max(0, Number(next.ms)));
+    }
     for (let i = 0; i < 1000; i++) {
       again = false;
       const method = await getMailMethod();
@@ -795,7 +1028,9 @@ export async function reclaimStale(olderThanMs = MAIL_OUTBOX_CLAIM_MS): Promise<
  * answers "unknown" and the row waits for an admin.
  */
 export async function settleUncertain(): Promise<number> {
-  if ((await getMailMethod()) !== "m365") return 0;
+  const method = await getMailMethod();
+  if (method === "acs") return settleUncertainAcs();
+  if (method !== "m365") return 0;
   const rows = (
     await pool().query<{ id: string; message_id: string }>(
       `SELECT id, message_id FROM mail_outbox WHERE status = 'uncertain' AND settle_checks < 3 AND message_id <> ''
@@ -828,6 +1063,15 @@ export async function outboxTick(): Promise<void> {
   try {
     await reclaimStale();
     await settleUncertain();
+    // 1.21.5: sends ACS accepted whose result can no longer be looked up (ACS is no longer chosen): uncertain after two hours, for an admin.
+    if (!acsConfig()) {
+      await pool().query(
+        `UPDATE mail_outbox SET status = 'uncertain', last_error = $1, settle_checks = 3, provider_check_at = NULL, updated_at = now()
+          WHERE status = 'accepted' AND posted_at < now() - interval '2 hours'`,
+        [ACS_NO_RESULT_REASON]
+      );
+    }
+    // 1.21.5: ACS results are looked up by the worker each time it runs (drain), which this starts.
     kickOutbox();
   } catch (e) {
     console.error("[mail-outbox] tick error:", oneLine(e));
@@ -840,7 +1084,7 @@ export async function outboxView(): Promise<OutboxView> {
   const [method, counts, day, ctl, problems, waiting] = await Promise.all([
     getMailMethod(),
     pool().query<{ queued: number; urgent: number; sent_hour: number; problems: number }>(
-      `SELECT count(*) FILTER (WHERE status IN ('queued', 'sending'))::int AS queued,
+      `SELECT count(*) FILTER (WHERE status IN ('queued', 'sending', 'accepted'))::int AS queued,
               count(*) FILTER (WHERE status = 'queued' AND priority = 0)::int AS urgent,
               count(*) FILTER (WHERE status = 'sent' AND sent_at > now() - interval '1 hour')::int AS sent_hour,
               count(*) FILTER (WHERE status IN ('failed', 'uncertain'))::int AS problems
@@ -853,22 +1097,27 @@ export async function outboxView(): Promise<OutboxView> {
          FROM mail_outbox WHERE status IN ('failed', 'uncertain') ORDER BY updated_at DESC, id DESC LIMIT 50`
     ),
     pool().query<{ id: string; status: "queued" | "sending"; kind: string; priority: number; subject: string; recipients: string; recipient_count: number; queued_at: Date; next_attempt_at: Date; last_error: string }>(
-      `SELECT id, status, kind, priority, subject, recipients, recipient_count, queued_at, next_attempt_at, last_error
-         FROM mail_outbox WHERE status IN ('queued', 'sending') ORDER BY priority, id LIMIT 50`
+      `SELECT id, CASE WHEN status = 'accepted' THEN 'sending' ELSE status END AS status, kind, priority, subject, recipients, recipient_count, queued_at,
+              COALESCE(provider_check_at, next_attempt_at) AS next_attempt_at,
+              CASE WHEN status = 'accepted' THEN 'Handed to Azure Communication Services; waiting for its result.' ELSE last_error END AS last_error
+         FROM mail_outbox WHERE status IN ('queued', 'sending', 'accepted') ORDER BY priority, id LIMIT 50`
     ),
   ]);
   const c = counts.rows[0];
   const p = ctl.rows[0];
   const pausedNow = p && p.paused_until && new Date(p.paused_until).getTime() > Date.now();
+  const lim = limits(pacedMethod(method) ? method : "m365");
   return {
     m365: method === "m365",
+    method,
+    per_hour: Number.isFinite(lim.perHour) ? lim.perHour : null,
     queued: c?.queued ?? 0,
     queued_urgent: c?.urgent ?? 0,
     sent_last_hour: c?.sent_hour ?? 0,
     day_recipients: day.rows[0]?.n ?? 0,
     daily_limit: MAIL_DAILY_RECIPIENT_LIMIT,
-    daily_cap: limits().safeCap,
-    per_minute: limits().perMinute,
+    daily_cap: lim.safeCap,
+    per_minute: lim.perMinute,
     paused: pausedNow ? { until: new Date(p.paused_until!).toISOString(), reason: p.pause_reason, kind: p.pause_kind === "refusal" ? "refusal" : "rate" } : null,
     problems: problems.rows.map(
       (r): OutboxProblem => ({
@@ -916,7 +1165,8 @@ export async function retryOutboxMessage(id: number, by: { actor: AuditActor; ip
   const r = await pool().query<{ was: string; kind: string; subject: string; recipient_count: number }>(
     `WITH old AS (SELECT id, status FROM mail_outbox WHERE id = $1 FOR UPDATE)
      UPDATE mail_outbox m SET status = 'queued', next_attempt_at = now(), queued_at = now(), last_error = '', settle_checks = 0, attempts = 0, transient_attempts = 0,
-            refusals = 0, refused_at = NULL, signin_failures = 0, claimed_by = NULL, claimed_at = NULL, posted_at = NULL, ledger_id = NULL, updated_at = now()
+            refusals = 0, refused_at = NULL, signin_failures = 0, claimed_by = NULL, claimed_at = NULL, posted_at = NULL, ledger_id = NULL,
+            provider_op = '', provider_check_at = NULL, updated_at = now()
        FROM old WHERE m.id = old.id AND old.status IN ('failed', 'uncertain') AND m.mime IS NOT NULL
      RETURNING old.status AS was, m.kind, m.subject, m.recipient_count`,
     [id]

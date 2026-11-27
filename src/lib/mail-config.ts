@@ -20,6 +20,15 @@
 // app (verify: false). Audited: settings.mail_method (the choice),
 // settings.mail_m365 (the configuration: what changed, never the secret),
 // settings.mail_m365_secret (a stored secret replaced). Server-only.
+//
+// 1.21.5: a third method, Azure Communication Services ("acs", lib/mail-acs),
+// is the operator's choice (COMPASSDOCS_MAIL_TRANSPORT=acs, lib/mail-acs-config)
+// and wins over the stored one while it is set: Settings shows it read-only
+// ("Email is sent by CompassDocs Cloud" in cloud mode) and refuses a switch.
+// What stays the workspace's is its reply address (`mail_reply_to`): ACS sends
+// from the platform's MailFrom address, which takes no replies, so a message
+// that names no Reply-To of its own gets this one. Audited as
+// settings.mail_reply_to.
 
 import "server-only";
 import { getSetting, setSetting, pool } from "./db";
@@ -42,6 +51,8 @@ import {
   type MailView,
 } from "./mail-m365-shared";
 import { m365SendSentence } from "./mail-m365-errors";
+import { acsConfig, acsSelected, isBareAddress } from "./mail-acs-config";
+import { isCloud } from "./cloud";
 
 const KEYS = {
   method: "mail_method",
@@ -58,6 +69,8 @@ const KEYS = {
   spObjectId: "mail_m365_sp_object_id",
   entraSend: "mail_m365_entra_send",
   check: "mail_m365_check",
+  // 1.21.5: where replies go when email leaves from a sender that takes none (Azure Communication Services).
+  replyTo: "mail_reply_to",
 } as const;
 
 /** Every settings key this module writes (tests put them back). */
@@ -104,7 +117,35 @@ export interface M365SendConfig {
 }
 
 export async function getMailMethod(): Promise<MailMethod> {
+  // 1.21.5: the operator's choice wins (lib/mail-acs-config); the stored one is kept for when it is unset.
+  if (acsSelected()) return "acs";
   return (await getSetting(KEYS.method)) === "m365" ? "m365" : "smtp";
+}
+
+/** 1.21.5: email goes through Azure Communication Services, so the way it is sent is not the admin's to change. */
+export const ACS_MANAGED = "Email is sent by CompassDocs Cloud, so how it is sent can't be changed here.";
+const ACS_OPERATOR = "Email is sent through Azure Communication Services (COMPASSDOCS_MAIL_TRANSPORT=acs), so how it is sent can't be changed here.";
+
+/** 1.21.5: the workspace's reply address ('' = none set). */
+export async function getWorkspaceReplyTo(): Promise<string> {
+  return ((await getSetting(KEYS.replyTo)) ?? "").trim();
+}
+
+/** Where replies go through ACS: the workspace's reply address, else COMPASSDOCS_ACS_REPLY_TO ('' = nowhere named). */
+export async function effectiveReplyTo(): Promise<string> {
+  return (await getWorkspaceReplyTo()) || acsConfig()?.replyTo || "";
+}
+
+/** Save (or, with '', clear) the workspace's reply address. Audited. Answers whether it changed. */
+export async function saveWorkspaceReplyTo(raw: unknown, by: MailActor): Promise<boolean> {
+  const v = typeof raw === "string" ? raw.trim() : "";
+  if (v.length > 254) throw new MailConfigError("That address is too long.");
+  if (v && !isBareAddress(v)) throw new MailConfigError("Enter one email address for replies, such as help@yourcompany.com, or leave it empty.");
+  const was = await getWorkspaceReplyTo();
+  if (was === v) return false;
+  await setSetting(KEYS.replyTo, v);
+  await audit({ actor: by.actor, action: "settings.mail_reply_to", targetType: "settings", targetId: "mail", targetLabel: "Email", details: { from: was || null, to: v || null }, ip: by.ip ?? null });
+  return true;
 }
 
 export async function getM365SendConfig(): Promise<M365SendConfig> {
@@ -171,6 +212,7 @@ export const graphUserOf = (c: Pick<M365SendConfig, "mailbox" | "graphUser">) =>
 
 /** Whether `method`'s configuration is complete enough to send. */
 export async function methodConfigured(method: MailMethod): Promise<boolean> {
+  if (method === "acs") return acsConfig() !== null;
   return method === "m365" ? m365SendConfigured(await getM365SendConfig()) : smtpConfigured(await getSmtpConfig());
 }
 
@@ -185,7 +227,10 @@ export async function mailConfigured(): Promise<boolean> {
  * its display name.
  */
 export async function workspaceFrom(): Promise<string> {
-  if ((await getMailMethod()) === "m365") {
+  const method = await getMailMethod();
+  // 1.21.5: the platform's MailFrom address; its display name is the sender username's, set in Azure.
+  if (method === "acs") return acsConfig()?.sender ?? "";
+  if (method === "m365") {
     const c = await getM365SendConfig();
     if (!m365SendConfigured(c)) return "";
     const name = cleanFromName(c.fromName);
@@ -225,9 +270,23 @@ export function m365View(c: M365SendConfig): MailM365View {
 export async function mailView(): Promise<MailView> {
   const [method, smtp, m365, oneClick] = await Promise.all([getMailMethod(), getSmtpConfig(), getM365SendConfig(), oneClickMailAvailable()]);
   const smtpOk = smtpConfigured(smtp);
+  const acs = method === "acs" ? acsConfig() : null;
   return {
     method,
-    configured: method === "m365" ? m365SendConfigured(m365) : smtpOk,
+    configured: method === "acs" ? acs !== null : method === "m365" ? m365SendConfigured(m365) : smtpOk,
+    acs:
+      method === "acs"
+        ? {
+            sender: acs?.sender ?? "",
+            endpoint_host: acs ? new URL(acs.endpoint).host : "",
+            auth: acs?.auth.kind === "key" ? "connection_string" : "managed_identity",
+            reply_to: await getWorkspaceReplyTo(),
+            reply_to_default: acs?.replyTo ?? "",
+            per_minute: acs?.perMinute ?? 0,
+            per_hour: acs?.perHour ?? 0,
+            cloud: isCloud(),
+          }
+        : null,
     // 1.21.0: `platform`: set by the platform (cloud mode), shown read-only.
     smtp: { host: smtp.host, port: smtp.port, secure: smtp.secure, user: smtp.user, has_pass: Boolean(smtp.pass), from: smtp.from, configured: smtpOk, platform: smtpFromPlatform() },
     m365: m365View(m365),
@@ -312,6 +371,7 @@ async function smtpSwitchWarnings(): Promise<string[]> {
  * switching changes something people notice, until `confirm` is true.
  */
 export async function setMailMethod(method: MailMethod, by: MailActor, opts: { force?: boolean; confirm?: boolean } = {}): Promise<boolean> {
+  if (acsSelected()) throw new MailConfigError(isCloud() ? ACS_MANAGED : ACS_OPERATOR, 409, "cloud_managed");
   const from = await getMailMethod();
   if (from === method) return false;
   if (!opts.force && !(await methodConfigured(method))) {

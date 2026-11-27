@@ -11,7 +11,9 @@
 //   - lib/file-store: Azure Blob Storage (1.21.2);
 //   - lib/db-auth: PostgreSQL with DATABASE_AUTH=entra (1.21.3);
 //   - lib/license-pull: the CompassDocs console's licence endpoint, with
-//     COMPASSDOCS_LICENSE_AUDIENCE (1.21.3).
+//     COMPASSDOCS_LICENSE_AUDIENCE (1.21.3);
+//   - lib/mail-acs: Azure Communication Services Email, with
+//     COMPASSDOCS_MAIL_TRANSPORT=acs (1.21.5).
 //
 // CachedToken keeps one access token per scope and renews it well before it
 // expires: callers always get a token with time left on it, the token

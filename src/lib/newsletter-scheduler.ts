@@ -16,6 +16,7 @@ import { getAppSettings } from "./settings-store";
 import { mailAttachment } from "./uploads";
 import { audit } from "./audit";
 import { getMailMethod } from "./mail-config";
+import { pacedMethod } from "./mail-m365-shared";
 import { queueM365Send } from "./newsletter-delivery-start";
 
 export async function sendDueNewsletters(): Promise<void> {
@@ -39,7 +40,7 @@ export async function sendDueNewsletters(): Promise<void> {
         attachments: (await listNewsletterFiles(n.id)).map((f) => mailAttachment(f.filename, f.stored_name)),
       };
       // 1.20.31: through Microsoft 365 the send is queued and paced in the background (lib/newsletter-delivery).
-      if ((await getMailMethod()) === "m365") {
+      if (pacedMethod(await getMailMethod())) {
         let audience = "Everyone";
         if (n.mode === "groups") {
           const names = (await listGroups()).filter((g) => groupIds.includes(g.id)).map((g) => g.name);

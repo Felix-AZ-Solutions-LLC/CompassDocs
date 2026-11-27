@@ -20,6 +20,15 @@
 //            → sign in and ask Graph whether the app may send as the
 //              mailbox, and as the admin's own address (it should not),
 //              sending nothing; kept for the page, audited
+//          { action: "reply_to", reply_to }
+//            → 1.21.5: the workspace's reply address (used through Azure
+//              Communication Services, whose sender takes no replies); ''
+//              clears it; audited (settings.mail_reply_to)
+//
+// 1.21.5: while email goes through Azure Communication Services (the
+// operator's COMPASSDOCS_MAIL_TRANSPORT=acs), "method" and saving with `use`
+// answer 409 code "cloud_managed"; "test" sends through ACS and waits up to
+// 30 seconds for its result; "check" signs in to ACS, sending nothing.
 //
 // Same permissions as the SMTP settings: integration.smtp_read to look,
 // integration.smtp_manage to change or test. Audited in lib/mail-config
@@ -29,17 +38,17 @@
 import { NextResponse } from "next/server";
 import { apiGuard, credentialSaveError } from "@/lib/api-auth";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
-import { MailConfigError, getMailMethod, mailView, methodConfigured, methodSwitchWarnings, saveM365SendConfig, setMailMethod } from "@/lib/mail-config";
+import { MailConfigError, getMailMethod, mailView, methodConfigured, methodSwitchWarnings, saveM365SendConfig, saveWorkspaceReplyTo, setMailMethod } from "@/lib/mail-config";
 import { sendMailWith } from "@/lib/mailer";
 import { probeM365Send } from "@/lib/mail-m365";
-import { methodLabel, type MailMethod } from "@/lib/mail-m365-shared";
+import { methodLabel, type ChosenMailMethod } from "@/lib/mail-m365-shared";
 import type { SessionUser } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 // The Microsoft 365 save signs in first; a test may wait out one Retry-After.
 export const maxDuration = 90;
 
-const asMethod = (v: unknown): MailMethod | null => (v === "smtp" || v === "m365" ? v : null);
+const asMethod = (v: unknown): ChosenMailMethod | null => (v === "smtp" || v === "m365" ? v : null);
 
 export async function GET() {
   const gate = await apiGuard("admin", "integration.smtp_read");
@@ -89,19 +98,30 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ ok: true, verified: r.verified, changed: r.changed, method_changed: r.method_changed, view: await mailView() });
     }
 
+    if (action === "reply_to") {
+      const changed = await saveWorkspaceReplyTo(body?.reply_to, by);
+      // New settings may be what a paused outbox was waiting for.
+      if (changed) await (await import("@/lib/mail-outbox")).resumeOutbox({ onlyRefusal: true }).catch(() => {});
+      return NextResponse.json({ ok: true, changed, view: await mailView() });
+    }
+
     if (action === "test") {
-      const method = asMethod(body?.method) ?? (await getMailMethod());
+      const current = await getMailMethod();
+      // 1.21.5: through ACS there is nothing else to test.
+      const method = current === "acs" ? current : (asMethod(body?.method) ?? current);
       const to = String(body?.to ?? "").trim();
       if (!/^[^\s@<>,;"]+@[^\s@<>,;"]+$/.test(to)) return NextResponse.json({ error: "Enter a recipient address for the test." }, { status: 400 });
       if (!(await methodConfigured(method))) {
         return NextResponse.json({ error: `${methodLabel(method)} isn't set up yet. Save its settings first.` }, { status: 409 });
       }
       const line =
-        method === "m365"
-          ? "This test was sent through Microsoft 365. Email from CompassDocs is set up, and it is in the sending mailbox's Sent Items."
-          : "This test was sent by SMTP. Email from CompassDocs is set up.";
+        method === "acs"
+          ? "This test was sent through Azure Communication Services. Email from CompassDocs is set up."
+          : method === "m365"
+            ? "This test was sent through Microsoft 365. Email from CompassDocs is set up, and it is in the sending mailbox's Sent Items."
+            : "This test was sent by SMTP. Email from CompassDocs is set up.";
       try {
-        await sendMailWith(method, { to: [to], subject: "CompassDocs test email", text: line });
+        await sendMailWith(method, { to: [to], subject: "CompassDocs test email", text: line }, { waitResult: true });
       } catch (e) {
         const error = e instanceof Error ? e.message : "Send failed.";
         await audit({ ...auditBase(by), action: "settings.mail_test", details: { method, ok: false, error: error.slice(0, 300) } });
@@ -109,6 +129,14 @@ export async function PATCH(req: Request) {
       }
       await audit({ ...auditBase(by), action: "settings.mail_test", details: { method, ok: true } });
       return NextResponse.json({ ok: true, status: `sent to ${to}`, method, view: await mailView() });
+    }
+
+    if (action === "check" && (await getMailMethod()) === "acs") {
+      const { probeAcs } = await import("@/lib/mail-acs");
+      const r = await probeAcs();
+      if (r.ok) await (await import("@/lib/mail-outbox")).resumeOutbox({ onlyRefusal: true }).catch(() => {});
+      await audit({ ...auditBase(by), action: "settings.mail_check", details: { method: "acs", ok: r.ok, error: r.ok ? null : r.message.slice(0, 300) } });
+      return NextResponse.json({ ok: r.ok, message: r.message, view: await mailView() });
     }
 
     if (action === "check") {

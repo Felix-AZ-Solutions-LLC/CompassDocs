@@ -15,6 +15,7 @@ import { canSend, canComment } from "@/lib/newsletter-access";
 import { sendNewsletter, archiveNewsletter } from "@/lib/newsletter";
 import { queueM365Send } from "@/lib/newsletter-delivery-start";
 import { getMailMethod } from "@/lib/mail-config";
+import { pacedMethod } from "@/lib/mail-m365-shared";
 import { getAppSettings } from "@/lib/settings-store";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import type { SessionUser } from "@/lib/types";
@@ -91,7 +92,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   // 1.20.31: through Microsoft 365 the send is queued and paced in the background (lib/newsletter-delivery).
-  if ((await getMailMethod()) === "m365") {
+  // 1.21.5: and through Azure Communication Services, on the same paced job and budget.
+  const via = await getMailMethod();
+  if (pacedMethod(via)) {
     const queued = await queueM365Send(n.id, { ...base, to: n.mode === "groups" ? groupIds : "all" }, audience, { id: user.id, name: user.name || user.username });
     if ("error" in queued) return NextResponse.json({ error: queued.error }, { status: queued.status });
     await audit({
@@ -100,7 +103,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       targetType: "newsletter",
       targetId: n.id,
       targetLabel: n.subject,
-      details: { audience, recipients: queued.delivery.total, via: "m365" },
+      details: { audience, recipients: queued.delivery.total, via },
       ip: ipFrom(req),
     });
     return NextResponse.json({ newsletter: await getNewsletter(n.id), queued: queued.delivery.total, delivery: queued.delivery });

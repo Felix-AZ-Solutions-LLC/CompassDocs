@@ -118,8 +118,8 @@ export function NewsletterWorkspace({
   spaces?: SpaceLite[];
   approverPool: ApproverLite[];
   smtpReady: boolean;
-  /** 1.20.31: how the workspace's email goes out; through Microsoft 365 a send is paced in the background. */
-  mailVia?: "smtp" | "m365";
+  /** 1.20.31: how the workspace's email goes out; through Microsoft 365 (1.21.5: or ACS) a send is paced in the background. */
+  mailVia?: "smtp" | "m365" | "acs";
   /** Admin-curated sender list; empty hides the From picker. */
   fromAddresses?: string[];
   /** False for readers who only see sent pieces (no editorial thread). */
@@ -285,7 +285,9 @@ export function NewsletterWorkspace({
           body:
             mailVia === "m365"
               ? "This cannot be undone. It goes out in the background through Microsoft 365, about 25 a minute (Microsoft allows one mailbox about 10,000 a day)."
-              : "This cannot be undone.",
+              : mailVia === "acs"
+                ? "This cannot be undone. It goes out in the background, paced under the workspace's email sending limits."
+                : "This cannot be undone.",
           confirmLabel: "Send",
           danger: true,
         }))
@@ -653,7 +655,7 @@ export function NewsletterWorkspace({
           {files.length === 0 ? (
             <p className="mt-2 text-xs text-slate-500">
               Files attached here go out with the email itself (up to 5 files, 5 MB each).
-              {mailVia === "m365" ? " Through Microsoft 365, one email can be at most about 2.9 MB with all its files: a larger newsletter is refused before it is sent." : ""}
+              {mailVia === "m365" ? " Through Microsoft 365, one email can be at most about 2.9 MB with all its files: a larger newsletter is refused before it is sent." : mailVia === "acs" ? " One email can be at most about 7.5 MB of files: a larger newsletter is refused before it is sent." : ""}
             </p>
           ) : (
             <ul className="mt-2 divide-y divide-slate-100">

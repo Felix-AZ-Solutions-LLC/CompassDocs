@@ -33,15 +33,26 @@
 
 import { cleanM365Address, cleanM365GraphId, isGuid, m365AddressProblem, m365CredentialsProblem, psLiteral, scopeFilter } from "./helpdesk/m365-mail-shared";
 
-export type MailMethod = "smtp" | "m365";
+/**
+ * 1.21.5: "acs" is Azure Communication Services Email (lib/mail-acs), chosen
+ * by the operator (COMPASSDOCS_MAIL_TRANSPORT=acs), never in Settings: it is
+ * not one of MAIL_METHODS.
+ */
+export type MailMethod = "smtp" | "m365" | "acs";
 
-export const MAIL_METHODS: { value: MailMethod; label: string }[] = [
+/** The methods an admin chooses between under Settings → Notifications → Email. */
+export type ChosenMailMethod = Exclude<MailMethod, "acs">;
+
+export const MAIL_METHODS: { value: ChosenMailMethod; label: string }[] = [
   { value: "smtp", label: "SMTP" },
   { value: "m365", label: "Microsoft 365" },
 ];
 
 /** The method's name as the page and diagnostics say it. */
-export const methodLabel = (m: MailMethod) => (m === "m365" ? "Microsoft 365" : "SMTP");
+export const methodLabel = (m: MailMethod) => (m === "m365" ? "Microsoft 365" : m === "acs" ? "Azure Communication Services" : "SMTP");
+
+/** Mail that waits in the outbox and goes out paced (lib/mail-outbox): Microsoft 365 and ACS. SMTP sends on the spot. */
+export const pacedMethod = (m: MailMethod) => m !== "smtp";
 
 /** The app registration the one-click setup makes, or finds by this name and reuses. */
 export const MAIL_M365_APP_NAME = "CompassDocs Workspace Mail";
@@ -122,9 +133,29 @@ export interface SmtpView {
   platform?: boolean;
 }
 
+/** 1.21.5: Azure Communication Services, as the platform (or the operator) set it up. Never a key. */
+export interface AcsView {
+  /** The MailFrom address every email leaves from. */
+  sender: string;
+  /** The resource's host, e.g. acme-mail.communication.azure.com. */
+  endpoint_host: string;
+  /** "managed_identity", or "connection_string" (development). */
+  auth: "managed_identity" | "connection_string";
+  /** The workspace's own reply address ('' = none set). */
+  reply_to: string;
+  /** COMPASSDOCS_ACS_REPLY_TO, used while the workspace sets none ('' = none). */
+  reply_to_default: string;
+  per_minute: number;
+  per_hour: number;
+  /** Cloud mode: the page says "Email is sent by CompassDocs Cloud". */
+  cloud: boolean;
+}
+
 /** GET /api/admin/mail. */
 export interface MailView {
   method: MailMethod;
+  /** 1.21.5: set when email goes through Azure Communication Services (method "acs"), else null. */
+  acs: AcsView | null;
   /** The chosen method is complete enough to send. */
   configured: boolean;
   smtp: SmtpView;

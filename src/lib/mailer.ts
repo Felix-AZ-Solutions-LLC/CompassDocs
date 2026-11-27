@@ -12,6 +12,13 @@
 // refused at once. SMTP sends on the spot, exactly as before. The test
 // emails (sendMailWith, `direct`, workspaceTransport's sendNow) stay direct
 // and synchronous, so the admin sees Microsoft's answer at once.
+//
+// 1.21.5: Azure Communication Services (lib/mail-acs, the operator's
+// COMPASSDOCS_MAIL_TRANSPORT=acs) works as Microsoft 365 does: the same
+// message is built, queued in the outbox and sent paced; the direct sends
+// stay direct (a test email waits up to 30 seconds for ACS's result). From
+// is always the platform's MailFrom address; a chosen sender, or a help
+// address, becomes Reply-To (lib/mail-acs-mime).
 // Server-only.
 
 import "server-only";
@@ -22,7 +29,8 @@ import { MAIL_NOT_SET_UP, type MailMethod } from "./mail-m365-shared";
 import { MailSendError, buildMime, mimeForM365, sendMimeM365, sendViaM365, type OutgoingMail } from "./mail-m365";
 import type { OutboxMeta } from "./mail-outbox";
 import { mailAttachmentsForSend, type MailAttachment } from "./uploads";
-import { telemetryHooks } from "./telemetry-hooks";
+import { countMail, telemetryHooks } from "./telemetry-hooks";
+import { acsConfig } from "./mail-acs-config";
 
 export type { OutgoingMail, OutboxMeta };
 
@@ -46,6 +54,28 @@ export interface SendMailOptions extends OutboxMeta {
   direct?: boolean;
   /** With `direct`: don't wait out a 429 inside the send (the caller pauses instead). */
   noWait?: boolean;
+}
+
+/** 1.21.5: one message now through Azure Communication Services (`waitResult`: the sender is watching, so ACS's result is waited for). */
+async function sendNowAcs(mime: Buffer, rcpt: string[], opts: { wait429?: boolean; waitResult?: boolean } = {}): Promise<void> {
+  const cfg = acsConfig();
+  if (!cfg) throw new MailSendError(MAIL_NOT_SET_UP, 0, "not_set_up");
+  const { sendAcsNow } = await import("./mail-acs");
+  const { addressList } = await import("./mail-outbox");
+  const { effectiveReplyTo } = await import("./mail-config");
+  try {
+    await sendAcsNow(mime, { config: cfg, rcpt: addressList(rcpt), replyTo: await effectiveReplyTo(), wait429: opts.wait429, waitResult: opts.waitResult });
+    countMail("acs", true);
+  } catch (e) {
+    countMail("acs", false);
+    throw e;
+  }
+}
+
+/** sendMail's message for Azure Communication Services: From the platform's sender (a chosen sender is kept as From's address, which lib/mail-acs-mime turns into Reply-To). */
+async function mimeForAcs(m: SendMailInput): Promise<Buffer> {
+  const sender = acsConfig()?.sender ?? "";
+  return buildMime({ from: m.fromOverride || sender, to: m.to, subject: m.subject, text: m.text, html: m.html, attachments: m.attachments });
 }
 
 /**
@@ -72,7 +102,11 @@ export function smtpTransportFor(cfg: SmtpConfig) {
 }
 
 /** Send one email with a given method, now (the settings page's test of the method on screen). Throws with a useful message. */
-export async function sendMailWith(method: MailMethod, m: SendMailInput, opts: { wait429?: boolean } = {}): Promise<void> {
+export async function sendMailWith(method: MailMethod, m: SendMailInput, opts: { wait429?: boolean; waitResult?: boolean } = {}): Promise<void> {
+  if (method === "acs") {
+    await sendNowAcs(await mimeForAcs(m), m.to, opts);
+    return;
+  }
   if (method === "m365") {
     await sendViaM365(m, undefined, opts);
     return;
@@ -107,8 +141,14 @@ export async function sendMail(
 ): Promise<void> {
   const method = await getMailMethod();
   const m = { to, subject, text, html, fromOverride, attachments };
-  if (method !== "m365" || opts.direct) {
+  if (method === "smtp" || opts.direct) {
     await sendMailWith(method, m, { wait429: !opts.noWait });
+    return;
+  }
+  if (method === "acs") {
+    if (!acsConfig()) throw new MailSendError(MAIL_NOT_SET_UP, 0, "not_set_up");
+    const { enqueueMime } = await import("./mail-outbox");
+    await enqueueMime(await mimeForAcs(m), { recipients: to, subject }, { kind: opts.kind, priority: opts.priority, ref: opts.ref });
     return;
   }
   const cfg = await getM365SendConfig();
@@ -121,7 +161,7 @@ export async function sendMail(
 export interface WorkspaceTransport {
   method: MailMethod;
   from: string;
-  /** Through Microsoft 365: queued in the outbox (lib/mail-outbox) with `meta`. By SMTP: sent now. */
+  /** Through Microsoft 365 or ACS: queued in the outbox (lib/mail-outbox) with `meta`. By SMTP: sent now. */
   send: (m: OutgoingMail, meta?: OutboxMeta) => Promise<void>;
   /** Sent now, whatever the method (the desk's test emails). */
   sendNow: (m: OutgoingMail) => Promise<void>;
@@ -134,6 +174,19 @@ export interface WorkspaceTransport {
  */
 export async function workspaceTransport(): Promise<WorkspaceTransport | null> {
   const method = await getMailMethod();
+  if (method === "acs") {
+    const cfg = acsConfig();
+    if (!cfg) return null;
+    return {
+      method,
+      from: cfg.sender,
+      send: async (m, meta) => {
+        const { enqueueOutgoing } = await import("./mail-outbox");
+        await enqueueOutgoing(m, meta ?? {});
+      },
+      sendNow: async (m) => sendNowAcs(await buildMime(m), [...(Array.isArray(m.to) ? m.to : [m.to]), ...(m.cc ? [m.cc] : [])], { waitResult: true }),
+    };
+  }
   if (method === "m365") {
     const cfg = await getM365SendConfig();
     if (!m365SendConfigured(cfg)) return null;

@@ -1909,6 +1909,13 @@ const SCHEMA_SQL = `
     updated_at timestamptz NOT NULL DEFAULT now()
   );
   DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM mail_outbox_control WHERE id = 1) THEN INSERT INTO mail_outbox_control (id) VALUES (1) ON CONFLICT (id) DO NOTHING; END IF; END $$;
+  -- 1.21.5: email through Azure Communication Services (lib/mail-outbox, lib/mail-acs).
+  -- provider_op is the send's Operation-Id (ours, stamped before the POST, so a send
+  -- whose answer never came can be looked up); a row ACS accepted is 'accepted' until
+  -- its result is known, and provider_check_at is when it is looked up next.
+  ALTER TABLE mail_outbox ADD COLUMN IF NOT EXISTS provider_op text NOT NULL DEFAULT '';
+  ALTER TABLE mail_outbox ADD COLUMN IF NOT EXISTS provider_check_at timestamptz;
+  CREATE INDEX IF NOT EXISTS idx_mail_outbox_accepted ON mail_outbox (provider_check_at) WHERE status = 'accepted';
 
   -- Document comments (0.38): a flat discussion under each document, with
   -- @mentions. Admin-deleted comments stay as rows (deleted_at set) so the

@@ -240,11 +240,12 @@ async function smtpTransport(): Promise<Transport | null> {
   if (testTransport) {
     const from = (await workspaceFrom().catch(() => "")) || (await getSmtpConfig()).from;
     const t = testTransport;
-    return { send: (m) => t(m), sendNow: t, from: from || "helpdesk@example.test", m365only: (await getMailMethod().catch(() => "smtp")) === "m365" };
+    return { send: (m) => t(m), sendNow: t, from: from || "helpdesk@example.test", m365only: (await getMailMethod().catch(() => "smtp")) !== "smtp" };
   }
   const t = await workspaceTransport();
   if (!t) return null;
-  return { from: t.from, send: (m, meta) => t.send(m, meta), sendNow: (m) => t.sendNow(m), m365only: t.method === "m365" };
+  // 1.21.5: Azure Communication Services sends from one MailFrom address too, so the same holds.
+  return { from: t.from, send: (m, meta) => t.send(m, meta), sendNow: (m) => t.sendNow(m), m365only: t.method !== "smtp" };
 }
 
 /** Whether helpdesk mail can go out at all (the chosen mail method set up, or a test transport). */

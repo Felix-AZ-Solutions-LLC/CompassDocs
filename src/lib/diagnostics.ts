@@ -12,7 +12,8 @@ import { fileStore, fileStoreKind, storeProblem } from "./file-store";
 import { getSmtpConfig, smtpConfigured } from "./smtp-config";
 import { SECRET_UNREADABLE, getM365SendConfig, getMailMethod, m365SendConfigured } from "./mail-config";
 import { probeM365Send } from "./mail-m365";
-import { MAIL_CHECK_FRESH_MS, secretExpiry, secretExpirySentence, type MailM365Check } from "./mail-m365-shared";
+import { MAIL_CHECK_FRESH_MS, secretExpiry, secretExpirySentence, type MailM365Check, type MailMethod } from "./mail-m365-shared";
+import { acsConfig } from "./mail-acs-config";
 import { aiAvailable, getAiProvider } from "./ai-config";
 import { getEmbeddingsConfig, vectorAvailable } from "./embeddings";
 import { licenseState } from "./license";
@@ -103,9 +104,10 @@ async function checkUploads(): Promise<DiagnosticCheck> {
  * warning.
  */
 export async function checkMail(opts: { live?: boolean } = {}): Promise<DiagnosticCheck> {
-  let method: "smtp" | "m365" = "smtp";
+  let method: MailMethod = "smtp";
   try {
     method = await getMailMethod();
+    if (method === "acs") return await checkAcsMail(opts.live === true);
     if (method === "m365") return await checkM365Mail(opts.live === true);
     const cfg = await getSmtpConfig();
     if (!smtpConfigured(cfg)) {
@@ -126,7 +128,7 @@ export async function checkMail(opts: { live?: boolean } = {}): Promise<Diagnost
   } catch (e) {
     return {
       key: "smtp",
-      label: method === "m365" ? "Email (Microsoft 365)" : "Email (SMTP)",
+      label: method === "acs" ? ACS_LABEL : method === "m365" ? "Email (Microsoft 365)" : "Email (SMTP)",
       status: "fail",
       detail: e instanceof Error ? e.message : String(e),
       fix: method === "m365" ? FIX.m365 : FIX.smtp,
@@ -146,18 +148,39 @@ export async function checkOutbox(): Promise<DiagnosticCheck | null> {
   try {
     const { outboxView } = await import("./mail-outbox");
     const v = await outboxView();
-    if (!v.m365 && !v.queued && !v.problems_total) return null;
+    if (!v.m365 && v.method !== "acs" && !v.queued && !v.problems_total) return null;
     const fix = { href: "/admin/notifications/email#outbox", label: "Open the outbox" };
     const label = "Email outbox";
     if (v.paused?.kind === "refusal") return { key: "mail_outbox", label, status: "fail", detail: `Paused: ${v.paused.reason} ${v.queued} waiting.`, fix };
     if (v.problems_total) {
       return { key: "mail_outbox", label, status: "warn", detail: `${v.problems_total === 1 ? "1 email" : `${v.problems_total} emails`} failed or may not have gone out. ${v.queued} waiting.`, fix };
     }
-    if (v.paused) return { key: "mail_outbox", label, status: "warn", detail: `Microsoft 365 asked to slow down; sending resumes at ${v.paused.until?.slice(11, 16) ?? "soon"} UTC. ${v.queued} waiting.`, fix };
+    const service = v.method === "acs" ? "Azure Communication Services" : "Microsoft 365";
+    if (v.paused) return { key: "mail_outbox", label, status: "warn", detail: `${service} asked to slow down; sending resumes at ${v.paused.until?.slice(11, 16) ?? "soon"} UTC. ${v.queued} waiting.`, fix };
+    if (v.method === "acs") return { key: "mail_outbox", label, status: "pass", detail: `${v.queued} waiting, ${v.sent_last_hour} sent in the last hour, of ${v.per_hour ?? "?"} an hour.` };
     return { key: "mail_outbox", label, status: "pass", detail: `${v.queued} waiting, ${v.sent_last_hour} sent in the last hour, ${v.day_recipients.toLocaleString("en-US")} of ${v.daily_limit.toLocaleString("en-US")} recipients today.` };
   } catch (e) {
     return { key: "mail_outbox", label: "Email outbox", status: "warn", detail: e instanceof Error ? e.message : "Could not read the outbox." };
   }
+}
+
+const ACS_LABEL = "Email (Azure Communication Services)";
+
+/**
+ * 1.21.5: email through Azure Communication Services (lib/mail-acs). A page
+ * render says how it is set up; `live` signs in and looks up an operation
+ * that does not exist (ACS checks the identity first), sending nothing.
+ */
+async function checkAcsMail(live: boolean): Promise<DiagnosticCheck> {
+  const c = acsConfig();
+  if (!c) return { key: "smtp", label: ACS_LABEL, status: "fail", detail: "COMPASSDOCS_MAIL_TRANSPORT is acs but its settings are incomplete: the start-up log says which." };
+  const where = `${c.sender} through ${new URL(c.endpoint).host}`;
+  if (!live) return { key: "smtp", label: ACS_LABEL, status: "pass", detail: `Sends from ${where}, about ${c.perMinute} a minute and ${c.perHour} an hour.` };
+  const { probeAcs } = await import("./mail-acs");
+  const timeout = new Promise<null>((r) => setTimeout(() => r(null), PROBE_BUDGET_MS).unref?.());
+  const r = await Promise.race([probeAcs(c), timeout]);
+  if (!r) return { key: "smtp", label: ACS_LABEL, status: "warn", detail: `Azure Communication Services didn't answer within ${PROBE_BUDGET_MS / 1000} seconds.` };
+  return { key: "smtp", label: ACS_LABEL, status: r.ok ? "pass" : "fail", detail: r.ok ? `${r.message} Sends from ${where}.` : r.message };
 }
 
 async function checkM365Mail(live: boolean): Promise<DiagnosticCheck> {

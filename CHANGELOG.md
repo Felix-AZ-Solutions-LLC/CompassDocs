@@ -4,6 +4,72 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.21.5] - 2026-11-27
+
+Cloud mode, part six, the last of Phase 3: a CompassDocs Cloud workspace's
+email goes out through Azure Communication Services (ACS) Email, signed in
+with the workspace's managed identity, through the same outbox as Microsoft
+365 mail. It is the operator's opt-in (`COMPASSDOCS_MAIL_TRANSPORT=acs`); a
+self-hosted install that does not set it is unchanged.
+
+### Added
+- **Email through Azure Communication Services (`COMPASSDOCS_MAIL_TRANSPORT=acs`).**
+  A third way out beside SMTP and Microsoft 365, set from the environment:
+  `COMPASSDOCS_ACS_ENDPOINT` (the Communication Services resource),
+  `COMPASSDOCS_ACS_SENDER` (a MailFrom address on a verified domain),
+  optional `COMPASSDOCS_ACS_REPLY_TO`, `COMPASSDOCS_ACS_PER_MINUTE` and
+  `COMPASSDOCS_ACS_PER_HOUR` (30 and 100 by default, ACS's defaults for a
+  custom domain). The app signs in with its managed identity (a Microsoft
+  Entra token for `https://communication.azure.com/.default`, the identity
+  Blob Storage and PostgreSQL already use); it needs the **Communication and
+  Email Service Owner** role on the resource, or a custom role with
+  `Microsoft.Communication/CommunicationServices/Read`,
+  `Microsoft.Communication/CommunicationServices/Write` and
+  `Microsoft.Communication/EmailServices/write`. The README's "Email through
+  Azure Communication Services" has the Azure setup.
+- **Through the outbox.** Every message is queued (sealed) as before and
+  posted once to `emails:send` (api-version 2023-03-31) with its own
+  `Operation-Id`. ACS's 202 makes the row *accepted*; its operation is
+  looked up shortly after and then less often: Succeeded → sent, Failed or
+  Canceled → failed with ACS's reason, unknown after two hours → may not
+  have gone out. No answer to the POST is looked up by its `Operation-Id`
+  before an admin is asked. 429 with `Retry-After` pauses the outbox and
+  fails nothing; a refused identity or sender pauses it with the reason and
+  tells the admins once. The outbox paces to the minute **and the hour**
+  limits; newsletters draw from the same budget.
+- **What each email carries.** From the platform's sender (its display name
+  is the sender username's in Azure); Reply-To the message's own, else its
+  From when that is another address (a help address, a newsletter's chosen
+  sender), else the workspace's reply address; plain text and HTML;
+  attachments up to ACS's 10 MB per email after base64, refused in words
+  when queued; at most 50 recipients; `Message-ID`, `In-Reply-To`,
+  `References`, `List-Unsubscribe` and the other headers passed through.
+  Open and click tracking is off.
+- **Settings → Notifications → Email under ACS** says "Email is sent by
+  CompassDocs Cloud from …", keeps the test email (it waits up to 30
+  seconds for ACS's result) and the Outbox (with the hourly limit), and adds
+  **Replies go to**, the one setting that stays the workspace's (audited,
+  `settings.mail_reply_to`). Switching method is refused (409
+  `cloud_managed`). Diagnostics' Run checks signs in to ACS, sending nothing.
+- **Start-up check.** A setting that can't work stops the process with one
+  line each; in cloud mode that includes `COMPASSDOCS_ACS_CONNECTION_STRING`
+  (development only, HMAC-signed) to anything but a loopback endpoint.
+
+### Changed
+- The audit label of `settings.mail_check` is "Checked the email
+  connection" (it now covers ACS too).
+
+### Security
+- ACS access keys (`accesskey=` in a connection string,
+  `COMPASSDOCS_ACS_CONNECTION_STRING`) and HMAC request signatures are
+  masked in every log line, like the tokens and storage keys before them.
+  No token or key is put in an error message.
+
+### Notes
+- Microsoft has announced the retirement of Azure Communication Services,
+  ACS Email included, on 30 September 2028, with new onboarding limited
+  from 23 October 2026. Resources created before then keep working.
+
 ## [1.21.4] - 2026-11-26
 
 Cloud mode, part five: CompassDocs staff get into a customer's workspace
