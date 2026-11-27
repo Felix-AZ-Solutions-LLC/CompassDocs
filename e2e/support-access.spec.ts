@@ -230,6 +230,8 @@ test.describe.serial("cloud mode: support access and the workspace export", () =
     await expect(banner).toContainText("Read-only");
     await expect(banner).toContainText("Sam Support");
     await expect(banner.locator("time")).toHaveAttribute("data-tt", /.+/);
+    // The sidebar footer names what the session may do, never "Admin".
+    await expect(staff.getByRole("link", { name: /Manage account|Sam Support/ }).first()).toContainText("Support · read-only");
     await shoot(staff, "support-banner");
 
     // Read-only: a change is refused before any route runs.
