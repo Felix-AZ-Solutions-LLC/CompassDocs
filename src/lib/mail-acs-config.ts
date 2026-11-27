@@ -60,7 +60,16 @@ export interface AcsConfig {
   perHour: number;
 }
 
-const ADDRESS = /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/;
+/**
+ * One bare address: a local part, then dot-separated domain labels. The labels
+ * exclude "." so the pattern is unambiguous and runs in linear time.
+ */
+const ADDRESS = /^[^\s@<>",;]+@(?:[^\s@<>",;.]+\.)+[^\s@<>",;.]+$/;
+
+/** Is this one bare email address (at most 254 characters)? */
+export function isBareAddress(v: string): boolean {
+  return v.length <= 254 && ADDRESS.test(v);
+}
 
 function loopbackHost(host: string): boolean {
   return /^(localhost|127\.0\.0\.1|\[?::1\]?)$/.test(host);
@@ -117,9 +126,9 @@ export function acsProblems(env: Env = process.env): { fatal: string[]; warnings
   const cloud = isCloud(env);
   const sender = env.COMPASSDOCS_ACS_SENDER?.trim() ?? "";
   if (!sender) fatal.push("COMPASSDOCS_ACS_SENDER is not set: give the MailFrom address, on a domain verified in Azure Communication Services, e.g. DoNotReply@mail.example.com.");
-  else if (!ADDRESS.test(sender)) fatal.push("COMPASSDOCS_ACS_SENDER must be one email address alone (no display name): the display name is the sender username's, set in Azure.");
+  else if (!isBareAddress(sender)) fatal.push("COMPASSDOCS_ACS_SENDER must be one email address alone (no display name): the display name is the sender username's, set in Azure.");
   const replyTo = env.COMPASSDOCS_ACS_REPLY_TO?.trim() ?? "";
-  if (replyTo && !ADDRESS.test(replyTo)) fatal.push("COMPASSDOCS_ACS_REPLY_TO must be one email address.");
+  if (replyTo && !isBareAddress(replyTo)) fatal.push("COMPASSDOCS_ACS_REPLY_TO must be one email address.");
   for (const [name, v] of [
     ["COMPASSDOCS_ACS_PER_MINUTE", env.COMPASSDOCS_ACS_PER_MINUTE],
     ["COMPASSDOCS_ACS_PER_HOUR", env.COMPASSDOCS_ACS_PER_HOUR],

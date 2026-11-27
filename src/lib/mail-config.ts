@@ -51,7 +51,7 @@ import {
   type MailView,
 } from "./mail-m365-shared";
 import { m365SendSentence } from "./mail-m365-errors";
-import { acsConfig, acsSelected } from "./mail-acs-config";
+import { acsConfig, acsSelected, isBareAddress } from "./mail-acs-config";
 import { isCloud } from "./cloud";
 
 const KEYS = {
@@ -139,8 +139,8 @@ export async function effectiveReplyTo(): Promise<string> {
 /** Save (or, with '', clear) the workspace's reply address. Audited. Answers whether it changed. */
 export async function saveWorkspaceReplyTo(raw: unknown, by: MailActor): Promise<boolean> {
   const v = typeof raw === "string" ? raw.trim() : "";
-  if (v && !/^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/.test(v)) throw new MailConfigError("Enter one email address for replies, such as help@yourcompany.com, or leave it empty.");
   if (v.length > 254) throw new MailConfigError("That address is too long.");
+  if (v && !isBareAddress(v)) throw new MailConfigError("Enter one email address for replies, such as help@yourcompany.com, or leave it empty.");
   const was = await getWorkspaceReplyTo();
   if (was === v) return false;
   await setSetting(KEYS.replyTo, v);
