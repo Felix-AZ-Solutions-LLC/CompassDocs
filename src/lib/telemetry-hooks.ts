@@ -18,7 +18,7 @@ export interface TelemetryHooks {
   /** A span around one SMTP send, and the mail counts (lib/mailer). */
   smtp<T>(server: { host: string; port: number }, fn: () => Promise<T>): Promise<T>;
   /** Count one mail handed to Microsoft 365 (sent) or refused (failed). */
-  mail(transport: "smtp" | "m365", ok: boolean): void;
+  mail(transport: "smtp" | "m365" | "acs", ok: boolean): void;
   /** 1.21.2 (lib/db-retry): a database outage began. */
   dbOutage?(): void;
   /** 1.21.2 (lib/db-retry): a request that waited for the database got it, or gave up. */
@@ -33,7 +33,7 @@ export function telemetryHooks(): TelemetryHooks | undefined {
 }
 
 /** Count one mail by outcome, when telemetry is on. Never throws. */
-export function countMail(transport: "smtp" | "m365", ok: boolean): void {
+export function countMail(transport: "smtp" | "m365" | "acs", ok: boolean): void {
   try {
     G.__compassTelemetry?.mail(transport, ok);
   } catch {

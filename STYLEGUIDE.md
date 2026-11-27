@@ -847,6 +847,19 @@ focus):
   such as the From address). The secret itself is never shown, and the
   card's Save and Remove are left out; a choice that stays the workspace's
   (the AI model, sending by Microsoft 365 instead) stays editable beside it.
+- **A choice the platform makes for the workspace** (1.21.5: email through
+  Azure Communication Services, `COMPASSDOCS_MAIL_TRANSPORT=acs`;
+  `components/MailSettings` `AcsMail`). The card keeps its title, its
+  description and its status chip (**Set up** `ok`, **Not set up**
+  `neutral`); the `Segmented` and every option's form give way to one
+  `SetByPlatform` line ("Email is sent by CompassDocs Cloud from
+  noreply@…", or "…through Azure Communication Services…" on a self-hosted
+  install that opted in), never a disabled picker. What stays the
+  workspace's (where replies go) follows as an ordinary `Field` with a
+  `help` line and its own `secondary` **Save**, enabled only once it
+  changed, in a row with the card's `border-t` rhythm; the test row and the
+  Outbox card below stay, their sentences naming the platform. The API
+  refuses the choice itself with 409 code `cloud_managed`.
 - **A setting the platform supplies and renews** (1.21.3: the license in
   cloud mode, `components/LicensePanel` `CloudLicense`). The card keeps its
   heading ("License key") and a `secondary` `sm` **Check now** (`RefreshCw`,

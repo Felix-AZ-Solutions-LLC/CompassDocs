@@ -49,6 +49,11 @@ export async function register() {
   // /readyz stays not ready until it answers. Nothing for the uploads folder.
   await (await import("./lib/file-store")).checkFileStoreStartup(logEvent);
 
+  // 1.21.5: email through Azure Communication Services (COMPASSDOCS_MAIL_TRANSPORT=acs,
+  // lib/mail-acs-config), in both modes: a setting that can't work exits here, saying
+  // which (in cloud mode, a connection string to a real resource is one). Unset, nothing.
+  if (!(await (await import("./lib/mail-acs-config")).checkMailTransportStartup(logEvent))) return;
+
   const { every, after, runJob, jobError, onDrain, onClose, exposeLifecycle } = await import("./lib/shutdown");
   exposeLifecycle();
   // The desk's live streams end first (they would otherwise hold the server

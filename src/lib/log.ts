@@ -16,7 +16,8 @@
 //
 // Never secrets: values of the secret variables (lib/cloud ENV_SECRETS and
 // the SMTP and updater ones) are masked wherever they appear, so are
-// passwords in connection strings, bearer tokens, JWTs (1.21.3) and API-key shapes, and
+// passwords in connection strings, bearer tokens, JWTs (1.21.3), ACS access
+// keys and request signatures (1.21.5) and API-key shapes, and
 // fields named like a secret (password, token, secret, key…) are masked
 // whole. The request id is the x-request-id header (the platform's, or one
 // the proxy gives each request in JSON mode, proxy.ts), when the line is
@@ -51,6 +52,8 @@ const SECRET_VARS = [
   "APPLICATIONINSIGHTS_CONNECTION_STRING",
   // 1.21.2: the blob store's development connection string (an account key or SAS, lib/file-store).
   "COMPASSDOCS_BLOB_CONNECTION_STRING",
+  // 1.21.5: the ACS resource's development connection string (its access key, lib/mail-acs-config).
+  "COMPASSDOCS_ACS_CONNECTION_STRING",
   // The copy command's service principal, when an operator runs it with one.
   "AZURE_CLIENT_SECRET",
 ];
@@ -90,6 +93,10 @@ export function redact(text: string, env: Env = process.env): string {
   // 1.21.2: Azure Storage credentials: a connection string's AccountKey or
   // SharedAccessSignature, and a SAS's signature in a URL.
   out = out.replace(/\b(AccountKey|SharedAccessSignature)=[^;\s"']+/gi, `$1=${MASK}`);
+  // 1.21.5: an Azure Communication Services connection string's access key, and
+  // the HMAC signature of a request signed with it (lib/mail-acs).
+  out = out.replace(/\b(accesskey)=[^;\s"']+/gi, `$1=${MASK}`);
+  out = out.replace(/\b(HMAC-SHA256\s+SignedHeaders=[^&\s"']*&Signature=)[^\s"'&;]+/gi, `$1${MASK}`);
   out = out.replace(/([?&]sig=)[^&\s"'#]+/gi, `$1${MASK}`);
   // Sealed settings (lib/secretbox) are ciphertext, but never worth printing.
   out = out.replace(/enc:v1:[A-Za-z0-9+/=]{16,}/g, `enc:v1:${MASK}`);

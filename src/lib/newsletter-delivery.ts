@@ -39,6 +39,7 @@ import "server-only";
 import { pool, getNewsletter, markNewsletterSent, addNewsletterComment } from "./db";
 import { audit } from "./audit";
 import { sendMail } from "./mailer";
+import { acsSelected } from "./mail-acs-config";
 import { MailSendError, refusalRepeats } from "./mail-m365";
 import { classifySendError } from "./mail-outbox-shared";
 import { isDraining } from "./shutdown";
@@ -287,6 +288,6 @@ async function finish(id: number, job: { audience: string; actor_id: number | nu
     targetType: "newsletter",
     targetId: id,
     targetLabel: n?.subject ?? "",
-    details: { audience: job.audience, sent: v.sent, failed: v.failed, via: "m365", ...(job.scheduled ? { scheduled: true } : {}) },
+    details: { audience: job.audience, sent: v.sent, failed: v.failed, via: acsSelected() ? "acs" : "m365", ...(job.scheduled ? { scheduled: true } : {}) },
   });
 }

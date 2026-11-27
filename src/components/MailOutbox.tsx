@@ -15,6 +15,10 @@
 //             Discard, ask first. Both are audited.
 //
 // The card reads the outbox again every 15 seconds while it is open.
+//
+// 1.21.5: email through Azure Communication Services waits here too
+// (`paced`): the third count is the hour's sends against the hourly limit
+// (ACS has no daily recipient cap), and the sentences name ACS.
 
 import { useEffect, useState } from "react";
 import { CircleHelp, Clock, Hourglass, Inbox, RefreshCw, RotateCw, Trash2, TriangleAlert } from "lucide-react";
@@ -38,7 +42,7 @@ async function act(body: Record<string, unknown>): Promise<{ ok: boolean; data: 
   return { ok: Boolean(res?.ok), data };
 }
 
-export function MailOutbox({ initial, m365 }: { initial: OutboxView | null; m365: boolean }) {
+export function MailOutbox({ initial, paced }: { initial: OutboxView | null; paced: boolean }) {
   const [v, setV] = useState<OutboxView | null>(initial);
   const [busy, setBusy] = useState<string>("");
   const [now, setNow] = useState(() => Date.now());
@@ -64,9 +68,10 @@ export function MailOutbox({ initial, m365 }: { initial: OutboxView | null; m365
       alive = false;
       clearInterval(t);
     };
-  }, [initial, m365]);
+  }, [initial, paced]);
 
-  if (!v || (!m365 && !v.m365 && !v.queued && !v.problems_total)) return null;
+  if (!v || (!paced && !v.m365 && v.method !== "acs" && !v.queued && !v.problems_total)) return null;
+  const acs = v.method === "acs";
 
   async function run(key: string, body: Record<string, unknown>, done: string) {
     setBusy(key);
@@ -85,7 +90,9 @@ export function MailOutbox({ initial, m365 }: { initial: OutboxView | null; m365
     if (p.status === "uncertain") {
       const ok = await confirmDialog({
         title: "Send it again?",
-        body: "Microsoft didn't answer when it was sent, so it may have gone out already. Check the sending mailbox's Sent Items first: sending again may deliver a second copy.",
+        body: acs
+          ? "Azure Communication Services didn't say whether it went out, so it may have already. Sending again may deliver a second copy."
+          : "Microsoft didn't answer when it was sent, so it may have gone out already. Check the sending mailbox's Sent Items first: sending again may deliver a second copy.",
         confirmLabel: "Send again",
       });
       if (ok !== true) return;
@@ -145,7 +152,9 @@ export function MailOutbox({ initial, m365 }: { initial: OutboxView | null; m365
       icon={<Inbox />}
       title="Outbox"
       description={
-        v.m365
+        acs
+          ? `Email waits here and goes out at about ${v.per_minute} a minute and ${v.per_hour ?? "?"} an hour, with sign-in links and helpdesk replies first. Nothing is dropped when the email service asks to slow down.`
+          : v.m365
           ? `Email through Microsoft 365 waits here and goes out at about ${v.per_minute} a minute, spread over the minute, with sign-in links and helpdesk replies first. Nothing is dropped when Microsoft asks to slow down.`
           : "Email that was waiting when you switched to SMTP goes out by SMTP from here."
       }
@@ -180,6 +189,15 @@ export function MailOutbox({ initial, m365 }: { initial: OutboxView | null; m365
               {n(v.sent_last_hour)}
             </dd>
           </div>
+          {acs ? (
+            <div className="rounded-lg border border-slate-200 bg-canvas px-3 py-2">
+              <dt className="text-xs text-slate-500">Hourly limit</dt>
+              <dd className="text-lg font-semibold tabular-nums text-slate-900" data-testid="outbox-hour">
+                {n(v.per_hour ?? 0)}
+              </dd>
+              <dd className="text-xs text-slate-500">Emails in any hour, and {n(v.per_minute)} in any minute.</dd>
+            </div>
+          ) : (
           <div className="rounded-lg border border-slate-200 bg-canvas px-3 py-2">
             <dt className="text-xs text-slate-500">Recipients in the last 24 hours</dt>
             <dd className={`text-lg font-semibold tabular-nums ${dayOver ? "ink-warn" : "text-slate-900"}`} data-testid="outbox-day">
@@ -189,14 +207,15 @@ export function MailOutbox({ initial, m365 }: { initial: OutboxView | null; m365
               {dayOver ? `Over ${n(v.daily_cap)}: ordinary mail waits until older sends age out; urgent mail still goes.` : `Ordinary mail stops at ${n(v.daily_cap)}, leaving room for urgent mail.`}
             </dd>
           </div>
+          )}
         </dl>
 
         {v.paused && v.paused.kind === "rate" && (
           <p className="notice-warn mt-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-sm" data-testid="outbox-paused" role="status">
             <Clock className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
             <span>
-              <strong className="font-semibold">Paused{pausedUntil ? ` until ${fmt.dateTime(v.paused.until)} (${untilWords(pausedUntil, now)})` : ""}.</strong> Microsoft 365
-              asked this mailbox to slow down. Waiting email goes out after that, in order; none is lost.
+              <strong className="font-semibold">Paused{pausedUntil ? ` until ${fmt.dateTime(v.paused.until)} (${untilWords(pausedUntil, now)})` : ""}.</strong>{" "}
+              {acs ? "The email service asked to slow down." : "Microsoft 365 asked this mailbox to slow down."} Waiting email goes out after that, in order; none is lost.
             </span>
           </p>
         )}
@@ -209,7 +228,7 @@ export function MailOutbox({ initial, m365 }: { initial: OutboxView | null; m365
               </span>
             </p>
             <p className="mt-1 pl-6 text-xs">
-              Waiting email goes out once this is fixed: save the settings above or press Check connection.
+              {acs ? "Waiting email goes out once this is fixed; press Try now after a change." : "Waiting email goes out once this is fixed: save the settings above or press Check connection."}
               {pausedUntil ? ` It tries again by itself ${untilWords(pausedUntil, now)}.` : ""}
             </p>
             <div className="mt-2 pl-6">

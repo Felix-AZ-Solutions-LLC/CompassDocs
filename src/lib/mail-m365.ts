@@ -43,8 +43,9 @@ import { mailAttachmentsForSend, type MailAttachment } from "./uploads";
 import { M365Error, graph, m365Token, userPath, type M365Credentials } from "./helpdesk/m365/graph";
 import { SECRET_UNREADABLE, entraGrantsSend, getM365SendConfig, graphUserOf, m365SendConfigured, recordM365Check, type M365SendConfig } from "./mail-config";
 import { m365SendSentence } from "./mail-m365-errors";
-import { MAIL_M365_MAX_MIME, MAIL_NOT_SET_UP, cleanSendingMailbox, m365FromFor, mailTooLarge, type MailM365Check } from "./mail-m365-shared";
+import { MAIL_M365_MAX_MIME, MAIL_NOT_SET_UP, cleanSendingMailbox, m365FromFor, type MailM365Check } from "./mail-m365-shared";
 import { countMail } from "./telemetry-hooks";
+import { MailSendError, MailTooLargeError } from "./mail-send-error";
 
 /** A message as the transports take it (the helpdesk's carries threading headers; the rest a subset). */
 export interface OutgoingMail {
@@ -61,34 +62,8 @@ export interface OutgoingMail {
   attachments?: MailAttachment[];
 }
 
-/** A refusal from Microsoft, in a sentence (lib/mail-m365-errors). SMTP-like fields let the helpdesk's sender checks read it. */
-export class MailSendError extends Error {
-  /** 550 for a refused From (ErrorSendAsDenied), as an SMTP server answers one; undefined otherwise. */
-  responseCode?: number;
-  response?: string;
-  constructor(
-    message: string,
-    public status: number,
-    public code = "",
-    public kind = "",
-    /** A 429's Retry-After, when Microsoft gave one. */
-    public retryAfterMs: number | null = null
-  ) {
-    super(message);
-    this.name = "MailSendError";
-    if (code.toLowerCase() === "errorsendasdenied") {
-      this.responseCode = 550;
-      this.response = `550 5.7.60 SendAsDenied: ${message}`;
-    }
-  }
-}
-
-export class MailTooLargeError extends MailSendError {
-  constructor(public bytes: number) {
-    super(mailTooLarge(bytes), 413, "too_large", "too_large");
-    this.name = "MailTooLargeError";
-  }
-}
+/** A refusal from Microsoft, in a sentence (lib/mail-m365-errors); since 1.21.5 in lib/mail-send-error, shared with Azure Communication Services. */
+export { MailSendError, MailTooLargeError };
 
 /** The mail as RFC 822 bytes, built by the library that sends SMTP. */
 export async function buildMime(m: OutgoingMail): Promise<Buffer> {
@@ -296,5 +271,6 @@ export async function probeM365Send(opts: { record?: boolean; cfg?: M365SendConf
 export function refusalRepeats(e: unknown): boolean {
   if (e instanceof MailTooLargeError) return true;
   if (!(e instanceof MailSendError)) return false;
-  return e.kind === "auth" || e.code === "not_set_up" || e.status === 401 || e.status === 403 || e.status === 404;
+  // 1.21.5: "config" is ACS refusing the sender or the resource (lib/mail-acs): the same for every recipient.
+  return e.kind === "auth" || e.kind === "config" || e.code === "not_set_up" || e.status === 401 || e.status === 403 || e.status === 404;
 }

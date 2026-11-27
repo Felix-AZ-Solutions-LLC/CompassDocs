@@ -337,13 +337,19 @@ secret reference.
 | `COMPASSDOCS_LICENSE_TOKEN` | yes | With `COMPASSDOCS_LICENSE_URL`, when the managed identity isn't used: a bearer token the console issued to this workspace. |
 | `ANTHROPIC_API_KEY` | yes | When set, the platform's AI key: it wins over a saved key and Settings → AI shows it read-only. |
 | `COMPASSDOCS_SMTP_HOST`, `COMPASSDOCS_SMTP_PORT` (587), `COMPASSDOCS_SMTP_SECURE` (`starttls`, `tls` or `none`), `COMPASSDOCS_SMTP_USER`, `COMPASSDOCS_SMTP_PASSWORD` (secret), `COMPASSDOCS_SMTP_FROM` | password | When `COMPASSDOCS_SMTP_HOST` is set, the platform's mail relay: Settings → Email shows SMTP read-only, and the workspace can still choose Microsoft 365 instead. Read only in cloud mode. |
+| `COMPASSDOCS_MAIL_TRANSPORT` | | `acs` sends the workspace's email through [Azure Communication Services](#email-through-azure-communication-services), CompassDocs Cloud's way: it wins over SMTP and Microsoft 365 (Settings → Email shows "Email is sent by CompassDocs Cloud"). Unset: as chosen in Settings. Any other value: the process exits 1. Works self-hosted too. |
+| `COMPASSDOCS_ACS_ENDPOINT` | | With `acs`: the Communication Services resource, e.g. `https://cdcloud-mail.communication.azure.com` (`https://`, no path, no key). The app signs in with the managed identity. |
+| `COMPASSDOCS_ACS_SENDER` | | With `acs`: the MailFrom address this workspace's email leaves from, on a domain verified in ACS and connected to the resource, e.g. `acme@mail.compassdocs.io`. Its display name is the sender username's, set in Azure. |
+| `COMPASSDOCS_ACS_REPLY_TO` | | Optional: where replies go while the workspace hasn't set its own reply address in Settings → Email. |
+| `COMPASSDOCS_ACS_PER_MINUTE`, `COMPASSDOCS_ACS_PER_HOUR` | | This workspace's share of the subscription's ACS sending quota (default `30` and `100`, ACS's defaults for a custom domain). |
+| `COMPASSDOCS_ACS_CONNECTION_STRING` | yes | Development only: `endpoint=…;accesskey=…`. Cloud mode refuses one whose endpoint is not a loopback address. Masked in every log line. |
 | `COMPASSDOCS_SETUP_TOKEN` | yes | The first-run setup token the platform hands the customer. Cloud mode never prints a setup token to the log. |
 | `COMPASSDOCS_ADMIN_USER`, `COMPASSDOCS_ADMIN_PASSWORD` | password | Optional: create the first administrator without the setup page. |
 | `COMPASSDOCS_METRICS_TOKEN` | yes | Optional: a bearer token for `/metrics`. |
 | `COMPASSDOCS_FILE_STORE` | | `blob` keeps the workspace's files in Azure Blob Storage (see [File storage](#file-storage)). Unset, files stay in `COMPASSDOCS_UPLOAD_DIR`, which must then be a persistent volume every replica shares (cloud mode logs a warning). |
 | `COMPASSDOCS_BLOB_ACCOUNT_URL` | | With `blob`: the storage account's address, e.g. `https://cdcloud.blob.core.windows.net` (no SAS, no path). The app signs in with the container app's managed identity. |
 | `COMPASSDOCS_BLOB_CONTAINER` | | With `blob`: the workspace's own container, e.g. `ws-acme`. |
-| `AZURE_CLIENT_ID` | | Optional: the client id of the user-assigned managed identity to sign in with (unset: the system-assigned one). One identity for everything the app signs in to: Blob Storage, PostgreSQL (`DATABASE_AUTH=entra`) and the console's license endpoint (`COMPASSDOCS_LICENSE_AUDIENCE`). |
+| `AZURE_CLIENT_ID` | | Optional: the client id of the user-assigned managed identity to sign in with (unset: the system-assigned one). One identity for everything the app signs in to: Blob Storage, PostgreSQL (`DATABASE_AUTH=entra`), the console's license endpoint (`COMPASSDOCS_LICENSE_AUDIENCE`) and Azure Communication Services (`COMPASSDOCS_MAIL_TRANSPORT=acs`). |
 | `COMPASSDOCS_BLOB_CONNECTION_STRING` | yes | Development only (Azurite). Cloud mode refuses one that is not a loopback address. |
 | `DATABASE_RETRY_WINDOW_MS` | | How long a request waits for the database through a restart or failover (default `60000` in cloud mode; see [Riding out a database restart](#riding-out-a-database-restart)). |
 | `COMPASSDOCS_UPLOAD_DIR` | | Where attachments live without `COMPASSDOCS_FILE_STORE=blob`: a persistent mount (Azure Files). |
@@ -372,7 +378,7 @@ the request's `x-request-id` (the platform's own, or one the app gives each
 request and sends back in the response), on lines written while serving
 it. With [telemetry](#telemetry-opentelemetry) on, a line written inside a
 traced request or job also has `trace_id` and `span_id`. Secrets never appear: the values of the secret variables above, passwords
-in connection strings, bearer tokens, JWTs (an Entra access token), API keys and fields named like a secret
+in connection strings, bearer tokens, JWTs (an Entra access token), API keys, ACS access keys and request signatures, and fields named like a secret
 are written as `[redacted]`. (`ts` repeats `time` for parsers of the
 pre-1.21.0 JSON lines.)
 
@@ -458,6 +464,108 @@ only copies what changed), then start the workspace with
 `COMPASSDOCS_SECRET_KEY`, never the key file: set it to the contents of the
 old `/uploads/.secret.key` (see below), or saved credentials and backups
 can't be opened.
+
+### Email through Azure Communication Services
+
+With `COMPASSDOCS_MAIL_TRANSPORT=acs` the workspace's email (notifications,
+reminders, digests, sign-in links, newsletters, helpdesk replies) goes out
+through [Azure Communication Services Email](https://learn.microsoft.com/azure/communication-services/concepts/email/email-overview)
+instead of SMTP or Microsoft 365. It is the operator's choice, not the
+workspace's: Settings → Notifications → Email says "Email is sent by
+CompassDocs Cloud from …" (in cloud mode; "…through Azure Communication
+Services…" on a self-hosted install that opts in), the SMTP and Microsoft
+365 settings stay stored but are not used, and switching is refused. What
+stays the workspace's is **Replies go to**: the sender takes no replies, so
+an email that names no reply address of its own gets this one (a helpdesk
+reply keeps its help address, a newsletter its chosen sender). Self-hosted
+installs that don't set the variable are unchanged.
+
+**How it sends.** Every message is built exactly as before and queued in
+the [outbox](#how-it-fits-together) (sealed, with retries, Retry and
+Discard), then posted to `POST {endpoint}/emails:send?api-version=2023-03-31`
+with an `Operation-Id` of its own. ACS answers 202 and delivers later, so
+the row is *accepted* and its operation is looked up shortly after
+(`GET {endpoint}/emails/operations/{id}`): **Succeeded** → sent, **Failed**
+or **Canceled** → failed with ACS's reason (a suppressed or invalid
+recipient, say), still unknown after two hours → *may not have gone out*,
+for an admin. A send whose answer never came is looked up by its
+`Operation-Id` before anyone is asked. A 429 pauses the whole outbox for
+its `Retry-After` (at least a minute) and fails nothing. The outbox paces
+itself to `COMPASSDOCS_ACS_PER_MINUTE` and `COMPASSDOCS_ACS_PER_HOUR`.
+
+| | Through ACS |
+| --- | --- |
+| From | `COMPASSDOCS_ACS_SENDER`, always; the display name is the sender username's (Azure), the API has no field for it |
+| Reply-To | the message's own; else its From, when that is another address; else the workspace's reply address; else `COMPASSDOCS_ACS_REPLY_TO` |
+| Body | plain text and HTML, as built |
+| Attachments | up to 10 MB per email *after* base64 (about 7.5 MB of files); a larger one is refused when it is queued, in words. ACS accepts [these types](https://learn.microsoft.com/azure/communication-services/concepts/email/email-attachment-allowed-mime-types) |
+| Recipients | at most 50 per email (To, Cc and Bcc together) |
+| Headers | `Message-ID`, `In-Reply-To`, `References` (helpdesk threading), `List-Unsubscribe`, `List-Unsubscribe-Post`, `Auto-Submitted` and the rest are passed through `headers` |
+| Tracking | open and click tracking is switched off on every message (`userEngagementTrackingDisabled`) |
+
+The app calls the REST API directly (two calls) rather than
+`@azure/communication-email`: no new dependency, nothing more in the image,
+and the outbox keeps control of retries, 429s and how often a result is
+looked up (ACS limits status lookups too: 60 a minute, 200 an hour per
+subscription). It signs in with the same managed identity as Blob Storage
+and PostgreSQL (a Microsoft Entra token for
+`https://communication.azure.com/.default`, `@azure/identity` loaded only
+when first needed).
+
+**Azure setup.**
+
+1. Create an **Email Communication Services** resource and add a
+   **custom domain** (for example `mail.compassdocs.io`); add the TXT, SPF,
+   DKIM and DKIM2 records it shows (and DMARC) until the domain is
+   **Verified**. An Azure-managed `*.azurecomm.net` domain is for testing
+   only: 5 emails a minute, and its sender can't be renamed.
+2. Under the domain's **MailFrom addresses**, add one sender username per
+   workspace (for example `acme`, display name "Acme") and set it as
+   `COMPASSDOCS_ACS_SENDER` (`acme@mail.compassdocs.io`). The display name
+   set here is what recipients see. Azure enables more sender usernames than
+   the default `DoNotReply` only on a domain whose sending limits were
+   raised, and allows 100 per domain.
+3. Create a **Communication Services** resource, **Connect** the verified
+   domain to it (Email → Domains), and set its endpoint as
+   `COMPASSDOCS_ACS_ENDPOINT`.
+4. Give the workspace's managed identity (the container app's, or the
+   user-assigned one in `AZURE_CLIENT_ID`) a role **on the Communication
+   Services resource**: the built-in **Communication and Email Service
+   Owner**, or a custom role with only
+   `Microsoft.Communication/CommunicationServices/Read`,
+   `Microsoft.Communication/CommunicationServices/Write` and
+   `Microsoft.Communication/EmailServices/write`, the minimal set Microsoft
+   documents for sending email with an Entra identity
+   ([Microsoft Learn](https://learn.microsoft.com/azure/communication-services/quickstarts/email/send-email-smtp/smtp-authentication#assign-a-role-to-the-microsoft-entra-application)).
+   Without it every send is refused (401/403): the outbox pauses with that
+   reason and the admins are told once.
+5. **Limits.** ACS's defaults for a custom domain are 30 emails a minute
+   and 100 an hour **per subscription**, shared by every workspace sending
+   from it. Ask for more with a quota request (Azure support, "Azure
+   Communication Services Email: Sending Limits"), and give each workspace
+   its share in `COMPASSDOCS_ACS_PER_MINUTE` / `COMPASSDOCS_ACS_PER_HOUR`.
+
+**Start-up.** A setting that can't work is one line each (`Email through
+Azure Communication Services can't start: …`) and the process exits 1:
+no sender, no endpoint, an endpoint that is not `https://` or carries a
+key, a limit that is not a whole number, and in cloud mode a connection
+string to a real resource. Otherwise one line says the sender, the
+resource, how the app signs in and the limits. Nothing is sent at start-up.
+Settings → System → Diagnostics' **Run checks** signs in and looks up an
+operation that does not exist, sending nothing.
+
+**Development.** `COMPASSDOCS_ACS_CONNECTION_STRING=endpoint=…;accesskey=…`
+signs each request with the resource's access key (HMAC-SHA256) instead of
+the managed identity. It works self-hosted with a warning; cloud mode
+refuses it unless the endpoint is a loopback address (a local mock). The
+key is masked in every log line.
+
+**Before you depend on it.** Microsoft has announced that Azure
+Communication Services, ACS Email included, retires on **30 September
+2028**, with new onboarding limited from 23 October 2026 ([retirement
+guide](https://learn.microsoft.com/azure/communication-services/acs-retirement-and-breaking-changes-guide)).
+Resources created before then keep working until retirement. The SMTP and
+Microsoft 365 transports are unaffected.
 
 ### Riding out a database restart
 

@@ -33,6 +33,14 @@
 // 365 is chosen or mail is left in it. Switching to SMTP with mail still
 // waiting asks first (the server's 409 "confirm" sentences, as switching to
 // Microsoft 365 does), from the method picker and from the SMTP save.
+//
+// 1.21.5: email through Azure Communication Services (the operator's
+// COMPASSDOCS_MAIL_TRANSPORT=acs; CompassDocs Cloud's way) is not a choice
+// here: the card keeps its title and chip, the Segmented and both forms give
+// way to AcsPanel (STYLEGUIDE "A setting the platform supplies": SetByPlatform
+// with "Email is sent by CompassDocs Cloud from …"), and the one thing that
+// stays the workspace's, where replies go, is a field with its own Save. The
+// test email and the Outbox stay.
 
 import { useState } from "react";
 import { Check, KeyRound, Send, ShieldCheck } from "lucide-react";
@@ -59,6 +67,7 @@ import {
   rbacCommands,
   secretExpiry,
   sendingMailboxProblem,
+  type ChosenMailMethod,
   type MailMethod,
   type MailView,
 } from "@/lib/mail-m365-shared";
@@ -73,7 +82,7 @@ async function patch(body: unknown, url = URL_): Promise<{ ok: boolean; status: 
   return { ok: res.ok, status: res.status, data };
 }
 
-const goesOut = (m: MailMethod) => (m === "m365" ? "through Microsoft 365" : "by SMTP");
+const goesOut = (m: MailMethod) => (m === "m365" ? "through Microsoft 365" : m === "acs" ? "through Azure Communication Services" : "by SMTP");
 
 function attention(v: MailView): boolean {
   if (v.method !== "m365" || !v.configured) return false;
@@ -114,11 +123,16 @@ export async function confirmSwitch(warnings: string[], target: MailMethod = "m3
 
 export function MailSettings({ initial, outbox = null }: { initial: MailView; outbox?: OutboxView | null }) {
   const [v, setV] = useState(initial);
-  const [shown, setShown] = useState<MailMethod>(initial.method);
+  if (v.method === "acs" && v.acs) return <AcsMail v={v} onSaved={setV} outbox={outbox} />;
+  return <ChosenMail v={v} setV={setV} outbox={outbox} />;
+}
+
+function ChosenMail({ v, setV, outbox }: { v: MailView; setV: (v: MailView) => void; outbox: OutboxView | null }) {
+  const [shown, setShown] = useState<ChosenMailMethod>(v.method === "acs" ? "smtp" : v.method);
   const [switching, setSwitching] = useState(false);
   const shownConfigured = shown === "m365" ? v.m365.configured : v.smtp.configured;
 
-  async function choose(target: MailMethod) {
+  async function choose(target: ChosenMailMethod) {
     if (target === shown) return;
     const ready = target === "m365" ? v.m365.configured : v.smtp.configured;
     if (target === v.method || !ready) {
@@ -167,7 +181,7 @@ export function MailSettings({ initial, outbox = null }: { initial: MailView; ou
             <span className="text-sm font-medium text-slate-700" aria-hidden>
               Send email with
             </span>
-            <Segmented<MailMethod> label="Send email with" options={MAIL_METHODS} value={shown} onChange={(m) => void choose(m)} />
+            <Segmented<ChosenMailMethod> label="Send email with" options={MAIL_METHODS} value={shown} onChange={(m) => void choose(m)} />
             {switching && <span className="text-xs text-slate-500">Switching…</span>}
           </div>
           {shown !== v.method && (
@@ -186,8 +200,86 @@ export function MailSettings({ initial, outbox = null }: { initial: MailView; ou
           <TestRow method={shown} enabled={shownConfigured} platform={shown === "smtp" && v.smtp.platform} />
         </div>
       </Card>
-      <MailOutbox initial={outbox} m365={v.method === "m365"} />
+      <MailOutbox initial={outbox} paced={v.method !== "smtp"} />
     </>
+  );
+}
+
+// --- Azure Communication Services (1.21.5) ---------------------------------------------
+
+function AcsMail({ v, onSaved, outbox }: { v: MailView; onSaved: (v: MailView) => void; outbox: OutboxView | null }) {
+  const a = v.acs!;
+  return (
+    <>
+      <Card
+        id="email"
+        className="scroll-mt-6"
+        title="How email is sent"
+        description="Notifications, reminders, digests, newsletters and helpdesk replies all go out this way."
+        actions={
+          <Chip tone={v.configured ? "ok" : "neutral"} size="sm">
+            {v.configured ? "Set up" : "Not set up"}
+          </Chip>
+        }
+      >
+        <div data-testid="mail-settings" data-method="acs">
+          <div data-testid="mail-acs">
+            <SetByPlatform>
+              {a.cloud ? "Email is sent by CompassDocs Cloud" : "Email is sent through Azure Communication Services"}
+              {a.sender ? (
+                <>
+                  {" "}
+                  from <span className="font-medium text-slate-700">{a.sender}</span>
+                </>
+              ) : null}
+              .
+            </SetByPlatform>
+          </div>
+          <ReplyToRow v={v} onSaved={onSaved} />
+          <TestRow method="acs" enabled={v.configured} platform={a.cloud} />
+        </div>
+      </Card>
+      <MailOutbox initial={outbox} paced />
+    </>
+  );
+}
+
+/** Where replies go: the sender takes none, so a message that names no Reply-To of its own gets this address. */
+function ReplyToRow({ v, onSaved }: { v: MailView; onSaved: (v: MailView) => void }) {
+  const a = v.acs!;
+  const [reply, setReply] = useState(a.reply_to);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const changed = reply.trim() !== a.reply_to;
+
+  async function save() {
+    setBusy(true);
+    setError("");
+    const r = await patch({ action: "reply_to", reply_to: reply.trim() });
+    setBusy(false);
+    if (!r.ok) {
+      setError(r.data?.error || "Could not save the reply address.");
+      return;
+    }
+    onSaved(r.data.view);
+    setReply(r.data.view?.acs?.reply_to ?? reply.trim());
+    toast("ok", reply.trim() ? `Replies now go to ${reply.trim()}.` : "Reply address removed.");
+  }
+
+  const help = a.reply_to_default
+    ? `Used when an email names no reply address of its own (helpdesk replies and newsletters do). Empty: ${a.reply_to_default}.`
+    : "Used when an email names no reply address of its own (helpdesk replies and newsletters do). Empty: replies to the sender aren\u2019t read.";
+  return (
+    <div className="mt-5 border-t border-slate-100 pt-4" data-testid="mail-reply-to">
+      <div className="flex flex-wrap items-end gap-3">
+        <Field label="Replies go to" size="md" className="min-w-0 flex-1 basis-56" help={help} error={error || undefined}>
+          <TextInput type="email" value={reply} onChange={(e) => setReply(e.target.value)} placeholder="help@acme.com" spellCheck={false} autoComplete="off" />
+        </Field>
+        <Button variant="secondary" busy={busy} disabled={!changed} onClick={() => void save()}>
+          Save
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -221,7 +313,19 @@ function TestRow({ method, enabled, platform = false }: { method: MailMethod; en
           Send test email
         </Button>
       </div>
-      <p className="mt-1 text-xs text-slate-500" data-testid="mail-test-hint">{platform ? "Sent through CompassDocs Cloud\u2019s relay." : enabled ? `Sent ${goesOut(method)}, with the settings saved above.` : `Save the ${methodLabel(method)} settings first.`}</p>
+      <p className="mt-1 text-xs text-slate-500" data-testid="mail-test-hint">
+        {platform
+          ? method === "acs"
+            ? "Sent by CompassDocs Cloud. The result is shown when it is known, within about 30 seconds."
+            : "Sent through CompassDocs Cloud\u2019s relay."
+          : method === "acs"
+            ? enabled
+              ? "Sent through Azure Communication Services. The result is shown when it is known, within about 30 seconds."
+              : "Azure Communication Services isn\u2019t set up: the start-up log says why."
+            : enabled
+              ? `Sent ${goesOut(method)}, with the settings saved above.`
+              : `Save the ${methodLabel(method)} settings first.`}
+      </p>
       <FormError className="mt-2">{error}</FormError>
     </div>
   );

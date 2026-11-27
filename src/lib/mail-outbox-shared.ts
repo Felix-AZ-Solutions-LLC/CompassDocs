@@ -18,6 +18,14 @@
 //   order     urgent first, then ordinary notifications, then bulk
 //             (digests, announcements, reminders, subscriber mail,
 //             newsletters); oldest first within each.
+//
+// 1.21.5: Azure Communication Services (lib/mail-acs) goes through the same
+// outbox with its own limits (acsPace): COMPASSDOCS_ACS_PER_MINUTE and
+// COMPASSDOCS_ACS_PER_HOUR emails (30 and 100 by default, ACS's defaults for
+// a custom domain, which hold for the whole Azure subscription), at most 50
+// recipients each, and no daily recipient cap of its own.
+
+import type { MailMethod } from "./mail-m365-shared";
 
 /** Exchange Online's limit, recipients a day for one mailbox. */
 export const MAIL_DAILY_RECIPIENT_LIMIT = 10_000;
@@ -104,6 +112,8 @@ export function kindLabel(kind: string): string {
 
 export interface PaceLimits {
   perMinute: number;
+  /** 1.21.5: sends in any 60 minutes (Infinity: no such limit, Microsoft 365). */
+  perHour: number;
   /** The least time between two sends; 0 = none (tests). */
   gapMs: number;
   safeCap: number;
@@ -112,10 +122,20 @@ export interface PaceLimits {
 
 export const DEFAULT_PACE: PaceLimits = {
   perMinute: MAIL_SENDS_PER_MINUTE,
+  perHour: Number.POSITIVE_INFINITY,
   gapMs: Math.ceil(60_000 / MAIL_SENDS_PER_MINUTE),
   safeCap: MAIL_DAILY_SAFE_CAP,
   urgentCap: MAIL_DAILY_URGENT_CAP,
 };
+
+/** 1.21.5: no daily recipient cap through ACS (its quota is per minute and per hour). */
+const NO_DAILY_CAP = Number.MAX_SAFE_INTEGER;
+
+/** The outbox's limits through Azure Communication Services: the configured share of the subscription's quota. */
+export function acsPace(perMinute: number, perHour: number): PaceLimits {
+  const m = Math.max(1, Math.floor(perMinute));
+  return { perMinute: m, perHour: Math.max(1, Math.floor(perHour)), gapMs: Math.ceil(60_000 / m), safeCap: NO_DAILY_CAP, urgentCap: NO_DAILY_CAP };
+}
 
 export interface PaceState {
   nowMs: number;
@@ -125,11 +145,13 @@ export interface PaceState {
   lastAtMs: number | null;
   /** Sends in the last 60 seconds, oldest first. */
   minute: number[];
+  /** 1.21.5: sends in the last 60 minutes, oldest first (only read when the limits have a perHour). */
+  hour?: number[];
   /** Recipients sent to in the last 24 hours. */
   dayRecipients: number;
 }
 
-export type PaceDecision = { ok: true } | { ok: false; why: "paused" | "gap" | "minute" | "daily"; waitMs: number };
+export type PaceDecision = { ok: true } | { ok: false; why: "paused" | "gap" | "minute" | "hour" | "daily"; waitMs: number };
 
 /**
  * Whether one more message to `recipients` people may go now, and if not
@@ -140,6 +162,11 @@ export function paceDecision(s: PaceState, recipients: number, priority: MailPri
   if (s.pausedUntilMs !== null && s.pausedUntilMs > s.nowMs) return { ok: false, why: "paused", waitMs: s.pausedUntilMs - s.nowMs };
   const cap = priority === PRIORITY.urgent ? limits.urgentCap : limits.safeCap;
   if (s.dayRecipients + Math.max(1, recipients) > cap) return { ok: false, why: "daily", waitMs: 0 };
+  const hour = s.hour ?? [];
+  if (Number.isFinite(limits.perHour) && hour.length >= limits.perHour) {
+    const oldest = hour[hour.length - limits.perHour];
+    return { ok: false, why: "hour", waitMs: Math.max(1, oldest + 3_600_000 - s.nowMs) };
+  }
   if (s.minute.length >= limits.perMinute) {
     const oldest = s.minute[s.minute.length - limits.perMinute];
     return { ok: false, why: "minute", waitMs: Math.max(1, oldest + 60_000 - s.nowMs) };
@@ -190,12 +217,13 @@ export function dailyWaitMs(sends: { atMs: number; recipients: number }[], nowMs
 export type SendOutcome = "rate" | "repeat" | "uncertain" | "transient" | "failed";
 
 export function classifySendError(e: { status?: number; code?: string; kind?: string; name?: string } | null | undefined): SendOutcome {
+  // 1.21.5 (lib/mail-acs): "config" is a setting every message shares (the sender, the endpoint).
   const status = Number(e?.status ?? 0);
   const code = String(e?.code ?? "").toLowerCase();
   const kind = String(e?.kind ?? "");
   if (e?.name === "MailTooLargeError" || kind === "too_large") return "failed";
   if (status === 429 || status === 503) return "rate";
-  if (kind === "auth" || code === "not_set_up" || code === "secret_unreadable" || status === 401 || status === 403 || status === 404) return "repeat";
+  if (kind === "auth" || kind === "config" || code === "not_set_up" || code === "secret_unreadable" || status === 401 || status === 403 || status === 404) return "repeat";
   if (code === "errorsendasdenied" || code === "mailboxnotenabledforrestapi" || code === "mailboxnotsupportedforrestapi" || code === "errorinvaliduser") return "repeat";
   if (status === 0) return kind === "blocked" ? "repeat" : "uncertain";
   if (status === 504) return "uncertain";
@@ -218,19 +246,25 @@ export const MAIL_REFUSAL_ATTEMPTS = 5;
 export const MAIL_MAX_RECIPIENTS = 500;
 
 /** The sentence for a message to more people than one send can take. */
-export function tooManyRecipients(n: number, cap: number): string {
-  return `This email has ${n} recipients. Microsoft 365 takes at most ${cap} in one email from this workspace: send it in smaller groups.`;
+export function tooManyRecipients(n: number, cap: number, method: MailMethod = "m365"): string {
+  const who = method === "acs" ? "Azure Communication Services" : "Microsoft 365";
+  return `This email has ${n} recipients. ${who} takes at most ${cap} in one email from this workspace: send it in smaller groups.`;
 }
 
 /** The wait before the next try of a transient refusal: 1, 2, 4, 8 minutes. */
 export const transientBackoffMs = (attempts: number) => Math.min(30 * 60_000, 60_000 * 2 ** Math.max(0, attempts - 1));
 
 export const UNCERTAIN_REASON = "Microsoft didn't answer, so this may have gone out. Check the sending mailbox's Sent Items, then Retry or Discard.";
+/** 1.21.5: no answer from ACS after the request left; the outbox looks the send up by its operation id. */
+export const ACS_UNCERTAIN_REASON = "Azure Communication Services didn't answer, so this may have gone out. It is looked up again shortly; if it can't be found, Retry or Discard.";
+/** 1.21.5: ACS accepted it and never said how it went. */
+export const ACS_NO_RESULT_REASON = "Azure Communication Services accepted this email but never said whether it was delivered. Check the resource's email logs, then Retry or Discard.";
 export const UNREADABLE_BODY = "This email can't be read any more: the server's secret key changed since it was queued. Discard it.";
 
 // --- Shapes ---------------------------------------------------------------------------------
 
-export type OutboxStatus = "queued" | "sending" | "sent" | "failed" | "uncertain" | "discarded";
+/** 1.21.5: "accepted": handed to ACS, its result not known yet (lib/mail-outbox looks it up). */
+export type OutboxStatus = "queued" | "sending" | "accepted" | "sent" | "failed" | "uncertain" | "discarded";
 
 /** A failed or uncertain message, as the admin's list shows it. */
 export interface OutboxProblem {
@@ -251,6 +285,10 @@ export interface OutboxProblem {
 export interface OutboxView {
   /** Mail goes out through Microsoft 365 now. */
   m365: boolean;
+  /** 1.21.5: how mail goes out now (the outbox paces "m365" and "acs"). */
+  method: MailMethod;
+  /** 1.21.5: sends allowed in any hour (ACS), null when there is no hourly limit. */
+  per_hour: number | null;
   queued: number;
   /** Queued messages that are urgent. */
   queued_urgent: number;
