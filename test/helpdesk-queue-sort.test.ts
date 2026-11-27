@@ -90,7 +90,7 @@ const EE_REAL = path.join(__dirname, "..", "src", "lib", "ee");
     ee: () => ({ present: true, features: ["helpdesk"] }),
     eePresent: () => true,
     featureEnabled: async (feature: string) => feature === "helpdesk",
-    featureEnforced: async (feature: string) => feature === "helpdesk",
+    featureEnforced: async (feature: string) => feature === "helpdesk", featureEnabledFrom: (feature: string) => feature === "helpdesk", featureEnforcedFrom: (feature: string) => feature === "helpdesk",
   });
   const loader = Module as unknown as {
     _resolveFilename: (request: string, parent: { filename?: string } | null, ...rest: unknown[]) => string;

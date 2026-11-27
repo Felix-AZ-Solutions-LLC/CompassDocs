@@ -70,7 +70,7 @@ const EE_REAL = path.join(__dirname, "..", "src", "lib", "ee");
     ee: () => ({ present: true, features: ["helpdesk"] }),
     eePresent: () => true,
     featureEnabled: async (f: string) => f === "helpdesk",
-    featureEnforced: async (f: string) => f === "helpdesk",
+    featureEnforced: async (f: string) => f === "helpdesk", featureEnabledFrom: (f: string) => f === "helpdesk", featureEnforcedFrom: (f: string) => f === "helpdesk",
   });
   const loader = Module as unknown as { _resolveFilename: (request: string, parent: { filename?: string } | null, ...rest: unknown[]) => string };
   const resolve = loader._resolveFilename;

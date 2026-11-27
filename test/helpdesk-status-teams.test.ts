@@ -68,7 +68,7 @@ const EE_REAL = path.join(__dirname, "..", "src", "lib", "ee");
   ee.exports = {
     ee: () => ({ present: true, features: licensed ? ["helpdesk"] : [] }),
     eePresent: () => true,
-    featureEnabled: async (feature: string) => licensed && feature === "helpdesk", featureEnforced: async (feature: string) => licensed && feature === "helpdesk",
+    featureEnabled: async (feature: string) => licensed && feature === "helpdesk", featureEnforced: async (feature: string) => licensed && feature === "helpdesk", featureEnabledFrom: (feature: string) => licensed && feature === "helpdesk", featureEnforcedFrom: (feature: string) => licensed && feature === "helpdesk",
   };
   require.cache[EE_STUB] = ee;
   const loader = Module as unknown as {

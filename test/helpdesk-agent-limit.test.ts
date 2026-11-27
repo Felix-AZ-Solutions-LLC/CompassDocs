@@ -75,7 +75,7 @@ const LICENSE_REAL = path.join(__dirname, "..", "src", "lib", "license");
   ee.exports = {
     ee: () => edition,
     eePresent: () => true,
-    featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature),
+    featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature), featureEnabledFrom: (feature: string) => edition.features.includes(feature), featureEnforcedFrom: (feature: string) => edition.features.includes(feature),
   };
   require.cache[EE_STUB] = ee;
 

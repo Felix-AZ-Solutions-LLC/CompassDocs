@@ -77,7 +77,7 @@ const EE_REAL = path.join(__dirname, "..", "src", "lib", "ee");
   ee.exports = {
     ee: () => ({ present: true, features: ["policy_ack"] }),
     eePresent: () => true,
-    featureEnabled: async (feature: string) => feature === "policy_ack", featureEnforced: async (feature: string) => feature === "policy_ack",
+    featureEnabled: async (feature: string) => feature === "policy_ack", featureEnforced: async (feature: string) => feature === "policy_ack", featureEnabledFrom: (feature: string) => feature === "policy_ack", featureEnforcedFrom: (feature: string) => feature === "policy_ack",
   };
   require.cache[EE_STUB] = ee;
   const loader = Module as unknown as {
