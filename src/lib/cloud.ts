@@ -87,8 +87,14 @@ export const CLOUD_HIDDEN_SECTIONS: readonly string[] = Object.values(CLOUD_AREA
   .map((a) => a.section)
   .filter((s): s is string => !!s);
 
-/** Is this settings section hidden in this mode? */
+/**
+ * Is this settings section hidden in this mode? The platform's areas in
+ * cloud mode; and (1.21.4) Support access everywhere but a cloud workspace
+ * with support access configured (lib/support), so a self-hosted install's
+ * rail, search and palette are unchanged.
+ */
 export function sectionHiddenInMode(href: string, env: Env = process.env): boolean {
+  if (href === SUPPORT_SECTION) return !supportAccessEnabled(env);
   return isCloud(env) && CLOUD_HIDDEN_SECTIONS.includes(href);
 }
 
@@ -216,6 +222,90 @@ export function licenseManagedByCloud(env: Env = process.env): boolean {
   return !!(platformValue("COMPASSDOCS_LICENSE_KEY", env) || platformValue("COMPASSDOCS_LICENSE_URL", env));
 }
 
+// --- Support access (1.21.4, lib/support) ------------------------------------
+//
+// COMPASSDOCS_SUPPORT_PUBLIC_KEY: the public half of the Ed25519 key the
+// console's signing service signs support tokens with (lib/support-token).
+// Only in cloud mode, and only with COMPASSDOCS_WORKSPACE_ID (a token must
+// name this workspace). Never the license key: a different key, a different
+// signer. Up to SUPPORT_MAX_KEYS keys, comma-separated, so the signing key
+// can be rotated without a gap. Self-hosted, never read: support access does
+// not exist there.
+
+/** The Ed25519 SubjectPublicKeyInfo prefix (DER): 12 bytes, then the 32-byte key. */
+const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+/** The vendor's license key (lib/license), which must never be used here. Compared by value, not imported. */
+const LICENSE_KEY_FINGERPRINT = "df38f60f754bc888a3fd2a2fb69656c18d7116b5fc17a9fcefa18f212567c44d";
+export const SUPPORT_MAX_KEYS = 3;
+
+/** The 44 DER bytes of one key written as base64 SPKI or PEM, or null when it isn't one. */
+export function supportKeyDer(raw: string): Buffer | null {
+  const body = raw
+    .replace(/-----BEGIN PUBLIC KEY-----/, "")
+    .replace(/-----END PUBLIC KEY-----/, "")
+    .replace(/\s+/g, "");
+  if (!body || !/^[A-Za-z0-9+/]+={0,2}$/.test(body)) return null;
+  const der = Buffer.from(body, "base64");
+  return der.length === 44 && der.subarray(0, 12).equals(ED25519_SPKI_PREFIX) ? der : null;
+}
+
+/** The keys COMPASSDOCS_SUPPORT_PUBLIC_KEY names (raw strings, unchecked). */
+function supportKeyItems(env: Env): string[] {
+  return (env.COMPASSDOCS_SUPPORT_PUBLIC_KEY ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export interface SupportAccessConfig {
+  /** COMPASSDOCS_WORKSPACE_ID: every support token must name it. */
+  workspaceId: string;
+  /** The signing service's public keys (Ed25519 SPKI DER, 44 bytes each). */
+  keys: Buffer[];
+}
+
+/** Why support access can't work as configured (cloud mode with the key set); empty otherwise. */
+export function supportAccessProblems(env: Env = process.env): string[] {
+  if (!isCloud(env)) return [];
+  const items = supportKeyItems(env);
+  if (!items.length) return [];
+  const out: string[] = [];
+  if (items.length > SUPPORT_MAX_KEYS) out.push(`COMPASSDOCS_SUPPORT_PUBLIC_KEY holds ${items.length} keys; at most ${SUPPORT_MAX_KEYS} (comma-separated) are read.`);
+  items.forEach((item, i) => {
+    const der = supportKeyDer(item);
+    const which = items.length > 1 ? ` (key ${i + 1})` : "";
+    if (!der) out.push(`COMPASSDOCS_SUPPORT_PUBLIC_KEY${which} is not an Ed25519 public key: give it as base64 (SubjectPublicKeyInfo, "MCowBQYDK2VwAyEA…") or PEM.`);
+    else if (der.subarray(12).toString("hex") === LICENSE_KEY_FINGERPRINT) {
+      out.push(`COMPASSDOCS_SUPPORT_PUBLIC_KEY${which} is the license key. Support tokens are signed by the console's own signing key: give its public key.`);
+    }
+  });
+  if (!env.COMPASSDOCS_WORKSPACE_ID?.trim()) {
+    out.push("COMPASSDOCS_WORKSPACE_ID is not set. A support token is accepted only when it names this workspace.");
+  }
+  return out;
+}
+
+/**
+ * Support access (lib/support), in cloud mode with
+ * COMPASSDOCS_SUPPORT_PUBLIC_KEY set and valid: the workspace and the keys.
+ * Null otherwise: self-hosted, not configured, or misconfigured (cloud mode
+ * then does not start; cloudStartupProblems says why). Read on every call.
+ */
+export function supportAccessConfig(env: Env = process.env): SupportAccessConfig | null {
+  if (!isCloud(env)) return null;
+  const items = supportKeyItems(env);
+  if (!items.length || supportAccessProblems(env).length) return null;
+  return { workspaceId: env.COMPASSDOCS_WORKSPACE_ID!.trim(), keys: items.map((i) => supportKeyDer(i)!) };
+}
+
+/** Is support access switched on (cloud mode, a valid key)? */
+export function supportAccessEnabled(env: Env = process.env): boolean {
+  return supportAccessConfig(env) !== null;
+}
+
+/** Settings sections that exist only in cloud mode with support access on. */
+export const SUPPORT_SECTION = "/admin/support-access";
+
 /** The value of a platform secret's variable in cloud mode, or null (self-hosted, or the variable unset). */
 export function platformValue(envName: string, env: Env = process.env): string | null {
   if (!isCloud(env)) return null;
@@ -285,6 +375,8 @@ export function cloudStartupProblems(env: Env = process.env): { fatal: string[];
   if (!env.DATABASE_URL?.trim()) fatal.push("DATABASE_URL is not set.");
   // 1.21.3: the license from the console (lib/license-pull).
   fatal.push(...licensePullProblems(env));
+  // 1.21.4: support access (lib/support): a key that isn't one, the license key, or no workspace id.
+  fatal.push(...supportAccessProblems(env));
   if (env.COMPASSDOCS_LICENSE_AUDIENCE?.trim() && env.COMPASSDOCS_LICENSE_TOKEN?.trim()) {
     warnings.push("COMPASSDOCS_LICENSE_AUDIENCE and COMPASSDOCS_LICENSE_TOKEN are both set: the license endpoint is reached with the managed identity, and the token is not used.");
   }

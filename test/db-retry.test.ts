@@ -324,6 +324,13 @@ describe("waiting through an outage", () => {
       });
       const waited = Date.now() - started;
       assert.ok(waited >= 1300 && waited < 4000, `waited about the window (${waited} ms)`);
+      // The outage began at the first refusal, a moment after that request started, so
+      // its window ends those few ms after the request's own did. Let them pass, or the
+      // next request (rightly) waits them out too and counts as a second one that waited.
+      const outage = currentDbOutage();
+      assert.ok(outage, "the outage is still open");
+      const outageWindowLeft = outage.since + 1500 - Date.now();
+      if (outageWindowLeft > 0) await new Promise((r) => setTimeout(r, outageWindowLeft + 5));
       // The outage is now older than its window: the next request tries once and fails at once.
       started = Date.now();
       await assert.rejects(pool.query("SELECT 1"), DatabaseUnavailableError);

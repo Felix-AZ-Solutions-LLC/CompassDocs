@@ -17,6 +17,7 @@ import { HD_INTAKE_SCHEMA } from "../src/lib/helpdesk/intake-schema";
 import { HD_ASSIGNMENT_SCHEMA } from "../src/lib/helpdesk/assignment-schema";
 import { EMAIL_PARTS_SCHEMA } from "../src/lib/email-parts-schema";
 import { NOTIFY_POLICY_SCHEMA } from "../src/lib/notify-policy-schema";
+import { SUPPORT_SCHEMA, WORKSPACE_EXPORT_SCHEMA } from "../src/lib/support-schema";
 import { HD_ANALYTICS_SCHEMA } from "../src/lib/helpdesk/analytics/schema";
 import { HD_MERGE_SCHEMA } from "../src/lib/helpdesk/merge-schema";
 import { HD_PRESENCE_SCHEMA } from "../src/lib/helpdesk/presence-schema";
@@ -67,6 +68,8 @@ const INTERPOLATED: Record<string, string> = {
   HD_ANALYTICS_SCHEMA,
   EMAIL_PARTS_SCHEMA,
   NOTIFY_POLICY_SCHEMA,
+  SUPPORT_SCHEMA,
+  WORKSPACE_EXPORT_SCHEMA,
   HD_MERGE_SCHEMA,
   HD_PRESENCE_SCHEMA,
   HD_SAVED_VIEWS_SCHEMA,

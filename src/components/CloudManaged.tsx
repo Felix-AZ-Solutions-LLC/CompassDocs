@@ -11,18 +11,20 @@
 //     SMTP) keeps its label; its input is replaced by this line ("Managed by
 //     CompassDocs Cloud" for the license the console renews, 1.21.3).
 //
-// No action: there is nothing in the workspace to go to, and the sentences
+// No action, but one (1.21.4): Backups points at the workspace export
+// (Settings → Import & export), the copy a customer can take themselves.
+// Otherwise there is nothing in the workspace to go to, and the sentences
 // say where to ask instead.
 
 import { Cloud } from "lucide-react";
-import { EmptyState, SectionEmpty } from "./form";
+import { EmptyState, SectionEmpty, type EmptyAction } from "./form";
 import { chipClass } from "./Chip";
 import { CLOUD_AREAS, CLOUD_MANAGED_TITLE, SET_BY_PLATFORM, type CloudArea } from "@/lib/cloud";
 
-export function CloudManagedPage({ area }: { area: CloudArea }) {
+export function CloudManagedPage({ area, action }: { area: CloudArea; action?: EmptyAction }) {
   return (
     <div data-testid={`cloud-managed-${area}`}>
-      <EmptyState icon={<Cloud />} title={CLOUD_MANAGED_TITLE} body={CLOUD_AREAS[area].body} />
+      <EmptyState icon={<Cloud />} title={CLOUD_MANAGED_TITLE} body={CLOUD_AREAS[area].body} action={action} />
     </div>
   );
 }

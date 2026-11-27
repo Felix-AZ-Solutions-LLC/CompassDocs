@@ -672,6 +672,26 @@ export const AUDIT_LABELS: Record<string, string> = {
   "backup.download": "Downloaded backup",
   "audit.export": "Exported audit log",
   "system.update_triggered": "Started system update",
+  // 1.21.4: support access (lib/support), cloud mode.
+  "support.requested": "CompassDocs support asked for access",
+  "support.approved": "Approved CompassDocs support access",
+  "support.denied": "Denied CompassDocs support access",
+  "support.revoked": "Revoked CompassDocs support access",
+  "support.request_expired": "A CompassDocs support request lapsed",
+  "support.signed_in": "CompassDocs support signed in",
+  "support.emergency_access": "CompassDocs support used emergency access",
+  "support.emergency_reviewed": "Reviewed emergency support access",
+  "support.sign_in_refused": "Refused a CompassDocs support sign-in",
+  "support.page_viewed": "CompassDocs support viewed a page",
+  "support.action": "CompassDocs support made a change",
+  "support.session_ended": "CompassDocs support session ended",
+  "support.settings_changed": "Changed support access settings",
+  // 1.21.4: workspace export (lib/workspace-export), cloud mode.
+  "workspace.export_started": "Started a workspace export",
+  "workspace.export_ready": "Workspace export ready",
+  "workspace.export_failed": "Workspace export failed",
+  "workspace.export_downloaded": "Downloaded a workspace export",
+  "workspace.export_deleted": "Deleted a workspace export",
 };
 
 /** "person_updated" → "Person updated"; "ai_key_set" → "Ai key set". */

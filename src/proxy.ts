@@ -37,11 +37,23 @@
 //    and the log lines they write (lib/log request_id) see it, and the
 //    response carries it back. Readable-log installs are untouched.
 //
+// 5. (1.21.4) A CompassDocs support session (lib/support; its cookie's token
+//    says so by its prefix, lib/support-policy) is held to what it may do
+//    before any route runs: a read-only one is refused every request that
+//    changes something, both levels are refused their own access, copies of
+//    the workspace, account security and the writes support never makes
+//    (supportRefusal): an API answers 403 with a `code`, a page shows "Not
+//    available in a support session" at the same address. Each page it
+//    views and each change it asks for is tagged (SUPPORT_ACTIVITY_HEADER)
+//    so lib/auth writes it to the audit log once. A tag a client sent is
+//    dropped on every path.
+//
 // No authentication happens here — the session check stays in requireUser,
 // where it can read the database.
 
 import { NextResponse, type NextRequest } from "next/server";
 import { jsonLogging } from "@/lib/cloud";
+import { SESSION_COOKIE_NAME, SUPPORT_ACTIVITY_HEADER, SUPPORT_NOT_ALLOWED_PAGE, safeMethod, sessionControl, supportLevelOfToken, supportRefusal } from "@/lib/support-policy";
 
 /** The request header that carries the page's path and query. */
 export const RETURN_PATH_HEADER = "x-compass-path";
@@ -84,16 +96,35 @@ export function proxy(req: NextRequest) {
   // 1.20.35: a page header the client sent itself is never passed on, on any
   // path: the root layout reads it to decide the dark style (and the sign-in
   // return path before it), so only the proxy may write it.
-  const forged = req.headers.has(RETURN_PATH_HEADER) || req.headers.has(PREFETCH_HEADER);
+  const forged = req.headers.has(RETURN_PATH_HEADER) || req.headers.has(PREFETCH_HEADER) || req.headers.has(SUPPORT_ACTIVITY_HEADER);
   const requestId = jsonLogging() ? requestIdFrom(req.headers) : null;
-  if (!page && !anonymous && !forged && !requestId) return NextResponse.next();
+  // 1.21.4: a support session, by its cookie (none on a request whose cookies are taken off).
+  const support = anonymous ? null : supportLevelOfToken(req.cookies.get(SESSION_COOKIE_NAME)?.value);
+  if (!page && !anonymous && !forged && !requestId && !support) return NextResponse.next();
+  const prefetch = req.headers.has("next-router-prefetch");
+  if (support) {
+    const refusal = supportRefusal(support, req.method, pathname);
+    if (refusal) {
+      if (page && safeMethod(req.method)) {
+        const res = NextResponse.rewrite(new URL(SUPPORT_NOT_ALLOWED_PAGE, req.url));
+        if (requestId) res.headers.set(REQUEST_ID_HEADER, requestId);
+        return res;
+      }
+      return NextResponse.json(refusal, { status: 403, headers: requestId ? { [REQUEST_ID_HEADER]: requestId } : undefined });
+    }
+  }
   const headers = new Headers(req.headers);
   if (requestId) headers.set(REQUEST_ID_HEADER, requestId);
   headers.delete(RETURN_PATH_HEADER);
   headers.delete(PREFETCH_HEADER);
+  headers.delete(SUPPORT_ACTIVITY_HEADER);
   if (page) headers.set(RETURN_PATH_HEADER, `${pathname}${search}`);
-  if (page && req.headers.has("next-router-prefetch")) headers.set(PREFETCH_HEADER, "1");
+  if (page && prefetch) headers.set(PREFETCH_HEADER, "1");
   if (anonymous) headers.delete("cookie");
+  // A page viewed (not a prefetch) or a change asked for, for the audit log.
+  if (support && ((page && req.method === "GET" && !prefetch) || (!safeMethod(req.method) && !sessionControl(req.method, pathname)))) {
+    headers.set(SUPPORT_ACTIVITY_HEADER, `${crypto.randomUUID()} ${req.method.toUpperCase()} ${pathname.slice(0, 1000)}`);
+  }
   const res = NextResponse.next({ request: { headers } });
   if (requestId) res.headers.set(REQUEST_ID_HEADER, requestId);
   return res;

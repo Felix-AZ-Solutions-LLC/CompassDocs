@@ -145,3 +145,14 @@ export function mcpRateLimited(key: string, calls = 1): number {
   for (let i = 0; i < Math.max(1, calls); i++) wait = Math.max(wait, limitedFor(`mcp:${key}`, 120, 60_000));
   return wait;
 }
+
+/**
+ * The support endpoints (1.21.4, lib/support): the console's requests and
+ * status checks and the sign-in page's token, 30 a minute per address.
+ * Each is signed and checked anyway; this keeps a client that isn't the
+ * console from making the workspace verify signatures in a loop (every
+ * refused sign-in is also an audit row).
+ */
+export function supportEndpointRateLimited(ip: string): number {
+  return limitedFor(`support:${ip}`, 30, 60_000);
+}

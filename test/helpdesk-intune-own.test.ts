@@ -67,8 +67,9 @@ const DIR_REAL = path.join(__dirname, "..", "src", "lib", "directory-config");
     },
     draftMode: async () => ({ isEnabled: false }),
   });
-  const feature = async (f: string) => f === "helpdesk" || (f === "directory_sync" && directorySyncLicensed);
-  mk(EE_STUB, { ee: () => ({ present: true, features: ["helpdesk"] }), eePresent: () => true, featureEnabled: feature, featureEnforced: feature });
+  const featureFrom = (f: string) => f === "helpdesk" || (f === "directory_sync" && directorySyncLicensed);
+  const feature = async (f: string) => featureFrom(f);
+  mk(EE_STUB, { ee: () => ({ present: true, features: ["helpdesk"] }), eePresent: () => true, featureEnabled: feature, featureEnforced: feature, featureEnabledFrom: featureFrom, featureEnforcedFrom: featureFrom });
   mk(DIR_STUB, {
     getDirectoryGraphConfig: async () => {
       directoryConfigReads++;

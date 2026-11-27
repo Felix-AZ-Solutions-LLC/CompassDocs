@@ -112,9 +112,13 @@ export function isValidBackupName(name: string): boolean {
   return /^compassdocs-\d{8}-\d{6}\.dump(\.enc)?$/.test(name);
 }
 
-/** The uploads half of a set (1.20.27). */
+/**
+ * The uploads half of a set (1.20.27). 1.21.4: or the same archive
+ * unencrypted (".files.tar"), as a CompassDocs Cloud workspace export
+ * carries it (lib/workspace-export), so an export restores here as a set.
+ */
 export function isValidFilesName(name: string): boolean {
-  return /^compassdocs-\d{8}-\d{6}\.files\.tar\.enc$/.test(name);
+  return /^compassdocs-\d{8}-\d{6}\.files\.tar(\.enc)?$/.test(name);
 }
 
 /** Either file of a set: what the download route serves. */
@@ -122,9 +126,22 @@ export function isValidBackupFile(name: string): boolean {
   return isValidBackupName(name) || isValidFilesName(name);
 }
 
-/** The files half that belongs with a database dump's name. */
+/** The files half that belongs with a database dump's name (the name a new backup gives it). */
 export function filesNameFor(dumpName: string): string {
   return dumpName.replace(/\.dump(\.enc)?$/, FILES_EXT);
+}
+
+/**
+ * The files half a set has on disk (1.21.4): the encrypted one a backup
+ * makes, else an unencrypted ".files.tar" (a workspace export's); null when
+ * the set has none.
+ */
+async function filesHalfOf(dumpName: string): Promise<{ name: string; size: number } | null> {
+  for (const name of [filesNameFor(dumpName), dumpName.replace(/\.dump(\.enc)?$/, ".files.tar")]) {
+    const f = await stat(join(backupDir(), name)).catch(() => null);
+    if (f && f.isFile()) return { name, size: f.size };
+  }
+  return null;
 }
 
 function stamp(d: Date): string {
@@ -212,13 +229,11 @@ export async function createBackup(now: Date = new Date()): Promise<CreateBackup
 
 async function backupInfo(name: string): Promise<BackupInfo> {
   const s = await stat(join(backupDir(), name));
-  const filesName = filesNameFor(name);
-  const f = await stat(join(backupDir(), filesName)).catch(() => null);
   return {
     name,
     size: s.size,
     created_at: new Date(s.mtimeMs).toISOString(),
-    files: f && f.isFile() ? { name: filesName, size: f.size } : null,
+    files: await filesHalfOf(name),
   };
 }
 
@@ -261,6 +276,7 @@ export async function deleteBackup(name: string): Promise<boolean> {
     return false;
   }
   await unlink(join(backupDir(), filesNameFor(name))).catch(() => {});
+  await unlink(join(backupDir(), name.replace(/\.dump(\.enc)?$/, ".files.tar"))).catch(() => {});
   return true;
 }
 
@@ -328,8 +344,9 @@ export async function restoreBackup(name: string): Promise<RestoreResult> {
   const p = backupPath(name);
   if (!p || !isValidBackupName(name)) throw new Error("Invalid backup name.");
   await stat(p); // throws if missing
-  const filesPath = join(backupDir(), filesNameFor(name));
-  const hasFiles = Boolean(await stat(filesPath).catch(() => null));
+  const half = await filesHalfOf(name);
+  const filesPath = half ? join(backupDir(), half.name) : "";
+  const hasFiles = Boolean(half);
 
   // 1.20.27 (second review, Low): the attachments go back FIRST. Adding
   // files never removes one, so if this step fails the database has not

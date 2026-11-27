@@ -14,6 +14,17 @@ import { forgetDeskOnSignOut } from "./helpdesk/desk/popout/reply-popout";
 // same /account page (avatar, name, a cog icon) in a 232px row, which also
 // pushed long names into the icons.
 
+/**
+ * The footer's second line: the person's role, or, in a CompassDocs support
+ * session (1.21.4), what that session may do. A read-only support session
+ * runs on an administrator-shaped account but can change nothing, so
+ * "Admin" there would mislead.
+ */
+export function roleLine(user: Pick<SessionUser, "role" | "support">): string {
+  if (user.support) return user.support.level === "read_only" ? "Support · read-only" : "Support · admin";
+  return ROLE_LABEL[user.role];
+}
+
 export function UserMenu({ user, collapsed = false }: { user: SessionUser; collapsed?: boolean }) {
   const router = useRouter();
   const display = user.name || user.username;
@@ -57,7 +68,7 @@ export function UserMenu({ user, collapsed = false }: { user: SessionUser; colla
         <UserAvatar name={display} avatar={user.avatar} size="sm" />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-medium text-slate-800">{display}</span>
-          <span className="block truncate text-xs text-slate-500">{ROLE_LABEL[user.role]}</span>
+          <span className="block truncate text-xs text-slate-500">{roleLine(user)}</span>
         </span>
       </Link>
       <div className="flex shrink-0 items-center">

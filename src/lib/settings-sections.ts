@@ -41,6 +41,7 @@ import {
   SquareArrowOutUpRight,
   Users,
   UsersRound,
+  LifeBuoy,
 } from "lucide-react";
 
 /** A routed page inside a section (/admin/directory/fields). */
@@ -162,6 +163,13 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
           { href: "/admin/sso#scim", label: "SCIM provisioning", keywords: "scim provisioning token entra users groups" },
           { href: "/admin/sso#duo", label: "Duo sign-in check", keywords: "duo mfa 2fa two-factor multi-factor push universal prompt bypass break-glass desk" },
           { href: "/admin/sso#break-glass", label: "SSO only and break-glass accounts", keywords: "sso only password break-glass emergency remove local passwords" },
+        ] },
+      // 1.21.4: only in a CompassDocs Cloud workspace with support access configured (lib/cloud sectionHiddenInMode).
+      { href: "/admin/support-access", label: "Support access", icon: LifeBuoy, description: "Let CompassDocs support in for a limited time, only when you approve, with every step in the audit log.", keywords: "compassdocs support staff help access grant request approve deny revoke emergency session audit troubleshoot", permission: "user.update_role", topics: [
+          { href: "/admin/support-access#waiting", label: "Requests waiting", keywords: "approve deny pending request" },
+          { href: "/admin/support-access#active", label: "Active access", keywords: "revoke end session now" },
+          { href: "/admin/support-access#settings", label: "Support access settings", keywords: "allow requests emergency access off read-only administrator" },
+          { href: "/admin/support-access#history", label: "Past access", keywords: "history sessions pages viewed changes" },
         ] },
       { href: "/admin/directory", label: "Directory", icon: BookUser, description: "People sync from Microsoft 365, attributes, and profiles.", keywords: "people microsoft 365 sync attributes profiles photos", permission: "directory.sync_manage", docs: "https://docs.compassdocs.io/guides/directory/", pages: [
           { href: "/admin/directory", label: "People", icon: Users, keywords: "people entries import csv" },

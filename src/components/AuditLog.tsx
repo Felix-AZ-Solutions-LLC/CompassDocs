@@ -30,6 +30,8 @@ interface Initial {
   total: number;
   categories: string[];
   limit: number;
+  /** 1.21.4: the category the page opened on (`?category=support`, Support access's link); "" for all. */
+  category?: string;
 }
 
 // Action labels live in lib/audit-labels (shared with the export); the
@@ -67,7 +69,7 @@ export function AuditLog({
   const [rows, setRows] = useState<AuditRow[]>(initial.rows);
   const [total, setTotal] = useState(initial.total);
   const [page, setPage] = useState(0);
-  const [category, setCategory] = useState("");
+  const [category, setCategory] = useState(initial.category ?? "");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [loading, setLoading] = useState(false);

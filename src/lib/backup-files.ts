@@ -62,6 +62,8 @@ const SCRATCH_RE = [
 export function excluded(rel: string, keyRel: string | null): boolean {
   const name = rel.split("/").pop() || "";
   if (keyRel && rel === keyRel) return true;
+  // 1.21.4: workspace exports in the making and made (lib/file-store exportStore): never in a backup, never restored over.
+  if (rel === "exports" || rel.startsWith("exports/")) return true;
   if (name === ".secret.key") return true; // the default name, wherever the env points
   return SCRATCH_RE.some((re) => re.test(name));
 }
@@ -75,6 +77,11 @@ function vanished(e: unknown): boolean {
 
 function octal(n: number, width: number): string {
   return n.toString(8).padStart(width - 1, "0") + "\0";
+}
+
+/** One ustar header block (1.21.4: exported for lib/workspace-export's outer archive). */
+export function tarHeader(name: string, size: number, mode: number, mtime: number, type: "0" | "5" | "x", prefix = ""): Buffer {
+  return header(name, size, mode, mtime, type, prefix);
 }
 
 function header(name: string, size: number, mode: number, mtime: number, type: "0" | "5" | "x", prefix = ""): Buffer {
@@ -123,6 +130,15 @@ function padding(size: number): Buffer {
   const rem = size % BLOCK;
   return rem ? Buffer.alloc(BLOCK - rem, 0) : Buffer.alloc(0);
 }
+
+/** The zeros after an entry's data (exported for lib/workspace-export). */
+export const tarPadding = padding;
+
+/** The two zero blocks that end an archive. */
+export const TAR_END = Buffer.alloc(BLOCK * 2, 0);
+
+/** Write `chunk` to `out`, waiting for it to drain (exported for lib/workspace-export). */
+export const tarWrite = writeAll;
 
 export interface FilesArchiveResult {
   files: number;
@@ -272,12 +288,34 @@ async function writeStoreArchive(dest: string): Promise<FilesArchiveResult> {
   listed.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   const out = createWriteStream(dest, { mode: 0o600 });
   const closed = once(out, "close");
+  try {
+    return await writeStoreTar(out, store, listed);
+  } finally {
+    out.end();
+    await closed;
+  }
+}
+
+/**
+ * The store's files `listed` as an archive in the format above, written to
+ * `out` (which the caller ends). 1.21.4: shared with lib/workspace-export,
+ * which writes it into the file store itself and reports `progress` after
+ * each file. Works on either store: a stored file's key is its path.
+ */
+export async function writeStoreTar(
+  out: NodeJS.WritableStream,
+  store: Pick<ReturnType<typeof fileStore>, "stat" | "readStream">,
+  listed: StoredFile[],
+  progress?: (done: { files: number; bytes: number }) => void | Promise<void>,
+  signal?: AbortSignal
+): Promise<FilesArchiveResult> {
   let files = 0;
   let bytes = 0;
   let gone = 0;
   let importDir = false;
-  try {
+  {
     for (const f of listed) {
+      signal?.throwIfAborted();
       const now = await store.stat(f.key);
       if (!now) {
         gone++;
@@ -330,11 +368,9 @@ async function writeStoreArchive(dest: string): Promise<FilesArchiveResult> {
       }
       files++;
       bytes += size;
+      await progress?.({ files, bytes });
     }
     await writeAll(out, Buffer.alloc(BLOCK * 2, 0)); // end of archive
-  } finally {
-    out.end();
-    await closed;
   }
   return { files, bytes, vanished: gone };
 }

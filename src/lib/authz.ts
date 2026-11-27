@@ -21,6 +21,7 @@ import { cache } from "react";
 import { pool } from "./db";
 import { isPermissionKey, permission } from "./permissions";
 import type { PermissionKey } from "./permissions";
+import { supportPermissionAllowed, type SupportLevel } from "./support-policy";
 
 /**
  * Is the legacy role ladder still the enforcement authority?
@@ -50,6 +51,8 @@ interface GrantRow {
   space_id: number | null;
   role_name: string;
   via_group: string | null;
+  /** 1.21.4: the level of the support session this account is (lib/support), else null. */
+  support_level?: string | null;
 }
 
 /**
@@ -59,7 +62,8 @@ interface GrantRow {
  */
 async function grantRows(userId: number): Promise<GrantRow[]> {
   const { rows } = await pool().query<GrantRow>(
-    `SELECT rp.permission, ra.scope_type, ra.space_id, r.name AS role_name, g.name AS via_group
+    `SELECT rp.permission, ra.scope_type, ra.space_id, r.name AS role_name, g.name AS via_group,
+            (SELECT ss.level FROM support_sessions ss WHERE ss.principal_id = $1 LIMIT 1) AS support_level
        FROM role_assignments ra
        JOIN roles r ON r.id = ra.role_id
        JOIN role_permissions rp ON rp.role_id = ra.role_id
@@ -87,9 +91,14 @@ async function resolveGrants(userId: number): Promise<Grants> {
   const rows = await grantRows(userId);
   const global = new Set<PermissionKey>();
   const perSpace = new Map<PermissionKey, Set<number>>();
+  // 1.21.4: a CompassDocs support session's account (lib/support) holds only
+  // what lib/support-policy allows its level, whatever its role grants.
+  const supportLevel = rows.find((r) => r.support_level)?.support_level;
+  const level: SupportLevel | null = supportLevel === "admin" || supportLevel === "read_only" ? supportLevel : null;
   for (const r of rows) {
     if (!isPermissionKey(r.permission)) continue; // unknown key ⇒ no grant
     const key = r.permission as PermissionKey;
+    if (level && !supportPermissionAllowed(level, key)) continue;
     if (r.scope_type === "global") {
       global.add(key);
     } else if (r.space_id !== null) {

@@ -69,7 +69,7 @@ const edition = { present: true, features: ["helpdesk"] as string[] };
   const ee = new Module(EE_STUB);
   ee.filename = EE_STUB;
   ee.loaded = true;
-  ee.exports = { ee: () => edition, eePresent: () => true, featureEnabled: async (f: string) => edition.features.includes(f), featureEnforced: async (f: string) => edition.features.includes(f) };
+  ee.exports = { ee: () => edition, eePresent: () => true, featureEnabled: async (f: string) => edition.features.includes(f), featureEnforced: async (f: string) => edition.features.includes(f), featureEnabledFrom: (f: string) => edition.features.includes(f), featureEnforcedFrom: (f: string) => edition.features.includes(f) };
   require.cache[EE_STUB] = ee;
   const loader = Module as unknown as { _resolveFilename: (r: string, p: { filename?: string } | null, ...rest: unknown[]) => string };
   const resolve = loader._resolveFilename;

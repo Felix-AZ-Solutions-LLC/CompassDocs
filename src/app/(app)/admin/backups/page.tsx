@@ -8,6 +8,7 @@ import { BackupsClient } from "@/components/BackupsClient";
 import { BackupDestinations } from "@/components/BackupDestinations";
 import { CloudManagedPage } from "@/components/CloudManaged";
 import { SettingsPage } from "@/components/SettingsPage";
+import { PackageOpen } from "lucide-react";
 
 import { settingsMetadata } from "@/lib/settings-sections";
 export const dynamic = "force-dynamic";
@@ -20,7 +21,7 @@ export default async function BackupsPage() {
   if (isCloud()) {
     return (
       <SettingsPage href="/admin/backups" docs={false}>
-        <CloudManagedPage area="backups" />
+        <CloudManagedPage area="backups" action={{ href: "/admin/data#workspace-export", label: "Export your workspace", icon: <PackageOpen /> }} />
       </SettingsPage>
     );
   }

@@ -10,6 +10,13 @@
 //
 // `edition.features` is exported so a test can switch the feature off and
 // prove the gate.
+//
+// Every stub of lib/ee (this one and the inline ones) carries ALL of its
+// exports, the settings-map *From variants included: test files run in
+// parallel against one database, and while test/duo-mfa.test.ts has a Duo
+// rule switched on, every session check anywhere calls
+// featureEnforcedFrom("sso", …) (lib/duo-config). A stub without it fails
+// the other file with "featureEnforcedFrom is not a function" (1.21.4).
 
 import Module from "node:module";
 import path from "node:path";
@@ -26,7 +33,7 @@ if (!require.cache[EE_STUB]) {
   ee.exports = {
     ee: () => edition,
     eePresent: () => edition.present,
-    featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature),
+    featureEnabled: async (feature: string) => edition.features.includes(feature), featureEnforced: async (feature: string) => edition.features.includes(feature), featureEnabledFrom: (feature: string) => edition.features.includes(feature), featureEnforcedFrom: (feature: string) => edition.features.includes(feature),
   };
   require.cache[EE_STUB] = ee;
 

@@ -17,6 +17,7 @@ import { CommandPalette } from "@/components/palette/CommandPalette";
 import { navCapabilities } from "@/lib/nav-capabilities";
 import { spaceScopeFor } from "@/lib/access";
 import { listSpaces } from "@/lib/db";
+import { SupportBanner } from "@/components/support/SupportBanner";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
@@ -63,6 +64,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <main id="main" tabIndex={-1} className="flex-1 overflow-y-auto outline-none print:overflow-visible">
         <SettingsProvider value={settings}>
         <ReachableSettingsProvider sections={reachable}>
+        {/* 1.21.4: a CompassDocs support session says so on every page (lib/support). */}
+        {user.support && <SupportBanner support={user.support} />}
         <WidthProvider initial={user.page_width}>{children}
         <ToastHost />
         <DialogHost /></WidthProvider>

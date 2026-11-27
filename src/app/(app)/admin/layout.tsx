@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { Settings } from "lucide-react";
+import { Settings, ShieldAlert } from "lucide-react";
 import { requireUser, reachableSettingsSections } from "@/lib/auth";
 import { SettingsNav } from "@/components/SettingsNav";
 import { SettingsJumpHighlight } from "@/components/SettingsJumpHighlight";
@@ -11,6 +11,7 @@ import { licenseState } from "@/lib/license";
 import { licenceDaysLeft } from "@/lib/license-enforcement";
 import { eePresent } from "@/lib/ee";
 import { ssoOnlyDisabledByEnv } from "@/lib/sign-in-security-shared";
+import { SUPPORT_SECTION } from "@/lib/cloud";
 
 /** Days before expiry the settings pages start saying so (1.20.27, security review M4). */
 const LICENCE_WARN_DAYS = 30;
@@ -41,6 +42,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     if (days !== null && days <= LICENCE_WARN_DAYS && "license" in state) licenceNote = { days, expires: state.license.expires };
   }
 
+  // 1.21.4: CompassDocs support used emergency access (lib/support): said on
+  // every settings page, to whoever can open Support access, until one of
+  // them marks it reviewed.
+  const emergencies =
+    reachable.includes(SUPPORT_SECTION) && !user.support ? await (await import("@/lib/support")).unreviewedEmergencies() : 0;
+
   return (
     <PageContainer>
       {/* An eyebrow, not a heading: the section (SettingsPage) is the page's
@@ -59,6 +66,17 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         <div className="notice-warn mb-4 rounded-lg border px-3 py-2 text-sm">
           SSO only is switched off on the server (<code className="font-mono text-xs">COMPASSDOCS_SSO_ONLY_DISABLED=1</code>). Every account
           with a password can sign in with it. Remove it and restart to enforce SSO only again.
+        </div>
+      )}
+      {emergencies > 0 && (
+        <div className="notice-warn mb-4 flex items-start gap-2 rounded-lg border px-3 py-2 text-sm" role="note" data-testid="support-emergency-note">
+          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <p>
+            CompassDocs support used emergency access {emergencies === 1 ? "once" : `${emergencies} times`} without waiting for approval.{" "}
+            <a href="/admin/support-access" className="link font-medium">
+              Review it in Support access
+            </a>
+          </p>
         </div>
       )}
       {licenceNote && (
