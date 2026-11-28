@@ -334,8 +334,12 @@ test.describe.serial("cloud mode: support access and the workspace export", () =
 
   test("Support access in dark mode and at phone width", async ({ page }) => {
     await login(page, ADMIN);
-    await page.goto("/admin/support-access");
+    // Dark before the page loads, so the boot script paints it dark. Switching
+    // after load leans on ThemeToggle's live listener, which only exists once
+    // the page has hydrated: an early switch raced it and could be missed.
     await page.emulateMedia({ colorScheme: "dark" });
+    await page.goto("/admin/support-access");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     const card = page.locator("#history");
     expect(await card.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe("rgb(255, 255, 255)");
     await page.emulateMedia({ colorScheme: "light" });

@@ -30,7 +30,8 @@ const SHOTS = process.env.E2E_SHOTS_DIR || "";
 const ROOT = path.resolve(__dirname, "..");
 const ENTRY = path.join(ROOT, "scripts", "start.cjs");
 const SERVER_JS = path.join(ROOT, ".next", "standalone", "server.js");
-const PORT = 3987;
+// Its own port: support-access.spec.ts has 3987 (each cloud-mode spec spawns its own server).
+const PORT = 3988;
 const BASE = `http://localhost:${PORT}`;
 const SECRET_KEY = randomBytes(32).toString("hex");
 const DB_NAME = "compass_e2e_plan_usage";
