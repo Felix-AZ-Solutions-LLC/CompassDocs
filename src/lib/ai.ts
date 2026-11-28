@@ -37,6 +37,12 @@ export interface AiAnswer {
   people: AiPerson[];
   /** "ai" when synthesized by Claude, "fallback" when no API key is configured. */
   mode: "ai" | "fallback";
+  /**
+   * 1.22.0: AI is paused at the plan's monthly cap until this day ("1 Dec"):
+   * the answer is the keyword matches, and the page says the pause once, in
+   * its reader's words (design D3).
+   */
+  pausedUntil?: string;
 }
 
 function toSources(docs: Document[]): AiSource[] {
@@ -423,12 +429,8 @@ Rules:
         mode: "ai",
       };
     }
-    // 1.22.0: the month's AI cap is reached: the matching documents, and the pause in place of an answer (design D3).
-    const paused = pausedMessage(err);
-    if (paused) {
-      const fb = fallbackAnswer(question, docs, people);
-      return { ...fb, answer: `${paused}\n\n${fb.answer}` };
-    }
+    // 1.22.0: the month's AI cap is reached: the keyword matches, and the page says the pause (design D3).
+    if (pausedMessage(err)) return { ...fallbackAnswer(question, docs, people), pausedUntil: (err as { until?: string }).until ?? "next month" };
     // Any API failure (bad key, rate limit, network) degrades gracefully.
     console.error("AI answer failed, falling back to snippets:", err);
     return fallbackAnswer(question, docs, people);

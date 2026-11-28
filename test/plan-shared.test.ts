@@ -28,6 +28,9 @@ import {
   lastMonths,
   meterState,
   noticeFor,
+  isRealDay,
+  billingContactFrom,
+  BILLING_ALL_ADMINS,
   parsePlanClaim,
   prorateExtraAgent,
   storageSteps,
@@ -75,12 +78,20 @@ describe("the cloudPlan claim", () => {
   });
 
   test("optional fields are read when present", () => {
-    const p = plan({ bufferPct: 10, billingContact: " billing@northwind.example ", priceUsd: 199, billing: "monthly", renewsAt: "2027-03-14T00:00:00Z" });
+    const p = plan({ bufferPct: 10, billingContact: " billing@northwind.example ", priceUsd: 199, billing: "monthly", renewsAt: "2027-03-14" });
     assert.equal(p.bufferPct, 10);
     assert.equal(p.billingContact, "billing@northwind.example");
     assert.equal(p.priceUsd, 199);
     assert.equal(p.billing, "monthly");
     assert.equal(p.renewsAt, "2027-03-14");
+  });
+
+  test("renewsAt is exactly YYYY-MM-DD and a real day (review): anything else is no plan", () => {
+    for (const renewsAt of ["2027-03-14T00:00:00Z", "2027-03-14 ", "2027-3-14", "2027-02-30", "2027-13-01", "14/03/2027", "2027-03-14x"]) {
+      assert.equal(parsePlanClaim({ ...STARTER, renewsAt }), null, renewsAt);
+    }
+    assert.equal(isRealDay("2028-02-29"), true, "a leap day");
+    assert.equal(isRealDay("2027-02-29"), false);
   });
 
   test("limits may be null (no limit), but must be present", () => {
@@ -301,6 +312,22 @@ describe("threshold banners and their dismissal (design B)", () => {
     assert.equal(paused.threshold, "paused");
   });
 
+  test("AI by contract (no allowance) with a cap reached: the pause is still said (review)", () => {
+    const d = plan({ name: "dedicated", agentsMax: null, activeUsersLimit: null, aiAllowanceUsd: null });
+    const ai = aiSpend(120, null, "cap", 100);
+    assert.equal(ai.paused, true);
+    const n = noticeFor(r("ai", 120, null, "normal"), { ...ctx, plan: d, ai })!;
+    assert.equal(n.threshold, "paused");
+    assert.equal(noticeFor(r("ai", 50, null, "normal"), { ...ctx, plan: d, ai: aiSpend(50, null, "cap", 100) }), null, "under the cap: nothing");
+  });
+
+  test("the dashboard's short line (design B2)", () => {
+    const n80 = noticeFor(r("users", 204, 250, "warn"), ctx)!;
+    assert.deepEqual(n80.short, { lead: "82% of Starter's active users this month.", rest: "Nothing changes if you go over." });
+    assert.equal(noticeFor(r("agents", 12, 10, "past"), ctx)!.short.lead, "12 agents, Starter's limit with its buffer.");
+    assert.equal(noticeFor(r("ai", 15, 15, "over"), { ...ctx, ai: aiSpend(15, 15, "stop", null) })!.short.lead, "AI is paused for the rest of November.");
+  });
+
   test("a dismissal hides that threshold, for that month only, until the next threshold", () => {
     const readings = [r("users", 204, 250, "warn"), r("agents", 3, 10, "normal")];
     assert.equal(visibleNotices(readings, ctx, []).length, 1);
@@ -392,5 +419,22 @@ describe("resolvePlan: the licence names its workspace", () => {
     const r = resolvePlan({ inForce: mint({ workspace: "ws_any", cloudPlan: STARTER }), workspaceId: null, now: NOW }, parse);
     assert.equal(r.state?.plan.name, "starter");
     assert.equal(r.remember, null);
+  });
+});
+
+describe("the billing contact (Decision 5, review)", () => {
+  test("an address set here; every admin chosen here over the licence's contact; else the licence's; else every admin", () => {
+    assert.deepEqual(billingContactFrom("ops@acme.example", "lic@acme.example"), { email: "ops@acme.example", source: "here", licenseContact: "lic@acme.example" });
+    assert.deepEqual(billingContactFrom(BILLING_ALL_ADMINS, "lic@acme.example"), { email: "", source: "admins", licenseContact: "lic@acme.example" });
+    assert.deepEqual(billingContactFrom("", "lic@acme.example"), { email: "lic@acme.example", source: "license", licenseContact: "lic@acme.example" });
+    assert.deepEqual(billingContactFrom(undefined, null), { email: "", source: "default", licenseContact: null });
+  });
+});
+
+describe("agents by contract (no maximum, review)", () => {
+  test("never extra agents, so never a price", () => {
+    const d = plan({ name: "dedicated", agentsIncluded: 0, agentsMax: null, activeUsersLimit: null, aiAllowanceUsd: null });
+    assert.equal(extraAgents(30, d), 0);
+    assert.equal(agentHoldAt(d), null);
   });
 });

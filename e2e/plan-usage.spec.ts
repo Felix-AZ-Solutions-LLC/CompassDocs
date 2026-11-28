@@ -123,6 +123,8 @@ function northwind(over: Record<string, unknown> = {}) {
       paceUsd: 14.6,
     },
     billingContact: "",
+    billingContactSource: "default",
+    licenseContact: null,
     mismatch: null,
     spending: { spending: "keep", capUsd: null },
     ...over,
@@ -142,10 +144,12 @@ async function standIn(page: Page, overview: Record<string, unknown> = northwind
   const sent: { url: string; method: string; body: unknown }[] = [];
   const record = (route: Route) => sent.push({ url: route.request().url(), method: route.request().method(), body: route.request().postDataJSON?.() ?? null });
   await page.route("**/api/admin/plan", (route) => (route.request().method() === "GET" ? route.fulfill({ json: overview }) : route.fallback()));
-  await page.route("**/api/admin/plan/people**", (route) => route.fulfill({ json: { month: MONTH, count: 204, by_kind: (overview as ReturnType<typeof northwind>).users.byKind, people: PEOPLE } }));
+  await page.route("**/api/admin/plan/people**", (route) => route.fulfill({ json: { month: MONTH, count: 204, by_kind: (overview as ReturnType<typeof northwind>).users.byKind, people: PEOPLE, shown: PEOPLE.length, limit: 500 } }));
   await page.route("**/api/admin/plan/settings", async (route) => {
     record(route);
-    await route.fulfill({ json: { spending: { spending: "cap", capUsd: 40 }, billing_contact: "" } });
+    const b = route.request().postDataJSON() as { billing_contact?: string };
+    const contact = b.billing_contact === undefined || b.billing_contact === "all_admins" ? { email: "", source: "admins", licenseContact: null } : { email: b.billing_contact, source: b.billing_contact ? "here" : "default", licenseContact: null };
+    await route.fulfill({ json: { spending: { spending: "cap", capUsd: 40 }, billing_contact: contact } });
   });
   await page.route("**/api/admin/plan/upgrade", async (route) => {
     record(route);
@@ -342,7 +346,7 @@ test.describe.serial("cloud mode: Plan & usage", () => {
       })
     );
     await page.goto("/admin/plan");
-    await expect(page.getByTestId("agents-chip")).toHaveText("At 12 · Starter's limit");
+    await expect(page.getByTestId("agents-chip")).toHaveText("At 12 · Starter's limit, new agents held");
     await expect(page.getByTestId("users-chip")).toHaveText("Over by 21 · in buffer");
     await expect(page.getByTestId("storage-chip")).toHaveText("1 extra 50 GB · $25/mo");
     await expect(page.getByTestId("ai-chip")).toHaveText("$2.40 beyond · billed $3.12");
@@ -359,6 +363,8 @@ test.describe.serial("cloud mode: Plan & usage", () => {
     await page.goto("/admin/plan/people");
     await expect(page.getByRole("heading", { name: `Who counted in` })).toBeVisible();
     await expect(page.getByText("Requesters 11")).toBeVisible();
+    // The count, the chips and the list come from one answer.
+    await expect(page.getByText(/^204 people so far\./)).toBeVisible();
     await expect(page.getByRole("row", { name: /Chris Morales Requester Customer portal/ })).toBeVisible();
     await expect(page.getByRole("link", { name: "Download CSV" })).toHaveAttribute("href", "/api/admin/plan/people?format=csv");
     await shoot(page, "plan-people");
@@ -414,20 +420,39 @@ test.describe.serial("cloud mode: Plan & usage", () => {
       plan: "starter",
       mismatch: null,
       notices: [
-        { month: MONTH, meter: "users", threshold: "past", tone: "warn", lead: "Northwind has outgrown Starter: 312 active users this month, past the 300 buffer.", rest: "Nobody is locked out and nothing is turned off. Shared includes 1,000 active users a month." },
-        { month: MONTH, meter: "ai", threshold: "limit", tone: "info", lead: "Northwind has used its $15 AI allowance for November.", rest: "AI keeps working; the rest of the month is billed at cost +30% (so far $0.40 beyond, billed as $0.52)." },
+        {
+          month: MONTH,
+          meter: "users",
+          threshold: "past",
+          tone: "warn",
+          lead: "Northwind has outgrown Starter: 312 active users this month, past the 300 buffer.",
+          rest: "Nobody is locked out and nothing is turned off. Shared includes 1,000 active users a month.",
+          short: { lead: "Past Starter's active users and its buffer this month.", rest: "Nobody is locked out." },
+        },
+        {
+          month: MONTH,
+          meter: "ai",
+          threshold: "limit",
+          tone: "info",
+          lead: "Northwind has used its $15 AI allowance for November.",
+          rest: "AI keeps working; the rest of the month is billed at cost +30% (so far $0.40 beyond, billed as $0.52).",
+          short: { lead: "This month's AI allowance is used.", rest: "AI keeps working, billed at cost +30%." },
+        },
       ],
     };
     await login(page, ADMIN);
     const sent = await standIn(page, northwind(), notices);
     await page.goto("/");
     const banner = page.getByTestId("plan-banner");
-    await expect(banner).toContainText("Nobody is locked out and nothing is turned off.");
+    // The dashboard says it short (design B2); the settings pages in full.
+    await expect(banner).toContainText("Past Starter's active users and its buffer this month. Nobody is locked out.");
+    await expect(banner).not.toContainText("nothing is turned off");
     await expect(banner.getByRole("note", { name: "Plan usage" })).toHaveAttribute("data-plan-tone", "warn");
     await expect(banner.getByRole("link", { name: "Upgrade to Shared" })).toHaveAttribute("href", "/admin/plan#upgrade");
     await shoot(page, "plan-banner-dashboard", false);
     await page.goto("/admin/license");
     await expect(page.getByTestId("plan-banner")).toContainText("outgrown Starter");
+    await expect(page.getByTestId("plan-banner")).toContainText("Nobody is locked out and nothing is turned off.");
     await shoot(page, "plan-banner-settings", false);
     // Not repeated on Plan & usage: its meters say it.
     await page.goto("/admin/plan");
@@ -447,9 +472,26 @@ test.describe.serial("cloud mode: Plan & usage", () => {
     // 80% alone is a fact (notice-info), linking to the page.
     await page.unroute("**/api/plan/notices");
     await page.route("**/api/plan/notices", (route) =>
-      route.fulfill({ json: { plan: "starter", mismatch: null, notices: [{ month: MONTH, meter: "users", threshold: "80", tone: "info", lead: "Northwind is at 82% of Starter's 250 active users this month", rest: "(204 people). Nothing changes if you go over; there's a 50-person buffer." }] } })
+      route.fulfill({
+        json: {
+          plan: "starter",
+          mismatch: null,
+          notices: [
+            {
+              month: MONTH,
+              meter: "users",
+              threshold: "80",
+              tone: "info",
+              lead: "Northwind is at 82% of Starter's 250 active users this month",
+              rest: "(204 people). Nothing changes if you go over; there's a 50-person buffer.",
+              short: { lead: "82% of Starter's active users this month.", rest: "Nothing changes if you go over." },
+            },
+          ],
+        },
+      })
     );
     await page.goto("/");
+    await expect(page.getByTestId("plan-banner")).toContainText("82% of Starter's active users this month. Nothing changes if you go over.");
     await expect(page.getByTestId("plan-banner").getByRole("note", { name: "Plan usage" })).toHaveAttribute("data-plan-tone", "info");
     await expect(page.getByTestId("plan-banner").getByRole("link", { name: "Open Plan & usage" })).toBeVisible();
     await shoot(page, "plan-banner-80", false);
@@ -482,5 +524,57 @@ test.describe.serial("cloud mode: Plan & usage", () => {
     await shoot(page, "plan-mismatch", false);
     await page.goto("/");
     await expect(page.getByTestId("plan-mismatch")).toContainText("See what to do");
+  });
+
+  test("a license for another workspace and none kept: the notice says it once; Plan & usage says what it waits for", async ({ page }) => {
+    await login(page, ADMIN);
+    const mismatch = { licenseWorkspace: "ws_7f3a9c", workspaceId: "ws_2c91e4", runningOn: null };
+    await standIn(page, northwind(), { plan: null, notices: [], mismatch });
+    await page.route("**/api/admin/plan", (route) => route.fulfill({ status: 404, json: { error: "This workspace has no CompassDocs Cloud plan.", code: "no_plan", mismatch } }));
+    await page.goto("/admin/plan");
+    const n = page.getByTestId("plan-mismatch");
+    await expect(n).toContainText("There is no earlier license for this workspace to run on");
+    expect((await n.innerText()).match(/until this is fixed/g)?.length, "said once").toBe(1);
+    await expect(page.getByRole("heading", { name: "Waiting for this workspace's plan license" })).toBeVisible();
+    await expect(page.getByText("No CompassDocs Cloud plan")).toHaveCount(0);
+    await shoot(page, "plan-mismatch-empty", false);
+  });
+
+  test("the billing contact: the license's named as such; every admin can be chosen over it; the toast says who", async ({ page }) => {
+    await login(page, ADMIN);
+    const sent = await standIn(page, northwind({ billingContact: "billing@northwind.example", billingContactSource: "license", licenseContact: "billing@northwind.example" }));
+    await page.goto("/admin/plan");
+    await expect(page.getByTestId("billing-contact")).toHaveText("billing@northwind.example (from the license)");
+    await page.locator("#billing-contact").getByRole("button", { name: "Change" }).click();
+    const dialog = page.getByRole("dialog", { name: "Billing contact" });
+    await expect(dialog.getByRole("radio", { name: "The license's contact" })).toBeChecked();
+    await dialog.getByRole("radio", { name: "Every admin" }).check();
+    await shoot(page, "plan-billing-contact", false);
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByText("Warning emails go to every admin.")).toBeVisible();
+    expect(sent.find((s) => s.url.endsWith("/api/admin/plan/settings"))?.body).toEqual({ billing_contact: "all_admins" });
+  });
+
+  test("Dedicated: agents and AI by contract: no buffer, no price, no \"Stop at the allowance\"", async ({ page }) => {
+    await login(page, ADMIN);
+    const base = northwind();
+    await standIn(
+      page,
+      northwind({
+        plan: { ...base.plan, name: "dedicated", label: "Dedicated", agentsIncluded: 0, agentsMax: null, activeUsersLimit: null, aiAllowanceUsd: null, storageGb: 250, priceUsd: 2950, next: null },
+        meters: { ...base.meters, agents: { ...base.meters.agents, value: 31, limit: null, cap: null, state: "normal" }, ai: { ...base.meters.ai, limit: null, cap: null, state: "normal" } },
+        agents: { used: 31, included: 0, max: null, holdAt: null, extra: 0 },
+        ai: { ...base.ai, allowanceUsd: null },
+      })
+    );
+    await page.goto("/admin/plan");
+    await expect(page.getByTestId("agents-chip")).toHaveText("31 agents · by contract");
+    await expect(page.locator('[data-plan-meter="agents"]')).not.toContainText("$9.99");
+    await expect(page.locator('[data-plan-meter="agents"] .plan-buffer')).toHaveCount(0);
+    const fill = page.locator('[data-plan-meter="agents"] [role="meter"] > div').last();
+    expect(await fill.evaluate((el) => el.className)).toContain("bg-compass-600");
+    await page.goto("/admin/plan/ai#ai-spending");
+    await expect(page.getByText("Dedicated's AI is by contract. You can cap it at a monthly amount.")).toBeVisible();
+    await expect(page.getByRole("radio", { name: "Stop at the allowance" })).toHaveCount(0);
   });
 });

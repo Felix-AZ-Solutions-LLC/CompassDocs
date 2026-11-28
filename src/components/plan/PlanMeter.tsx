@@ -4,7 +4,10 @@
 // its hatched end; within the limit the fill is the accent, past it amber
 // (the UsageMeter rule). Ticks mark the limit and, for agents, the included
 // count. role="meter" with the real numbers; the card's chip says the state
-// in words, so color is never the only signal. Server-safe.
+// in words, so color is never the only signal. A limit with no maximum (a
+// Dedicated plan's agents: `soft={false}`) has no buffer and never turns
+// amber: the accent fill only. A mark at the start replaces the "0" label
+// rather than sitting on it. Server-safe.
 
 export interface MeterMark {
   at: number;
@@ -19,6 +22,7 @@ export function PlanMeter({
   valueText,
   marks = [],
   startLabel = "0",
+  soft = true,
   className = "",
 }: {
   value: number;
@@ -33,11 +37,17 @@ export function PlanMeter({
   /** Ticks under the bar (the limit first). */
   marks?: MeterMark[];
   startLabel?: string;
+  /** false: no buffer and no amber (a count with no maximum: the bar is just how many). */
+  soft?: boolean;
   className?: string;
 }) {
-  const top = Math.max(end, limit, 1e-9);
-  const pos = (n: number) => `${Math.max(0, Math.min(100, (n / top) * 100))}%`;
-  const over = value > limit;
+  const top = Math.max(soft ? end : limit, limit, 1e-9);
+  const pct = (n: number) => Math.max(0, Math.min(100, (n / top) * 100));
+  const pos = (n: number) => `${pct(n)}%`;
+  const over = soft && value > limit;
+  // A mark at (or right by) the start takes the start's place: one label, never two on top of each other.
+  const atStart = (m: MeterMark) => pct(m.at) < 4;
+  const showStart = !marks.some(atStart);
   return (
     <div className={className}>
       <div className="relative">
@@ -51,7 +61,7 @@ export function PlanMeter({
           aria-valuenow={Math.min(value, limit)}
           aria-valuetext={valueText}
         >
-          {end > limit && <div aria-hidden className="plan-buffer absolute inset-y-0 right-0" style={{ left: pos(limit) }} />}
+          {soft && end > limit && <div aria-hidden className="plan-buffer absolute inset-y-0 right-0" style={{ left: pos(limit) }} />}
           <div aria-hidden className={`absolute inset-y-0 left-0 rounded-full ${over ? "bg-amber-500" : "bg-compass-600"}`} style={{ width: pos(value) }} />
         </div>
         {marks.map((m) => (
@@ -59,9 +69,9 @@ export function PlanMeter({
         ))}
       </div>
       <div aria-hidden className="relative mt-1 h-4 text-2xs text-slate-500 tabular-nums">
-        <span className="absolute left-0">{startLabel}</span>
+        {showStart && <span className="absolute left-0">{startLabel}</span>}
         {marks.map((m) => (
-          <span key={`${m.at}-${m.label}`} className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: pos(m.at) }}>
+          <span key={`${m.at}-${m.label}`} className={`absolute whitespace-nowrap ${atStart(m) ? "" : "-translate-x-1/2"}`} style={{ left: atStart(m) ? 0 : pos(m.at) }}>
             {m.label}
           </span>
         ))}

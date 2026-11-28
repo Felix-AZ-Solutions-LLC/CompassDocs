@@ -540,7 +540,8 @@ describe("1.22.0: a CompassDocs Cloud plan's agent rules", () => {
     planLib.setPlanForTests({ state: { plan, license: { id: "lic", customer: "T", plan: "starter", features: ["helpdesk"], seats: 0, issued: "2026-03-14", expires: "2031-03-14" }, source: "in_force", mismatch: null }, mismatch: null, remember: null });
   };
   const n = async () => (await agentsLib.deskAgentIds()).length;
-  const add = (who: Person, extra: Record<string, unknown> = {}) => call(agentsRoute.POST, req("/helpdesk/admin/agents", P.admin.session, { user_id: who.id, role: "agent", ...extra }));
+  // A workspace admin adds (they can open Plan & usage, so they see and confirm the price); `by` another adder.
+  const add = (who: Person, extra: Record<string, unknown> = {}, by: Person = P.wsadmin) => call(agentsRoute.POST, req("/helpdesk/admin/agents", by.session, { user_id: who.id, role: "agent", ...extra }));
 
   before(async () => {
     process.env.COMPASSDOCS_CLOUD = "1";
@@ -548,6 +549,7 @@ describe("1.22.0: a CompassDocs Cloud plan's agent rules", () => {
     await person("plan1", "Pia Planone");
     await person("plan2", "Pat Plantwo");
     await person("plan3", "Pru Planthree");
+    await person("plan4", "Pax Planfour");
   });
   after(() => {
     planLib.setPlanForTests(null);
@@ -577,13 +579,48 @@ describe("1.22.0: a CompassDocs Cloud plan's agent rules", () => {
   test("the agents list carries the plan and the prorated price for whoever adds", async () => {
     const used = await n();
     setPlan(Math.max(0, used - 1), used + 10);
-    const r = await call(agentsRoute.GET, req("/helpdesk/admin/agents", P.admin.session));
+    const r = await call(agentsRoute.GET, req("/helpdesk/admin/agents", P.wsadmin.session));
     assert.equal(r.status, 200);
     assert.equal(r.body.plan.label, "Starter");
+    assert.equal(r.body.plan.admin, true);
     assert.equal(r.body.plan.hold_at, shared.bufferCap(used + 10, 20));
     assert.equal(r.body.plan.monthly_usd, 9.99);
     assert.equal(r.body.plan.proration.periodUsd, 119.88);
     assert.equal(r.body.plan.next.label, "Shared");
+    assert.equal(r.body.plan.state, "normal");
+  });
+
+  test("a desk Admin who can't open Plan & usage: the rules without prices, and an extra agent is an admin's to add (review)", async () => {
+    const used = await n();
+    setPlan(used, used + 10);
+    const r = await call(agentsRoute.GET, req("/helpdesk/admin/agents", P.admin.session));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.plan.admin, false);
+    assert.equal(r.body.plan.included, used);
+    assert.equal(r.body.plan.monthly_usd, null, "no price");
+    assert.equal(r.body.plan.price_usd, null);
+    assert.equal(r.body.plan.proration, null);
+    assert.equal(r.body.plan.next.price_usd, null);
+    // Even with confirm_extra: they were shown no price, so they can't accept one.
+    const refused = await add(P.plan3, { confirm_extra: true }, P.admin);
+    assert.equal(refused.status, 403, JSON.stringify(refused.body));
+    assert.equal(refused.body.code, "plan_admin_needed");
+    assert.match(refused.body.error, /Ask an admin to add them/);
+    assert.ok(!(await counted()).has(P.plan3.id));
+  });
+
+  test("agents by contract (no maximum): no price step and no hold (review)", async () => {
+    const used = await n();
+    setPlan(0, null);
+    const r = await call(agentsRoute.GET, req("/helpdesk/admin/agents", P.wsadmin.session));
+    assert.equal(r.body.plan.max, null);
+    assert.equal(r.body.plan.hold_at, null);
+    assert.ok(used > 0, "past the 0 included");
+    // Past the 0 included, a new agent is added with no price to confirm, by a desk Admin too: nothing changes the bill here.
+    const r2 = await add(P.plan4, {}, P.admin);
+    assert.equal(r2.status, 201, JSON.stringify(r2.body));
+    const off = await call(agentRoute.DELETE, req(`/helpdesk/admin/agents/${P.plan4.id}`, P.admin.session, undefined, "DELETE"), { userId: String(P.plan4.id) });
+    assert.ok(off.status < 300, JSON.stringify(off.body));
   });
 
   test("at the maximum with its buffer, new adds are held; everyone on the desk stays", async () => {

@@ -27,6 +27,7 @@ import { isCloud, PLAN_SECTION } from "./cloud";
 import { getSetting, setSetting } from "./db";
 import { GRACE_DAYS, licenseKey, parseLicense, type License } from "./license";
 import { parsePlanClaim, type CloudPlan, type LicenceMismatch } from "./plan-shared";
+import { roleAtLeast, type SessionUser } from "./types";
 
 /** The last licence whose plan named this workspace (a token), for a mismatch (design F). */
 export const PLAN_LAST_MATCH_SETTING = "plan_license_last_match";
@@ -135,3 +136,19 @@ export async function cloudPlan(): Promise<CloudPlan | null> {
 
 /** The Plan & usage settings section (and everything under it). */
 export { PLAN_SECTION };
+
+/**
+ * May this person open Plan & usage, and so see the plan's prices, warnings
+ * and upgrade (design B2: "an admin" here is workspace.settings_manage)?
+ * Cloud mode only; never a CompassDocs support session.
+ */
+export async function isPlanAdmin(user: Pick<SessionUser, "id" | "role" | "support">): Promise<boolean> {
+  if (!isCloud() || user.support) return false;
+  const { legacyAuthzEnforcement, grantsFor, admits } = await import("./authz");
+  if (legacyAuthzEnforcement()) return roleAtLeast(user.role, "admin");
+  try {
+    return admits(await grantsFor(user.id), "workspace.settings_manage");
+  } catch {
+    return false;
+  }
+}

@@ -23,6 +23,7 @@ import { buttonClass, iconButtonClass } from "@/components/Button";
 import { CopyButton } from "@/components/CopyButton";
 import { toast } from "@/components/Toasts";
 import { PLAN_CATALOGUE, planLabel, shortDate, SUPPORT_EMAIL, type LicenceMismatch, type PlanName, type PlanNotice } from "@/lib/plan-shared";
+import { PLAN_CHANGED_EVENT } from "./plan-data";
 
 interface NoticesBody {
   notices: PlanNotice[];
@@ -34,16 +35,27 @@ export function PlanBanner({ place }: { place: "dashboard" | "settings" }) {
   const [data, setData] = useState<NoticesBody | null>(null);
   const [hidden, setHidden] = useState(false);
   const path = usePathname() ?? "";
+  // Read again on every page (the settings layout stays mounted between them) and after a Plan & usage change.
+  const [changed, setChanged] = useState(0);
+  useEffect(() => {
+    const on = () => setChanged((n) => n + 1);
+    window.addEventListener(PLAN_CHANGED_EVENT, on);
+    return () => window.removeEventListener(PLAN_CHANGED_EVENT, on);
+  }, []);
   useEffect(() => {
     let live = true;
     fetch("/api/plan/notices", { cache: "no-store" })
       .then(async (r) => (r.ok ? ((await r.json()) as NoticesBody) : null))
-      .then((b) => live && setData(b))
+      .then((b) => {
+        if (!live) return;
+        setData(b);
+        setHidden(false);
+      })
       .catch(() => {});
     return () => {
       live = false;
     };
-  }, []);
+  }, [path, changed]);
   if (!data) return null;
   const onPlanPage = path.startsWith("/admin/plan");
   const notices = onPlanPage || hidden ? [] : data.notices;
@@ -77,7 +89,8 @@ export function PlanBanner({ place }: { place: "dashboard" | "settings" }) {
           <div className="min-w-0 flex-1 space-y-1">
             {notices.map((n) => (
               <p key={`${n.meter}:${n.threshold}`} data-plan-notice={`${n.meter}:${n.threshold}`}>
-                <b className="font-semibold">{n.lead}</b> {n.rest}{" "}
+                {/* Design B2: the dashboard says it in one short line; the settings pages in full. */}
+                <b className="font-semibold">{place === "dashboard" ? n.short.lead : n.lead}</b> {place === "dashboard" ? n.short.rest : n.rest}{" "}
                 {!past && n === notices[notices.length - 1] && (
                   <Link href={onlyAi && n.threshold === "limit" ? "/admin/plan/ai#ai-spending" : "/admin/plan"} className="link font-medium">
                     {onlyAi && n.threshold === "limit" ? "Set a spending cap" : "Open Plan & usage"}
@@ -110,9 +123,10 @@ export function PlanBanner({ place }: { place: "dashboard" | "settings" }) {
 
 /** Design F: the licence in force names another workspace. Our setup problem, said plainly; the workspace keeps running on the last licence that matched. */
 function MismatchNotice({ m, short }: { m: LicenceMismatch; short: boolean }) {
+  // Said once, and only what is true: with an earlier matching licence the plan runs on it; without one there is no plan yet.
   const running = m.runningOn
-    ? `It runs on its last license that matched (${planLabel(m.runningOn.plan)}, renews ${shortDate(m.runningOn.renewsAt)}).`
-    : "It runs as it is, with billing paused, until this is fixed.";
+    ? `It runs on its last license that matched (${planLabel(m.runningOn.plan)}, renews ${shortDate(m.runningOn.renewsAt)}). Plan & usage shows the counts, and nothing is billed until this is fixed.`
+    : "There is no earlier license for this workspace to run on, so Plan & usage has no plan to show yet, and nothing is billed until this is fixed.";
   if (short) {
     return (
       <div role="note" className="notice-error flex items-start gap-2 rounded-lg border px-3 py-2 text-sm" data-testid="plan-mismatch">
@@ -138,7 +152,7 @@ function MismatchNotice({ m, short }: { m: LicenceMismatch; short: boolean }) {
         </span>
       </p>
       <p className="pl-6">
-        <b className="font-semibold">Everything keeps working, and nothing is lost.</b> {running} Plan & usage shows the counts but bills nothing until this is fixed.
+        <b className="font-semibold">Everything keeps working, and nothing is lost.</b> {running}
       </p>
       <p className="pl-6">
         We've been told automatically. If it isn't fixed within a day, contact CompassDocs support:{" "}

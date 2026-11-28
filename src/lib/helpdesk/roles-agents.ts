@@ -111,14 +111,32 @@ export class AgentPriceError extends DeskRoleError {
   }
 }
 
+/**
+ * 1.22.0, CompassDocs Cloud: an extra agent changes the plan's bill, so only
+ * someone who can open Plan & usage (and so sees the price) may add one: a
+ * desk Manager who isn't a workspace admin is told to ask an admin (403
+ * `plan_admin_needed`). Adds within the included agents are unchanged.
+ */
+export class AgentAdminNeededError extends DeskRoleError {
+  readonly code = "plan_admin_needed";
+  constructor(public included: number, planLabel: string) {
+    super(`All ${included} agents included in ${planLabel} are in use, and another one adds to the plan's bill. Ask an admin to add them.`, 403);
+  }
+
+  body() {
+    return { error: this.message, code: this.code, included: this.included };
+  }
+}
+
 /** The plan's agent rules for an add, in a cloud workspace with a plan; null otherwise (the licence's `agents` claim applies). */
-async function planAgentRules(): Promise<{ holdAt: number | null; included: number; label: string; next: string | null } | null> {
+async function planAgentRules(): Promise<{ holdAt: number | null; included: number; label: string; next: string | null; priced: boolean } | null> {
   const { cloudPlan } = await import("../plan");
   const plan = await cloudPlan();
   if (!plan) return null;
   const { agentHoldAt, planLabel, PLAN_CATALOGUE } = await import("../plan-shared");
   const next = PLAN_CATALOGUE[plan.name].next;
-  return { holdAt: agentHoldAt(plan), included: plan.agentsIncluded, label: planLabel(plan.name), next: next ? planLabel(next) : null };
+  // No maximum: agents by contract (Dedicated): no price step and no hold.
+  return { holdAt: agentHoldAt(plan), included: plan.agentsIncluded, label: planLabel(plan.name), next: next ? planLabel(next) : null, priced: plan.agentsMax !== null };
 }
 
 const DESK_PERMS = ["helpdesk.admin", "helpdesk.agent_all", "helpdesk.agent", "helpdesk.reports"] as const;
@@ -367,6 +385,8 @@ export async function setDeskAgent(
   // its buffer, and one past the included agents needs its price confirmed.
   const planRules = role !== undefined ? await planAgentRules() : null;
   const allowance = role !== undefined ? (planRules ? planRules.holdAt : await agentAllowance()) : null;
+  // Read before the transaction (it may ask the permissions tables): may this caller add a paid agent?
+  const planAdmin = planRules?.priced ? await (await import("../plan")).isPlanAdmin(by) : false;
 
   await withTx(async (client) => {
     if (allowance !== null || planRules) {
@@ -380,9 +400,12 @@ export async function setDeskAgent(
       if (adding && allowance !== null && counted.length >= allowance) {
         throw planRules ? new PlanAgentHoldError(allowance, counted.length, planRules.label, planRules.next) : new AgentLimitError(allowance, counted.length);
       }
-      if (adding && planRules && counted.length >= planRules.included && !opts.confirmExtra) {
-        const { EXTRA_AGENT_USD } = await import("../plan-shared");
-        throw new AgentPriceError(planRules.included, counted.length, EXTRA_AGENT_USD);
+      if (adding && planRules?.priced && counted.length >= planRules.included) {
+        if (!planAdmin) throw new AgentAdminNeededError(planRules.included, planRules.label);
+        if (!opts.confirmExtra) {
+          const { EXTRA_AGENT_USD } = await import("../plan-shared");
+          throw new AgentPriceError(planRules.included, counted.length, EXTRA_AGENT_USD);
+        }
       }
     }
     if (role !== undefined) {

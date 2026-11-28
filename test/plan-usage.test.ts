@@ -16,6 +16,8 @@
 // Run: DATABASE_URL=… npx tsx --tsconfig ./tsconfig.test.json --test test/plan-usage.test.ts
 
 process.env.COMPASSDOCS_CLOUD = "1";
+// The platform's AI key (cloud mode's ANTHROPIC_API_KEY): only AI on it is the plan's (lib/plan-usage aiMetered).
+process.env.ANTHROPIC_API_KEY = "sk-ant-test-platform";
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
@@ -153,7 +155,11 @@ describe("AI cost by feature and the cap", () => {
     await usage.recordAiUsage({ feature: "ask", userId: U.viewer, model: "claude-sonnet-5-5", tokens: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 } }, new Date("2030-05-10T10:00:00Z"));
     await usage.recordAiUsage({ feature: "write", userId: U.editor, model: "claude-opus-5-5", tokens: { input: 100_000, output: 100_000, cacheRead: 0, cacheWrite: 0 } }, new Date("2030-05-11T10:00:00Z"));
     await usage.recordAiUsage({ feature: "mcp", model: "x", tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, costUsd: 0.6 }, new Date("2030-05-12T10:00:00Z"));
-    await pool().query("INSERT INTO hd_claude_usage (user_id, model, cost_usd, requests, stop_reason, at) VALUES ($1, 'claude-opus-5-5', 7.85, 1, 'end_turn', '2030-05-12T11:00:00Z')", [U.agent]);
+    await pool().query("INSERT INTO hd_claude_usage (user_id, model, cost_usd, requests, stop_reason, at, plan_metered) VALUES ($1, 'claude-opus-5-5', 7.85, 1, 'end_turn', '2030-05-12T11:00:00Z', true)", [U.agent]);
+    // A desk turn on an admin's own key: theirs to pay, never the plan's.
+    await pool().query("INSERT INTO hd_claude_usage (user_id, model, cost_usd, requests, stop_reason, at, plan_metered) VALUES ($1, 'claude-opus-5-5', 99, 1, 'end_turn', '2030-05-12T12:00:00Z', false)", [U.agent]);
+    // A desk turn still running (its one-step reservation): counted by the cap's check only.
+    await pool().query("INSERT INTO hd_claude_usage (user_id, model, cost_usd, requests, stop_reason, at, plan_metered) VALUES ($1, 'claude-opus-5-5', 0.5, 0, 'running', $2, true)", [U.agent, new Date("2030-05-12T13:00:00Z")]);
     const m = await usage.aiMonth(MAY);
     assert.equal(m.byFeature.ask, 2, "1M input tokens of Sonnet 5.5 at $2");
     assert.equal(m.byFeature.write, 2.4, "100k in at $4 + 100k out at $20 per million");
@@ -162,6 +168,8 @@ describe("AI cost by feature and the cap", () => {
     assert.equal(m.total, 12.85);
     assert.equal(m.deskTurns, 1);
     assert.equal(m.askAnswers, 1);
+    assert.equal((await usage.aiMonth(MAY, undefined, { reserved: true })).total, 13.35, "the cap's check counts the running turn's reservation");
+    await pool().query("DELETE FROM hd_claude_usage WHERE stop_reason = 'running' AND at = '2030-05-12T13:00:00Z'");
   });
 
   test("keep AI on (the default): never paused", async () => {
@@ -177,7 +185,8 @@ describe("AI cost by feature and the cap", () => {
     await usage.recordAiUsage({ feature: "write", model: "x", tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, costUsd: 27.15 }, new Date(at));
     try {
       assert.deepEqual(await usage.aiGate(MAY), { until: "1 Jun" });
-      await assert.rejects(usage.assertAiAllowed(MAY), (e: Error) => e.name === "AiPausedError" && /AI is paused until 1 Jun/.test(e.message) && /Ask an admin/.test(e.message));
+      // The error's sentence names no audience: the screens add "Admins can raise…" or "Ask an admin…" for their reader.
+      await assert.rejects(usage.assertAiAllowed(MAY, "desk"), (e: Error) => e.name === "AiPausedError" && e.message === "AI is paused until 1 Jun: this workspace reached its monthly AI limit.");
       await usage.setAiSpending({ spending: "cap", capUsd: 5 });
       assert.deepEqual(await usage.getAiSpending(), { spending: "cap", capUsd: 5 });
     } finally {
@@ -198,10 +207,25 @@ describe("AI cost by feature and the cap", () => {
 
   test("the entry points' status: the pause for everyone, the 'beyond' line for admins only (Decision 7)", async () => {
     await usage.recordAiUsage({ feature: "ask", model: "x", tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, costUsd: 1 }, new Date("2030-05-19T11:00:00Z"));
-    assert.deepEqual(await usage.aiPlanStatus(true, MAY), { pausedUntil: null, admin: true, beyond: true });
-    assert.deepEqual(await usage.aiPlanStatus(false, MAY), { pausedUntil: null, admin: false, beyond: false });
+    const pick = (s: Awaited<ReturnType<typeof usage.aiPlanStatus>>) => s && { pausedUntil: s.pausedUntil, admin: s.admin, beyond: s.beyond };
+    assert.deepEqual(pick(await usage.aiPlanStatus(true, MAY)), { pausedUntil: null, admin: true, beyond: true });
+    assert.deepEqual(pick(await usage.aiPlanStatus(false, MAY)), { pausedUntil: null, admin: false, beyond: false });
     await usage.setAiSpending({ spending: "stop", capUsd: null });
-    assert.deepEqual(await usage.aiPlanStatus(false, MAY), { pausedUntil: "1 Jun", admin: false, beyond: false });
+    const paused = await usage.aiPlanStatus(false, MAY);
+    assert.deepEqual(pick(paused), { pausedUntil: "1 Jun", admin: false, beyond: false });
+    assert.equal(paused?.month, "May");
+    assert.equal(paused?.restartsOn, "1 June", "design D3: \"It starts again on 1 June\"");
+    // On an admin's own key nothing is the plan's: never paused, never "beyond".
+    const key = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      assert.equal(await usage.aiMetered("desk"), false);
+      assert.equal(await usage.aiGate(MAY, "desk"), null, "an admin's own key is never paused by the plan");
+      assert.deepEqual(pick(await usage.aiPlanStatus(true, MAY)), { pausedUntil: null, admin: true, beyond: false });
+    } finally {
+      process.env.ANTHROPIC_API_KEY = key;
+    }
+    assert.equal(await usage.aiMetered("desk"), true);
     await usage.setAiSpending({ spending: "keep", capUsd: null });
   });
 });
@@ -282,5 +306,161 @@ describe("the daily count and the history", () => {
     await usage.purgeHistory(new Date("2031-02-10T00:00:00Z"));
     const left = await pool().query("SELECT to_char(day, 'YYYY-MM-DD') AS day FROM plan_usage_daily WHERE day IN ('2030-01-15', '2030-02-01')");
     assert.deepEqual(left.rows.map((r) => r.day), ["2030-02-01"]);
+  });
+});
+
+// --- 1.22.0 review fixes ------------------------------------------------------------------------
+
+/** A plan with no limits: the runs below send no threshold email whatever they count. */
+const OPEN = parsePlanClaim({ name: "dedicated", agentsIncluded: 0, agentsMax: null, activeUsersLimit: null, storageGb: null, aiAllowanceUsd: null, renewsAt: "2031-03-14" }) as CloudPlan;
+const OPEN_STATE: PlanState = { ...STATE, plan: OPEN };
+
+/** A file store stand-in: `list()` yields the stored files (only file keys, as the real stores do); `usage()` is the container's every blob. */
+function fakeStore(files: number[], opts: { failList?: boolean } = {}) {
+  return {
+    async *list() {
+      if (opts.failList) throw new Error("the container could not be listed");
+      for (const [i, size] of files.entries()) yield { key: `${String(i).padStart(32, "0")}.png`, size, modifiedAt: new Date() };
+    },
+    async usage() {
+      throw new Error("usage() sums every blob, exports included: the plan must never read it");
+    },
+  };
+}
+
+describe("review: one person, one active user (a portal contact who is also an app user)", () => {
+  test("a requester whose email is an active user's counts once, as that user; the count, chips and list agree", async () => {
+    const c = await fixtureQuery("INSERT INTO hd_portal_contacts (email, name) VALUES ($1, 'Same Person') RETURNING id", [`${STAMP}-editor@example.test`.toUpperCase()]);
+    contactIds.push(c.rows[0].id);
+    const at = new Date("2030-09-03T09:00:00Z");
+    await usage.recordActive("user", U.editor, at);
+    await usage.recordActive("portal", c.rows[0].id, new Date("2030-09-04T09:00:00Z"));
+    await usage.recordActive("portal", contactIds[0], at);
+    const sep = new Date("2030-09-20T00:00:00Z");
+    const s = await usage.activeSummary(sep);
+    assert.equal(s.count, 2, "the editor and the other requester: the editor's portal sign-in is the editor");
+    assert.equal(s.people.length, s.count);
+    assert.deepEqual(s.byKind, { Agents: 0, Admins: 0, Approvers: 0, Editors: 1, Viewers: 0, Requesters: 1 });
+    assert.equal((await usage.activeUsers(sep)).count, s.count, "the daily count says the same");
+    assert.ok(!s.people.some((p) => p.name === "Same Person"));
+  });
+});
+
+describe("review: storage counts the stored files, never the container's other blobs", () => {
+  test("the store's listing (file keys only), never usage(), which in blob mode includes workspace exports", async () => {
+    const desk = Number((await pool().query("SELECT coalesce(sum(size), 0) AS n FROM hd_attachments")).rows[0].n);
+    const s = await usage.countStorage(fakeStore([1000, 2000, 3000]));
+    // The listing's 6000 bytes, less the desk's attachments (they count under Helpdesk); usage() was never called (it throws).
+    assert.equal(s.areas.files, Math.max(0, 6000 - desk));
+    assert.equal(await usage.storedFileBytes(fakeStore([1000, 2000, 3000])), 6000);
+  });
+
+  test("a store that can't be listed fails the count (never a 0)", async () => {
+    await assert.rejects(usage.countStorage(fakeStore([], { failList: true })), /could not be listed/);
+  });
+});
+
+describe("review: the count is all or nothing, under a tried lock, one run at a time", () => {
+  before(() => setPlanForTests({ state: OPEN_STATE, mismatch: null, remember: null }));
+  after(() => setPlanForTests({ state: STATE, mismatch: null, remember: null }));
+
+  test("a part that fails fails the whole count: nothing is saved or sent", async () => {
+    usage.resetPlanTickForTests();
+    const at = new Date("2030-07-15T09:00:00Z");
+    await assert.rejects(usage.countUsage(OPEN_STATE, at, { store: fakeStore([], { failList: true }) }));
+    await assert.rejects(usage.planUsageTick(at, { report: false, store: fakeStore([], { failList: true }) }));
+    assert.equal((await usage.countsBetween("2030-07-14", "2030-07-15")).length, 0, "no partial count was saved");
+  });
+
+  test("another replica holding the lock: this one skips at once (never waits on a pool connection)", async () => {
+    usage.resetPlanTickForTests();
+    const other = await pool().connect();
+    try {
+      await other.query("SELECT pg_advisory_lock(hashtext('plan-usage'))");
+      const started = Date.now();
+      const r = await usage.planUsageTick(new Date("2030-07-16T09:00:00Z"), { report: false, store: fakeStore([10]) });
+      assert.equal(r.skipped, true);
+      assert.deepEqual(r.counted, []);
+      assert.ok(Date.now() - started < 5000, "it did not wait for the lock");
+    } finally {
+      await other.query("SELECT pg_advisory_unlock(hashtext('plan-usage'))");
+      other.release();
+    }
+    assert.equal((await usage.countsBetween("2030-07-16", "2030-07-16")).length, 0);
+  });
+
+  test("two runs at once in a process share one count", async () => {
+    usage.resetPlanTickForTests();
+    const at = new Date("2030-07-17T09:00:00Z");
+    const a = usage.planUsageTick(at, { report: false, store: fakeStore([10]) });
+    const b = usage.planUsageTick(at, { report: false, store: fakeStore([10]) });
+    assert.equal(a, b, "the second call gets the first's run");
+    const r = await a;
+    assert.deepEqual(r.counted, ["2030-07-17"]);
+    assert.equal((await usage.countsBetween("2030-07-17", "2030-07-17")).length, 1);
+  });
+
+  test("a page never waits for a count: it starts one in the background, at most one at a time and one per five minutes", async () => {
+    usage.resetPlanTickForTests();
+    const at = new Date("2030-07-18T09:00:00Z");
+    const other = await pool().connect();
+    try {
+      // Hold the lock so the background run is quick and saves nothing (the page's answer is what is tested).
+      await other.query("SELECT pg_advisory_lock(hashtext('plan-usage'))");
+      assert.equal(await usage.ensureCounted(at), true, "today has no count: one is started");
+      assert.equal(await usage.ensureCounted(at), false, "not a second one");
+      await usage.planUsageTick(at).catch(() => {});
+    } finally {
+      await other.query("SELECT pg_advisory_unlock(hashtext('plan-usage'))");
+      other.release();
+    }
+    assert.equal(await usage.ensureCounted(at), false, "started less than five minutes ago");
+    usage.resetPlanTickForTests();
+  });
+});
+
+describe("review: the AI cap holds under concurrency (reservations), on the platform's key only", () => {
+  const JUL = new Date("2030-07-10T10:00:00Z");
+  after(async () => usage.setAiSpending({ spending: "keep", capUsd: null }));
+
+  test("requests at the same time each reserve their most; once reservations reach the cap the next is refused", async () => {
+    await usage.setAiSpending({ spending: "cap", capUsd: 20 });
+    const admit = () => usage.admitAi({ feature: "ask", userId: U.viewer, model: "claude-sonnet-5-5", reserveUsd: 12 }, JUL);
+    const r = await Promise.allSettled([admit(), admit(), admit()]);
+    const ok = r.filter((x) => x.status === "fulfilled") as PromiseFulfilledResult<number | null>[];
+    assert.equal(ok.length, 2, "$0 and $12 are under the $20 cap; $24 is not (the overshoot is at most the one request admitted last)");
+    assert.equal(r.filter((x) => x.status === "rejected" && (x.reason as Error).name === "AiPausedError").length, 1);
+    // Settled at what they used: a smaller cost frees the cap again; a failed request's reservation goes.
+    await usage.settleAi(ok[0].value!, { model: "claude-sonnet-5-5", tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, costUsd: 1 });
+    await usage.settleAi(ok[1].value!, null);
+    const m = await usage.aiMonth(JUL);
+    assert.equal(m.byFeature.ask, 1, "the settled request at its cost; the failed one gone");
+    const again = await usage.admitAi({ feature: "ask", model: "claude-sonnet-5-5", reserveUsd: 1 }, JUL);
+    assert.notEqual(again, null, "under the cap again");
+    await usage.settleAi(again!, null);
+  });
+
+  test("a reservation counts for the cap's check, never for the counts and pages", async () => {
+    const before = (await usage.aiMonth(JUL)).total;
+    const id = await usage.admitAi({ feature: "write", model: "claude-sonnet-5-5", reserveUsd: 3 }, JUL);
+    assert.ok(id);
+    assert.equal((await usage.aiMonth(JUL)).total, before);
+    assert.equal((await usage.aiMonth(JUL, undefined, { reserved: true })).total, Math.round((before + 3) * 1e6) / 1e6);
+    await usage.settleAi(id!, null);
+  });
+});
+
+describe("review: the billing contact (Decision 5)", () => {
+  const LIC: PlanState = { ...STATE, plan: { ...PLAN, billingContact: `${STAMP}-lic@example.test` } };
+  after(async () => setSetting(usage.BILLING_CONTACT_SETTING, ""));
+
+  test("the licence's contact by default; every admin when chosen here, whatever the licence names; an address set here first", async () => {
+    await setSetting(usage.BILLING_CONTACT_SETTING, "");
+    assert.deepEqual(await usage.warningRecipients(LIC), [{ email: `${STAMP}-lic@example.test`, userId: null }]);
+    await setSetting(usage.BILLING_CONTACT_SETTING, "all_admins");
+    const admins = await usage.warningRecipients(LIC);
+    assert.ok(admins.some((a) => a.userId === U.admin) && !admins.some((a) => a.email.endsWith("-lic@example.test")), "the licence's contact can be overridden");
+    await setSetting(usage.BILLING_CONTACT_SETTING, `${STAMP}-here@example.test`);
+    assert.deepEqual(await usage.warningRecipients(LIC), [{ email: `${STAMP}-here@example.test`, userId: null }]);
   });
 });

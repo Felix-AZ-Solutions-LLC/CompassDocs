@@ -38,6 +38,7 @@ import { isCloud } from "./cloud";
 import { getSetting, setSetting } from "./db";
 import { hq, hqOne, withTx } from "./helpdesk/db-core";
 import { estimateCostUsd, type ClaudeTokens } from "./helpdesk/claude/shared";
+import type { FileStore } from "./file-store";
 import { cloudPlanState, type PlanState } from "./plan";
 import {
   AI_FEATURES,
@@ -53,6 +54,7 @@ import {
   lastMonths,
   meterState,
   monthKey,
+  monthName,
   monthStart,
   nextMonthStartLabel,
   planLabel,
@@ -62,6 +64,7 @@ import {
   visibleNotices,
   dismissalKey,
   validEmail,
+  billingContactFrom,
   type AiFeature,
   type AiSpendView,
   type AiSpending,
@@ -133,7 +136,13 @@ interface ActiveRow {
   role: string;
 }
 
-/** Everyone counted in the month that starts `month` ("2026-11-01"), before `before` (exclusive). */
+/**
+ * Everyone counted in the month that starts `month` ("2026-11-01"), before
+ * `before` (exclusive). One person, one row: a portal contact whose email is
+ * an app user's who also counted that month is that user (who counts under
+ * the higher role), not a second person. Done here, in SQL, so the count,
+ * the chips and the list are always the same people.
+ */
 async function activeRows(month: string, before: Date): Promise<ActiveRow[]> {
   return hq<ActiveRow>(
     `SELECT a.kind, a.subject_id, a.last_at,
@@ -144,18 +153,21 @@ async function activeRows(month: string, before: Date): Promise<ActiveRow[]> {
        LEFT JOIN hd_portal_contacts c ON a.kind = 'portal' AND c.id = a.subject_id
       WHERE a.month = $1 AND a.first_at < $2
         AND ((a.kind = 'user' AND u.id IS NOT NULL AND u.status = 'active' AND u.auth_provider <> 'compassdocs_support')
-             OR (a.kind = 'portal' AND c.id IS NOT NULL))`,
+             OR (a.kind = 'portal' AND c.id IS NOT NULL
+                 AND NOT EXISTS (
+                   SELECT 1 FROM plan_active_users a2
+                     JOIN users u2 ON u2.id = a2.subject_id
+                    WHERE a2.month = a.month AND a2.kind = 'user' AND a2.first_at < $2
+                      AND u2.status = 'active' AND u2.auth_provider <> 'compassdocs_support'
+                      AND u2.email <> '' AND lower(u2.email) = lower(c.email))))`,
     [month, before]
   );
 }
 
+/** Who is on the desk. A failure fails the count (never a desk of nobody). */
 async function deskAgentSet(): Promise<Set<number>> {
-  try {
-    const { deskAgentIds } = await import("./helpdesk/roles-agents");
-    return new Set(await deskAgentIds());
-  } catch {
-    return new Set();
-  }
+  const { deskAgentIds } = await import("./helpdesk/roles-agents");
+  return new Set(await deskAgentIds());
 }
 
 /** How a row counts: Agent for anyone on the desk, else their workspace role; a portal contact is a Requester. */
@@ -165,24 +177,40 @@ export function countedAs(row: Pick<ActiveRow, "kind" | "role" | "subject_id">, 
   return ROLE_KIND[row.role] ?? "Viewers";
 }
 
-/** The month's active users: how many, by role. */
-export async function activeUsers(now: Date, before: Date = now): Promise<{ count: number; byKind: Record<CountedAs, number> }> {
-  const [rows, agents] = await Promise.all([activeRows(monthStart(now), before), deskAgentSet()]);
+function byKindOf(rows: ActiveRow[], agents: Set<number>): Record<CountedAs, number> {
   const byKind = Object.fromEntries(COUNTED_AS.map((k) => [k, 0])) as Record<CountedAs, number>;
   for (const r of rows) byKind[countedAs(r, agents)]++;
-  return { count: rows.length, byKind };
+  return byKind;
 }
 
-/** "Who counted" (design A6): names stay in the workspace, for its admins. */
-export async function activePeople(now: Date): Promise<PlanPerson[]> {
-  const [rows, agents] = await Promise.all([activeRows(monthStart(now), new Date(now.getTime() + 1)), deskAgentSet()]);
-  return rows
+/** The month's active users: how many, by role. One query after another: a count holds at most two connections. */
+export async function activeUsers(now: Date, before: Date = now): Promise<{ count: number; byKind: Record<CountedAs, number> }> {
+  const rows = await activeRows(monthStart(now), before);
+  const agents = await deskAgentSet();
+  return { count: rows.length, byKind: byKindOf(rows, agents) };
+}
+
+/**
+ * "Who counted" (design A6): the month so far, from ONE read, so the
+ * count, the chips and the list agree. Names stay in the workspace, for
+ * its admins. Most recent first.
+ */
+export async function activeSummary(now: Date): Promise<{ count: number; byKind: Record<CountedAs, number>; people: PlanPerson[] }> {
+  const rows = await activeRows(monthStart(now), new Date(now.getTime() + 1));
+  const agents = await deskAgentSet();
+  const people = rows
     .map((r) => {
       const as = countedAs(r, agents);
       const detail = r.kind === "portal" ? "Customer portal" : as === "Agents" && ROLE_KIND[r.role] ? `${ROLE_KIND[r.role].slice(0, -1)} in CompassDocs` : "";
       return { name: r.name || "Unnamed", countedAs: as.slice(0, -1), detail, lastAt: r.last_at };
     })
     .sort((a, b) => b.lastAt.localeCompare(a.lastAt) || a.name.localeCompare(b.name));
+  return { count: rows.length, byKind: byKindOf(rows, agents), people };
+}
+
+/** The people alone (the CSV). */
+export async function activePeople(now: Date): Promise<PlanPerson[]> {
+  return (await activeSummary(now)).people;
 }
 
 // --- AI -----------------------------------------------------------------------------------------
@@ -196,7 +224,23 @@ export interface AiCall {
   costUsd?: number;
 }
 
-/** Record one AI request outside the desk (cloud mode only). Never throws. */
+const money = (n: number) => Math.round(n * 1_000_000) / 1_000_000;
+
+/**
+ * Is an AI request metered against the plan? Only on the platform's key
+ * (cloud mode's ANTHROPIC_API_KEY, lib/ai-config "platform"): an admin's
+ * own key, or another provider, is theirs to pay, so it is neither counted
+ * nor capped. `desk`: Claude in the desk (always Anthropic); `chat`: Ask,
+ * Write and Proofread (the configured provider).
+ */
+export async function aiMetered(path: "chat" | "desk"): Promise<boolean> {
+  if (!isCloud()) return false;
+  const { getAiKeySource, getAiProvider } = await import("./ai-config");
+  if ((await getAiKeySource()) !== "platform") return false;
+  return path === "desk" || (await getAiProvider()) === "anthropic";
+}
+
+/** Record one metered AI request outside the desk (cloud mode only). Never throws. */
 export async function recordAiUsage(call: AiCall, at: Date = new Date()): Promise<void> {
   if (!isCloud()) return;
   const t = call.tokens;
@@ -205,10 +249,59 @@ export async function recordAiUsage(call: AiCall, at: Date = new Date()): Promis
     await hq(
       `INSERT INTO ai_usage (at, feature, user_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [at, call.feature, call.userId ?? null, call.model.slice(0, 80), t.input, t.output, t.cacheRead, t.cacheWrite, Math.round(cost * 1_000_000) / 1_000_000]
+      [at, call.feature, call.userId ?? null, call.model.slice(0, 80), t.input, t.output, t.cacheRead, t.cacheWrite, money(cost)]
     );
   } catch {
     /* the answer was given; a lost ledger row is a cent, not a failure */
+  }
+}
+
+/** How long an unsettled reservation counts (a request that never came back stops holding the cap). */
+const RESERVATION_MS = 10 * 60_000;
+
+/**
+ * Admit a metered AI request outside the desk (chatComplete): refused with
+ * AiPausedError while the month's cap is reached, else its most it can
+ * cost (`reserveUsd`: the prompt and the whole output budget at the price
+ * list) is reserved in ai_usage before the request goes, under a lock, and
+ * the check counts every reservation in flight. So requests at the same
+ * time can't all slip under the cap: the month ends over the cap by at
+ * most the one request admitted just before it was reached. Returns the
+ * reservation's id (settleAi), or null when nothing is metered (no plan).
+ */
+export async function admitAi(req: { feature: AiFeature; userId?: number | null; model: string; reserveUsd: number }, now: Date = new Date()): Promise<number | null> {
+  if (!isCloud()) return null;
+  const state = await cloudPlanState();
+  if (!state) return null;
+  const choice = await getAiSpending();
+  return withTx(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('plan-ai-admit'))");
+    if (choice.spending !== "keep") {
+      const month = await aiMonth(now, undefined, { reserved: true, client });
+      if (aiSpend(month.total, state.plan.aiAllowanceUsd, choice.spending, choice.capUsd).paused) throw new AiPausedError(nextMonthStartLabel(now));
+    }
+    const r = await client.query<{ id: string }>(
+      `INSERT INTO ai_usage (at, feature, user_id, model, cost_usd, reserved) VALUES ($1, $2, $3, $4, $5, true) RETURNING id`,
+      [now, req.feature, req.userId ?? null, req.model.slice(0, 80), money(Math.max(0, req.reserveUsd))]
+    );
+    return Number(r.rows[0].id);
+  });
+}
+
+/** Replace a reservation with what the request used; null (it failed, nothing known) removes it. Never throws. */
+export async function settleAi(id: number, call: Pick<AiCall, "model" | "tokens" | "costUsd"> | null): Promise<void> {
+  try {
+    if (!call) {
+      await hq("DELETE FROM ai_usage WHERE id = $1 AND reserved", [id]);
+      return;
+    }
+    const t = call.tokens;
+    await hq(
+      `UPDATE ai_usage SET model = $2, input_tokens = $3, output_tokens = $4, cache_read_tokens = $5, cache_write_tokens = $6, cost_usd = $7, reserved = false WHERE id = $1`,
+      [id, call.model.slice(0, 80), t.input, t.output, t.cacheRead, t.cacheWrite, money(call.costUsd ?? estimateCostUsd(call.model, t))]
+    );
+  } catch {
+    /* the reservation stops counting after RESERVATION_MS */
   }
 }
 
@@ -219,13 +312,29 @@ export interface AiMonth {
   askAnswers: number;
 }
 
-/** AI dollars in `now`'s month (UTC) before `before`: the desk's ledger plus ai_usage, by feature. */
-export async function aiMonth(now: Date, before: Date = new Date(now.getTime() + 1)): Promise<AiMonth> {
+/**
+ * AI dollars in `now`'s month (UTC) before `before`: the metered rows of
+ * the desk's ledger (hd_claude_usage.plan_metered) plus ai_usage, by
+ * feature. `reserved` (the cap's check) also counts what requests in flight
+ * reserved (a desk turn's running row, an unsettled ai_usage row) for
+ * RESERVATION_MS; counts and pages never do.
+ */
+export async function aiMonth(now: Date, before: Date = new Date(now.getTime() + 1), opts: { reserved?: boolean; client?: Parameters<typeof hq>[2] } = {}): Promise<AiMonth> {
   const start = `${monthStart(now)}T00:00:00Z`;
-  const [desk, rest] = await Promise.all([
-    hqOne<{ usd: string; turns: string }>("SELECT coalesce(sum(cost_usd), 0) AS usd, count(*) AS turns FROM hd_claude_usage WHERE at >= $1 AND at < $2", [start, before]),
-    hq<{ feature: string; usd: string; n: string }>("SELECT feature, coalesce(sum(cost_usd), 0) AS usd, count(*) AS n FROM ai_usage WHERE at >= $1 AND at < $2 GROUP BY feature", [start, before]),
-  ]);
+  const live = opts.reserved === true;
+  const since = new Date(Date.now() - RESERVATION_MS);
+  const desk = await hqOne<{ usd: string; turns: string }>(
+    `SELECT coalesce(sum(cost_usd), 0) AS usd, count(*) FILTER (WHERE stop_reason <> 'running') AS turns FROM hd_claude_usage
+      WHERE at >= $1 AND at < $2 AND plan_metered AND (stop_reason <> 'running' OR ($3 AND at > $4))`,
+    [start, before, live, since],
+    opts.client
+  );
+  const rest = await hq<{ feature: string; usd: string; n: string }>(
+    `SELECT feature, coalesce(sum(cost_usd), 0) AS usd, count(*) FILTER (WHERE NOT reserved) AS n FROM ai_usage
+      WHERE at >= $1 AND at < $2 AND (NOT reserved OR ($3 AND at > $4)) GROUP BY feature`,
+    [start, before, live, since],
+    opts.client
+  );
   const byFeature = Object.fromEntries(AI_FEATURES.map((f) => [f, 0])) as Record<AiFeature, number>;
   byFeature.desk = Number(desk?.usd ?? 0);
   let askAnswers = 0;
@@ -233,9 +342,8 @@ export async function aiMonth(now: Date, before: Date = new Date(now.getTime() +
     if ((AI_FEATURES as readonly string[]).includes(r.feature)) byFeature[r.feature as AiFeature] += Number(r.usd);
     if (r.feature === "ask") askAnswers = Number(r.n);
   }
-  const round = (n: number) => Math.round(n * 1_000_000) / 1_000_000;
-  for (const f of AI_FEATURES) byFeature[f] = round(byFeature[f]);
-  return { total: round(AI_FEATURES.reduce((s, f) => s + byFeature[f], 0)), byFeature, deskTurns: Number(desk?.turns ?? 0), askAnswers };
+  for (const f of AI_FEATURES) byFeature[f] = money(byFeature[f]);
+  return { total: money(AI_FEATURES.reduce((s, f) => s + byFeature[f], 0)), byFeature, deskTurns: Number(desk?.turns ?? 0), askAnswers };
 }
 
 export interface AiSpendingChoice {
@@ -264,11 +372,15 @@ export async function aiSpendNow(now: Date = new Date(), state?: PlanState | nul
   return { ...aiSpend(month.total, s.plan.aiAllowanceUsd, choice.spending, choice.capUsd), month };
 }
 
-/** Why an AI request is refused: the cap is reached for this month (design D3). */
+/**
+ * Why an AI request is refused: the cap is reached for this month (design
+ * D3). Its message is the pause without an audience: the screens add
+ * "Admins can raise…" or "Ask an admin…" for whoever reads it (AiPlanLine).
+ */
 export class AiPausedError extends Error {
   readonly until: string;
   constructor(until: string) {
-    super(aiPausedSentence(until, false));
+    super(`AI is paused until ${until}: this workspace reached its monthly AI limit.`);
     this.name = "AiPausedError";
     this.until = until;
   }
@@ -280,26 +392,30 @@ export function aiPausedSentence(until: string, admin: boolean): string {
 }
 
 /**
- * Before an AI request: null when it may go ahead, else when AI starts
- * again ("1 Dec"). Only a cloud workspace with a plan and a cap reached is
- * ever paused; anything that fails here lets the request through (the cap
- * is a spending choice, not a security control).
+ * Before a metered AI request (the desk's turns; aiPlanStatus): null when
+ * it may go ahead, else when AI starts again ("1 Dec"). Only a cloud
+ * workspace with a plan, on the platform's key, with a cap reached is ever
+ * paused; reservations in flight count. Anything that fails here lets the
+ * request through (the cap is a spending choice, not a security control).
  */
-export async function aiGate(now: Date = new Date()): Promise<{ until: string } | null> {
+export async function aiGate(now: Date = new Date(), path: "chat" | "desk" = "desk"): Promise<{ until: string } | null> {
   if (!isCloud()) return null;
   try {
     const choice = await getAiSpending();
     if (choice.spending === "keep") return null;
-    const view = await aiSpendNow(now);
-    return view?.paused ? { until: nextMonthStartLabel(now) } : null;
+    if (!(await aiMetered(path))) return null;
+    const state = await cloudPlanState();
+    if (!state) return null;
+    const month = await aiMonth(now, undefined, { reserved: true });
+    return aiSpend(month.total, state.plan.aiAllowanceUsd, choice.spending, choice.capUsd).paused ? { until: nextMonthStartLabel(now) } : null;
   } catch {
     return null;
   }
 }
 
-/** aiGate as a throw (chatComplete and the desk call it before each request). */
-export async function assertAiAllowed(now: Date = new Date()): Promise<void> {
-  const g = await aiGate(now);
+/** aiGate as a throw. */
+export async function assertAiAllowed(now: Date = new Date(), path: "chat" | "desk" = "chat"): Promise<void> {
+  const g = await aiGate(now, path);
   if (g) throw new AiPausedError(g.until);
 }
 
@@ -321,13 +437,23 @@ export function storageAreas(raw: { storeBytes: number; deskFileBytes: number; d
   return { bytes: files + documents + desk, areas: { files, documents, helpdesk: desk }, notCounted: { exports: Math.max(0, raw.exportBytes) } };
 }
 
-/** Count storage now. The file store's usage already leaves out backups and export objects (lib/file-store). */
-export async function countStorage(): Promise<StorageCount> {
-  const { fileStore } = await import("./file-store");
-  const [store, sums] = await Promise.all([
-    fileStore()
-      .usage()
-      .catch(() => ({ bytes: 0, files: 0 })),
+/**
+ * The stored files' bytes: the store's listing, which yields only file keys
+ * (uploads, desk imports). Never FileStore.usage(): in blob mode that sums
+ * every blob in the container, workspace exports included (exportStore()
+ * shares it), which is what the account bills, not what the plan counts.
+ */
+export async function storedFileBytes(store: Pick<FileStore, "list">): Promise<number> {
+  let bytes = 0;
+  for await (const f of store.list()) bytes += f.size;
+  return bytes;
+}
+
+/** Count storage now (a failure throws: the count fails rather than saving a 0). */
+export async function countStorage(store?: Pick<FileStore, "list">): Promise<StorageCount> {
+  const files = store ?? (await import("./file-store")).fileStore();
+  const [storeBytes, sums] = await Promise.all([
+    storedFileBytes(files),
     hqOne<{ desk_files: string; doc_text: string; desk_text: string; exports: string }>(
       `SELECT
          (SELECT coalesce(sum(size), 0) FROM hd_attachments) AS desk_files,
@@ -338,7 +464,7 @@ export async function countStorage(): Promise<StorageCount> {
     ),
   ]);
   return storageAreas({
-    storeBytes: Number(store.bytes) || 0,
+    storeBytes: storeBytes,
     deskFileBytes: Number(sums?.desk_files ?? 0),
     docTextBytes: Number(sums?.doc_text ?? 0),
     deskTextBytes: Number(sums?.desk_text ?? 0),
@@ -363,17 +489,17 @@ export interface DailyCounts {
 /**
  * Count `day` as of `asOf`: the month's active users and AI before `asOf`
  * (so a day counted after it ended is that day's final count), agents and
- * storage as they are now.
+ * storage as they are now. All or nothing: any part that fails fails the
+ * count (the run retries), so a partial count is never saved or sent. One
+ * read after another, so a count holds at most two pool connections.
  */
-export async function countUsage(state: PlanState, asOf: Date): Promise<DailyCounts> {
+export async function countUsage(state: PlanState, asOf: Date, opts: { store?: Pick<FileStore, "list"> } = {}): Promise<DailyCounts> {
   const { countDeskAgents } = await import("./helpdesk/roles-agents");
   const monthOf = new Date(asOf.getTime() - 1);
-  const [agents, users, storage, ai] = await Promise.all([
-    countDeskAgents().catch(() => 0),
-    activeUsers(monthOf, asOf),
-    countStorage(),
-    aiMonth(monthOf, asOf),
-  ]);
+  const agents = await countDeskAgents();
+  const users = await activeUsers(monthOf, asOf);
+  const storage = await countStorage(opts.store);
+  const ai = await aiMonth(monthOf, asOf);
   return {
     day: dayKey(monthOf),
     countedAt: new Date().toISOString(),
@@ -434,8 +560,8 @@ export async function latestCounts(upTo: Date = new Date()): Promise<DailyRow | 
 }
 
 /** Days in a range, oldest first. */
-export async function countsBetween(from: string, to: string): Promise<DailyRow[]> {
-  const rows = await hq<Record<string, unknown>>("SELECT *, to_char(day, 'YYYY-MM-DD') AS day FROM plan_usage_daily WHERE day >= $1 AND day <= $2 ORDER BY plan_usage_daily.day", [from, to]);
+export async function countsBetween(from: string, to: string, client?: Parameters<typeof hq>[2]): Promise<DailyRow[]> {
+  const rows = await hq<Record<string, unknown>>("SELECT *, to_char(day, 'YYYY-MM-DD') AS day FROM plan_usage_daily WHERE day >= $1 AND day <= $2 ORDER BY plan_usage_daily.day", [from, to], client);
   return rows.map(toDaily);
 }
 
@@ -522,7 +648,7 @@ export async function dismissNotices(userId: number, items: { meter: MeterKey; t
 
 /** Who the threshold email goes to: the billing contact when one is named (the setting, else the licence's), else every active admin with an address (Decision 5). */
 export async function warningRecipients(state: PlanState): Promise<{ email: string; userId: number | null }[]> {
-  const named = ((await getSetting(BILLING_CONTACT_SETTING)) ?? "").trim() || state.plan.billingContact || "";
+  const named = billingContactFrom(await getSetting(BILLING_CONTACT_SETTING), state.plan.billingContact).email;
   if (named && validEmail(named)) {
     const u = await hqOne<{ id: number }>("SELECT id FROM users WHERE lower(email) = lower($1) AND status = 'active' LIMIT 1", [named]);
     return [{ email: named, userId: u?.id ?? null }];
@@ -616,36 +742,70 @@ export interface TickResult {
   emailed: number;
   /** When to run again (ms). */
   nextInMs: number;
+  /** Another replica held the count's lock: it counts, this one did nothing. */
+  skipped?: boolean;
 }
+
+/** How soon to look again when another replica was counting. */
+const SKIPPED_RETRY_MS = 15 * 60_000;
+
+/**
+ * Run `fn` holding the count's advisory lock, or don't run it at all: the
+ * lock is TRIED (pg_try_advisory_xact_lock), never waited for, so a replica
+ * (or a page) never parks a pool connection behind another's count. The
+ * lock's transaction is the `client`; the count's reads go through the
+ * pool one at a time, and its writes through `client`.
+ */
+async function withCountLock(fn: (client: Parameters<typeof hq>[2]) => Promise<void>): Promise<boolean> {
+  return withTx(async (client) => {
+    const r = await client.query<{ ok: boolean }>("SELECT pg_try_advisory_xact_lock(hashtext('plan-usage')) AS ok");
+    if (!r.rows[0]?.ok) return false;
+    await fn(client);
+    return true;
+  });
+}
+
+const T = globalThis as unknown as { __compassPlanTick?: Promise<TickResult> | null; __compassPlanKick?: number };
 
 /**
  * One run: count today (if not counted within COUNT_EVERY_MS) and finish
  * yesterday (if its last count was before midnight), forget what is past
  * 13 months, send a threshold email if one is due, then report to the
- * console. Under an advisory lock, so replicas take turns.
+ * console. One run at a time in a process (a second call shares the first's
+ * result), and across replicas under a tried lock: the replica that holds
+ * it counts, the others skip.
  */
-export async function planUsageTick(now: Date = new Date(), opts: { report?: boolean } = {}): Promise<TickResult> {
+export function planUsageTick(now: Date = new Date(), opts: { report?: boolean; store?: Pick<FileStore, "list"> } = {}): Promise<TickResult> {
+  if (T.__compassPlanTick) return T.__compassPlanTick;
+  const run = runTick(now, opts).finally(() => {
+    T.__compassPlanTick = null;
+  });
+  T.__compassPlanTick = run;
+  return run;
+}
+
+async function runTick(now: Date, opts: { report?: boolean; store?: Pick<FileStore, "list"> }): Promise<TickResult> {
   const state = await cloudPlanState();
   if (!state) return { counted: [], emailed: 0, nextInMs: COUNT_EVERY_MS };
   const counted: string[] = [];
   const today = dayKey(now);
   const midnight = new Date(`${today}T00:00:00Z`);
   const yesterday = dayKey(new Date(midnight.getTime() - 1));
-  const { withAdvisoryLock } = await import("./db");
-  await withAdvisoryLock("plan-usage", async () => {
-    const rows = await countsBetween(yesterday, today);
+  const held = await withCountLock(async (client) => {
+    const rows = await countsBetween(yesterday, today, client);
     const y = rows.find((r) => r.day === yesterday);
     const t = rows.find((r) => r.day === today);
     if (y && new Date(y.counted_at) < midnight) {
-      await saveCounts(await countUsage(state, midnight));
+      await saveCounts(await countUsage(state, midnight, opts), client);
       counted.push(yesterday);
     }
     if (!t || now.getTime() - new Date(t.counted_at).getTime() >= COUNT_EVERY_MS) {
-      await saveCounts(await countUsage(state, now));
+      await saveCounts(await countUsage(state, now, opts), client);
       counted.push(today);
     }
-    if (counted.length) await purgeHistory(now);
+    if (counted.length) await purgeHistory(now, client);
   });
+  if (!held) return { counted: [], emailed: 0, nextInMs: SKIPPED_RETRY_MS, skipped: true };
   let emailed = 0;
   const latest = await latestCounts(now);
   if (latest) emailed = (await sendThresholdEmail(state, latest, now)).length;
@@ -660,11 +820,31 @@ export async function planUsageTick(now: Date = new Date(), opts: { report?: boo
   return { counted, emailed, nextInMs: Math.max(60_000, Math.min(nextInMs, toMidnight)) };
 }
 
-/** Make sure today has a count (the Plan & usage page asks before it reads one). */
-export async function ensureCounted(now: Date = new Date()): Promise<void> {
+/** How often a page may start a count (when today has none). */
+const KICK_EVERY_MS = 5 * 60_000;
+
+/**
+ * The Plan & usage page reads the latest SAVED count and never waits for a
+ * new one: when today has none, a count starts in the background (at most
+ * one running, and at most one started per KICK_EVERY_MS), and the next
+ * visit shows it. Returns whether one was started.
+ */
+export async function ensureCounted(now: Date = new Date()): Promise<boolean> {
   const latest = await latestCounts(now);
-  if (latest && latest.day === dayKey(now)) return;
-  await planUsageTick(now, { report: false });
+  if (latest && latest.day === dayKey(now)) return false;
+  if (T.__compassPlanTick || (T.__compassPlanKick && Date.now() - T.__compassPlanKick < KICK_EVERY_MS)) return false;
+  T.__compassPlanKick = Date.now();
+  void planUsageTick(now, { report: false }).catch(async (e) => {
+    const { logEvent } = await import("./log");
+    logEvent("warn", "plan.count_failed", { message: e instanceof Error ? e.message.split("\n")[0] : String(e) });
+  });
+  return true;
+}
+
+/** Tests: forget the in-process run and the last page's start. */
+export function resetPlanTickForTests(): void {
+  T.__compassPlanTick = null;
+  T.__compassPlanKick = undefined;
 }
 
 const S = globalThis as unknown as { __compassPlanJob?: boolean };
@@ -701,7 +881,8 @@ export async function planOverview(now: Date = new Date()): Promise<PlanOverview
   const resolution = await (await import("./plan")).planResolution();
   const state = resolution.state;
   if (!state) return null;
-  await ensureCounted(now).catch(() => {});
+  // The latest saved count; a missing one for today is started in the background, never waited for.
+  await ensureCounted(now).catch(() => false);
   const from = `${lastMonths(now, 6)[0]}-01`;
   const [rows, ai, users, name, contact] = await Promise.all([
     countsBetween(from, dayKey(now)),
@@ -758,7 +939,10 @@ export async function planOverview(now: Date = new Date()): Promise<PlanOverview
       lastMonthUsd: lastMonthRows.length ? Number(lastMonthRows[lastMonthRows.length - 1].ai_usd) : 0,
       paceUsd: aiPace(ai.spentUsd, now),
     },
-    billingContact: (contact ?? "").trim() || p.billingContact || "",
+    ...(() => {
+      const c = billingContactFrom(contact, p.billingContact);
+      return { billingContact: c.email, billingContactSource: c.source, licenseContact: c.licenseContact };
+    })(),
     mismatch: resolution.mismatch,
   };
 }
@@ -768,6 +952,10 @@ export async function planOverview(now: Date = new Date()): Promise<PlanOverview
 export interface AiPlanStatus {
   /** AI is paused until this day ("1 Dec"): everyone sees it, it names no amount. */
   pausedUntil: string | null;
+  /** For the pause's words (design D3): the workspace, this month ("November") and the day AI starts again ("1 December"). */
+  workspace: string;
+  month: string;
+  restartsOn: string;
   /** The viewer can open Plan & usage (the only people who see billing words, Decision 7). */
   admin: boolean;
   /** Past this month's allowance (admins only): "billed at cost +30%". */
@@ -785,13 +973,22 @@ export async function aiPlanStatus(planAdmin: boolean, now: Date = new Date()): 
     const state = await cloudPlanState();
     if (!state) return null;
     const choice = await getAiSpending();
-    if (!planAdmin && choice.spending === "keep") return { pausedUntil: null, admin: false, beyond: false };
+    const restart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+    const words = {
+      workspace: await workspaceName(),
+      month: monthName(monthKey(now)),
+      restartsOn: `1 ${restart.toLocaleString("en-US", { month: "long", timeZone: "UTC" })}`,
+    };
+    // Only AI on the platform's key is the plan's: an admin's own key is never paused or billed here.
+    const metered = await aiMetered("desk");
+    if (!metered || (!planAdmin && choice.spending === "keep")) return { pausedUntil: null, admin: planAdmin, beyond: false, ...words };
     const view = await aiSpendNow(now, state);
     if (!view) return null;
     return {
       pausedUntil: view.paused ? nextMonthStartLabel(now) : null,
       admin: planAdmin,
       beyond: planAdmin && view.allowanceUsd !== null && view.allowanceUsd > 0 && view.spentUsd >= view.allowanceUsd,
+      ...words,
     };
   } catch {
     return null;

@@ -28,7 +28,7 @@ import type { EditDefault } from "@/lib/compliance-settings";
 import { changeSummary, suggestReconfirm } from "@/lib/diff";
 import { people } from "@/components/compliance/copy";
 import { PolicyFactsFields, cleanPoints } from "./handbooks/PolicyFactsFields";
-import { AiPlanLine, useAiPlan } from "./plan/AiPlan";
+import { AiPlanLine, aiPausedText, useAiPlan } from "./plan/AiPlan";
 
 type EditorTab = "rich" | "markdown" | "preview";
 
@@ -1346,12 +1346,22 @@ export function DocEditor({
                   )}
                 </Popover>
               </div>
+              {/* 1.22.0 (design D3): paused at the plan's AI cap, Proofread stays where it is, aria-disabled with its reason. */}
+              {aiPaused && (
+                <span id="proofread-paused" className="sr-only">
+                  {aiPausedText(aiPlan?.pausedUntil ?? "", !!aiPlan?.admin)}
+                </span>
+              )}
               <button
                 type="button"
-                onClick={runProofread}
-                disabled={proofing || !content.trim() || aiPaused}
+                onClick={() => {
+                  if (!aiPaused) void runProofread();
+                }}
+                disabled={proofing || !content.trim()}
+                aria-disabled={aiPaused || undefined}
+                aria-describedby={aiPaused ? "proofread-paused" : undefined}
                 data-tt={aiPaused ? `AI is paused until ${aiPlan?.pausedUntil}` : "Check grammar, spelling, and clarity with AI"} aria-label="Check grammar, spelling, and clarity with AI"
-                className="mr-1 flex items-center gap-1 rounded-md px-2.5 py-1 text-sm font-medium text-compass-700 hover:bg-compass-50 disabled:opacity-50"
+                className="mr-1 flex items-center gap-1 rounded-md px-2.5 py-1 text-sm font-medium text-compass-700 hover:bg-compass-50 disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-transparent"
               >
                 {proofing ? (
                   "Proofreading…"

@@ -7,7 +7,7 @@
 // monthly spending choice). Everything reads GET /api/admin/plan (plan-data);
 // a 404 means the licence carries no plan, said as the page's empty state.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -22,15 +22,18 @@ import {
   Headset,
   Info,
   RefreshCw,
+  ShieldAlert,
   Sparkles,
   TriangleAlert,
   UsersRound,
   Wallet,
+  X,
 } from "lucide-react";
 import { Button, iconButtonClass } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { Chip, type ChipTone } from "@/components/Chip";
-import { confirmDialog, promptDialog } from "@/components/Dialog";
+import { confirmDialog } from "@/components/Dialog";
+import { Modal } from "@/components/Modal";
 import { EmptyState, Field, FormError, SectionEmpty, TextInput } from "@/components/form";
 import { CardTitle } from "@/components/Heading";
 import { ListFilter } from "@/components/ListFilter";
@@ -54,10 +57,13 @@ import {
   usd,
   usdShort,
   validEmail,
+  BILLING_ALL_ADMINS,
   type AiSpending,
+  type BillingContact,
   type MeterState,
   type PlanPerson,
 } from "@/lib/plan-shared";
+import { AgentsChip } from "./AgentsChip";
 import { PlanMeter } from "./PlanMeter";
 import { PlanTrend } from "./PlanTrend";
 import { UpgradeDialog, upgradeLabel } from "./UpgradeDialog";
@@ -69,7 +75,15 @@ export function PlanUsage({ tab }: { tab: PlanTab }) {
   const { load, reload } = usePlan();
   if (load.state === "loading") return <LoadingRow />;
   if (load.state === "none")
-    return (
+    return load.mismatch ? (
+      // Design F, with no earlier license for this workspace to run on: say what is missing, not "no plan".
+      <EmptyState
+        icon={<ShieldAlert />}
+        title="Waiting for this workspace's plan license"
+        body={`The license in force is for another workspace (${load.mismatch.licenseWorkspace}), so there is no plan to show here yet and nothing is billed. Everything keeps working. Once CompassDocs sends the license for ${load.mismatch.workspaceId}, its plan and usage appear here.`}
+        action={{ href: "/admin/license", label: "Open License" }}
+      />
+    ) : (
       <EmptyState
         icon={<Cloud />}
         title="No CompassDocs Cloud plan"
@@ -126,26 +140,15 @@ function countedLine(iso: string | null): React.ReactNode {
   );
 }
 
+/** Who the warning emails go to, in words (the licence's contact is named as such). */
+function contactWords(c: Pick<BillingContact, "email" | "source">): string {
+  if (!c.email) return "All admins";
+  return c.source === "license" ? `${c.email} (from the license)` : c.email;
+}
+
 function Overview({ d, reload }: { d: PlanData; reload: () => void }) {
   const p = d.plan;
-  async function changeContact() {
-    const next = await promptDialog({
-      title: "Billing contact",
-      label: "Email address",
-      initial: d.billingContact,
-      type: "email",
-      help: "The plan's warning emails go to this address instead of every admin. Leave it empty for all admins.",
-      confirmLabel: "Save",
-      required: false,
-      validate: (v: string) => (v.trim() && !validEmail(v) ? "Enter an email address, or leave it empty." : undefined),
-    });
-    if (next === null) return;
-    const res = await fetch("/api/admin/plan/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ billing_contact: next.trim() }) });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) return toast("error", body?.error || "Couldn't save the billing contact.");
-    toast("ok", next.trim() ? `Warning emails go to ${next.trim()}.` : "Warning emails go to every admin.");
-    reload();
-  }
+  const [contactOpen, setContactOpen] = useState(false);
   return (
     <>
       <Card padding="p-5" className="@container">
@@ -174,9 +177,11 @@ function Overview({ d, reload }: { d: PlanData; reload: () => void }) {
           )}
           <div id="billing-contact" className="flex scroll-mt-6 flex-wrap items-baseline gap-1">
             <dt>Billing contact</dt>
-            <dd className="font-semibold text-slate-900">{d.billingContact || "All admins"}</dd>
+            <dd className="font-semibold text-slate-900" data-testid="billing-contact">
+              {contactWords({ email: d.billingContact, source: d.billingContactSource })}
+            </dd>
             <dd>
-              <button type="button" className="link text-xs print:hidden" onClick={changeContact}>
+              <button type="button" className="link text-xs print:hidden" onClick={() => setContactOpen(true)}>
                 Change
               </button>
             </dd>
@@ -202,7 +207,83 @@ function Overview({ d, reload }: { d: PlanData; reload: () => void }) {
         </div>
       </div>
       <p className="text-xs text-slate-500">The dashed line on each trend is the plan's limit. {monthName(d.month)}'s point is hollow: the month isn't over.</p>
+      {contactOpen && <BillingContactDialog d={d} onClose={() => setContactOpen(false)} onSaved={reload} />}
     </>
+  );
+}
+
+/**
+ * Decision 5: where the plan's warning emails go. The licence's contact
+ * (when it names one) is shown as such and stays the default; an admin
+ * can choose every admin instead, or another address. The toast says who
+ * they go to now, from the server's answer.
+ */
+function BillingContactDialog({ d, onClose, onSaved }: { d: PlanData; onClose: () => void; onSaved: () => void }) {
+  type Choice = "license" | "admins" | "email";
+  const titleId = useId();
+  const lic = d.licenseContact;
+  const initial: Choice = d.billingContactSource === "here" ? "email" : d.billingContactSource === "license" ? "license" : lic && d.billingContactSource === "default" ? "license" : "admins";
+  const [choice, setChoice] = useState<Choice>(initial);
+  const [email, setEmail] = useState(d.billingContactSource === "here" ? d.billingContact : "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function save() {
+    setError("");
+    if (choice === "email" && !validEmail(email.trim())) return setError("Enter an email address.");
+    setBusy(true);
+    try {
+      const value = choice === "email" ? email.trim() : choice === "admins" ? BILLING_ALL_ADMINS : "";
+      const res = await fetch("/api/admin/plan/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ billing_contact: value }) });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) return setError(body?.error || "Couldn't save the billing contact.");
+      const now = body?.billing_contact as BillingContact | undefined;
+      toast("ok", now?.email ? `Warning emails go to ${now.email}${now.source === "license" ? ", the license's contact" : ""}.` : "Warning emails go to every admin.");
+      onSaved();
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const options: { value: Choice; label: string; description: string; extra?: React.ReactNode }[] = [
+    ...(lic ? [{ value: "license" as const, label: "The license's contact", description: `${lic}, as CompassDocs has it on your plan.` }] : []),
+    { value: "admins", label: "Every admin", description: "Everyone who can open Plan & usage." },
+    {
+      value: "email",
+      label: "Another address",
+      description: "One address instead of every admin.",
+      extra: (
+        <Field label="Email address" size="xs">
+          <TextInput type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
+        </Field>
+      ),
+    },
+  ];
+  return (
+    <Modal open onClose={onClose} labelledBy={titleId} className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-xl border border-slate-200 bg-surface p-5 shadow-modal">
+      <div className="flex items-start justify-between gap-3">
+        <h2 id={titleId} className="text-base font-semibold text-slate-900">
+          Billing contact
+        </h2>
+        <button type="button" onClick={onClose} aria-label="Close" data-tt="Close" className={iconButtonClass("quiet", "sm", "-mr-1 -mt-1")}>
+          <X aria-hidden />
+        </button>
+      </div>
+      <p className="mt-1 text-sm text-slate-600">Who gets the plan's warning emails (80%, the limit, past the buffer, AI paused).</p>
+      <div className="mt-4">
+        <RadioCards label="Billing contact" name="billing-contact" value={choice} onChange={setChoice} options={options} />
+      </div>
+      {error && <FormError className="mt-3">{error}</FormError>}
+      <div className="mt-5 flex flex-wrap items-center gap-2">
+        <Button busy={busy} onClick={save}>
+          Save
+        </Button>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -275,15 +356,11 @@ function AgentsCard({ d }: { d: PlanData }) {
   const a = d.agents;
   const m = d.meters.agents;
   const label = d.plan.label;
-  const chip = (() => {
-    if (m.state === "past") return stateChip("error", `At ${a.holdAt ?? a.used} · ${label}'s limit`, warnIcon, "agents-chip");
-    if (m.state === "over") return stateChip("warn", `${a.used} of ${a.max} · in buffer`, warnIcon, "agents-chip");
-    if (m.state === "warn") return stateChip("warn", `${a.used} of ${a.max} max`, warnIcon, "agents-chip");
-    if (a.extra > 0) return stateChip("accent", `${a.extra} extra · ${usd(a.extra * EXTRA_AGENT_USD)}/mo`, undefined, "agents-chip");
-    return stateChip("neutral", a.used >= a.included ? `All ${a.included} included in use` : `${a.used} of ${a.included} included`, undefined, "agents-chip");
-  })();
-  const end = a.holdAt ?? (a.max ?? Math.max(a.included, a.used)) * 1.2;
-  const limit = a.max ?? Math.max(a.included, 1);
+  const chip = <AgentsChip used={a.used} included={a.included} max={a.max} holdAt={a.holdAt} state={m.state} label={label} extraUsd={EXTRA_AGENT_USD} />;
+  // No maximum (agents by contract): no buffer, no amber, the bar is just how many (STYLEGUIDE §Plan meter).
+  const soft = a.max !== null;
+  const limit = a.max ?? Math.max(a.included, a.used, 1);
+  const end = a.holdAt ?? limit;
   return (
     <MeterCard
       id="agents"
@@ -291,23 +368,27 @@ function AgentsCard({ d }: { d: PlanData }) {
       title="Agents"
       chip={chip}
       big={String(a.used)}
-      of={`of ${a.included} included${a.max !== null ? ` · up to ${a.max} on ${label}` : ""}`}
+      of={a.max !== null ? `of ${a.included} included · up to ${a.max} on ${label}` : `on ${label}, by contract`}
       meter={
         <PlanMeter
           value={a.used}
           limit={limit}
           end={end}
           label="Helpdesk agents"
-          valueText={`${a.used} agents: ${a.included} included${a.max !== null ? `, up to ${a.max}, held at ${a.holdAt}` : ""}`}
+          soft={soft}
+          valueText={`${a.used} agents: ${a.included} included${a.max !== null ? `, up to ${a.max}, new agents held at ${a.holdAt}` : ", more by contract"}`}
           marks={[{ at: a.included, label: `${a.included} included` }, ...(a.max !== null && a.max !== a.included ? [{ at: a.max, label: `${a.max} max` }] : [])]}
         />
       }
       body={
-        <>
-          Each agent past {a.included} is {usd(EXTRA_AGENT_USD)}/mo, prorated
-          {a.max !== null ? `; ${label} allows ${a.max}, and ${a.holdAt} with the buffer` : ""}.{" "}
-          {a.extra > 0 ? `${a.extra} extra this month: ${usd(a.extra * EXTRA_AGENT_USD)} a month.` : "No extra agents this month."}
-        </>
+        a.max === null ? (
+          `${label}'s agents are by contract: adding one changes nothing here.`
+        ) : (
+          <>
+            Each agent past {a.included} is {usd(EXTRA_AGENT_USD)}/mo, prorated; {label} allows {a.max}, and {a.holdAt} with the buffer.{" "}
+            {a.extra > 0 ? `${a.extra} extra this month: ${usd(a.extra * EXTRA_AGENT_USD)} a month.` : "No extra agents this month."}
+          </>
+        )
       }
       footer={
         <a href="/desk/settings/agents" target="_blank" rel="noopener noreferrer" className="link inline-flex items-center gap-1 font-medium print:hidden">
@@ -459,8 +540,17 @@ function AiCard({ d }: { d: PlanData }) {
 
 // --- Active users ----------------------------------------------------------------------------------
 
+interface PeopleBody {
+  count: number;
+  by_kind: Record<string, number>;
+  people: PlanPerson[];
+  /** How many the list carries (the most recent; the CSV has everyone). */
+  shown: number;
+}
+
 function People({ d }: { d: PlanData }) {
-  const [rows, setRows] = useState<PlanPerson[] | null>(null);
+  // The count, the chips and the list: one answer, one read (they always agree).
+  const [body, setBody] = useState<PeopleBody | null>(null);
   const [error, setError] = useState("");
   const [q, setQ] = useState("");
   useEffect(() => {
@@ -468,21 +558,22 @@ function People({ d }: { d: PlanData }) {
       .then(async (r) => {
         const b = await r.json().catch(() => null);
         if (!r.ok || !b) throw new Error(b?.error || "Couldn't load who counted.");
-        setRows(b.people as PlanPerson[]);
+        setBody(b as PeopleBody);
       })
       .catch((e: Error) => setError(e.message));
   }, []);
+  const rows = body?.people ?? null;
   const shown = useMemo(() => {
     const t = q.trim().toLowerCase();
     return (rows ?? []).filter((r) => !t || `${r.name} ${r.countedAs} ${r.detail}`.toLowerCase().includes(t));
   }, [rows, q]);
-  const byKind = Object.entries(d.users.byKind).filter(([, n]) => n > 0);
-  const total = d.meters.users.value;
+  const byKind = Object.entries(body?.by_kind ?? {}).filter(([, n]) => n > 0);
+  const total = body?.count ?? null;
   return (
     <Card
       padding="none"
       title={`Who counted in ${monthName(d.month)}`}
-      description={`${total.toLocaleString("en-US")} ${total === 1 ? "person" : "people"}. Each person counts once, under their highest role. The list stays in this workspace.`}
+      description={`${total === null ? "" : `${total.toLocaleString("en-US")} ${total === 1 ? "person" : "people"} so far. `}Each person counts once, under their highest role. The list stays in this workspace.`}
       actions={
         <a href="/api/admin/plan/people?format=csv" download className={iconButtonClass("bordered", "sm", "print:hidden")} data-tt="Download CSV" aria-label="Download CSV">
           <Download aria-hidden />
@@ -527,7 +618,7 @@ function People({ d }: { d: PlanData }) {
                 </tr>
               </thead>
               <tbody>
-                {shown.slice(0, 500).map((r, i) => (
+                {shown.map((r, i) => (
                   <tr key={`${r.name}-${i}`} className={TR}>
                     <Td className="font-medium text-slate-800">{r.name}</Td>
                     <Td>
@@ -542,7 +633,11 @@ function People({ d }: { d: PlanData }) {
               </tbody>
             </Table>
           )}
-          {shown.length > 500 && <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">Showing the first 500 of {shown.length}. The CSV has everyone.</p>}
+          {body && body.count > body.shown && (
+            <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
+              Showing the {body.shown.toLocaleString("en-US")} most recent of {body.count.toLocaleString("en-US")}. The CSV has everyone.
+            </p>
+          )}
         </>
       )}
     </Card>
@@ -622,7 +717,7 @@ function Ai({ d, reload }: { d: PlanData; reload: () => void }) {
             );
           })}
           <li className="flex items-center justify-between gap-3 py-3 text-sm font-semibold text-slate-900">
-            <span>{ai.beyondUsd > 0 ? `${usd(ai.beyondUsd)} beyond the allowance · billed ${usd(ai.billedUsd)}` : "Within allowance · nothing billed yet"}</span>
+            <span>{ai.allowanceUsd === null ? "AI by contract" : ai.beyondUsd > 0 ? `${usd(ai.beyondUsd)} beyond the allowance · billed ${usd(ai.billedUsd)}` : "Within allowance · nothing billed yet"}</span>
             <span className="tabular-nums">{usd(ai.spentUsd)}</span>
           </li>
         </ul>
@@ -651,7 +746,9 @@ function Spending({ d, reload }: { d: PlanData; reload: () => void }) {
       if (!Number.isFinite(n) || n <= 0) return setError("Enter a monthly cap in dollars.");
       if (allowance !== null && n < allowance) return setError(`The cap includes the ${a} allowance: enter at least ${a}, or choose Stop at the allowance.`);
     }
-    if (choice !== "keep" && d.ai.spentUsd >= (choice === "stop" ? (allowance ?? 0) : Number(cap))) {
+    // Ask before pausing AI at once: only with a real limit (the allowance, or a valid cap) already reached.
+    const limitNow = choice === "stop" ? allowance : choice === "cap" ? Number(cap) : null;
+    if (limitNow !== null && Number.isFinite(limitNow) && limitNow > 0 && d.ai.spentUsd >= limitNow) {
       const ok = await confirmDialog({
         title: "Pause AI for the rest of the month?",
         body: `This month's AI (${usd(d.ai.spentUsd)}) is already at that limit, so Claude in the desk, Ask, Write and Proofread pause until ${d.nextMonthStart}. Everything else keeps working.`,
@@ -676,19 +773,30 @@ function Spending({ d, reload }: { d: PlanData; reload: () => void }) {
   }
 
   return (
-    <Card id="ai-spending" className="scroll-mt-6" title="Monthly AI spending" icon={<Wallet />} description={`${d.plan.label} includes ${allowance !== null ? `about ${a}` : "AI by contract"} a month. Choose what happens after that.`}>
+    <Card
+      id="ai-spending"
+      className="scroll-mt-6"
+      title="Monthly AI spending"
+      icon={<Wallet />}
+      description={allowance !== null ? `${d.plan.label} includes about ${a} of AI a month. Choose what happens after that.` : `${d.plan.label}'s AI is by contract. You can cap it at a monthly amount.`}
+    >
       <RadioCards
         label="Monthly AI spending"
         name="ai-spending"
         value={choice}
         onChange={setChoice}
         options={[
-          { value: "keep", label: "Keep AI on", description: `Beyond ${a}, AI is billed at cost +${Math.round(AI_MARKUP * 100)}%. You get an email when the allowance runs out.` },
-          { value: "stop", label: "Stop at the allowance", description: `AI pauses for the rest of the month once ${a} is used. Nothing extra is billed.` },
+          {
+            value: "keep",
+            label: "Keep AI on",
+            description: allowance !== null ? `Beyond ${a}, AI is billed at cost +${Math.round(AI_MARKUP * 100)}%. You get an email when the allowance runs out.` : "AI stays on all month, under your contract.",
+          },
+          // No allowance (AI by contract): nothing to stop at, so no "Stop at the allowance".
+          ...(allowance !== null ? [{ value: "stop" as const, label: "Stop at the allowance", description: `AI pauses for the rest of the month once ${a} is used. Nothing extra is billed.` }] : []),
           {
             value: "cap",
             label: "Cap at an amount",
-            description: `AI is billed beyond ${a} up to your cap, then pauses for the month.`,
+            description: allowance !== null ? `AI is billed beyond ${a} up to your cap, then pauses for the month.` : "AI pauses for the rest of the month once this much is used.",
             extra: (
               <Field label="Cap, a month" size="xs" help={allowance !== null ? `Including the ${a} allowance.` : undefined}>
                 <TextInput inputMode="decimal" value={cap} onChange={(e) => setCap(e.target.value.replace(/[^0-9.]/g, ""))} />

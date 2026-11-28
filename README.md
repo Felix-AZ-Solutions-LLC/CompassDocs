@@ -797,13 +797,13 @@ keep their seats and agent rules exactly as before.
 | --- | --- | --- | --- |
 | `name` | yes | `"starter"` \| `"shared"` \| `"dedicated"` | The plan. |
 | `agentsIncluded` | yes | integer ≥ 0 | Agents the plan includes. Each one past it is an extra agent at $9.99/mo, prorated. |
-| `agentsMax` | yes | integer ≥ `agentsIncluded`, or `null` | The plan's agent maximum. New agents are held at the maximum plus the buffer (10 → 12, 25 → 30); `null` means no maximum. |
+| `agentsMax` | yes | integer ≥ `agentsIncluded`, or `null` | The plan's agent maximum. New agents are held at the maximum plus the buffer (10 → 12, 25 → 30); `null` means agents by contract (Dedicated): no maximum, no hold, and no extra-agent price step. |
 | `activeUsersLimit` | yes | integer ≥ 0, or `null` | Active users a calendar month (UTC); `null` means no cap. |
 | `storageGb` | yes | number ≥ 0, or `null` | Storage included, in GB (10⁹ bytes). Past it, each started 50 GB is $25 a month. `null`: by contract. |
 | `aiAllowanceUsd` | yes | number ≥ 0, or `null` | AI included each month, in US dollars at cost. Beyond it, AI is billed at cost +30%. `null`: by contract. |
-| `renewsAt` | yes | `YYYY-MM-DD` | The plan's renewal date (an extra agent is prorated to it). |
+| `renewsAt` | yes | `YYYY-MM-DD` | The plan's renewal date (an extra agent is prorated to it). Exactly ten characters and a real calendar day: a timestamp, `2027-3-14` or `2027-02-30` is malformed. |
 | `bufferPct` | no (20) | integer 0–100 | The soft buffer above `activeUsersLimit` and `agentsMax`. |
-| `billingContact` | no | an email address | Where the warning emails go instead of every admin; an admin can set another on Plan & usage. |
+| `billingContact` | no | an email address | Where the warning emails go instead of every admin. Plan & usage shows it as the license's contact; an admin can choose another address, or every admin, instead. |
 | `priceUsd` | no | number ≥ 0 | The monthly price shown on the plan card; else the published price (Starter $199, Shared $449, Dedicated $2,950). |
 | `billing` | no (`"annual"`) | `"annual"` \| `"monthly"` | How the plan is billed: an extra agent is prorated to the renewal ($119.88 a year) or to the month's end. |
 
@@ -829,6 +829,22 @@ daily count and its report to the console (below), the admin banners and
 the threshold email, the price step and the hold in Desk settings →
 Agents (the plan's rules replace the `agents` claim), and the monthly AI
 cap. Agents are held, never removed; nobody is locked out by any meter.
+An extra agent (past `agentsIncluded`) changes the bill, so only someone
+who can open Plan & usage adds one, after its price is shown; a desk
+Manager who can't is told to ask an admin (403 `plan_admin_needed`).
+
+**The monthly AI cap** (off by default: AI stays on past the allowance and
+is billed at cost +30%). An admin can stop AI at the allowance or cap it at
+an amount; then every metered AI request is admitted against the month's
+spending first. Admission reserves the most the request can cost (Ask,
+Write and Proofread: the prompt and the whole output budget at the price
+list; a desk turn: one step, the desk's own reservation) and counts every
+reservation in flight, under a lock, so requests at the same time can't
+all slip under the cap. The bound: the month ends over the cap by at most
+the request admitted just before it was reached, plus what a desk turn
+uses past its first step. A request is settled at its tokens' price when
+it answers; one that fails gives its reservation back, and one that never
+comes back stops holding the cap after 10 minutes.
 
 ### Usage to the console
 
@@ -849,23 +865,36 @@ for its admins (Plan & usage → Active users).
   sessions, or disabled accounts.
 - `storageBytes`: the stored files (attachments, images, ticket files) plus
   documents' text, version history and the Trash. Never backups, workspace
-  exports or the search index.
+  exports or the search index. The files are the file store's own listing
+  of file keys: in blob mode the container also holds workspace exports,
+  which are never summed.
 - `aiUsd`: AI at cost this month up to the end of the day: every request's
   tokens at the provider's price list (the desk's Claude limits use the
-  same calculation), by feature.
+  same calculation), by feature. **Only AI on the platform's key** (cloud
+  mode's `ANTHROPIC_API_KEY`) is counted or capped: AI on an admin's own
+  key, or on an OpenAI-compatible endpoint they set up, is theirs to pay
+  and never appears here.
+
+**All or nothing.** A count that can't read one of its parts (the file
+store, the desk, the database) fails as a whole and is retried; it is never
+saved or sent with a part as 0.
 
 **When.** About 30 seconds after start, then every 6 hours (with the
 license check-in's cadence), and a few minutes after midnight UTC, when the
-day that ended is counted a last time. Each run counts under an advisory
-lock (replicas count once), keeps 13 months, checks the thresholds, then
-sends every day not yet sent, oldest first.
+day that ended is counted a last time. Each run TRIES an advisory lock and
+skips when another replica holds it (it never waits, so no database
+connection is held up), counts, keeps 13 months, checks the thresholds,
+then sends every day not yet sent, oldest first. Plan & usage never waits
+for a count: it shows the latest saved one and, when today has none,
+starts one in the background.
 
 **The HTTP contract** (what the console implements):
 
 - **Request.** `POST <COMPASSDOCS_USAGE_URL>`; unset, it is
   `COMPASSDOCS_LICENSE_URL` with its last path segment replaced by `usage`
   (`https://console.compassdocs.io/api/workspaces/ws_2c91e4/license` →
-  `…/ws_2c91e4/usage`). `COMPASSDOCS_USAGE_URL` must be `https://` on the
+  `…/ws_2c91e4/usage`; a trailing slash or a query on the license URL is
+  dropped first, so `…/license/` gives `…/usage` too). `COMPASSDOCS_USAGE_URL` must be `https://` on the
   license URL's origin (the credential goes with it), or cloud mode does
   not start. Headers:
   - `Authorization: Bearer <credential>`: exactly the license request's

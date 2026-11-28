@@ -40,7 +40,7 @@ async function shot(page: Page, name: string) {
   await page.emulateMedia({ colorScheme: "light" });
 }
 
-function plan(used: number) {
+function plan(used: number, over: Record<string, unknown> = {}) {
   return {
     name: "starter",
     label: "Starter",
@@ -48,17 +48,20 @@ function plan(used: number) {
     max: 10,
     hold_at: 12,
     used,
+    state: used >= 12 ? "past" : used > 10 ? "over" : used >= 8 ? "warn" : "normal",
+    admin: true,
     monthly_usd: 9.99,
     price_usd: 199,
     renews_at: "2027-03-14",
     billing: "annual",
     proration: { nowUsd: 35.14, days: 107, periodUsd: 119.88, until: "2027-03-14" },
     next: { name: "shared", label: "Shared", price_usd: 449, included: 5, max: 25 },
+    ...over,
   };
 }
 
 /** The real agents list with the plan's numbers; POSTs recorded and answered 201. */
-async function standIn(page: Page, used: number): Promise<unknown[]> {
+async function standIn(page: Page, used: number, over: Record<string, unknown> = {}): Promise<unknown[]> {
   const posts: unknown[] = [];
   await page.unroute(AGENTS_API);
   await page.route(AGENTS_API, async (route) => {
@@ -68,7 +71,7 @@ async function standIn(page: Page, used: number): Promise<unknown[]> {
     }
     const res = await route.fetch();
     const body = await res.json();
-    await route.fulfill({ response: res, json: { ...body, used, plan: plan(used) } });
+    await route.fulfill({ response: res, json: { ...body, used, plan: plan(used, over) } });
   });
   return posts;
 }
@@ -99,8 +102,8 @@ test.describe("adding an agent on a Cloud plan", () => {
     await standIn(page, 3);
     await page.goto("/desk/settings/agents");
     const meter = page.getByTestId("plan-agents-meter");
-    await expect(meter).toContainText("3 of 3 agents");
-    await expect(meter).toContainText("included in Starter · $9.99/mo each beyond that · up to 10");
+    await expect(meter).toContainText("3 agents · 3 included in Starter · $9.99/mo each beyond that · up to 10");
+    await expect(page.getByTestId("plan-agents-chip")).toHaveText("All 3 included in use");
     await expect(page.getByRole("link", { name: /Buy more agents/ })).toHaveCount(0);
     await expect(meter.getByRole("meter", { name: "Helpdesk agents" })).toHaveAttribute("aria-valuemax", "10");
   });
@@ -147,8 +150,46 @@ test.describe("adding an agent on a Cloud plan", () => {
     const add = dialog.getByRole("button", { name: "Add to desk" });
     await expect(add).toHaveAttribute("aria-disabled", "true");
     await expect(add).toHaveAttribute("aria-describedby", "plan-held-reason");
+    // The person picker stays: someone already counted can still be given a role.
+    await expect(dialog.getByRole("combobox", { name: "Person" })).toBeVisible();
     await shot(page, "plan-add-agent-held");
     await add.click({ force: true });
     expect(posts.length, "nothing is sent while held").toBe(0);
+  });
+
+  test("the meter at the hold says it in words (the chip), not color alone", async ({ page }) => {
+    test.skip(!(await deskLicensed(page)), "helpdesk is not licensed in this build; the EE rig runs it");
+    await standIn(page, 12);
+    await page.goto("/desk/settings/agents");
+    await expect(page.getByTestId("plan-agents-meter")).toContainText("12 agents · 3 included in Starter");
+    await expect(page.getByTestId("plan-agents-chip")).toHaveText("At 12 · Starter's limit, new agents held");
+    await expect(page.getByRole("meter", { name: "Helpdesk agents" })).toHaveAttribute("aria-valuetext", /new agents are held at 12/);
+  });
+
+  test("Shared held, next Dedicated: its price and agents by contract, no invented sum", async ({ page }) => {
+    test.skip(!(await deskLicensed(page)), "helpdesk is not licensed in this build; the EE rig runs it");
+    await standIn(page, 30, { name: "shared", label: "Shared", included: 5, max: 25, hold_at: 30, price_usd: 449, next: { name: "dedicated", label: "Dedicated", price_usd: 2950, included: 0, max: null } });
+    const dialog = await openAdd(page);
+    const compare = dialog.getByTestId("plan-compare");
+    await expect(compare).toContainText("From $2,950/mo, agents by contract");
+    await expect(compare).not.toContainText("$2,950 + ");
+    await expect(dialog.getByRole("link", { name: "Talk to us about Dedicated" })).toBeVisible();
+    await shot(page, "plan-add-agent-held-dedicated");
+  });
+
+  test("a desk Admin who can't open Plan & usage: no price, no upgrade, ask an admin", async ({ page }) => {
+    test.skip(!(await deskLicensed(page)), "helpdesk is not licensed in this build; the EE rig runs it");
+    await ensureUser(page, PICK, "viewer", PICK_NAME);
+    const posts = await standIn(page, 3, { admin: false, monthly_usd: null, price_usd: null, proration: null, next: { name: "shared", label: "Shared", price_usd: null, included: 5, max: 25 } });
+    await page.goto("/desk/settings/agents");
+    await expect(page.getByTestId("plan-agents-meter")).not.toContainText("$");
+    const dialog = await openAdd(page);
+    await pick(page);
+    await expect(dialog.getByTestId("plan-ask-admin")).toContainText("Ask an admin to add this person.");
+    const add = dialog.getByRole("button", { name: "Add to desk" });
+    await expect(add).toHaveAttribute("aria-disabled", "true");
+    await expect(add).toHaveAttribute("aria-describedby", "plan-ask-reason");
+    await add.click({ force: true });
+    expect(posts.length).toBe(0);
   });
 });

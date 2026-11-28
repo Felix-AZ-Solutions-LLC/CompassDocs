@@ -141,10 +141,13 @@ export async function prepareTurn(input: TurnInput): Promise<{ ok: true; turn: P
   if (claudeTurnLimited(input.user.id)) return { ok: false, status: 429, error: "You're asking Claude very quickly. Wait a moment and try again." };
   // 1.22.0: a CompassDocs Cloud workspace's monthly AI cap (lib/plan-usage; never self-hosted). The desk's
   // own workspace and per-agent limits (reserveTurn) keep working inside it.
+  // Only a turn on the platform's key is the plan's: an admin's own key is neither capped nor counted.
+  let planMetered = false;
   {
-    const { aiGate, aiPausedSentence } = await import("../../plan-usage");
-    const paused = await aiGate();
-    if (paused) return { ok: false, status: 409, error: aiPausedSentence(paused.until, input.user.role === "admin") };
+    const { aiGate, aiMetered, aiPausedSentence } = await import("../../plan-usage");
+    planMetered = await aiMetered("desk");
+    const paused = planMetered ? await aiGate(new Date(), "desk") : null;
+    if (paused) return { ok: false, status: 409, error: aiPausedSentence(paused.until, await (await import("../../plan")).isPlanAdmin(input.user)) };
   }
 
   const model = await getAiModel();
@@ -170,7 +173,7 @@ export async function prepareTurn(input: TurnInput): Promise<{ ok: true; turn: P
   const chat = await openChat(input.user.id, ticket?.id ?? null, { chatId: input.chatId, fresh: input.fresh, title: ticket ? `#${ticket.number}: ${text}` : text });
   if (!(await claimChat(chat.id))) return { ok: false, status: 409, error: "Claude is still answering in this chat (perhaps in another tab). Wait for it, then ask again." };
   const maxTokens = REPLY_TOKENS + (profile.current ? thinkingHeadroom(effort) : 0);
-  const reserved = await reserveTurn(cfg, { userId: input.user.id, chatId: chat.id, ticketNumber: ticket?.number ?? null, model, reserveUsd: reservationUsd(model, maxTokens) });
+  const reserved = await reserveTurn(cfg, { userId: input.user.id, chatId: chat.id, ticketNumber: ticket?.number ?? null, model, reserveUsd: reservationUsd(model, maxTokens), planMetered });
   if (!reserved.ok) {
     await releaseChat(chat.id);
     return { ok: false, status: 429, error: reserved.error };

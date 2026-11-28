@@ -259,7 +259,13 @@ export function usageReportUrl(env: Env = process.env): URL | null {
   const pull = licensePullConfig(env);
   if (!pull || usageReportProblems(env).length) return null;
   const raw = platformValue("COMPASSDOCS_USAGE_URL", env);
-  return raw ? new URL(raw) : new URL("usage", pull.url);
+  if (raw) return new URL(raw);
+  // The license URL's last path segment, trailing slashes aside, becomes "usage".
+  const base = new URL(pull.url);
+  base.pathname = base.pathname.replace(/\/+$/, "");
+  base.search = "";
+  base.hash = "";
+  return new URL("usage", base);
 }
 
 /** In cloud mode, is the license CompassDocs Cloud's (from the environment or the console), so read-only here? */

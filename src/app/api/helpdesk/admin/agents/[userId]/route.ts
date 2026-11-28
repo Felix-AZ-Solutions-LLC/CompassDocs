@@ -14,7 +14,7 @@ import { NextResponse } from "next/server";
 import { audit, actorFrom, ipFrom } from "@/lib/audit";
 import { readJson } from "@/lib/helpdesk/access";
 import { hdAnyCapGate, hdCan } from "@/lib/helpdesk/roles";
-import { AgentLimitError, AgentPriceError, auditAgentLimit, DeskRoleError, removeDeskAgent, setDeskAgent } from "@/lib/helpdesk/roles-agents";
+import { AgentLimitError, AgentAdminNeededError, AgentPriceError, auditAgentLimit, DeskRoleError, removeDeskAgent, setDeskAgent } from "@/lib/helpdesk/roles-agents";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +23,7 @@ type Ctx = { params: Promise<{ userId: string }> };
 function fail(e: unknown): NextResponse {
   if (e instanceof AgentLimitError) return NextResponse.json(e.body(), { status: e.status });
   // 1.22.0: an extra agent's price to confirm (CompassDocs Cloud), with its numbers.
-  if (e instanceof AgentPriceError) return NextResponse.json(e.body(), { status: e.status });
+  if (e instanceof AgentPriceError || e instanceof AgentAdminNeededError) return NextResponse.json(e.body(), { status: e.status });
   if (e instanceof DeskRoleError) return NextResponse.json({ error: e.message }, { status: e.status });
   throw e;
 }

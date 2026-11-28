@@ -38,29 +38,39 @@ Enterprise license, don't change.
   warning, never an error; each says nothing stops), dismissed per admin per
   threshold per month, and one email per meter per threshold per month, at
   most one a day: the new built-in "Plan usage threshold" template, to every
-  admin or to the billing contact when one is named. Nobody else sees any of
-  it.
+  admin or to the billing contact (the license's, shown as such, unless an
+  admin chooses another address or every admin). Nobody else sees any of
+  it. The dashboard says each in one short line; the settings pages in full.
 - **Adding an agent past the included ones** shows the price first: "Adds
   an extra agent: $9.99/mo, prorated", the amount charged now to the plan's
   renewal ($119.88 a year when billed annually), and a button that says the
   price; the server refuses an add that didn't confirm it (409
   `confirm_price`). Past the plan's maximum the add still works inside the
   buffer and says so; at the buffer's end (12 on Starter, 30 on Shared) new
-  agents are held with the plan's comparison and an upgrade request.
-  Nobody already on the desk is ever removed.
+  agents are held with the plan's comparison and an upgrade request (the
+  person picker stays, for someone already counted). Nobody already on the
+  desk is ever removed. Prices and the upgrade are only for whoever can open
+  Plan & usage: a desk Manager who can't sees the rules without a price and
+  asks an admin to add an extra agent (403 `plan_admin_needed`). Agents by
+  contract (Dedicated) have no price step and no hold.
 - **The AI allowance.** AI stays on by default. On Plan & usage → AI an
   admin can stop at the allowance or cap at an amount; once reached, Claude
   in the desk, Ask, Write and Proofread pause until the 1st with a clear
-  sentence, and everything else keeps working. The cap is checked before
-  each request against the running total (at most one answer over), and the
-  desk's own Claude limits keep working inside it. Past the allowance,
+  sentence (the Claude panel shows it as its state), and everything else
+  keeps working. Each request is admitted against the month's spending
+  with its most it can cost reserved, so requests at the same time can't
+  all slip under the cap (the bound is in the README), and the desk's own
+  Claude limits keep working inside it. Only AI on the platform's key is
+  counted or capped; an admin's own key is theirs. Past the allowance,
   admins see one quiet "billed at cost +30%" line where AI is used.
 - **Daily usage counting.** Agents, monthly active users (anyone who signed
   in or used the app this month, requesters once they sign in to the
   portal, API tokens as their person), storage (files, documents' text,
   versions and the Trash; never backups, exports or the search index) and
   AI dollars by feature from every request's tokens at the price list. Kept
-  13 months, counted under an advisory lock so replicas count once.
+  13 months. One replica counts at a time (a tried lock: the others skip,
+  never wait), a count is all or nothing (a part that fails fails the count,
+  never a 0), and Plan & usage never waits for one.
 - **Usage to the console.** Each day's counts go to `POST …/usage` beside
   the license endpoint (or `COMPASSDOCS_USAGE_URL`, on the same origin),
   with the license request's credential: idempotent per workspace and day,

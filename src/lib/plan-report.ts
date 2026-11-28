@@ -314,7 +314,8 @@ async function runReport(state: PlanState): Promise<ReportRun> {
     }
     if (outcome.kind === "refused") {
       // Not this body again: the next count of the day is sent afresh.
-      await hq("UPDATE plan_usage_daily SET reported_counted_at = counted_at, report_attempts = report_attempts + 1, report_error = $2 WHERE day = $1", [row.day, outcome.message]);
+      // Only if the day wasn't counted again meanwhile: a newer count is a new body, still to send.
+      await hq("UPDATE plan_usage_daily SET reported_counted_at = counted_at, report_attempts = report_attempts + 1, report_error = $2 WHERE day = $1 AND counted_at = $3", [row.day, outcome.message, row.counted_at]);
       await say("warn", "plan.usage_report_refused", `${outcome.message} Day ${row.day}.`);
       continue;
     }

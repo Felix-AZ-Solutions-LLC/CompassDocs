@@ -14,10 +14,15 @@
 //                           account) or 'portal' (a customer portal
 //                           contact). Never leaves the workspace: the
 //                           console gets the count, the admin the list.
-//   ai_usage                one row per AI request outside the desk (Ask,
-//                           Write and Proofread, MCP): the feature, tokens
-//                           and the cost at the price list (the desk's own
-//                           ledger is hd_claude_usage). No prompt, no answer.
+//   ai_usage                one row per metered AI request outside the desk
+//                           (Ask, Write and Proofread, MCP; on the
+//                           platform's key only): the feature, tokens and the
+//                           cost at the price list (the desk's own ledger is
+//                           hd_claude_usage, whose plan_metered marks the
+//                           turns on the platform's key). `reserved`: admitted
+//                           and in flight, holding its most it can cost
+//                           against the cap until it is settled. No prompt,
+//                           no answer.
 //   plan_notices            thresholds already emailed: one per meter per
 //                           threshold per month.
 //   plan_banner_dismissals  banners an admin dismissed: per admin, per
@@ -59,9 +64,13 @@ export const PLAN_SCHEMA = `
     output_tokens integer NOT NULL DEFAULT 0,
     cache_read_tokens integer NOT NULL DEFAULT 0,
     cache_write_tokens integer NOT NULL DEFAULT 0,
-    cost_usd numeric(14,6) NOT NULL DEFAULT 0
+    cost_usd numeric(14,6) NOT NULL DEFAULT 0,
+    reserved boolean NOT NULL DEFAULT false
   );
+  ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS reserved boolean NOT NULL DEFAULT false;
   CREATE INDEX IF NOT EXISTS idx_ai_usage_at ON ai_usage(at);
+  -- A desk turn on the platform's key counts against the plan; one on an admin's own key never does.
+  ALTER TABLE hd_claude_usage ADD COLUMN IF NOT EXISTS plan_metered boolean NOT NULL DEFAULT false;
   -- The month's desk spending by UTC month (the desk's own limits use its timezone).
   CREATE INDEX IF NOT EXISTS idx_hd_claude_usage_at ON hd_claude_usage(at);
 

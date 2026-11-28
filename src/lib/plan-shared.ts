@@ -86,6 +86,13 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object
 const nonNegInt = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
 const nonNegNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Exactly YYYY-MM-DD, and a day the calendar has (2027-02-30 is not: Date.parse would roll it over). */
+export function isRealDay(s: unknown): s is string {
+  if (typeof s !== "string" || !ISO_DAY.test(s)) return false;
+  const d = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
 const EMAIL = /^[^\s@<>",;]{1,64}@[^\s@<>",;]{1,190}\.[^\s@<>",;]{2,}$/;
 
 /** A key that must be present: a value that passes `ok`, or null when `nullable`. */
@@ -119,7 +126,7 @@ export function parsePlanClaim(raw: unknown): CloudPlan | null {
   const ai = field(raw, "aiAllowanceUsd", nonNegNum, true);
   if (!included.ok || !max.ok || !users.ok || !storage.ok || !ai.ok) return null;
   const renews = raw.renewsAt;
-  if (typeof renews !== "string" || !ISO_DAY.test(renews.slice(0, 10)) || Number.isNaN(Date.parse(renews.slice(0, 10)))) return null;
+  if (!isRealDay(renews)) return null;
   if (max.v !== null && max.v < (included.v as number)) return null;
   let bufferPct = DEFAULT_BUFFER_PCT;
   if ("bufferPct" in raw && raw.bufferPct !== undefined) {
@@ -149,7 +156,7 @@ export function parsePlanClaim(raw: unknown): CloudPlan | null {
     storageGb: storage.v,
     aiAllowanceUsd: ai.v,
     bufferPct,
-    renewsAt: renews.slice(0, 10),
+    renewsAt: renews,
     billingContact,
     priceUsd,
     billing,
@@ -205,8 +212,9 @@ export function agentHoldAt(plan: Pick<CloudPlan, "agentsMax" | "bufferPct">): n
   return plan.agentsMax === null ? null : bufferCap(plan.agentsMax, plan.bufferPct);
 }
 
-/** Extra (paid) agents on the desk. */
-export function extraAgents(used: number, plan: Pick<CloudPlan, "agentsIncluded">): number {
+/** Extra (paid) agents on the desk; none when agents are by contract (no maximum: Dedicated). */
+export function extraAgents(used: number, plan: Pick<CloudPlan, "agentsIncluded"> & Partial<Pick<CloudPlan, "agentsMax">>): number {
+  if (plan.agentsMax === null) return 0;
   return Math.max(0, used - plan.agentsIncluded);
 }
 
@@ -442,6 +450,8 @@ export interface PlanNotice {
   /** The bold first sentence and the rest. */
   lead: string;
   rest: string;
+  /** The dashboard's shorter form (design B2: "82% of Starter's active users this month. Nothing changes if you go over."). */
+  short: { lead: string; rest: string };
 }
 
 /** A dismissal's key: one per admin, per threshold, per month (Decision 9). */
@@ -466,6 +476,35 @@ export function pct(value: number, limit: number): number {
 
 /** One meter's banner at its threshold, or null below 80% or without a limit. */
 export function noticeFor(r: MeterReading, ctx: NoticeContext): PlanNotice | null {
+  const n = noticeBody(r, ctx);
+  return n ? { ...n, short: shortNotice(n, r, ctx) } : null;
+}
+
+/** Design B2: the dashboard's one line, under the greeting (the settings pages say it in full). */
+function shortNotice(n: Omit<PlanNotice, "short">, r: MeterReading, ctx: NoticeContext): PlanNotice["short"] {
+  const label = planLabel(ctx.plan.name);
+  const month = monthName(ctx.month);
+  if (n.meter === "ai") {
+    const ai = ctx.ai;
+    if (n.threshold === "paused") return { lead: `AI is paused for the rest of ${month}.`, rest: "Everything else works as usual." };
+    if (n.threshold === "limit") return { lead: `This month's AI allowance is used.`, rest: "AI keeps working, billed at cost +30%." };
+    return { lead: `${ai && ai.allowanceUsd ? pct(ai.spentUsd, ai.allowanceUsd) : 80}% of ${label}'s AI allowance this month.`, rest: "Nothing stops if it runs out." };
+  }
+  if (n.meter === "users") {
+    if (n.threshold === "80") return { lead: `${pct(r.value, r.limit ?? r.value)}% of ${label}'s active users this month.`, rest: "Nothing changes if you go over." };
+    if (n.threshold === "limit") return { lead: `Over ${label}'s active users this month.`, rest: "Everyone keeps signing in as normal." };
+    return { lead: `Past ${label}'s active users and its buffer this month.`, rest: "Nobody is locked out." };
+  }
+  if (n.meter === "agents") {
+    if (n.threshold === "80") return { lead: `${r.value} of ${label}'s ${r.limit} agents.`, rest: "Adding more still works." };
+    if (n.threshold === "limit") return { lead: `${r.value} agents; ${label} goes up to ${r.limit}.`, rest: "Everyone on the desk keeps working." };
+    return { lead: `${r.value} agents, ${label}'s limit with its buffer.`, rest: "New agents wait; everyone on the desk keeps working." };
+  }
+  if (n.threshold === "80") return { lead: `${pct(r.value, r.limit ?? r.value)}% of ${label}'s storage.`, rest: "Nothing stops if you go over." };
+  return { lead: `Past ${label}'s ${r.limit} GB of storage.`, rest: "Everything keeps working." };
+}
+
+function noticeBody(r: MeterReading, ctx: NoticeContext): Omit<PlanNotice, "short"> | null {
   const { plan, workspace: w } = ctx;
   const label = planLabel(plan.name);
   const next = PLAN_CATALOGUE[plan.name].next;
@@ -473,7 +512,7 @@ export function noticeFor(r: MeterReading, ctx: NoticeContext): PlanNotice | nul
   const base = { month: ctx.month, meter: r.key } as const;
   if (r.key === "ai") {
     const ai = ctx.ai;
-    if (!ai || ai.allowanceUsd === null) return null;
+    if (!ai) return null;
     if (ai.paused) {
       return {
         ...base,
@@ -483,6 +522,7 @@ export function noticeFor(r: MeterReading, ctx: NoticeContext): PlanNotice | nul
         rest: `${w} reached its monthly AI limit (${usd(ai.capUsd ?? ai.spentUsd)}). Everything else works as usual; AI starts again next month, or raise the limit in Plan & usage.`,
       };
     }
+    if (ai.allowanceUsd === null) return null;
     if (r.state === "over") {
       return {
         ...base,
@@ -586,9 +626,33 @@ export interface PlanOverview {
   users: { byKind: Record<string, number> };
   storage: { bytes: number; limitBytes: number | null; areas: { files: number; documents: number; helpdesk: number }; notCounted: { exports: number }; steps: number };
   ai: AiSpendView & { byFeature: Record<AiFeature, number>; details: { deskTurns: number; askAnswers: number }; lastMonthUsd: number; paceUsd: number | null };
+  /** Who the warning emails go to ("" = every admin), and why (billingContactFrom). */
   billingContact: string;
+  billingContactSource: BillingContact["source"];
+  licenseContact: string | null;
   /** The licence in force names another workspace (design F): the plan shown is the last that matched. */
   mismatch: LicenceMismatch | null;
+}
+
+/** The billing contact setting's value for "every admin", chosen here over the licence's contact. */
+export const BILLING_ALL_ADMINS = "all_admins";
+
+/** Where the warning emails go: chosen here (an address, or every admin), else the licence's contact, else every admin. */
+export interface BillingContact {
+  /** The address, or "" for every admin. */
+  email: string;
+  /** "here": an address set on Plan & usage; "admins": every admin, chosen here; "license": the licence's contact; "default": every admin, nothing chosen. */
+  source: "here" | "admins" | "license" | "default";
+  /** The licence's own contact, shown beside the choice. */
+  licenseContact: string | null;
+}
+
+export function billingContactFrom(setting: string | null | undefined, licenseContact: string | null): BillingContact {
+  const s = (setting ?? "").trim();
+  if (s === BILLING_ALL_ADMINS) return { email: "", source: "admins", licenseContact };
+  if (s && validEmail(s)) return { email: s, source: "here", licenseContact };
+  if (licenseContact) return { email: licenseContact, source: "license", licenseContact };
+  return { email: "", source: "default", licenseContact };
 }
 
 export interface LicenceMismatch {

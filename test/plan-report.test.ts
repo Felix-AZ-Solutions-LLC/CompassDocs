@@ -37,7 +37,7 @@ interface Seen {
   body: Record<string, unknown>;
 }
 const seen: Seen[] = [];
-let answer: (n: number) => Response = () => new Response(null, { status: 204 });
+let answer: (n: number) => Response | Promise<Response> = () => new Response(null, { status: 204 });
 
 const fakeFetch = (async (url: URL | string, init?: RequestInit) => {
   const headers = Object.fromEntries(Object.entries((init?.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), v]));
@@ -80,6 +80,12 @@ describe("the endpoint", () => {
     const env = { ...process.env, COMPASSDOCS_USAGE_URL: "https://console.example/v2/usage" };
     assert.equal(usageReportUrl(env)?.toString(), "https://console.example/v2/usage");
     assert.deepEqual(usageReportProblems(env), []);
+  });
+
+  test("a licence URL with a trailing slash (or a query) still gives …/usage (review)", () => {
+    const base = process.env.COMPASSDOCS_LICENSE_URL!.replace(/\/+$/, "");
+    assert.equal(usageReportUrl({ ...process.env, COMPASSDOCS_LICENSE_URL: `${base}/` })?.toString(), "https://console.example/api/cloud/usage");
+    assert.equal(usageReportUrl({ ...process.env, COMPASSDOCS_LICENSE_URL: `${base}//?v=2` })?.toString(), "https://console.example/api/cloud/usage");
   });
 
   test("never another origin (the credential would go there), never plain http", () => {
@@ -262,6 +268,22 @@ describe("reportPendingUsage: idempotent per workspace and day, retried with bac
     answer = () => new Response(null, { status: 204 });
     assert.deepEqual((await report.reportPendingUsage(STATE)).sent, [], "not this body again");
     assert.equal(seen.length, 0);
+  });
+
+  test("a day counted again while its refused body was on the way is still sent: the refusal marks only the body sent (review)", async () => {
+    await pool().query("UPDATE plan_usage_daily SET counted_at = '2032-05-21T12:30:00Z', reported_counted_at = NULL WHERE day = '2032-05-20'");
+    seen.length = 0;
+    // The console refuses; meanwhile the day is counted again (another replica's 6-hourly count).
+    answer = async () => {
+      await pool().query("UPDATE plan_usage_daily SET counted_at = '2032-05-21T12:45:00Z' WHERE day = '2032-05-20'");
+      return new Response(JSON.stringify({ error: "plan does not match" }), { status: 422 });
+    };
+    report.resetUsageReportForTests();
+    assert.equal((await report.reportPendingUsage(STATE)).outcome?.kind, "refused");
+    seen.length = 0;
+    answer = () => new Response(null, { status: 204 });
+    assert.deepEqual((await report.reportPendingUsage(STATE)).sent, ["2032-05-20"], "the newer count is a new body");
+    assert.equal(seen[0].body.countedAt, "2032-05-21T12:45:00.000Z");
   });
 
   test("a 404 (no usage endpoint yet) waits six hours", async () => {
