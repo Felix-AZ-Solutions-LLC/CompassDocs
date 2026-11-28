@@ -54,6 +54,8 @@ export async function v1Auth(req: Request, need: "read" | "write"): Promise<V1Us
   if (!scopes.includes(need)) {
     return v1Error(403, `This token is missing the '${need}' scope.`);
   }
+  // 1.22.0: someone using an API token counts as themselves (lib/plan-usage; cloud mode only).
+  (await import("./plan-usage")).noteActive("user", user.id);
   return user;
 }
 

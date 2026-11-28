@@ -95,6 +95,8 @@ export const CLOUD_HIDDEN_SECTIONS: readonly string[] = Object.values(CLOUD_AREA
  */
 export function sectionHiddenInMode(href: string, env: Env = process.env): boolean {
   if (href === SUPPORT_SECTION) return !supportAccessEnabled(env);
+  // 1.22.0: Plan & usage exists only in cloud mode (and only with a plan: lib/auth reachableSettingsSections asks lib/plan).
+  if (href === PLAN_SECTION) return !isCloud(env);
   return isCloud(env) && CLOUD_HIDDEN_SECTIONS.includes(href);
 }
 
@@ -217,6 +219,49 @@ export function licensePullProblems(env: Env = process.env): string[] {
   return out;
 }
 
+// --- Usage to the console (1.22.0, lib/plan-report) ------------------------------
+//
+// The daily counts go to the console with the licence's credential, so to
+// the same origin as COMPASSDOCS_LICENSE_URL: COMPASSDOCS_USAGE_URL when set
+// (it must be on that origin, or the credential would go elsewhere), else
+// the licence URL with its last path segment replaced by "usage"
+// (https://console.example/api/cloud/license → …/api/cloud/usage).
+
+/** Why COMPASSDOCS_USAGE_URL can't be used (cloud mode with it set); empty otherwise. */
+export function usageReportProblems(env: Env = process.env): string[] {
+  const raw = platformValue("COMPASSDOCS_USAGE_URL", env);
+  if (!raw) return [];
+  let u: URL | null = null;
+  try {
+    u = new URL(raw);
+  } catch {
+    return ["COMPASSDOCS_USAGE_URL is not a valid URL."];
+  }
+  const out: string[] = [];
+  if (u.protocol !== "https:" && !(u.protocol === "http:" && loopbackHost(u.hostname))) out.push(`COMPASSDOCS_USAGE_URL must be an https:// address (it is ${u.protocol}//…).`);
+  if (u.username || u.password) out.push("COMPASSDOCS_USAGE_URL must not carry a user name or password.");
+  const lic = platformValue("COMPASSDOCS_LICENSE_URL", env);
+  let licOrigin = "";
+  try {
+    licOrigin = lic ? new URL(lic).origin : "";
+  } catch {
+    /* licensePullProblems says so */
+  }
+  if (!lic) out.push("COMPASSDOCS_USAGE_URL is set without COMPASSDOCS_LICENSE_URL: usage is sent with the license endpoint's credential.");
+  else if (licOrigin && u.origin !== licOrigin) {
+    out.push(`COMPASSDOCS_USAGE_URL must be on the license endpoint's origin (${licOrigin}): usage is sent with the same credential.`);
+  }
+  return out;
+}
+
+/** Where the daily usage report goes (cloud mode with the license endpoint configured), or null. */
+export function usageReportUrl(env: Env = process.env): URL | null {
+  const pull = licensePullConfig(env);
+  if (!pull || usageReportProblems(env).length) return null;
+  const raw = platformValue("COMPASSDOCS_USAGE_URL", env);
+  return raw ? new URL(raw) : new URL("usage", pull.url);
+}
+
 /** In cloud mode, is the license CompassDocs Cloud's (from the environment or the console), so read-only here? */
 export function licenseManagedByCloud(env: Env = process.env): boolean {
   return !!(platformValue("COMPASSDOCS_LICENSE_KEY", env) || platformValue("COMPASSDOCS_LICENSE_URL", env));
@@ -303,6 +348,9 @@ export function supportAccessEnabled(env: Env = process.env): boolean {
   return supportAccessConfig(env) !== null;
 }
 
+/** 1.22.0: the Plan & usage section (lib/plan): cloud mode with a plan in the licence only. */
+export const PLAN_SECTION = "/admin/plan";
+
 /** Settings sections that exist only in cloud mode with support access on. */
 export const SUPPORT_SECTION = "/admin/support-access";
 
@@ -375,6 +423,8 @@ export function cloudStartupProblems(env: Env = process.env): { fatal: string[];
   if (!env.DATABASE_URL?.trim()) fatal.push("DATABASE_URL is not set.");
   // 1.21.3: the license from the console (lib/license-pull).
   fatal.push(...licensePullProblems(env));
+  // 1.22.0: where the daily usage goes (lib/plan-report), when set apart from the license URL.
+  fatal.push(...usageReportProblems(env));
   // 1.21.4: support access (lib/support): a key that isn't one, the license key, or no workspace id.
   fatal.push(...supportAccessProblems(env));
   if (env.COMPASSDOCS_LICENSE_AUDIENCE?.trim() && env.COMPASSDOCS_LICENSE_TOKEN?.trim()) {

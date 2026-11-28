@@ -335,6 +335,7 @@ secret reference.
 | `COMPASSDOCS_LICENSE_URL` | | Optional: the console's license endpoint for this workspace. The app fetches the workspace's license from it shortly after start and about every 6 hours, so a renewal needs no restart (see [License from the console](#license-from-the-console)). Must be `https://`. Needs `COMPASSDOCS_WORKSPACE_ID` and one of the two below; without them cloud mode doesn't start. |
 | `COMPASSDOCS_LICENSE_AUDIENCE` | | With `COMPASSDOCS_LICENSE_URL` (**recommended**): the console's app ID URI, e.g. `api://compassdocs-console`. The app asks for a Microsoft Entra token for `<audience>/.default` as its managed identity: no secret to store or rotate. Wins over `COMPASSDOCS_LICENSE_TOKEN`. |
 | `COMPASSDOCS_LICENSE_TOKEN` | yes | With `COMPASSDOCS_LICENSE_URL`, when the managed identity isn't used: a bearer token the console issued to this workspace. |
+| `COMPASSDOCS_USAGE_URL` | | Optional (1.22.0): where a workspace with a Cloud plan sends its daily usage (see [Usage to the console](#usage-to-the-console)). Unset, `COMPASSDOCS_LICENSE_URL` with its last path segment replaced by `usage`. Must be `https://` on the license URL's origin, since it is sent with the same credential; otherwise cloud mode doesn't start. |
 | `ANTHROPIC_API_KEY` | yes | When set, the platform's AI key: it wins over a saved key and Settings → AI shows it read-only. |
 | `COMPASSDOCS_SMTP_HOST`, `COMPASSDOCS_SMTP_PORT` (587), `COMPASSDOCS_SMTP_SECURE` (`starttls`, `tls` or `none`), `COMPASSDOCS_SMTP_USER`, `COMPASSDOCS_SMTP_PASSWORD` (secret), `COMPASSDOCS_SMTP_FROM` | password | When `COMPASSDOCS_SMTP_HOST` is set, the platform's mail relay: Settings → Email shows SMTP read-only, and the workspace can still choose Microsoft 365 instead. Read only in cloud mode. |
 | `COMPASSDOCS_MAIL_TRANSPORT` | | `acs` sends the workspace's email through [Azure Communication Services](#email-through-azure-communication-services), CompassDocs Cloud's way: it wins over SMTP and Microsoft 365 (Settings → Email shows "Email is sent by CompassDocs Cloud"). Unset: as chosen in Settings. Any other value: the process exits 1. Works self-hosted too. |
@@ -760,6 +761,187 @@ failures is one line (`license.console_unreachable`,
   today, with one more claim, `workspace`. A license for a cloud workspace
   without that claim is refused by the pull (it still works as
   `COMPASSDOCS_LICENSE_KEY`).
+
+### The plan in the license
+
+1.22.0: a CompassDocs Cloud license carries the workspace's plan in one
+more signed claim, `cloudPlan`, beside `workspace`. The console signs it
+with the vendor's Ed25519 key like every other claim; the app reads it in
+one place (`lib/plan` `cloudPlanState()`) and only in cloud mode. Self-hosted
+installs, and a cloud workspace on an Enterprise license, ignore it and
+keep their seats and agent rules exactly as before.
+
+```json
+{
+  "id": "lic_…", "customer": "Northwind Traders", "plan": "starter",
+  "features": ["helpdesk", "policy_ack", "training"], "seats": 0, "agents": -1,
+  "issued": "2026-03-14", "expires": "2027-03-28",
+  "workspace": "ws_2c91e4",
+  "cloudPlan": {
+    "name": "starter",
+    "agentsIncluded": 3,
+    "agentsMax": 10,
+    "activeUsersLimit": 250,
+    "storageGb": 25,
+    "aiAllowanceUsd": 15,
+    "bufferPct": 20,
+    "renewsAt": "2027-03-14",
+    "billingContact": "billing@northwind.example",
+    "priceUsd": 199,
+    "billing": "annual"
+  }
+}
+```
+
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `name` | yes | `"starter"` \| `"shared"` \| `"dedicated"` | The plan. |
+| `agentsIncluded` | yes | integer ≥ 0 | Agents the plan includes. Each one past it is an extra agent at $9.99/mo, prorated. |
+| `agentsMax` | yes | integer ≥ `agentsIncluded`, or `null` | The plan's agent maximum. New agents are held at the maximum plus the buffer (10 → 12, 25 → 30); `null` means no maximum. |
+| `activeUsersLimit` | yes | integer ≥ 0, or `null` | Active users a calendar month (UTC); `null` means no cap. |
+| `storageGb` | yes | number ≥ 0, or `null` | Storage included, in GB (10⁹ bytes). Past it, each started 50 GB is $25 a month. `null`: by contract. |
+| `aiAllowanceUsd` | yes | number ≥ 0, or `null` | AI included each month, in US dollars at cost. Beyond it, AI is billed at cost +30%. `null`: by contract. |
+| `renewsAt` | yes | `YYYY-MM-DD` | The plan's renewal date (an extra agent is prorated to it). |
+| `bufferPct` | no (20) | integer 0–100 | The soft buffer above `activeUsersLimit` and `agentsMax`. |
+| `billingContact` | no | an email address | Where the warning emails go instead of every admin; an admin can set another on Plan & usage. |
+| `priceUsd` | no | number ≥ 0 | The monthly price shown on the plan card; else the published price (Starter $199, Shared $449, Dedicated $2,950). |
+| `billing` | no (`"annual"`) | `"annual"` \| `"monthly"` | How the plan is billed: an extra agent is prorated to the renewal ($119.88 a year) or to the month's end. |
+
+**Missing, partial or malformed is no plan.** Every required key must be
+present (a limit may be `null`, never absent); a value of the wrong type,
+`agentsMax` below `agentsIncluded`, or an optional field that is present
+but malformed makes the whole claim read as no plan, never as a guess.
+Keep the existing `plan` label claim set to the same name: older versions
+read it, and the `cloudPlan` object is a separate claim so that they never
+see an object where they expect a string.
+
+**The workspace check (design F).** With `COMPASSDOCS_WORKSPACE_ID` set, a
+license carrying `cloudPlan` is used for the plan only when its `workspace`
+claim is this workspace: the platform's bootstrap `COMPASSDOCS_LICENSE_KEY`
+included, as the console's licenses already are (1.21.3). One that names
+another workspace changes nothing: the workspace keeps running on the last
+license whose plan matched (kept in the `plan_license_last_match` setting),
+never read-only, its admins see a notice naming both workspaces, and the
+usage report says so (`licenseMismatch`).
+
+**What a plan turns on** (cloud mode only): Settings → Plan & usage, the
+daily count and its report to the console (below), the admin banners and
+the threshold email, the price step and the hold in Desk settings →
+Agents (the plan's rules replace the `agents` claim), and the monthly AI
+cap. Agents are held, never removed; nobody is locked out by any meter.
+
+### Usage to the console
+
+1.22.0: a cloud workspace with a plan counts its usage once a day and
+sends the console the counts, with the license request's credential.
+**Counts only**: no names, email addresses, document titles, ticket text
+or prompts ever leave the workspace. The list of who counted stays in it,
+for its admins (Plan & usage → Active users).
+
+**What is counted.** Months are calendar months in UTC.
+
+- `agents`: people with a desk role on the day (the License page's count).
+- `activeUsers`: distinct people who signed in or used the app this month
+  up to the end of the day: viewers, editors, approvers, admins, agents,
+  and requesters who sign in to the customer portal; API tokens and app
+  connections count as their person. Never people who only email the help
+  address, share-link or public-site visitors, CompassDocs support
+  sessions, or disabled accounts.
+- `storageBytes`: the stored files (attachments, images, ticket files) plus
+  documents' text, version history and the Trash. Never backups, workspace
+  exports or the search index.
+- `aiUsd`: AI at cost this month up to the end of the day: every request's
+  tokens at the provider's price list (the desk's Claude limits use the
+  same calculation), by feature.
+
+**When.** About 30 seconds after start, then every 6 hours (with the
+license check-in's cadence), and a few minutes after midnight UTC, when the
+day that ended is counted a last time. Each run counts under an advisory
+lock (replicas count once), keeps 13 months, checks the thresholds, then
+sends every day not yet sent, oldest first.
+
+**The HTTP contract** (what the console implements):
+
+- **Request.** `POST <COMPASSDOCS_USAGE_URL>`; unset, it is
+  `COMPASSDOCS_LICENSE_URL` with its last path segment replaced by `usage`
+  (`https://console.compassdocs.io/api/workspaces/ws_2c91e4/license` →
+  `…/ws_2c91e4/usage`). `COMPASSDOCS_USAGE_URL` must be `https://` on the
+  license URL's origin (the credential goes with it), or cloud mode does
+  not start. Headers:
+  - `Authorization: Bearer <credential>`: exactly the license request's
+    (the managed identity's Entra token for `COMPASSDOCS_LICENSE_AUDIENCE`,
+    else `COMPASSDOCS_LICENSE_TOKEN`). **The console must identify the
+    workspace from the credential** and refuse a body for another one.
+  - `Content-Type: application/json`, `Accept: application/json`
+  - `Idempotency-Key: usage:<workspace>:<day>`
+  - `X-CompassDocs-Workspace: <COMPASSDOCS_WORKSPACE_ID>`,
+    `User-Agent: CompassDocs/<version>`, `X-CompassDocs-Version: <version>`
+- **Body** (`schema` 1; at most 8 KB, about 600 bytes in practice):
+
+  ```json
+  {
+    "schema": 1,
+    "workspace": "ws_2c91e4",
+    "day": "2026-11-27",
+    "countedAt": "2026-11-28T00:05:12.000Z",
+    "appVersion": "1.22.0",
+    "licenseId": "lic_01HZX…",
+    "plan": "starter",
+    "agents": 3,
+    "activeUsers": 204,
+    "storageBytes": 12025908428,
+    "storage": { "files": 6334000000, "documents": 3651000000, "helpdesk": 2040908428 },
+    "aiUsd": { "total": 13.1, "desk": 7.85, "ask": 2.4, "write": 2.25, "mcp": 0.6 },
+    "licenseMismatch": null
+  }
+  ```
+
+  | Field | Type | Meaning |
+  | --- | --- | --- |
+  | `schema` | integer | `1`. A later version adds fields; the console ignores what it doesn't know. |
+  | `workspace` | string | `COMPASSDOCS_WORKSPACE_ID`. |
+  | `day` | `YYYY-MM-DD` | The UTC day counted. |
+  | `countedAt` | ISO 8601 (UTC) | When it was counted. A day is counted several times (every 6 hours, then once after it ends); the newest `countedAt` is the day's count. |
+  | `appVersion` | string | The app's version. |
+  | `licenseId` | string or `null` | The `id` of the license the plan comes from. |
+  | `plan` | string | The plan's `name`. |
+  | `agents` | integer | People with a desk role on the day. Bill the month's highest, prorated by day. |
+  | `activeUsers` | integer | Distinct active people this month up to the end of `day` (month to date: the month's last day is its total). |
+  | `storageBytes` | integer | What counts, in bytes. Bill the month's highest day. |
+  | `storage` | object of integers | `files`, `documents` (text, versions, the Trash), `helpdesk` (ticket files and email): they add up to `storageBytes`. |
+  | `aiUsd` | object of numbers | AI at cost in US dollars this month up to the end of `day` (month to date), six decimals: `total` and by feature, `desk` (Claude in the desk), `ask` (Ask), `write` (Write and Proofread), `mcp` (AI served to MCP clients). Beyond the plan's `aiAllowanceUsd`, bill × 1.3. |
+  | `licenseMismatch` | object or `null` | `{ "licenseWorkspace": "ws_7f3a9c" }` when the license in force names another workspace (design F): the console should raise it to staff. |
+
+- **Idempotency.** One report per workspace and day: the console keeps one
+  row per (`workspace`, `day`), the one with the newest `countedAt`. A
+  report with the same or an older `countedAt` changes nothing and is still
+  answered `2xx`. The `Idempotency-Key` names that row; it is not a
+  one-shot key (a later count of the same day carries the same key and must
+  replace the row).
+- **Responses.**
+
+  | Status | The app |
+  | --- | --- |
+  | `200`, `201`, `202`, `204` | Stored: the day is marked sent (until it is counted again). Any body is read up to 4 KB and ignored. |
+  | `400`, `409`, `413`, `422` | The console refused this body (`{"error": "…"}` is logged): not sent again until the day is counted again; the run goes on to the next day. Use `409` for a workspace that doesn't match the credential. |
+  | `401`, `403` | The credential was refused: stops, keeps the days pending, backs off. |
+  | `404` | No usage endpoint (yet): stops, tries again in 6 hours. |
+  | `429`, `5xx`, no answer | Stops, keeps the days pending, honours `Retry-After` (seconds or a date, between 1 minute and 6 hours). |
+  | `3xx` | Never followed (an error): the credential is never sent elsewhere. |
+
+- **Retries.** A failure stops the run and the next try waits 1, 2, 4…
+  minutes, at most an hour (± 20%), or the console's `Retry-After`. Days
+  are sent oldest first; days older than 35 days are not sent again. A day
+  counted again after it was sent is sent again with its new `countedAt`.
+- **Limits.** 15 seconds for the whole exchange, 8 KB of request body, 4 KB
+  of response read, no redirect followed, one request at a time per
+  replica.
+
+The workspace keeps its counts whatever the console answers: Plan & usage
+shows them, and nothing about the workspace changes when the console
+can't be reached. Log events: `plan.usage_report_failed`,
+`plan.usage_report_refused`, `plan.usage_report_ok` (each once until it
+changes), `plan.count_failed`, `plan.threshold_email_failed`.
 
 ### Support access
 

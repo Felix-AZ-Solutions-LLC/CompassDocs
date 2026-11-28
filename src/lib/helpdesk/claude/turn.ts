@@ -139,6 +139,13 @@ export async function prepareTurn(input: TurnInput): Promise<{ ok: true; turn: P
     ticket = t;
   }
   if (claudeTurnLimited(input.user.id)) return { ok: false, status: 429, error: "You're asking Claude very quickly. Wait a moment and try again." };
+  // 1.22.0: a CompassDocs Cloud workspace's monthly AI cap (lib/plan-usage; never self-hosted). The desk's
+  // own workspace and per-agent limits (reserveTurn) keep working inside it.
+  {
+    const { aiGate, aiPausedSentence } = await import("../../plan-usage");
+    const paused = await aiGate();
+    if (paused) return { ok: false, status: 409, error: aiPausedSentence(paused.until, input.user.role === "admin") };
+  }
 
   const model = await getAiModel();
   const profile = modelProfile(model);

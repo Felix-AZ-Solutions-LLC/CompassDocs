@@ -11,7 +11,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getSetting, setSetting } from "./db";
 import { metric } from "./metrics";
 import { safeFetch } from "./safe-fetch";
-import { platformValue } from "./cloud";
+import { isCloud, platformValue } from "./cloud";
+import type { AiFeature } from "./plan-shared";
 
 const KEY_SETTING = "anthropic_api_key";
 const MODEL_SETTING = "ai_model";
@@ -255,9 +256,31 @@ export async function chatComplete(input: {
    * to the model's default. Ignored by legacy models and other providers.
    */
   effort?: AiEffort;
+  /**
+   * 1.22.0: which feature asks (lib/plan-shared AiFeature), for a CompassDocs
+   * Cloud workspace's AI allowance: the request is refused while the
+   * month's AI cap is reached (AiPausedError) and its tokens are recorded
+   * at the price list (lib/plan-usage; cloud mode only).
+   */
+  feature?: AiFeature;
+  /** Who asked, for the ledger. */
+  userId?: number | null;
 }): Promise<string> {
+  // 1.22.0: the plan's monthly AI cap, checked before the request (never self-hosted).
+  if (isCloud()) await (await import("./plan-usage")).assertAiAllowed();
   metric("ai_requests");
   const provider = await getAiProvider();
+  const record = (model: string, u: { input_tokens?: number | null; output_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } | null | undefined) => {
+    if (!isCloud() || !u) return;
+    void import("./plan-usage").then((m) =>
+      m.recordAiUsage({
+        feature: input.feature ?? "ask",
+        userId: input.userId ?? null,
+        model,
+        tokens: { input: Number(u.input_tokens ?? 0) || 0, output: Number(u.output_tokens ?? 0) || 0, cacheRead: Number(u.cache_read_input_tokens ?? 0) || 0, cacheWrite: Number(u.cache_creation_input_tokens ?? 0) || 0 },
+      })
+    );
+  };
 
   if (provider === "anthropic") {
     const apiKey = await getAnthropicKey();
@@ -273,6 +296,7 @@ export async function chatComplete(input: {
         system: input.system,
         messages: [{ role: "user", content: input.user }],
       });
+      record(model, response.usage);
       if (response.stop_reason === "refusal") throw new AiRefusalError();
       return response.content
         .filter((b): b is Anthropic.TextBlock => b.type === "text")
@@ -295,6 +319,7 @@ export async function chatComplete(input: {
       ...(profile.fallbacks ? { betas: [FALLBACK_BETA], fallbacks: "default" as const } : {}),
     });
     const message = await stream.finalMessage();
+    record(model, message.usage);
     // Check the stop reason before reading content: a refusal's partial text is not an answer.
     if (message.stop_reason === "refusal") throw new AiRefusalError();
     return message.content

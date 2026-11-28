@@ -23,6 +23,7 @@ import type { SessionUser } from "@/lib/types";
 import { AnnouncementBoard } from "@/components/AnnouncementBoard";
 import { NewsletterBoard } from "@/components/NewsletterBoard";
 import { DashboardGreeting } from "@/components/DashboardGreeting";
+import { PlanBannerSlot } from "@/components/plan/PlanBannerSlot";
 import { StatusBadge } from "@/components/Badges";
 import { listReviewsDue } from "@/lib/reviews";
 import { formatDate, settingsForUser } from "@/lib/format";
@@ -136,6 +137,9 @@ export default async function DashboardPage({
           </span>
         </Link>
       </header>
+
+      {/* 1.22.0: the CompassDocs Cloud plan's warnings, for admins only (design B1, B2): cloud mode, never self-hosted. */}
+      <PlanBannerSlot user={user} place="dashboard" />
 
       {/* The status strip replaces the old problems banner (1.17.0). */}
       {show("status") && <StatusStrip />}

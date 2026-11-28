@@ -279,7 +279,7 @@ describe("compositions", () => {
     const r = await call(R.comps.GET, `${BASE}/compositions`, admin, "GET");
     assert.equal(r.status, 200);
     assert.equal(r.body.can_manage, true);
-    assert.deepEqual(r.body.events.map((e: Json) => e.key), tpl.EMAIL_TEMPLATES.map((t) => t.key));
+    assert.deepEqual(r.body.events.map((e: Json) => e.key), tpl.listedTemplates().map((t) => t.key));
     const mine = r.body.compositions.find((c: Json) => c.event_key === EV_HD);
     assert.deepEqual(Object.keys(mine.header).sort(), ["effective_id", "effective_name", "id", "source"]);
     assert.equal(mine.body.source, "chosen");

@@ -39,6 +39,7 @@ export async function POST(req: Request) {
       title: typeof body?.title === "string" ? body.title : "",
       docType: typeof body?.docType === "string" ? body.docType : "",
       content: typeof body?.content === "string" ? body.content : "",
+      userId: (gate as SessionUser).id,
     })
   );
 }

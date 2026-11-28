@@ -16,8 +16,10 @@
 // grace, when nothing is refused.
 
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
-import { ExternalLink, Pencil, Plus, TriangleAlert, UserMinus, UsersRound, X } from "lucide-react";
-import { Button, iconButtonClass } from "@/components/Button";
+import { ArrowUpRight, ExternalLink, Pencil, Plus, TriangleAlert, UserMinus, UsersRound, X } from "lucide-react";
+import { Button, buttonClass, iconButtonClass } from "@/components/Button";
+import { PlanMeter } from "@/components/plan/PlanMeter";
+import { shortDate, usd, usdShort } from "@/lib/plan-shared";
 import { Card } from "@/components/Card";
 import { Chip } from "@/components/Chip";
 import { EntityPicker } from "@/components/EntityPicker";
@@ -60,6 +62,25 @@ interface AgentsData {
   /** How far past `licensed` (0 within it). */
   over: number;
   buy_url: string;
+  /** 1.22.0: a CompassDocs Cloud plan's agent rules (absent self-hosted and on Enterprise licences). */
+  plan?: PlanAgents;
+}
+
+/** 1.22.0 (design C): the plan's agents, and the price of one more. */
+interface PlanAgents {
+  name: string;
+  label: string;
+  included: number;
+  max: number | null;
+  /** Adds are held here (the maximum with its buffer); null = no hold. */
+  hold_at: number | null;
+  used: number;
+  monthly_usd: number;
+  price_usd: number;
+  renews_at: string;
+  billing: "annual" | "monthly";
+  proration: { nowUsd: number; days: number; periodUsd: number; until: string };
+  next: { name: string; label: string; price_usd: number; included: number; max: number | null } | null;
 }
 
 /** What Add agent needs to know about the allowance. */
@@ -70,6 +91,8 @@ interface AgentLimitView {
   buyUrl: string;
   /** Already counted: adding them at a role takes no place. */
   counted: Set<number>;
+  /** 1.22.0: the CompassDocs Cloud plan's rules, when there is a plan. */
+  plan?: PlanAgents;
 }
 
 const AVAILABILITY: Record<HdDeskAgent["availability"], { label: string; tone: "ok" | "warn" | "neutral" }> = {
@@ -187,7 +210,7 @@ export function AgentsSettings() {
           ) : undefined
         }
       />
-      {data && showAllowance && <AgentAllowance d={data} />}
+      {data && showAllowance && (data.plan ? <PlanAgentsMeter p={data.plan} /> : <AgentAllowance d={data} />)}
       {error && <p className="notice-error mb-4 rounded-lg border px-3 py-2 text-sm">{error}</p>}
       {data === null && !error && <LoadingRow className="py-10" />}
       {data && data.agents.length === 0 && (
@@ -345,10 +368,12 @@ export function AgentsSettings() {
           teams={data.teams}
           onDesk={new Set(data.agents.filter((a) => a.source !== "derived").map((a) => a.user_id))}
           limit={{
-            full: data.enforced && data.allowed !== null && data.used >= data.allowed,
-            allowed: data.allowed,
+            // 1.22.0: with a plan, adds are held at its maximum with the buffer instead of the licence's `agents`.
+            full: data.plan ? data.plan.hold_at !== null && data.used >= data.plan.hold_at : data.enforced && data.allowed !== null && data.used >= data.allowed,
+            allowed: data.plan ? data.plan.hold_at : data.allowed,
             buyUrl: data.buy_url,
             counted: new Set(data.agents.map((a) => a.user_id)),
+            plan: data.plan,
           }}
           onLimit={reload}
           onAdded={() => {
@@ -433,6 +458,61 @@ function AgentAllowance({ d }: { d: AgentsData }) {
   );
 }
 
+/**
+ * 1.22.0 (design C): the Agents page's meter on a CompassDocs Cloud plan:
+ * "3 of 3 agents · included in Starter · $9.99/mo each beyond that", the bar
+ * to the plan's maximum with its buffer, and no "Buy more agents" (extra
+ * agents are added here, at their price).
+ */
+function PlanAgentsMeter({ p }: { p: PlanAgents }) {
+  const limit = p.max ?? Math.max(p.included, 1);
+  const end = p.hold_at ?? limit * 1.2;
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-slate-200 bg-surface px-4 py-3 shadow-xs" data-testid="plan-agents-meter">
+      <UsersRound className="h-4 w-4 text-slate-500" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
+          <span className="font-semibold text-slate-900">
+            {p.used} of {agentsNoun(p.included)}
+          </span>
+          <span className="text-slate-500">
+            included in {p.label} · {usd(p.monthly_usd)}/mo each beyond that{p.max !== null ? ` · up to ${p.max}` : ""}
+          </span>
+        </div>
+        <PlanMeter
+          className="mt-2 max-w-md"
+          value={p.used}
+          limit={limit}
+          end={end}
+          label="Helpdesk agents"
+          valueText={`${p.used} agents: ${p.included} included${p.max !== null ? `, up to ${p.max}` : ""}`}
+          marks={[{ at: p.included, label: `${p.included} included` }, ...(p.max !== null && p.max !== p.included ? [{ at: p.max, label: `${p.max} max` }] : [])]}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ordinal(n: number): string {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] ?? s[v] ?? s[0]}`;
+}
+
+/**
+ * 1.22.0 (design C1–C3): what adding one more agent means on the plan.
+ * "held": at the maximum with its buffer (C3); "buffer": past the maximum,
+ * within the buffer (C2); "extra": past the included agents (C1); null:
+ * within the included ones, nothing changes from today's dialog.
+ */
+function planStep(p: PlanAgents | undefined, adding: boolean): "held" | "buffer" | "extra" | null {
+  if (!p || !adding) return null;
+  if (p.hold_at !== null && p.used >= p.hold_at) return "held";
+  if (p.max !== null && p.used >= p.max) return "buffer";
+  if (p.used >= p.included) return "extra";
+  return null;
+}
+
 /** The teams a viewer may tick: every team for Managers/Admins, their own for a Team lead. */
 function allowedTeams(me: HdCapsView, teams: TeamLite[]): TeamLite[] {
   if (me.caps.includes("agents.assign_roles") || me.caps.includes("teams.manage")) return teams;
@@ -496,6 +576,9 @@ function AddAgentModal({
   const lead = !me.caps.includes("agents.assign_roles");
   // Every place taken: only someone already counted (a workspace agent given a desk role) can still be added.
   const blocked = limit.full && !(who !== null && limit.counted.has(who));
+  // 1.22.0: a CompassDocs Cloud plan's price step (design C).
+  const adding = !(who !== null && limit.counted.has(who));
+  const step = planStep(limit.plan, adding);
 
   useEffect(() => {
     if (!open) return;
@@ -511,19 +594,30 @@ function AddAgentModal({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    // Held (every place taken): the button is aria-disabled and the notice says why; nothing is sent.
+    if (blocked) return;
     if (!who) return setError("Choose who to add.");
     if (lead && !teamIds.length) return setError("Choose at least one of your teams.");
-    if (blocked) return;
     setBusy(true);
     setError("");
     setLimitError("");
     try {
-      await sendJson("/api/helpdesk/admin/agents", "POST", { user_id: who, role, team_ids: teamIds }, "Couldn't add them.");
+      await sendJson(
+        "/api/helpdesk/admin/agents",
+        "POST",
+        // 1.22.0: an extra agent's price was shown on the button: the add confirms it.
+        { user_id: who, role, team_ids: teamIds, ...(step === "extra" || step === "buffer" ? { confirm_extra: true } : {}) },
+        "Couldn't add them."
+      );
       toast("ok", `${person?.name || person?.username || "They"} joined the desk as ${HD_ROLE_LABEL[role]}.`);
       onAdded();
     } catch (err) {
       if (err instanceof ApiError && err.status === 402 && err.code === "agent_limit") {
         setLimitError(err.message);
+        onLimit();
+      } else if (err instanceof ApiError && err.code === "confirm_price") {
+        // Someone else added an agent meanwhile: the price step now applies. Show it.
+        setError("The desk changed while this was open: check the price below and add them again.");
         onLimit();
       }
       else setError((err as Error).message);
@@ -544,7 +638,8 @@ function AddAgentModal({
           </button>
         </div>
         <p className="mt-1 text-sm text-slate-600">Put someone on the desk at a level, in the teams whose queues they work.</p>
-        {(limitError || (limit.full && limit.allowed !== null)) && (
+        {limit.plan && step === "held" && !limitError && <PlanHeld p={limit.plan} />}
+        {(limitError || (limit.full && limit.allowed !== null && !limit.plan)) && (
           <div className="notice-warn mt-3 flex gap-2 rounded-lg border px-3 py-2 text-sm" role={limitError ? "alert" : undefined}>
             <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
             <div>
@@ -555,7 +650,7 @@ function AddAgentModal({
                   <b>{limit.allowed === 1 ? "The 1 agent on your license is in use." : `All ${limit.allowed} agents on your license are in use.`}</b> Buy more agents to add someone, or take someone off the desk first.
                 </p>
               )}
-              <BuyAgentsLink href={limit.buyUrl} className="mt-1" />
+              {!limit.plan && <BuyAgentsLink href={limit.buyUrl} className="mt-1" />}
             </div>
           </div>
         )}
@@ -588,11 +683,27 @@ function AddAgentModal({
             </Select>
           </Field>
           <TeamChecks teams={allowed} value={teamIds} onChange={setTeamIds} legend={lead ? "Your teams" : "Teams (optional for Managers and Admins)"} />
+          {limit.plan && step === "buffer" && <PlanBuffer p={limit.plan} />}
+          {limit.plan && (step === "extra" || step === "buffer") && <PlanPrice p={limit.plan} inBuffer={step === "buffer"} />}
           {error && <FormError>{error}</FormError>}
         </div>
         <div className="mt-5 flex flex-wrap items-center gap-2">
-          <Button type="submit" busy={busy} disabled={blocked} icon={<Plus />}>
-            Add to desk
+          {limit.plan && step === "held" && limit.plan.next && (
+            <a href="/admin/plan#upgrade" className={buttonClass("primary")}>
+              <ArrowUpRight className="h-4 w-4" aria-hidden />
+              {limit.plan.next.name === "dedicated" ? "Talk to us about Dedicated" : `Upgrade to ${limit.plan.next.label}`}
+            </a>
+          )}
+          <Button
+            type="submit"
+            busy={busy}
+            variant={limit.plan && step === "held" ? "secondary" : "primary"}
+            disabled={blocked && !limit.plan}
+            aria-disabled={blocked && limit.plan ? true : undefined}
+            aria-describedby={blocked && limit.plan ? "plan-held-reason" : undefined}
+            icon={<Plus />}
+          >
+            {limit.plan && (step === "extra" || step === "buffer") ? `Add to desk · ${usd(limit.plan.monthly_usd)}/mo` : "Add to desk"}
           </Button>
           <Button type="button" variant="ghost" onClick={onClose}>
             Cancel
@@ -600,6 +711,80 @@ function AddAgentModal({
         </div>
       </form>
     </Modal>
+  );
+}
+
+/** C1: the price box. Past the included agents the add costs $9.99/mo, prorated to the plan's renewal. */
+function PlanPrice({ p, inBuffer }: { p: PlanAgents; inBuffer: boolean }) {
+  const extraAfter = p.used + 1 - p.included;
+  return (
+    <div className="notice-info rounded-lg border px-3 py-2 text-sm" data-testid="plan-price">
+      <p className="font-semibold">Adds an extra agent: {usd(p.monthly_usd)}/mo, prorated.</p>
+      <p className="mt-0.5 text-xs">
+        {inBuffer
+          ? `With this one, ${extraAfter} extra ${extraAfter === 1 ? "agent" : "agents"}: ${usd(extraAfter * p.monthly_usd)} a month.`
+          : `${p.used === p.included ? `All ${p.included} agents included in ${p.label} are in use.` : `${p.label} includes ${p.included} agents.`} About ${usd(p.proration.nowUsd)} is charged now for the rest of your plan ${
+              p.billing === "annual" ? `year (to ${shortDate(p.proration.until)})` : "month"
+            }, then it renews with the plan.`}
+      </p>
+    </div>
+  );
+}
+
+/** C2: past the plan's maximum, inside the buffer: the add still works, and we talk. */
+function PlanBuffer({ p }: { p: PlanAgents }) {
+  const left = (p.hold_at ?? p.used) - p.used;
+  return (
+    <div className="notice-warn flex gap-2 rounded-lg border px-3 py-2 text-sm" data-testid="plan-buffer">
+      <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+      <p>
+        <b>
+          This is your {ordinal(p.used + 1)} agent; {p.label} goes up to {p.max}.
+        </b>{" "}
+        You can add {left} more while we talk{p.next ? ` about ${p.next.label}` : ""}
+        {p.next && p.next.max !== null ? `, which includes ${p.next.included} agents and goes up to ${p.next.max}` : ""}.
+      </p>
+    </div>
+  );
+}
+
+/** C3: at the maximum with its buffer, new agents are held; nobody already on the desk is removed. */
+function PlanHeld({ p }: { p: PlanAgents }) {
+  const extraNow = Math.max(0, p.used - p.included);
+  const n = p.next;
+  const extraNext = n ? Math.max(0, p.used - n.included) : 0;
+  return (
+    <>
+      <div className="notice-warn mt-3 flex gap-2 rounded-lg border px-3 py-2 text-sm" role="note" id="plan-held-reason" data-testid="plan-held">
+        <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+        <p>
+          <b>
+            This workspace has {p.used} agents, {p.label}'s limit with its buffer.
+          </b>{" "}
+          Everyone on the desk keeps working. To add more, {n ? `move to ${n.label}${n.max !== null ? ` (up to ${n.max} agents)` : ""}` : "talk to CompassDocs"}, or take someone off the desk first.
+        </p>
+      </div>
+      {n && (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <div className="rounded-lg border border-slate-200 p-3 text-sm">
+            <p className="text-xs text-slate-500">{p.label} now</p>
+            <p className="font-semibold text-slate-900">{p.used} agents</p>
+            <p className="text-xs text-slate-600">
+              {usdShort(p.price_usd)} + {extraNow} × {usd(p.monthly_usd)}
+            </p>
+            <p className="text-xs text-slate-600">{usd(p.price_usd + extraNow * p.monthly_usd)}/mo</p>
+          </div>
+          <div className="rounded-lg border border-compass-300 bg-compass-50/60 p-3 text-sm dark:border-compass-500">
+            <p className="text-xs text-slate-500">{n.label}</p>
+            <p className="font-semibold text-slate-900">{p.used} agents</p>
+            <p className="text-xs text-slate-600">
+              {usdShort(n.price_usd)} + {extraNext} × {usd(p.monthly_usd)}
+            </p>
+            <p className="text-xs text-slate-600">{usd(n.price_usd + extraNext * p.monthly_usd)}/mo</p>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

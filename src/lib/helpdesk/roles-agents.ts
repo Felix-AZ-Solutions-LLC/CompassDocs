@@ -71,6 +71,56 @@ export class AgentLimitError extends DeskRoleError {
   }
 }
 
+/**
+ * 1.22.0, CompassDocs Cloud (lib/plan): new agents are held at the plan's
+ * maximum with its buffer (Decision 1: 12 on Starter, 30 on Shared). The
+ * same 402 `agent_limit`, with the plan's words; nobody already on the desk
+ * is ever removed.
+ */
+export class PlanAgentHoldError extends AgentLimitError {
+  constructor(
+    allowed: number,
+    used: number,
+    planLabel: string,
+    nextLabel: string | null
+  ) {
+    super(allowed, used);
+    this.message = `This workspace has ${used} agents, ${planLabel}'s limit with its buffer. Everyone on the desk keeps working. To add more, ${
+      nextLabel ? `move to ${nextLabel}` : "talk to CompassDocs"
+    }, or take someone off the desk first.`;
+  }
+}
+
+/**
+ * 1.22.0, CompassDocs Cloud: an add past the plan's included agents costs
+ * $9.99/mo, so it is made only once the caller confirmed the price (design
+ * C1): 409 `confirm_price` with the price until then.
+ */
+export class AgentPriceError extends DeskRoleError {
+  readonly code = "confirm_price";
+  constructor(
+    public included: number,
+    public used: number,
+    public monthlyUsd: number
+  ) {
+    super(`Adding someone past the ${included} included agents adds an extra agent at $${monthlyUsd.toFixed(2)}/mo, prorated. Confirm the price to add them.`, 409);
+  }
+
+  body() {
+    return { error: this.message, code: this.code, included: this.included, used: this.used, monthly_usd: this.monthlyUsd };
+  }
+}
+
+/** The plan's agent rules for an add, in a cloud workspace with a plan; null otherwise (the licence's `agents` claim applies). */
+async function planAgentRules(): Promise<{ holdAt: number | null; included: number; label: string; next: string | null } | null> {
+  const { cloudPlan } = await import("../plan");
+  const plan = await cloudPlan();
+  if (!plan) return null;
+  const { agentHoldAt, planLabel, PLAN_CATALOGUE } = await import("../plan-shared");
+  const next = PLAN_CATALOGUE[plan.name].next;
+  return { holdAt: agentHoldAt(plan), included: plan.agentsIncluded, label: planLabel(plan.name), next: next ? planLabel(next) : null };
+}
+
 const DESK_PERMS = ["helpdesk.admin", "helpdesk.agent_all", "helpdesk.agent", "helpdesk.reports"] as const;
 
 interface Row {
@@ -286,7 +336,11 @@ export interface DeskAgentChange {
 export async function setDeskAgent(
   by: U & { name?: string },
   input: { user_id: unknown; role?: unknown; team_ids?: unknown },
-  opts: { requireNew?: boolean } = {}
+  opts: {
+    requireNew?: boolean;
+    /** 1.22.0: the caller confirmed an extra agent's price (CompassDocs Cloud, past the plan's included agents). */
+    confirmExtra?: boolean;
+  } = {}
 ): Promise<DeskAgentChange> {
   const userId = Number(input.user_id);
   if (!Number.isInteger(userId) || userId <= 0) throw new DeskRoleError("Choose a person.", 400);
@@ -308,17 +362,28 @@ export async function setDeskAgent(
   const effectiveRole = role ?? (target.current?.source === "assigned" ? target.current.role : null);
   // Only a role puts someone on the desk (a team membership alone doesn't),
   // so only a role change can need room under the allowance.
-  const allowance = role !== undefined ? await agentAllowance() : null;
+  // 1.22.0: in a CompassDocs Cloud workspace with a plan, the plan's rules
+  // replace the licence's `agents` claim: adds are held at the maximum with
+  // its buffer, and one past the included agents needs its price confirmed.
+  const planRules = role !== undefined ? await planAgentRules() : null;
+  const allowance = role !== undefined ? (planRules ? planRules.holdAt : await agentAllowance()) : null;
 
   await withTx(async (client) => {
-    if (allowance !== null) {
+    if (allowance !== null || planRules) {
       // The agent allowance: someone not yet counted needs room. Changing
       // the role of someone already counted is never refused. The lock makes
       // two adds at once take turns, so they can't both see the last place;
       // the count runs after it, on this transaction's snapshot.
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [AGENT_ALLOWANCE_LOCK]);
       const counted = await deskAgentIds({ client });
-      if (!counted.includes(userId) && counted.length >= allowance) throw new AgentLimitError(allowance, counted.length);
+      const adding = !counted.includes(userId);
+      if (adding && allowance !== null && counted.length >= allowance) {
+        throw planRules ? new PlanAgentHoldError(allowance, counted.length, planRules.label, planRules.next) : new AgentLimitError(allowance, counted.length);
+      }
+      if (adding && planRules && counted.length >= planRules.included && !opts.confirmExtra) {
+        const { EXTRA_AGENT_USD } = await import("../plan-shared");
+        throw new AgentPriceError(planRules.included, counted.length, EXTRA_AGENT_USD);
+      }
     }
     if (role !== undefined) {
       await client.query(

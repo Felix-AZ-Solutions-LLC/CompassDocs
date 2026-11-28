@@ -6,6 +6,7 @@ import { chipClass } from "@/components/Chip";
 import { buttonClass } from "@/components/Button";
 import Link from "next/link";
 import { Clock, Flame, Lightbulb, SearchX, Sparkles, X } from "lucide-react";
+import { AiPlanLine } from "@/components/plan/AiPlan";
 import { EmptyState, TextInput } from "./form";
 import { MarkdownView } from "./MarkdownView";
 import { PageContainer } from "./PageWidth";
@@ -347,6 +348,8 @@ export function SearchClient({
             answer && (
               <>
                 <MarkdownView content={answer.answer} />
+                {/* 1.22.0: past the CompassDocs Cloud plan's AI allowance (admins only) or paused at its cap. */}
+                <AiPlanLine className="mt-3" />
                 {(answer.people?.length ?? 0) > 0 && (
                   <div className="mt-4 border-t border-compass-100 pt-3">
                     <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">

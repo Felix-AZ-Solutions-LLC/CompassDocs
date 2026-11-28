@@ -4,6 +4,80 @@ All notable changes to CompassDocs are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.22.0] - 2026-11-28
+
+Plan limits, usage and the AI allowance. A CompassDocs Cloud workspace's
+license now carries its plan (Starter, Shared or Dedicated, with its
+limits), and the workspace counts its usage once a day, shows it to its
+admins, warns them calmly as a meter fills, prices an extra agent before
+it is added, keeps AI to an optional monthly cap, and sends the console the
+counts, never names or content. Limits are soft: nobody is locked out and
+nothing is turned off. Self-hosted installs, and cloud workspaces on an
+Enterprise license, don't change.
+
+### Added
+- **The plan in the license.** A signed `cloudPlan` claim beside
+  `workspace`: `name`, `agentsIncluded`, `agentsMax`, `activeUsersLimit`,
+  `storageGb`, `aiAllowanceUsd`, `renewsAt`, and optional `bufferPct` (20),
+  `billingContact`, `priceUsd` and `billing`. Read in one place
+  (`lib/plan`), only in cloud mode; missing, partial or malformed reads as
+  no plan. The README's "The plan in the license" is the schema the console
+  signs.
+- **Settings → Plan & usage** (admins: whoever can change workspace
+  settings). The plan, its price and renewal, the workspace and the billing
+  contact, then four meters: agents (included and the plan's maximum),
+  active users this month, storage and the AI allowance, each with its
+  state as a chip, the 20% buffer as the bar's hatched end, and a six-month
+  trend drawn to scale with the limit dashed and the current month hollow.
+  Tabs for who counted (with a CSV that stays in the workspace), storage by
+  area, and AI by feature. **Upgrade to Shared** (or **Talk to us about
+  Dedicated**) sends CompassDocs a request by email from the workspace, or
+  opens a prepared email when the workspace can't send.
+- **Warnings.** At 80%, at the limit and past the buffer, admins see one
+  banner on the dashboard and every settings page (80% a fact, the others a
+  warning, never an error; each says nothing stops), dismissed per admin per
+  threshold per month, and one email per meter per threshold per month, at
+  most one a day: the new built-in "Plan usage threshold" template, to every
+  admin or to the billing contact when one is named. Nobody else sees any of
+  it.
+- **Adding an agent past the included ones** shows the price first: "Adds
+  an extra agent: $9.99/mo, prorated", the amount charged now to the plan's
+  renewal ($119.88 a year when billed annually), and a button that says the
+  price; the server refuses an add that didn't confirm it (409
+  `confirm_price`). Past the plan's maximum the add still works inside the
+  buffer and says so; at the buffer's end (12 on Starter, 30 on Shared) new
+  agents are held with the plan's comparison and an upgrade request.
+  Nobody already on the desk is ever removed.
+- **The AI allowance.** AI stays on by default. On Plan & usage → AI an
+  admin can stop at the allowance or cap at an amount; once reached, Claude
+  in the desk, Ask, Write and Proofread pause until the 1st with a clear
+  sentence, and everything else keeps working. The cap is checked before
+  each request against the running total (at most one answer over), and the
+  desk's own Claude limits keep working inside it. Past the allowance,
+  admins see one quiet "billed at cost +30%" line where AI is used.
+- **Daily usage counting.** Agents, monthly active users (anyone who signed
+  in or used the app this month, requesters once they sign in to the
+  portal, API tokens as their person), storage (files, documents' text,
+  versions and the Trash; never backups, exports or the search index) and
+  AI dollars by feature from every request's tokens at the price list. Kept
+  13 months, counted under an advisory lock so replicas count once.
+- **Usage to the console.** Each day's counts go to `POST …/usage` beside
+  the license endpoint (or `COMPASSDOCS_USAGE_URL`, on the same origin),
+  with the license request's credential: idempotent per workspace and day,
+  oldest first, retried with backoff, limited in time and size. The README's
+  "Usage to the console" is the contract.
+- **A license for another workspace** (cloud plans, the platform's
+  bootstrap included) is never used for the plan: the workspace keeps
+  running on the last license that matched, never read-only, its admins see
+  a plain notice naming both workspaces, and the usage report says so.
+
+### Changed
+- In a cloud workspace with a plan, the plan's agent rules replace the
+  license's `agents` claim, and Desk settings → Agents shows the plan's
+  meter without "Buy more agents".
+- Settings → AI shows the monthly spending choice, linking to Plan & usage,
+  in a cloud workspace with a plan.
+
 ## [1.21.5] - 2026-11-27
 
 Cloud mode, part six, the last of Phase 3: a CompassDocs Cloud workspace's

@@ -42,6 +42,8 @@ import {
   Users,
   UsersRound,
   LifeBuoy,
+  Gauge,
+  HardDrive,
 } from "lucide-react";
 
 /** A routed page inside a section (/admin/directory/fields). */
@@ -127,6 +129,16 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
           { href: "/admin/domain#cookies", label: "Session cookie security", keywords: "secure cookie https http login loop" },
         ] },
       { href: "/admin/license", label: "License", icon: KeyRound, description: "Enterprise license and entitlements.", keywords: "enterprise entitlements sso scim policy audit export training", permission: "workspace.settings_read", docs: "https://docs.compassdocs.io/admin/license/" },
+      // 1.22.0: only in a CompassDocs Cloud workspace whose licence carries a plan (lib/plan; lib/cloud sectionHiddenInMode, lib/auth reachableSettingsSections).
+      { href: "/admin/plan", label: "Plan & usage", icon: Gauge, description: "Your CompassDocs Cloud plan, what this workspace used this month, and what's billed beyond it.", keywords: "plan billing usage limits agents active users storage ai allowance spending cap upgrade starter shared dedicated meters", permission: "workspace.settings_manage", pages: [
+          { href: "/admin/plan", label: "Overview", icon: Gauge, keywords: "plan meters renewal" },
+          { href: "/admin/plan/people", label: "Active users", icon: UsersRound, keywords: "active users who counted sign-ins requesters csv" },
+          { href: "/admin/plan/storage", label: "Storage", icon: HardDrive, keywords: "storage attachments documents trash helpdesk gb" },
+          { href: "/admin/plan/ai", label: "AI", icon: Sparkles, keywords: "ai allowance spending cap pause cost feature" },
+        ], topics: [
+          { href: "/admin/plan/ai#ai-spending", label: "Monthly AI spending", keywords: "cap stop allowance keep ai on pause" },
+          { href: "/admin/plan#billing-contact", label: "Billing contact", keywords: "billing contact warning emails" },
+        ] },
     ],
   },
   {

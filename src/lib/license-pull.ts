@@ -337,6 +337,15 @@ function deps(): PullDeps {
   };
 }
 
+/**
+ * 1.22.0: the bearer credential the console's endpoints take: the same one
+ * the licence request sends (lib/plan-report sends the daily usage with it).
+ * Tests stand in for it through setLicensePullDepsForTests.
+ */
+export async function consoleCredential(cfg: LicensePullConfig): Promise<string> {
+  return deps().credential(cfg);
+}
+
 /** Tests: stand in for the network, the clock, the credential or the verifier (null: the real ones). */
 export function setLicensePullDepsForTests(d: Partial<PullDeps> | null): void {
   state().deps = d;

@@ -4,6 +4,7 @@ import type { AppSettings } from "./settings";
 import { renderBodyHtml } from "./newsletter";
 import { NOTIFY_EVENTS } from "./notify-policy-shared";
 import { originForDomain } from "./workspace-origin";
+import { isCloud } from "./cloud";
 
 // Editable templates for every alert email CompassDocs sends. Admins customize
 // the subject and body (markdown, written in the doc editor) under Settings →
@@ -49,6 +50,17 @@ export interface EmailTemplateDef {
    * addresses): a footer's "Manage your notifications" link is left out.
    */
   manageLink?: false;
+  /**
+   * 1.22.0: a CompassDocs Cloud email (the plan's threshold warning): listed
+   * in the library only in cloud mode (listedTemplates), so a self-hosted
+   * admin's library is unchanged.
+   */
+  cloudOnly?: true;
+}
+
+/** The templates the library lists here: every one, less the cloud-only ones outside cloud mode (1.22.0). */
+export function listedTemplates(): EmailTemplateDef[] {
+  return isCloud() ? EMAIL_TEMPLATES : EMAIL_TEMPLATES.filter((t) => !t.cloudOnly);
 }
 
 const T = (tag: string, label: string) => ({ tag, label });
@@ -785,6 +797,31 @@ export const EMAIL_TEMPLATES: EmailTemplateDef[] = [
       "[Sign in to {{portal_name}}]({{signin_url}})\n\n" +
       "The link works once and for {{minutes}} minutes. If you didn't ask for it, you can ignore this email: nobody can sign in without it.",
   },
+  {
+    // 1.22.0 (design B3): the CompassDocs Cloud plan's threshold warning.
+    key: "plan_usage_threshold",
+    label: "Plan usage threshold",
+    description:
+      "Sent to the workspace's admins (or the billing contact named on Plan & usage) when a meter of the CompassDocs Cloud plan reaches 80%, its limit or the end of its buffer: once per meter per threshold per month, at most one a day.",
+    tags: [
+      T("headline", "What happened, as one line (the subject)"),
+      T("notices", "Each threshold reached, as a sentence"),
+      T("meters", "The four meters, one line each"),
+      T("plan_name", "The plan (Starter, Shared, Dedicated)"),
+      T("restart_date", "When the counts start again (1 December)"),
+      T("plan_url", "Link to Plan & usage"),
+      T("org_name", "Workspace name"),
+      T("manage_url", "Manage-notifications link"),
+    ],
+    cloudOnly: true,
+    subject: "{{headline}}",
+    body:
+      "{{notices}}\n\n" +
+      "**Nothing changes for anyone**, even if you go over. Counts start again on {{restart_date}}.\n\n" +
+      "{{meters}}\n\n" +
+      "[Open Plan & usage]({{plan_url}})\n\n" +
+      "Sent by {{org_name}} to its CompassDocs admins. [Manage your notifications]({{manage_url}})",
+  },
 ];
 
 /**
@@ -1067,6 +1104,15 @@ export const SAMPLE_VARS: Record<string, Record<string, string>> = {
     portal_name: "Acme Support",
     signin_url: "/support/signin?token=sample",
     minutes: "15",
+  },
+  plan_usage_threshold: {
+    headline: "Northwind is at 80% of its Starter plan's active users",
+    notices:
+      "**Northwind is at 82% of Starter's 250 active users this month** (204 people). Nothing changes if you go over; there's a 50-person buffer.",
+    meters: "- Active users: 204 of 250\n- AI allowance: $13.10 of $15.00\n- Storage: 11.2 GB of 25 GB\n- Agents: 3 of 3 included (up to 10)",
+    plan_name: "Starter",
+    restart_date: "1 December",
+    plan_url: "/admin/plan",
   },
 };
 

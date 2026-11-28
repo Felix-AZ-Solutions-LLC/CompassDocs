@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { apiGuard } from "@/lib/api-auth";
 import {
-  EMAIL_TEMPLATES,
+  listedTemplates,
   templateDef,
   templateOverride,
   saveTemplateOverride,
@@ -27,7 +27,7 @@ export async function GET() {
   if (gate instanceof NextResponse) return gate;
 
   const templates = await Promise.all(
-    EMAIL_TEMPLATES.map(async (t) => {
+    listedTemplates().map(async (t) => {
       const override = await templateOverride(t.key);
       return {
         key: t.key,

@@ -80,6 +80,7 @@ import { getJson, sendJson } from "../api";
 import { StartWorkflowDialog, type StartWorkflowSuggestion } from "../workflow-start/StartWorkflow";
 import { useClaudeDesk } from "./ClaudeDesk";
 import { askClaude } from "./stream";
+import { AiPlanLine, useAiPlan } from "@/components/plan/AiPlan";
 
 const ACTIVITY_ICON: Record<string, React.ReactNode> = {
   search: <Search className="h-3 w-3" aria-hidden />,
@@ -113,6 +114,8 @@ export function ClaudePanel() {
   const [chats, setChats] = useState<ClaudeChatHistory["chats"]>([]);
   const [loading, setLoading] = useState(true);
   const [text, setText] = useState("");
+  // 1.22.0: the CompassDocs Cloud plan's AI cap (lib/plan-usage): paused, the input says so.
+  const aiPlan = useAiPlan();
   const [streaming, setStreaming] = useState(false);
   const [status, setStatus] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -598,7 +601,7 @@ export function ClaudePanel() {
                 void send(text, null);
               }
             }}
-            placeholder={number ? CLAUDE_INPUT_PLACEHOLDER : CLAUDE_INPUT_PLACEHOLDER_NO_TICKET}
+            placeholder={aiPlan?.pausedUntil ? `Claude is paused until ${aiPlan.pausedUntil}` : number ? CLAUDE_INPUT_PLACEHOLDER : CLAUDE_INPUT_PLACEHOLDER_NO_TICKET}
             className="frame-input max-h-36 min-h-7 flex-1 resize-none bg-transparent py-1 text-sm text-slate-900 placeholder:text-slate-400 [field-sizing:content]"
           />
           {streaming ? (
@@ -606,7 +609,7 @@ export function ClaudePanel() {
               <CircleStop aria-hidden />
             </button>
           ) : (
-            <button type="submit" disabled={!text.trim()} aria-label="Send" data-tt="Send" className={`${iconButtonClass("quiet", "sm")} text-compass-600 disabled:text-slate-400`}>
+            <button type="submit" disabled={!text.trim() || !!aiPlan?.pausedUntil} aria-label="Send" data-tt="Send" className={`${iconButtonClass("quiet", "sm")} text-compass-600 disabled:text-slate-400`}>
               <ArrowUp aria-hidden />
             </button>
           )}
@@ -617,6 +620,8 @@ export function ClaudePanel() {
             May quote internal notes in a reply (this question only)
           </label>
         )}
+        {/* 1.22.0: past the CompassDocs Cloud plan's AI allowance (admins only) or paused at its cap (everyone). */}
+        <AiPlanLine className="mt-1.5" />
         <p className="mt-1.5 text-xs text-slate-500">{CLAUDE_FOOTER_NOTE}</p>
       </div>
       {review && (

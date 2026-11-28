@@ -258,7 +258,9 @@ async function assertSchema1101(db: Client, label: string) {
     // to_char as 'YYYY-MM-DD', so they are that text whatever the parser does).
     // 1.20.37: a Help Center article's view-count day (lib/helpdesk/help-centre),
     // only ever compared in SQL and never read into JavaScript.
-    ["documents.ack_effective_at", "hd_assets.purchase_date", "hd_assets.warranty_end", "hd_hc_article_views.day", "hd_holidays.date", "hd_on_call_rotation.starts_on", "hd_ticket_checklist_items.due_date", "hd_ticket_events.end_date", "hd_ticket_events.start_date", "notify_digest_state.last_daily_on", "policy_settings.due_at"],
+    // 1.22.0: the CompassDocs Cloud plan's UTC days and months (lib/plan-usage, lib/plan-report): read
+    // with to_char as 'YYYY-MM-DD' or compared in SQL, so they are that text whatever the parser does.
+    ["documents.ack_effective_at", "hd_assets.purchase_date", "hd_assets.warranty_end", "hd_hc_article_views.day", "hd_holidays.date", "hd_on_call_rotation.starts_on", "hd_ticket_checklist_items.due_date", "hd_ticket_events.end_date", "hd_ticket_events.start_date", "notify_digest_state.last_daily_on", "plan_active_users.month", "plan_banner_dismissals.month", "plan_notices.month", "plan_usage_daily.day", "policy_settings.due_at"],
     `${label}: the OID 1082 text parser reaches exactly these columns; a new date column must be read as text on purpose`
   );
   const trigger = await db.query(

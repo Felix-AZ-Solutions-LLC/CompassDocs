@@ -544,6 +544,8 @@ export async function portalSessionContact(token: string | undefined | null, s?:
     await hq("UPDATE hd_portal_contacts SET last_seen_at = now() WHERE id = $1", [row.id]);
   }
   const { session_id: _s, expires_at: _e, mailbox_blocked: _m, ...contact } = row;
+  // 1.22.0: a requester who signs in to the portal counts as an active user (Decision 3; cloud mode only).
+  (await import("../plan-usage")).noteActive("portal", row.id);
   return contact;
 }
 

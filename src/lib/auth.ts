@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isCloud, sectionHiddenInMode } from "./cloud";
+import { isCloud, PLAN_SECTION, sectionHiddenInMode } from "./cloud";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { loginHref } from "./return-to";
@@ -263,6 +263,8 @@ export async function currentSession(): Promise<CurrentSession | null> {
     await touchSession(token, new Date(target).toISOString());
   }
   const user = toSessionUser(session);
+  // 1.22.0: an active user this month (lib/plan-usage; cloud mode only, once a day, never waited on).
+  (await import("./plan-usage")).noteActive("user", user.id);
   user.newsletter_role = await newsletterLevel(user);
   const pending = await pendingStep(session, sec);
   if (!duoSwitchedOn(settings)) return { user, token, duo: DUO_NOTHING_OWED, pending };
@@ -517,7 +519,9 @@ export async function reachableSettingsSections(user: SessionUser): Promise<stri
   // 1.21.0: in cloud mode the sections CompassDocs Cloud manages (Domain &
   // HTTPS, Backups; lib/cloud) are left out, so the rail, its search, the
   // desk's address link and anything else reading this never offer them.
-  const shown = (href: string) => !sectionHiddenInMode(href);
+  // 1.22.0: Plan & usage, only in a cloud workspace whose licence carries a plan (lib/plan).
+  const plan = isCloud() ? !!(await (await import("./plan")).cloudPlanState().catch(() => null)) : false;
+  const shown = (href: string) => !sectionHiddenInMode(href) && (href !== PLAN_SECTION || plan);
   if (legacyAuthzEnforcement()) {
     return roleAtLeast(user.role, "admin") ? [...SETTINGS_SECTIONS.map((s) => s.href), ...ownPages(() => true)].filter(shown) : [];
   }
