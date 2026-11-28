@@ -811,16 +811,18 @@ export const EMAIL_TEMPLATES: EmailTemplateDef[] = [
       T("restart_date", "When the counts start again (1 December)"),
       T("plan_url", "Link to Plan & usage"),
       T("org_name", "Workspace name"),
-      T("manage_url", "Manage-notifications link"),
     ],
     cloudOnly: true,
+    // A workspace notice for its admins or billing contact (who may have no account): no one's
+    // notification settings govern it, so no "Manage your notifications" link (design B3).
+    manageLink: false,
     subject: "{{headline}}",
     body:
       "{{notices}}\n\n" +
       "**Nothing changes for anyone**, even if you go over. Counts start again on {{restart_date}}.\n\n" +
       "{{meters}}\n\n" +
       "[Open Plan & usage]({{plan_url}})\n\n" +
-      "Sent by {{org_name}} to its CompassDocs admins. [Manage your notifications]({{manage_url}})",
+      "Sent by {{org_name}} to its CompassDocs admins.",
   },
 ];
 

@@ -576,7 +576,7 @@ export async function sendThresholdEmail(state: PlanState, c: DailyRow, now: Dat
       restart_date: `1 ${new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toLocaleString("en-US", { month: "long", timeZone: "UTC" })}`,
     };
     for (const r of recipients) {
-      const mail = await renderEmail("plan_usage_threshold", vars, origin, r.userId ? { recipientUserId: r.userId } : { recipientEmail: r.email });
+      const mail = await renderEmail("plan_usage_threshold", vars, origin, { ...(r.userId ? { recipientUserId: r.userId } : { recipientEmail: r.email }), manageLink: false });
       await sendMail([r.email], mail.subject, mail.text, mail.html, undefined, undefined, { kind: "plan_usage" });
     }
   } catch (e) {

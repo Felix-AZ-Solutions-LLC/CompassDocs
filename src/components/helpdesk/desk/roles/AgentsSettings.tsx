@@ -654,7 +654,8 @@ function AddAgentModal({
             </div>
           </div>
         )}
-        <div className="mt-4 space-y-4">
+        {/* 1.22.0: held at the plan's limit (design C3): the notice and the comparison stand in for the fields. */}
+        <div className={`mt-4 space-y-4 ${limit.plan && step === "held" ? "hidden" : ""}`}>
           <div>
             <p className="mb-1 text-xs font-medium text-slate-500">Person</p>
             {person ? (
@@ -701,6 +702,7 @@ function AddAgentModal({
             disabled={blocked && !limit.plan}
             aria-disabled={blocked && limit.plan ? true : undefined}
             aria-describedby={blocked && limit.plan ? "plan-held-reason" : undefined}
+            className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
             icon={<Plus />}
           >
             {limit.plan && (step === "extra" || step === "buffer") ? `Add to desk · ${usd(limit.plan.monthly_usd)}/mo` : "Add to desk"}

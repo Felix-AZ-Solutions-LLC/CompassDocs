@@ -118,7 +118,9 @@ describe("the catalog", () => {
   test("every personal email template belongs to an event (workspace reports, channels and sign-in mail excepted)", () => {
     const src = read("src/lib/email-templates.ts");
     const keys = [...src.matchAll(/^\s{4}key: "([a-z_]+)"/gm)].map((m) => m[1]);
-    const workspaceOnly = new Set(["workflow_event", "ack_program_report", "training_report"]);
+    // 1.22.0: the CompassDocs Cloud plan's threshold warning goes to the workspace's admins or its
+    // billing contact (who may have no account), like the programme reports: no one turns it off.
+    const workspaceOnly = new Set(["workflow_event", "ack_program_report", "training_report", "plan_usage_threshold"]);
     // 1.19.1: transactional sign-in mail the recipient asked for this
     // minute (the customer portal's one-time link). Like a password reset
     // it is never governed by preferences, so it has no event to turn off.
