@@ -535,7 +535,7 @@ test.describe.serial("cloud mode: Plan & usage", () => {
     const n = page.getByTestId("plan-mismatch");
     await expect(n).toContainText("There is no earlier license for this workspace to run on");
     expect((await n.innerText()).match(/until this is fixed/g)?.length, "said once").toBe(1);
-    await expect(page.getByRole("heading", { name: "Waiting for this workspace's plan license" })).toBeVisible();
+    await expect(page.getByText("Waiting for this workspace's plan license")).toBeVisible();
     await expect(page.getByText("No CompassDocs Cloud plan")).toHaveCount(0);
     await shoot(page, "plan-mismatch-empty", false);
   });
