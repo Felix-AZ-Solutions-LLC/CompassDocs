@@ -1925,6 +1925,47 @@ like this, and nothing else in the app invents its own way:
   `(app)/support/not-allowed` at the page's own address, a `PageHeader`
   (`ShieldOff`, "Not available in a support session") over an `EmptyState`
   saying what support can't open, with **Go to the dashboard**.
+- **Plan notices** (1.22.0, CompassDocs Cloud with a plan;
+  `components/plan/PlanBanner`, mounted by `PlanBannerSlot`). The plan's
+  thresholds, for whoever can open Plan & usage
+  (`workspace.settings_manage`) and nobody else: no banner, no meter, no
+  price anywhere for anyone else, and self-hosted never fetches. Two places:
+  under the greeting on the dashboard and under the "Settings" eyebrow on
+  every settings page (not on Plan & usage itself, whose meters say it).
+  **One banner** for every meter at a threshold this month, a `p` each
+  (bold lead, then the rest; on the dashboard the notice's short form,
+  design B2: "82% of Starter's active users this month. Nothing changes
+  if you go over."), the most severe first; its tone is the
+  highest: **80%** is `notice-info` (a fact, lucide `Info` in
+  `text-compass-600`; `Sparkles` when it is only the AI allowance), **the
+  limit** and **past the buffer** are `notice-warn` (`TriangleAlert`),
+  **never** `notice-error`: nothing has gone wrong. Every sentence says that
+  nothing stops ("Nothing changes if you go over", "Everyone keeps signing
+  in", "Nobody is locked out"); storage says it is billed in 50 GB steps,
+  never a buffer. The last sentence ends with one `link` ("Open Plan &
+  usage"; "Set a spending cap" for the AI allowance used); only the
+  past-the-buffer banner carries buttons, a `primary` `sm` **Upgrade to
+  Shared** (to `/admin/plan#upgrade`, which opens the dialog) and a
+  `secondary` `sm` **Open Plan & usage**. A quiet icon-only `X`
+  (`data-tt` "Dismiss", `aria-label` saying until when) dismisses every
+  threshold in it, **for that admin, until the next threshold or the next
+  month** (`plan_banner_dismissals`); it is news, so it is dismissible,
+  unlike a security notice. `role="note"`, `aria-label` "Plan usage",
+  `print:hidden`. It reads again on every page and after a Plan & usage
+  change (the `compass:plan-changed` event).
+- **A license for another workspace** (1.22.0, design F): `notice-error`
+  with `ShieldAlert`, never dismissible, in the same slot: the bold "This
+  workspace's plan license is for a different workspace.", both workspace
+  ids in `font-mono text-xs`, "This is a setup problem on our side, not
+  something you did", what keeps working (the last matching license, named),
+  who to write to and what to quote, then **Open License** (`secondary`
+  `sm`) and **Copy details** (`CopyButton`). On the dashboard it is one line
+  with a "See what to do" link. With no earlier matching license there is
+  no plan to run on: the notice says so once ("…so Plan & usage has no plan
+  to show yet, and nothing is billed until this is fixed."), and Plan &
+  usage's empty state is its own variant (`ShieldAlert`, "Waiting for this
+  workspace's plan license", both workspace ids, **Open License**), never
+  "No CompassDocs Cloud plan".
 - **Prerequisite states** ("SMTP is not set up", "this role is built in")
   are `notice-warn` banners with the action that clears them — never a
   bare amber sentence (it reads as a validation error and fails AA in
@@ -1998,6 +2039,122 @@ agents on the license): `<UsageMeter value max label>` from
   allows no value past it) and `aria-valuetext` with the real count ("7
   of 6, over by 1"). The visible sentence says the same, so color is
   never the only signal.
+
+## Plan meter
+
+A plan limit with a soft buffer (1.22.0, Settings → Plan & usage and
+Desk settings → Agents in a CompassDocs Cloud workspace with a plan):
+`<PlanMeter value limit end marks label valueText>` from
+`components/plan/PlanMeter`, the usage meter's variant. Not for an
+allowance without a buffer (that is `UsageMeter`, above).
+
+- **The bar runs to the buffer's end** (`end`: the limit × 1.2, rounded
+  down, for agents and active users; 120% of the limit for storage and the
+  AI allowance, which have no buffer), so the buffer is the bar's hatched
+  end (`.plan-buffer`: `rgb(var(--slate-300))` stripes on the track, from
+  the limit's tick to the end). `h-2`, `rounded-full`, `bg-slate-100`.
+  Within the limit the fill is `bg-compass-600`; past it `bg-amber-500`
+  (the UsageMeter rule). **No maximum** (a Dedicated plan's agents, by
+  contract: `soft={false}`): no buffer, no hatch, never amber; the
+  accent fill only, the bar is simply how many.
+- **Ticks**: a 2px `bg-slate-600` mark at the limit, and for agents one at
+  the included count too ("3 included", "10 max"), each labeled under the
+  bar in `text-2xs text-slate-500 tabular-nums`, with the start ("0",
+  "$0") at the left. A tick at (or right by) the start takes the start's
+  place, left-aligned ("0 included" alone, never "0" under it). Every
+  label is `aria-hidden`; the meter's own values speak.
+- **State is a chip with words**, in the card's header row, never color
+  alone: `ok` **Within plan** / **Within allowance**, `warn` with a 12px
+  `TriangleAlert` **82% of plan** / **8 of 10 max** / **Over by 21 · in
+  buffer**, `error` **Past the buffer** / **At 12 · Starter's limit, new
+  agents held**, `info` for what is simply billed (**1 extra 50 GB ·
+  $25/mo**, **$2.40 beyond · billed $3.12**), `accent` for paid extras
+  within the maximum (**1 extra · $9.99/mo**; without a price for someone
+  who can't open Plan & usage: **1 extra**), `neutral` for the included
+  agents (**All 3 included in use**), agents by contract (**31 agents · by
+  contract**) and **Paused · cap reached** (`CirclePause`). The agents chip
+  is one component, `components/plan/AgentsChip`, on Plan & usage's Agents
+  card and the desk's Agents page alike.
+- **The meter card** (`MeterCard` in `components/plan/PlanUsage`): a
+  `section` with `aria-labelledby` on its `CardTitle` (16px lucide icon:
+  `Headset`, `UsersRound`, `HardDrive`, `Sparkles`), the chip on the right;
+  the number in `text-3xl font-bold tracking-tight tabular-nums` with "of
+  250 this month" in `text-sm text-slate-500`; the meter; one `text-sm
+  text-slate-600` sentence on what is billed past it and what doesn't
+  count; then a footer row under a hairline: one link to the tab behind the
+  number ("See who counted →") and the trend. Four cards in a `@2xl`
+  two-column grid inside an `@container`.
+- **The trend** (`components/plan/PlanTrend`, a chart, so on the
+  `lucide-only` rule's allow list): six calendar months, one value each
+  (the month's final count; agents the month's highest), drawn to scale
+  from zero, a 2px `stroke-compass-500` line with a 10% wash, the plan's
+  limit as a dashed `stroke-slate-400` hairline with its value at the
+  right, 8px dots with a `ring-surface` ring, **the current month hollow**
+  (the month isn't over), month labels under it, and an `sr-only` table
+  with the numbers. One sentence under the cards says what the dashed line
+  and the hollow point mean.
+- **Accessibility.** `role="meter"`, `aria-label` naming what is counted,
+  `aria-valuemin` 0, `aria-valuemax` the limit, `aria-valuenow` capped at
+  it and `aria-valuetext` with the real count ("271 of 250, over by 21").
+- **The Add agent price step** (Desk settings → Agents, design C). Within
+  the included agents the dialog is unchanged. Past them, a `notice-info`
+  price box under the fields (bold "Adds an extra agent: $9.99/mo,
+  prorated.", then one `text-xs` line with the prorated amount to the
+  renewal) and the submit says the price ("Add to desk · $9.99/mo"), so
+  nobody adds a paid agent by habit; the server answers 409
+  `confirm_price` to an add that didn't confirm it. Past the maximum, in
+  the buffer, a `notice-warn` above it says which agent this is and how
+  many more fit. At the buffer's end, a `notice-warn` (`role="note"`)
+  explains the hold, two plan boxes compare the monthly price, the primary
+  becomes **Upgrade to Shared** and **Add to desk** is `secondary` and
+  `aria-disabled` with `aria-describedby` on the notice (never
+  `disabled`); after a 402 the server's notice carries that id. The
+  person picker stays while held, with a `text-xs` hint: someone already
+  counted as an agent can still be given a role. When the next plan has
+  no maximum (Shared → Dedicated), its box shows its price and "agents by
+  contract", never a sum. The page's meter becomes the plan meter, with
+  "12 agents · 3 included in Starter · $9.99/mo each beyond that · up to
+  10", the agents chip beside it, and no "Buy more agents". **Prices and
+  the upgrade only for whoever can open Plan & usage**: a desk Manager who
+  can't sees the same rules without a price, and past the included agents
+  a `notice-info` (`Info`, `role="note"`) "…Ask an admin to add this
+  person." in place of the price box, with **Add to desk** `aria-disabled`
+  and described by it (the server answers 403 `plan_admin_needed`). Agents
+  by contract have no price step and no hold.
+- **AI in use** (design D). Past the allowance, the AI entry points (the
+  desk's Claude panel above its fixed line, Ask under the answer, the
+  editor's Write menu at its foot) show **one** `text-xs text-slate-500`
+  line with a 14px `Info`, "Beyond this month's allowance: billed at cost
+  +30%.", only to people who can open Plan & usage: no color, no chip, no
+  dismiss. With the cap reached everyone sees the pause in the same place,
+  `text-xs text-slate-600` with `CirclePause`, naming no amount ("AI is
+  paused until 1 Dec: this workspace reached its monthly AI limit."), then
+  "Ask an admin if you need it sooner." or, for admins, a link to Plan &
+  usage. **Said once** where it shows: Ask puts the line in place of the
+  answer, then "Here are the keyword matches instead, which don't use
+  AI." and the matches (the answer's `pausedUntil` says the pause even
+  when the cap was reached after the page loaded). The AI controls stay
+  where they are (nothing jumps), `aria-disabled` with `aria-describedby`
+  on the reason (an `sr-only` sentence beside them) and the pause in
+  their `data-tt`; never a bare `disabled` that hides why. **The Claude
+  panel** (design D3) says it as its state: a `neutral` `sm` chip **Paused
+  until 1 Dec** (`CirclePause`) in the header, and in place of the welcome
+  (or after a chat's turns) a centred block: a 40px `bg-slate-100` circle
+  with `CirclePause`, the bold "AI is paused for the rest of November",
+  "{Workspace} reached its monthly AI limit. Everything else in the desk
+  works as usual. It starts again on 1 December.", then the audience line;
+  Send is `aria-disabled` (Enter sends nothing) and the footer's line gives
+  way to it. `components/plan/AiPlan` (`AiPlanLine`, `AiPausedChip`,
+  `AiPausedPanel`, `useAiPlan`) is the one source; the shell resolves it
+  once per page, and a Plan & usage change refreshes it
+  (`router.refresh()`). AI on an admin's own key is never the plan's: it
+  is never paused or marked "beyond".
+- **The billing contact** (Plan & usage's plan card): the address, with
+  "(from the license)" when it is the license's, or "All admins". Change
+  opens a `Modal` with `RadioCards`: **The license's contact** (only when
+  the license names one), **Every admin**, **Another address** (with its
+  field); the toast says who the emails go to now, from the server's
+  answer.
 
 ## Status chips
 

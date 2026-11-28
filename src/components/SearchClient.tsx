@@ -6,6 +6,7 @@ import { chipClass } from "@/components/Chip";
 import { buttonClass } from "@/components/Button";
 import Link from "next/link";
 import { Clock, Flame, Lightbulb, SearchX, Sparkles, X } from "lucide-react";
+import { AiPlanLine } from "@/components/plan/AiPlan";
 import { EmptyState, TextInput } from "./form";
 import { MarkdownView } from "./MarkdownView";
 import { PageContainer } from "./PageWidth";
@@ -346,7 +347,20 @@ export function SearchClient({
           ) : (
             answer && (
               <>
-                <MarkdownView content={answer.answer} />
+                {/* 1.22.0 (design D3): paused at the plan's AI cap: the pause in place of an answer, once, in the
+                    reader's words, then the keyword matches (which cost nothing). Else past the allowance (admins only). */}
+                {answer.pausedUntil ? (
+                  <>
+                    <AiPlanLine pausedUntil={answer.pausedUntil} className="mb-3" />
+                    <p className="mb-2 text-xs text-slate-500">Here are the keyword matches instead, which don't use AI.</p>
+                    <MarkdownView content={answer.answer} />
+                  </>
+                ) : (
+                  <>
+                    <MarkdownView content={answer.answer} />
+                    <AiPlanLine className="mt-3" />
+                  </>
+                )}
                 {(answer.people?.length ?? 0) > 0 && (
                   <div className="mt-4 border-t border-compass-100 pt-3">
                     <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">

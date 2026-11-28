@@ -22,5 +22,5 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
   }
 
-  return NextResponse.json(await proofread(content));
+  return NextResponse.json(await proofread(content, { userId: (gate as SessionUser).id }));
 }

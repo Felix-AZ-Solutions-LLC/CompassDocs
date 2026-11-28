@@ -519,3 +519,136 @@ describe("GET /api/admin/license", () => {
     if (r.body.license) assert.ok(r.body.license.agents === null || Number.isInteger(r.body.license.agents));
   });
 });
+
+// --- 1.22.0: a CompassDocs Cloud plan's agent rules (design C, Decision 1) ------------------------
+//
+// In cloud mode with a plan (stood in: lib/plan setPlanForTests), the plan
+// replaces the licence's `agents` claim: an add past the included agents
+// needs its price confirmed (409 confirm_price, then confirm_extra), and new
+// adds are held at the maximum with its buffer (402 agent_limit in the
+// plan's words). Nobody already on the desk is removed. The licence's own
+// allowance is set to 1 throughout, to show it no longer applies.
+
+describe("1.22.0: a CompassDocs Cloud plan's agent rules", () => {
+  /* eslint-disable @typescript-eslint/no-require-imports */
+  const planLib = require("../src/lib/plan") as typeof import("../src/lib/plan");
+  const shared = require("../src/lib/plan-shared") as typeof import("../src/lib/plan-shared");
+  /* eslint-enable @typescript-eslint/no-require-imports */
+  const setPlan = (agentsIncluded: number, agentsMax: number | null, bufferPct = 20) => {
+    const plan = shared.parsePlanClaim({ name: "starter", agentsIncluded, agentsMax, activeUsersLimit: 250, storageGb: 25, aiAllowanceUsd: 15, bufferPct, renewsAt: "2031-03-14" });
+    assert.ok(plan);
+    planLib.setPlanForTests({ state: { plan, license: { id: "lic", customer: "T", plan: "starter", features: ["helpdesk"], seats: 0, issued: "2026-03-14", expires: "2031-03-14" }, source: "in_force", mismatch: null }, mismatch: null, remember: null });
+  };
+  const n = async () => (await agentsLib.deskAgentIds()).length;
+  // A workspace admin adds (they can open Plan & usage, so they see and confirm the price); `by` another adder.
+  const add = (who: Person, extra: Record<string, unknown> = {}, by: Person = P.wsadmin) => call(agentsRoute.POST, req("/helpdesk/admin/agents", by.session, { user_id: who.id, role: "agent", ...extra }));
+
+  before(async () => {
+    process.env.COMPASSDOCS_CLOUD = "1";
+    allowance = 1;
+    await person("plan1", "Pia Planone");
+    await person("plan2", "Pat Plantwo");
+    await person("plan3", "Pru Planthree");
+    await person("plan4", "Pax Planfour");
+  });
+  after(() => {
+    planLib.setPlanForTests(null);
+    delete process.env.COMPASSDOCS_CLOUD;
+    allowance = null;
+  });
+
+  test("within the included agents: no price step, and the licence's allowance no longer applies", async () => {
+    setPlan((await n()) + 5, (await n()) + 20);
+    const r = await add(P.plan1);
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+  });
+
+  // Past the included agents whatever other files add or remove meanwhile (test files share the database and run at
+  // once): 0 included, the maximum well above the count.
+  test("past the included agents: 409 confirm_price with the price, then the confirmed add", async () => {
+    const used = await n();
+    setPlan(0, used + 10);
+    const r = await add(P.plan2);
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.equal(r.body.code, "confirm_price");
+    assert.equal(r.body.monthly_usd, 9.99);
+    assert.equal(r.body.included, 0);
+    assert.ok(!(await counted()).has(P.plan2.id), "nobody added without the price confirmed");
+    const ok = await add(P.plan2, { confirm_extra: true });
+    assert.equal(ok.status, 201, JSON.stringify(ok.body));
+  });
+
+  test("the agents list carries the plan and the prorated price for whoever adds", async () => {
+    const used = await n();
+    setPlan(Math.max(0, used - 1), used + 10);
+    const r = await call(agentsRoute.GET, req("/helpdesk/admin/agents", P.wsadmin.session));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.plan.label, "Starter");
+    assert.equal(r.body.plan.admin, true);
+    assert.equal(r.body.plan.hold_at, shared.bufferCap(used + 10, 20));
+    assert.equal(r.body.plan.monthly_usd, 9.99);
+    assert.equal(r.body.plan.proration.periodUsd, 119.88);
+    assert.equal(r.body.plan.next.label, "Shared");
+    assert.equal(r.body.plan.state, "normal");
+  });
+
+  test("a desk Admin who can't open Plan & usage: the rules without prices, and an extra agent is an admin's to add (review)", async () => {
+    const used = await n();
+    setPlan(0, used + 10);
+    const r = await call(agentsRoute.GET, req("/helpdesk/admin/agents", P.admin.session));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.plan.admin, false);
+    assert.equal(r.body.plan.included, 0);
+    assert.equal(r.body.plan.monthly_usd, null, "no price");
+    assert.equal(r.body.plan.price_usd, null);
+    assert.equal(r.body.plan.proration, null);
+    assert.equal(r.body.plan.next.price_usd, null);
+    // Even with confirm_extra: they were shown no price, so they can't accept one.
+    const refused = await add(P.plan3, { confirm_extra: true }, P.admin);
+    assert.equal(refused.status, 403, JSON.stringify(refused.body));
+    assert.equal(refused.body.code, "plan_admin_needed");
+    assert.match(refused.body.error, /Ask an admin to add them/);
+    assert.ok(!(await counted()).has(P.plan3.id));
+  });
+
+  test("agents by contract (no maximum): no price step and no hold (review)", async () => {
+    const used = await n();
+    setPlan(0, null);
+    const r = await call(agentsRoute.GET, req("/helpdesk/admin/agents", P.wsadmin.session));
+    assert.equal(r.body.plan.max, null);
+    assert.equal(r.body.plan.hold_at, null);
+    assert.ok(used > 0, "past the 0 included");
+    // Past the 0 included, a new agent is added with no price to confirm, by a desk Admin too: nothing changes the bill here.
+    const r2 = await add(P.plan4, {}, P.admin);
+    assert.equal(r2.status, 201, JSON.stringify(r2.body));
+    const off = await call(agentRoute.DELETE, req(`/helpdesk/admin/agents/${P.plan4.id}`, P.admin.session, undefined, "DELETE"), { userId: String(P.plan4.id) });
+    assert.ok(off.status < 300, JSON.stringify(off.body));
+  });
+
+  test("at the maximum with its buffer, new adds are held; everyone on the desk stays", async () => {
+    const used = await n();
+    setPlan(0, Math.max(0, used - 5), 0); // the buffer's end below the count (with room for other files' changes meanwhile)
+    const before = await counted();
+    const r = await add(P.plan3, { confirm_extra: true });
+    assert.equal(r.status, 402, JSON.stringify(r.body));
+    assert.equal(r.body.code, "agent_limit");
+    assert.match(r.body.error, /Starter's limit with its buffer\. Everyone on the desk keeps working\. To add more, move to Shared/);
+    const afterIds = await counted();
+    for (const id of before) assert.ok(afterIds.has(id), "nobody removed");
+    // A role change for someone already counted is never held.
+    const change = await call(agentRoute.PATCH, req(`/helpdesk/admin/agents/${P.plan1.id}`, P.admin.session, { role: "newbie" }, "PATCH"), { userId: String(P.plan1.id) });
+    assert.equal(change.status, 200, JSON.stringify(change.body));
+  });
+
+  test("outside cloud mode the plan is ignored: the licence's allowance applies, as in 1.21.5", async () => {
+    delete process.env.COMPASSDOCS_CLOUD;
+    try {
+      allowance = 1;
+      const r = await add(P.plan3, { confirm_extra: true });
+      assert.equal(r.status, 402);
+      assert.match(r.body.error, /Your license includes 1 helpdesk agent/);
+    } finally {
+      process.env.COMPASSDOCS_CLOUD = "1";
+    }
+  });
+});

@@ -1115,6 +1115,13 @@ table {
   @apply dark:border-compass-500/40;
 }
 
+/* 1.22.0: a plan meter's soft buffer (STYLEGUIDE §Plan meter): the bar's
+ * hatched end, past the limit. Slate stripes from the flipping ramp, so it
+ * reads on the track in light and in all three dark styles; print keeps it. */
+.plan-buffer {
+  background-image: repeating-linear-gradient(135deg, rgb(var(--slate-300)) 0 2px, transparent 2px 5px);
+}
+
 /* 1.20.27: one ink for a native <select>. `appearance: none` drops the
  * browser's own chevron (which sat beside lucide ChevronDown pills) and this
  * paints lucide's chevron-down in slate-400 (slate-500 in dark mode), so a

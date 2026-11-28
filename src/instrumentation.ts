@@ -270,6 +270,12 @@ export async function register() {
   // every 6 hours; a console that can't be reached keeps the license in force.
   if (isCloud()) (await import("./lib/license-pull")).startLicensePull();
 
+  // 1.22.0: the CompassDocs Cloud plan's daily count (lib/plan-usage): cloud
+  // mode only, and each run does nothing without a plan in the licence. Counts
+  // today every 6 hours and yesterday's final count after midnight UTC, checks
+  // the thresholds, and reports to the console (lib/plan-report).
+  if (isCloud()) (await import("./lib/plan-usage")).startPlanUsage();
+
   // 1.21.4: support access (lib/support) and workspace exports
   // (lib/workspace-export), cloud mode only. Each minute: support requests
   // nobody decided lapse and sessions past their end end (in the audit log);

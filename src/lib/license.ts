@@ -28,7 +28,7 @@ MCowBQYDK2VwAyEA3zj2D3VLyIij/SovtpZWwY1xFrX8F6n876GPISVnxE0=
 
 // Days a license keeps working past its expiry (soft grace) before features
 // switch off — avoids a renewal-paperwork lapse breaking, e.g., SSO.
-const GRACE_DAYS = 14;
+export const GRACE_DAYS = 14;
 
 export type EntitlementFeature =
   | "sso"
@@ -68,6 +68,13 @@ export interface License {
    * (lib/license-pull) is accepted only when it names this workspace.
    */
   workspace?: string;
+  /**
+   * 1.22.0: the CompassDocs Cloud plan the licence sells (its limits, its
+   * renewal). Read it with lib/plan-shared parsePlanClaim, never directly:
+   * missing, partial or malformed reads as no plan. Only a cloud-mode
+   * workspace reads it (lib/plan); everywhere else it is ignored.
+   */
+  cloudPlan?: unknown;
 }
 
 export type LicenseState =

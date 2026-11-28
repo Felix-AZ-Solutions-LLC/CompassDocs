@@ -33,7 +33,7 @@ export async function POST(req: Request) {
   const includeDrafts = await canSeeDrafts(user);
   // Handbooks 1.18.0 (H6): handbook-only documents answer only where the asker still sees them.
   const find = await findScopeFor(user);
-  const result = await answerQuestion(question, includeDrafts, await spaceScopeFor(user), find);
+  const result = await answerQuestion(question, includeDrafts, await spaceScopeFor(user), find, { userId: user.id, feature: "ask" });
   void recordSearch(user.id, question, result.sources.length, "ask").catch(() => {});
   return NextResponse.json(result);
 }

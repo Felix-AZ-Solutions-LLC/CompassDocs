@@ -693,6 +693,10 @@ export const AUDIT_LABELS: Record<string, string> = {
   "workspace.export_failed": "Workspace export failed",
   "workspace.export_downloaded": "Downloaded a workspace export",
   "workspace.export_deleted": "Deleted a workspace export",
+  // 1.22.0: Plan & usage (lib/plan-usage), cloud mode with a plan.
+  "plan.ai_spending_changed": "Changed monthly AI spending",
+  "plan.billing_contact_changed": "Changed the plan's billing contact",
+  "plan.upgrade_requested": "Asked CompassDocs about an upgrade",
 };
 
 /** "person_updated" → "Person updated"; "ai_key_set" → "Ai key set". */

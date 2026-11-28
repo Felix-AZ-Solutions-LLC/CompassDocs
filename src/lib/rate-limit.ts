@@ -91,6 +91,11 @@ export function exportRateLimited(key: string): boolean {
   return limited(`export:${key}`, 30, 60_000);
 }
 
+/** 1.22.0: Plan & usage's upgrade requests (an email to CompassDocs sales): 5 an hour per admin. */
+export function planUpgradeRateLimited(key: string): boolean {
+  return limited(`plan-upgrade:${key}`, 5, 60 * 60_000);
+}
+
 /** Public REST API (/api/v1): 120 requests per minute per token user. */
 export function apiV1RateLimited(key: string): boolean {
   return limited(`v1:${key}`, 120, 60_000);

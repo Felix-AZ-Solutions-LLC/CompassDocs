@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isCloud, sectionHiddenInMode } from "./cloud";
+import { isCloud, PLAN_SECTION, sectionHiddenInMode } from "./cloud";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { loginHref } from "./return-to";
@@ -265,11 +265,19 @@ export async function currentSession(): Promise<CurrentSession | null> {
   const user = toSessionUser(session);
   user.newsletter_role = await newsletterLevel(user);
   const pending = await pendingStep(session, sec);
-  if (!duoSwitchedOn(settings)) return { user, token, duo: DUO_NOTHING_OWED, pending };
+  // 1.22.0: an active user this month (lib/plan-usage; cloud mode only, once a day, never waited on),
+  // only once signed in: not while a two-step, Duo or other sign-in step is still owed.
+  const noteActive = async () => (await import("./plan-usage")).noteActive("user", user.id);
+  if (!duoSwitchedOn(settings)) {
+    if (!pending) await noteActive();
+    return { user, token, duo: DUO_NOTHING_OWED, pending };
+  }
   const standing = await (await import("./duo-gate")).duoSessionStanding(settings, session, token);
   duoStandings.set(user, standing);
   // Duo at sign-in is still to come: it is the second factor, so it is asked first (M6).
-  return { user, token, duo: standing.verdict, pending: pending === "two_step" && standing.verdict.signIn ? null : pending };
+  const owed = pending === "two_step" && standing.verdict.signIn ? null : pending;
+  if (!owed && !standing.verdict.signIn) await noteActive();
+  return { user, token, duo: standing.verdict, pending: owed };
 }
 
 /**
@@ -517,7 +525,15 @@ export async function reachableSettingsSections(user: SessionUser): Promise<stri
   // 1.21.0: in cloud mode the sections CompassDocs Cloud manages (Domain &
   // HTTPS, Backups; lib/cloud) are left out, so the rail, its search, the
   // desk's address link and anything else reading this never offer them.
-  const shown = (href: string) => !sectionHiddenInMode(href);
+  // 1.22.0: Plan & usage, only in a cloud workspace whose licence carries a plan (lib/plan), or a plan
+  // licence for another workspace (design F: the page then says what is wrong).
+  const plan = isCloud()
+    ? await (await import("./plan"))
+        .planResolution()
+        .then((r) => !!(r.state || r.mismatch))
+        .catch(() => false)
+    : false;
+  const shown = (href: string) => !sectionHiddenInMode(href) && (href !== PLAN_SECTION || plan);
   if (legacyAuthzEnforcement()) {
     return roleAtLeast(user.role, "admin") ? [...SETTINGS_SECTIONS.map((s) => s.href), ...ownPages(() => true)].filter(shown) : [];
   }

@@ -2,6 +2,12 @@ import { hybridRetrieveForAnswer } from "./embeddings";
 import { searchPeopleForAnswer } from "./directory";
 import type { DirectoryPerson } from "./directory";
 import { AiRefusalError, aiAvailable, chatComplete } from "./ai-config";
+import type { AiFeature } from "./plan-shared";
+
+/** 1.22.0: a CompassDocs Cloud workspace's monthly AI cap is reached (lib/plan-usage AiPausedError); its message is safe to show. */
+function pausedMessage(err: unknown): string | null {
+  return err instanceof Error && err.name === "AiPausedError" ? err.message : null;
+}
 import { DOC_TYPE_LABEL, type DocType, type Document } from "./types";
 import type { SpaceScope } from "./space-scope";
 import type { FindScope } from "./handbook-visibility";
@@ -31,6 +37,12 @@ export interface AiAnswer {
   people: AiPerson[];
   /** "ai" when synthesized by Claude, "fallback" when no API key is configured. */
   mode: "ai" | "fallback";
+  /**
+   * 1.22.0: AI is paused at the plan's monthly cap until this day ("1 Dec"):
+   * the answer is the keyword matches, and the page says the pause once, in
+   * its reader's words (design D3).
+   */
+  pausedUntil?: string;
 }
 
 function toSources(docs: Document[]): AiSource[] {
@@ -147,7 +159,7 @@ function extractJson(text: string): any | null {
  * and Markdown structure; returns a corrected version plus a list of notable
  * changes. Degrades to `mode: "unavailable"` when no ANTHROPIC_API_KEY is set.
  */
-export async function proofread(content: string): Promise<ProofResult> {
+export async function proofread(content: string, who: { userId?: number | null } = {}): Promise<ProofResult> {
   const text = content ?? "";
   if (!text.trim()) {
     return { mode: "ai", revised: text, changes: [], message: "Nothing to proofread yet." };
@@ -179,6 +191,8 @@ Strict rules:
       maxTokens: 8192,
       // An edit the author reviews: draft-level effort (1.20.0).
       effort: "medium",
+      feature: "write",
+      userId: who.userId,
     });
 
     const parsed = extractJson(raw);
@@ -209,6 +223,8 @@ Strict rules:
     };
   } catch (err) {
     if (err instanceof AiRefusalError) return { mode: "unavailable", message: "Claude declined to proofread this document." };
+    const paused = pausedMessage(err);
+    if (paused) return { mode: "unavailable", message: paused };
     console.error("Proofread failed:", err);
     return { mode: "unavailable", message: "Proofreading failed (API error). Please try again." };
   }
@@ -283,6 +299,8 @@ export async function writeAssist(input: {
   title?: string;
   docType?: string;
   content?: string;
+  /** 1.22.0: who asked, for a cloud workspace's AI ledger. */
+  userId?: number | null;
 }): Promise<WriteResult> {
   const action = input.action;
   const tone: WriteTone = input.tone ?? "professional";
@@ -320,6 +338,8 @@ export async function writeAssist(input: {
       maxTokens,
       // 1.20.0: a summary is a quick task; drafts and rewrites are drafting.
       effort: action === "summarize" ? "low" : "medium",
+      feature: "write",
+      userId: input.userId,
     });
 
     if (!text) {
@@ -334,6 +354,8 @@ export async function writeAssist(input: {
     return { mode: "ai", text, truncated: truncated && action !== "draft" };
   } catch (err) {
     if (err instanceof AiRefusalError) return { mode: "unavailable", message: "Claude declined this writing request." };
+    const paused = pausedMessage(err);
+    if (paused) return { mode: "unavailable", message: paused };
     console.error("Writing assist failed:", err);
     return { mode: "unavailable", message: "Writing assist failed (API error). Please try again." };
   }
@@ -344,7 +366,9 @@ export async function answerQuestion(
   includeDrafts = false,
   scope: SpaceScope,
   /** Handbooks 1.18.0 (H6): answer from handbook-only documents only where the asker still sees them. */
-  find?: FindScope
+  find?: FindScope,
+  /** 1.22.0: who asked and through what (a cloud workspace's AI ledger: "ask" here, "mcp" from a tool). */
+  who: { userId?: number | null; feature?: AiFeature } = {}
 ): Promise<AiAnswer> {
   const docs = await hybridRetrieveForAnswer(question, 6, includeDrafts, scope, find);
   // The people directory is workspace-wide for signed-in users, so "who"
@@ -385,6 +409,8 @@ Rules:
       maxTokens: 1024,
       // A grounded short answer from retrieved excerpts: summary-level effort (1.20.0).
       effort: "low",
+      feature: who.feature ?? "ask",
+      userId: who.userId,
     });
 
     return {
@@ -403,6 +429,8 @@ Rules:
         mode: "ai",
       };
     }
+    // 1.22.0: the month's AI cap is reached: the keyword matches, and the page says the pause (design D3).
+    if (pausedMessage(err)) return { ...fallbackAnswer(question, docs, people), pausedUntil: (err as { until?: string }).until ?? "next month" };
     // Any API failure (bad key, rate limit, network) degrades gracefully.
     console.error("AI answer failed, falling back to snippets:", err);
     return fallbackAnswer(question, docs, people);

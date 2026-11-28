@@ -4,7 +4,7 @@
 // here. Server-only.
 
 import "server-only";
-import { EMAIL_TEMPLATES, templateDef } from "@/lib/email-templates";
+import { listedTemplates, templateDef } from "@/lib/email-templates";
 import {
   getComposition,
   listCompositions,
@@ -19,7 +19,7 @@ import { areaForKey } from "./areas";
 import type { EventInfo, PartWithUsage, Surface, TagDef, TeamOption } from "./types";
 
 export function eventInfos(surface: Surface): EventInfo[] {
-  return EMAIL_TEMPLATES.filter((t) => surface.mode === "admin" || isHelpdeskEvent(t.key)).map((t) => ({
+  return listedTemplates().filter((t) => surface.mode === "admin" || isHelpdeskEvent(t.key)).map((t) => ({
     key: t.key,
     label: t.label,
     description: t.description,

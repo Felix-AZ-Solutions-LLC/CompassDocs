@@ -1883,6 +1883,8 @@ async function authenticate(req: Request): Promise<User | Response> {
       }
     );
   }
+  // 1.22.0: an app connection counts as the person it acts for (lib/plan-usage; cloud mode only).
+  (await import("@/lib/plan-usage")).noteActive("user", user.id);
   return user;
 }
 

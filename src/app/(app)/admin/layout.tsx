@@ -12,6 +12,7 @@ import { licenceDaysLeft } from "@/lib/license-enforcement";
 import { eePresent } from "@/lib/ee";
 import { ssoOnlyDisabledByEnv } from "@/lib/sign-in-security-shared";
 import { SUPPORT_SECTION } from "@/lib/cloud";
+import { PlanBannerSlot } from "@/components/plan/PlanBannerSlot";
 
 /** Days before expiry the settings pages start saying so (1.20.27, security review M4). */
 const LICENCE_WARN_DAYS = 30;
@@ -94,6 +95,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           </a>
         </div>
       )}
+      {/* 1.22.0: the CompassDocs Cloud plan's warnings and a licence for the wrong workspace (design B1, F), admins only. */}
+      <PlanBannerSlot user={user} place="settings" />
       <div className="flex flex-col gap-6 sm:flex-row sm:gap-8">
         {/* Sticky and self-scrolling: the 20-entry rail stays put while a long
             page (Workspace, Notifications, Backups) scrolls, and fits a

@@ -207,6 +207,7 @@ rule(
       "src/components/auth/CompassBezel.tsx", // the sign-in cover's dial, an illustration
       "src/components/AnalyticsClient.tsx", // a chart
       "src/components/helpdesk/desk/reports/charts.tsx", // desk report charts (§Desk reports and charts)
+      "src/components/plan/PlanTrend.tsx", // a plan meter's six-month trend, a chart (§Plan meter, 1.22.0)
     ];
     const hits = [];
     for (const f of FILES.filter((x) => /\.tsx?$/.test(x.rel))) {

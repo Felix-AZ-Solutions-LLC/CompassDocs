@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { emailTemplatesGate, canSeeEvent } from "@/lib/email-parts-access";
 import { isHelpdeskEvent, isScope, listCompositions, listTeamVariants, SCOPE_ALL } from "@/lib/email-parts";
-import { EMAIL_TEMPLATES } from "@/lib/email-templates";
+import { listedTemplates } from "@/lib/email-templates";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +16,7 @@ export async function GET(req: Request) {
   if (gate instanceof NextResponse) return gate;
   const scope = new URL(req.url).searchParams.get("scope") || SCOPE_ALL;
   if (!isScope(scope)) return NextResponse.json({ error: "Unknown scope: use 'all' or 'hd_team:<id>'." }, { status: 400 });
-  const events = EMAIL_TEMPLATES.filter(
+  const events = listedTemplates().filter(
     (t) => canSeeEvent(gate, t.key) && (scope === SCOPE_ALL || isHelpdeskEvent(t.key))
   );
   const compositions = await listCompositions(scope, events.map((t) => t.key));

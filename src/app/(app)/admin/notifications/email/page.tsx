@@ -4,7 +4,7 @@ import { MailSettings } from "@/components/MailSettings";
 import { mailView } from "@/lib/mail-config";
 import { outboxView } from "@/lib/mail-outbox";
 import { roleAtLeast, type Role } from "@/lib/types";
-import { EMAIL_TEMPLATES, templateOverride } from "@/lib/email-templates";
+import { listedTemplates, templateOverride } from "@/lib/email-templates";
 
 import { settingsMetadata } from "@/lib/settings-sections";
 export const dynamic = "force-dynamic";
@@ -28,15 +28,15 @@ export default async function EmailPage() {
   // (integration.smtp_read, as GET /api/admin/mail/outbox asks).
   const outbox = (await maySeeOutbox(user)) ? await outboxView().catch(() => null) : null;
   const customized = (
-    await Promise.all(EMAIL_TEMPLATES.map((t) => templateOverride(t.key)))
+    await Promise.all(listedTemplates().map((t) => templateOverride(t.key)))
   ).filter(Boolean).length;
   return (
     <div>
       <MailSettings initial={view} outbox={outbox} />
       <p className="mt-6 text-sm text-slate-500">
         {customized > 0
-          ? `${customized} of ${EMAIL_TEMPLATES.length} email templates are customized.`
-          : `All ${EMAIL_TEMPLATES.length} email templates are at their defaults.`}{" "}
+          ? `${customized} of ${listedTemplates().length} email templates are customized.`
+          : `All ${listedTemplates().length} email templates are at their defaults.`}{" "}
         <Link href="/admin/notifications/templates" className="link font-medium">
           Edit email templates
         </Link>

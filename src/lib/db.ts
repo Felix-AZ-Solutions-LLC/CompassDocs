@@ -5,6 +5,7 @@ import { HD_CALENDARS_SCHEMA } from "./helpdesk/calendars-schema";
 import { EMAIL_PARTS_SCHEMA } from "./email-parts-schema";
 import { NOTIFY_POLICY_SCHEMA } from "./notify-policy-schema";
 import { SUPPORT_SCHEMA, WORKSPACE_EXPORT_SCHEMA } from "./support-schema";
+import { PLAN_SCHEMA } from "./plan-schema";
 import { HD_INTAKE_SCHEMA } from "./helpdesk/intake-schema";
 import { HD_ANALYTICS_SCHEMA } from "./helpdesk/analytics/schema";
 import { HD_ASSIGNMENT_SCHEMA } from "./helpdesk/assignment-schema";
@@ -2659,6 +2660,8 @@ const SCHEMA_SQL = `
   -- Support access and workspace exports (1.21.4, lib/support-schema; after users and sessions).
   ${SUPPORT_SCHEMA}
   ${WORKSPACE_EXPORT_SCHEMA}
+  -- CompassDocs Cloud plan usage (1.22.0, lib/plan-schema; after users and hd_claude_usage).
+  ${PLAN_SCHEMA}
 `;
 
 /**

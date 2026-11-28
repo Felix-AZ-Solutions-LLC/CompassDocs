@@ -11,7 +11,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getSetting, setSetting } from "./db";
 import { metric } from "./metrics";
 import { safeFetch } from "./safe-fetch";
-import { platformValue } from "./cloud";
+import { isCloud, platformValue } from "./cloud";
+import type { AiFeature } from "./plan-shared";
+import { estimateCostUsd } from "./helpdesk/claude/shared";
 
 const KEY_SETTING = "anthropic_api_key";
 const MODEL_SETTING = "ai_model";
@@ -255,6 +257,18 @@ export async function chatComplete(input: {
    * to the model's default. Ignored by legacy models and other providers.
    */
   effort?: AiEffort;
+  /**
+   * 1.22.0: which feature asks (lib/plan-shared AiFeature), for a CompassDocs
+   * Cloud workspace's AI allowance. Only a request on the platform's key
+   * (getAiKeySource "platform", Anthropic) is the plan's: it is admitted
+   * against the month's cap with its most it can cost reserved (refused
+   * with AiPausedError while the cap is reached), then settled at its
+   * tokens' price (lib/plan-usage admitAi/settleAi). An admin's own key or
+   * another provider is never capped or counted.
+   */
+  feature?: AiFeature;
+  /** Who asked, for the ledger. */
+  userId?: number | null;
 }): Promise<string> {
   metric("ai_requests");
   const provider = await getAiProvider();
@@ -265,6 +279,54 @@ export async function chatComplete(input: {
     const client = anthropicClient(apiKey);
     const model = await getAiModel();
     const profile = modelProfile(model);
+    const effort = input.effort ?? "medium";
+    // 1.22.0: the plan's AI, on the platform's key only (never self-hosted): admitted with its most it can
+    // cost reserved (the prompt at ~3 characters a token, and the whole output budget), settled after.
+    const plan = isCloud() && (await getAiKeySource()) === "platform" ? await import("./plan-usage") : null;
+    const ticket = plan
+      ? await plan.admitAi({
+          feature: input.feature ?? "ask",
+          userId: input.userId ?? null,
+          model,
+          reserveUsd: estimateCostUsd(model, {
+            input: Math.ceil((input.system.length + input.user.length) / 3),
+            output: input.maxTokens + (profile.current ? thinkingHeadroom(effort) : 0),
+            cacheRead: 0,
+            cacheWrite: 0,
+          }),
+        })
+      : null;
+    let settled = false;
+    const record = (m: string, u: AnthropicUsage) => {
+      settled = true;
+      if (!plan || ticket === null) return;
+      void plan.settleAi(
+        ticket,
+        u
+          ? { model: m, tokens: { input: Number(u.input_tokens ?? 0) || 0, output: Number(u.output_tokens ?? 0) || 0, cacheRead: Number(u.cache_read_input_tokens ?? 0) || 0, cacheWrite: Number(u.cache_creation_input_tokens ?? 0) || 0 } }
+          : null
+      );
+    };
+    try {
+      return await anthropicTurn(client, model, profile, effort, input, record);
+    } finally {
+      // A request that failed before any answer: nothing known was used, the reservation goes.
+      if (!settled) record(model, null);
+    }
+  }
+  return openAiTurn(input);
+}
+
+/** One Anthropic request; `record` gets the response's usage as soon as there is one (a refusal's too). */
+async function anthropicTurn(
+  client: Anthropic,
+  model: string,
+  profile: ReturnType<typeof modelProfile>,
+  effort: AiEffort,
+  input: { system: string; user: string; maxTokens: number },
+  record: (model: string, usage: AnthropicUsage) => void
+): Promise<string> {
+  {
     if (!profile.current) {
       // A stored older model: the request exactly as before 1.20.0.
       const response = await client.messages.create({
@@ -273,6 +335,7 @@ export async function chatComplete(input: {
         system: input.system,
         messages: [{ role: "user", content: input.user }],
       });
+      record(model, response.usage);
       if (response.stop_reason === "refusal") throw new AiRefusalError();
       return response.content
         .filter((b): b is Anthropic.TextBlock => b.type === "text")
@@ -284,7 +347,6 @@ export async function chatComplete(input: {
     // effort, no sampling parameters, no prefill; streamed so a long proofread
     // never meets an HTTP timeout. Opus 5.5 and Sonnet 5.5 retry a classifier
     // decline on Anthropic's recommended model (fallbacks: "default").
-    const effort = input.effort ?? "medium";
     const stream = client.beta.messages.stream({
       model,
       max_tokens: input.maxTokens + thinkingHeadroom(effort),
@@ -295,6 +357,7 @@ export async function chatComplete(input: {
       ...(profile.fallbacks ? { betas: [FALLBACK_BETA], fallbacks: "default" as const } : {}),
     });
     const message = await stream.finalMessage();
+    record(model, message.usage);
     // Check the stop reason before reading content: a refusal's partial text is not an answer.
     if (message.stop_reason === "refusal") throw new AiRefusalError();
     return message.content
@@ -303,7 +366,13 @@ export async function chatComplete(input: {
       .join("")
       .trim();
   }
+}
 
+/** The token counts on an Anthropic response (classic and beta). */
+type AnthropicUsage = { input_tokens?: number | null; output_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } | null | undefined;
+
+/** The OpenAI-compatible provider (an admin's own endpoint: never the plan's). */
+async function openAiTurn(input: { system: string; user: string; maxTokens: number }): Promise<string> {
   // OpenAI-compatible chat completions.
   const cfg = await getAiProviderConfig();
   if (!cfg.openaiModel) throw new Error("No model configured for the OpenAI-compatible provider.");

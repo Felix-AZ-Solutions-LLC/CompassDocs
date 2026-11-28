@@ -34,6 +34,7 @@ import { agentAvailability, agentReadingPrefs, deskAccess, deskRoleCaps } from "
 import { deskLookFor } from "@/lib/helpdesk/appearance";
 import { claudeDeskClientProps } from "@/lib/helpdesk/claude/desk-props";
 import { SupportBanner } from "@/components/support/SupportBanner";
+import { AiPlanProvider } from "@/components/plan/AiPlan";
 
 export const dynamic = "force-dynamic";
 
@@ -83,6 +84,9 @@ export default async function DeskLayout({ children }: { children: React.ReactNo
 
   const [access, workspaceSettings] = await Promise.all([deskAccess(user), getAppSettings()]);
   const settings = settingsForUser(workspaceSettings, user);
+  // 1.22.0: the CompassDocs Cloud plan's AI allowance in the Claude panel (null outside cloud mode or without a plan).
+  const { canSeePlanNotices } = await import("@/components/plan/PlanBannerSlot");
+  const aiPlan = await (await import("@/lib/plan-usage")).aiPlanStatus(await canSeePlanNotices(user));
 
   let body: React.ReactNode;
   if (!access.licensed) {
@@ -138,6 +142,7 @@ export default async function DeskLayout({ children }: { children: React.ReactNo
 
   return (
     <SettingsProvider value={settings}>
+      <AiPlanProvider value={aiPlan}>
       <WidthProvider initial={user.page_width}>
         <DeskKeysProvider singleKey={user.single_key_shortcuts}>
           <UiScaleSync accountPref={user.ui_scale} />
@@ -152,6 +157,7 @@ export default async function DeskLayout({ children }: { children: React.ReactNo
           {user.support && <SupportBanner support={user.support} floating />}
         </DeskKeysProvider>
       </WidthProvider>
+      </AiPlanProvider>
     </SettingsProvider>
   );
 }

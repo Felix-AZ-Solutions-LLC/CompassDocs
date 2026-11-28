@@ -16,8 +16,11 @@
 // grace, when nothing is refused.
 
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
-import { ExternalLink, Pencil, Plus, TriangleAlert, UserMinus, UsersRound, X } from "lucide-react";
-import { Button, iconButtonClass } from "@/components/Button";
+import { ArrowUpRight, ExternalLink, Info, Pencil, Plus, TriangleAlert, UserMinus, UsersRound, X } from "lucide-react";
+import { Button, buttonClass, iconButtonClass } from "@/components/Button";
+import { PlanMeter } from "@/components/plan/PlanMeter";
+import { AgentsChip } from "@/components/plan/AgentsChip";
+import { shortDate, usd, usdShort, type MeterState } from "@/lib/plan-shared";
 import { Card } from "@/components/Card";
 import { Chip } from "@/components/Chip";
 import { EntityPicker } from "@/components/EntityPicker";
@@ -60,6 +63,33 @@ interface AgentsData {
   /** How far past `licensed` (0 within it). */
   over: number;
   buy_url: string;
+  /** 1.22.0: a CompassDocs Cloud plan's agent rules (absent self-hosted and on Enterprise licences). */
+  plan?: PlanAgents;
+}
+
+/**
+ * 1.22.0 (design C): the plan's agents, and the price of one more. Prices
+ * (and the upgrade) only for whoever can open Plan & usage (`admin`); a
+ * desk Manager who can't gets the same rules without them, and asks an
+ * admin to add an extra agent.
+ */
+interface PlanAgents {
+  name: string;
+  label: string;
+  included: number;
+  /** null: agents by contract (Dedicated): no price step, no buffer, no hold. */
+  max: number | null;
+  /** Adds are held here (the maximum with its buffer); null = no hold. */
+  hold_at: number | null;
+  used: number;
+  state: MeterState;
+  admin: boolean;
+  monthly_usd: number | null;
+  price_usd: number | null;
+  renews_at: string;
+  billing: "annual" | "monthly";
+  proration: { nowUsd: number; days: number; periodUsd: number; until: string } | null;
+  next: { name: string; label: string; price_usd: number | null; included: number; max: number | null } | null;
 }
 
 /** What Add agent needs to know about the allowance. */
@@ -70,6 +100,8 @@ interface AgentLimitView {
   buyUrl: string;
   /** Already counted: adding them at a role takes no place. */
   counted: Set<number>;
+  /** 1.22.0: the CompassDocs Cloud plan's rules, when there is a plan. */
+  plan?: PlanAgents;
 }
 
 const AVAILABILITY: Record<HdDeskAgent["availability"], { label: string; tone: "ok" | "warn" | "neutral" }> = {
@@ -187,7 +219,7 @@ export function AgentsSettings() {
           ) : undefined
         }
       />
-      {data && showAllowance && <AgentAllowance d={data} />}
+      {data && showAllowance && (data.plan ? <PlanAgentsMeter p={data.plan} /> : <AgentAllowance d={data} />)}
       {error && <p className="notice-error mb-4 rounded-lg border px-3 py-2 text-sm">{error}</p>}
       {data === null && !error && <LoadingRow className="py-10" />}
       {data && data.agents.length === 0 && (
@@ -345,10 +377,12 @@ export function AgentsSettings() {
           teams={data.teams}
           onDesk={new Set(data.agents.filter((a) => a.source !== "derived").map((a) => a.user_id))}
           limit={{
-            full: data.enforced && data.allowed !== null && data.used >= data.allowed,
-            allowed: data.allowed,
+            // 1.22.0: with a plan, adds are held at its maximum with the buffer instead of the licence's `agents`.
+            full: data.plan ? data.plan.hold_at !== null && data.used >= data.plan.hold_at : data.enforced && data.allowed !== null && data.used >= data.allowed,
+            allowed: data.plan ? data.plan.hold_at : data.allowed,
             buyUrl: data.buy_url,
             counted: new Set(data.agents.map((a) => a.user_id)),
+            plan: data.plan,
           }}
           onLimit={reload}
           onAdded={() => {
@@ -433,6 +467,73 @@ function AgentAllowance({ d }: { d: AgentsData }) {
   );
 }
 
+/**
+ * 1.22.0 (design C): the Agents page's meter on a CompassDocs Cloud plan:
+ * "12 agents · 3 included in Starter · $9.99/mo each beyond that · up to
+ * 10", the state chip Plan & usage's Agents card uses (the hold in words,
+ * never color alone), the bar to the plan's maximum with its buffer, and no
+ * "Buy more agents" (extra agents are added here, at their price). No
+ * maximum (agents by contract): no buffer and no amber. No price for
+ * whoever can't open Plan & usage.
+ */
+function PlanAgentsMeter({ p }: { p: PlanAgents }) {
+  const soft = p.max !== null;
+  const limit = p.max ?? Math.max(p.included, p.used, 1);
+  const end = p.hold_at ?? limit;
+  const held = p.hold_at !== null && p.used >= p.hold_at;
+  const details = [
+    p.max === null ? `by contract on ${p.label}` : `${p.included} included in ${p.label}`,
+    p.max !== null && p.monthly_usd !== null ? `${usd(p.monthly_usd)}/mo each beyond that` : "",
+    p.max !== null ? `up to ${p.max}` : "",
+  ].filter(Boolean);
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-slate-200 bg-surface px-4 py-3 shadow-xs" data-testid="plan-agents-meter">
+      <UsersRound className="h-4 w-4 text-slate-500" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+          <span className="font-semibold text-slate-900">
+            {p.used} {p.used === 1 ? "agent" : "agents"}
+          </span>
+          <span className="text-slate-500">· {details.join(" · ")}</span>
+          <AgentsChip testid="plan-agents-chip" used={p.used} included={p.included} max={p.max} holdAt={p.hold_at} state={p.state} label={p.label} extraUsd={p.monthly_usd} />
+        </div>
+        <PlanMeter
+          className="mt-2 max-w-md"
+          value={p.used}
+          limit={limit}
+          end={end}
+          soft={soft}
+          label="Helpdesk agents"
+          valueText={`${p.used} agents: ${p.included} included${p.max !== null ? `, up to ${p.max}${held ? `; new agents are held at ${p.hold_at}` : `, held at ${p.hold_at}`}` : ", more by contract"}`}
+          marks={[{ at: p.included, label: `${p.included} included` }, ...(p.max !== null && p.max !== p.included ? [{ at: p.max, label: `${p.max} max` }] : [])]}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ordinal(n: number): string {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] ?? s[v] ?? s[0]}`;
+}
+
+/**
+ * 1.22.0 (design C1–C3): what adding one more agent means on the plan.
+ * "held": at the maximum with its buffer (C3); "buffer": past the maximum,
+ * within the buffer (C2); "extra": past the included agents (C1); null:
+ * within the included ones, nothing changes from today's dialog.
+ */
+function planStep(p: PlanAgents | undefined, adding: boolean): "held" | "buffer" | "extra" | "ask" | null {
+  if (!p || !adding || p.max === null) return null;
+  if (p.hold_at !== null && p.used >= p.hold_at) return "held";
+  // Past the included agents an add changes the bill: only someone who can open Plan & usage makes it.
+  if (p.used >= p.included && !p.admin) return "ask";
+  if (p.used >= p.max) return "buffer";
+  if (p.used >= p.included) return "extra";
+  return null;
+}
+
 /** The teams a viewer may tick: every team for Managers/Admins, their own for a Team lead. */
 function allowedTeams(me: HdCapsView, teams: TeamLite[]): TeamLite[] {
   if (me.caps.includes("agents.assign_roles") || me.caps.includes("teams.manage")) return teams;
@@ -496,6 +597,12 @@ function AddAgentModal({
   const lead = !me.caps.includes("agents.assign_roles");
   // Every place taken: only someone already counted (a workspace agent given a desk role) can still be added.
   const blocked = limit.full && !(who !== null && limit.counted.has(who));
+  // 1.22.0: a CompassDocs Cloud plan's price step (design C).
+  const adding = !(who !== null && limit.counted.has(who));
+  const step = planStep(limit.plan, adding);
+  // Held, or an extra agent a non-admin can't add: the button is aria-disabled, and the notice says why.
+  const stopped = (blocked && !!limit.plan) || step === "ask";
+  const reasonId = step === "ask" ? "plan-ask-reason" : "plan-held-reason";
 
   useEffect(() => {
     if (!open) return;
@@ -511,19 +618,33 @@ function AddAgentModal({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    // Held (every place taken), or an extra agent for an admin to add: the button is aria-disabled and the notice says why; nothing is sent.
+    if (blocked || step === "ask") return;
     if (!who) return setError("Choose who to add.");
     if (lead && !teamIds.length) return setError("Choose at least one of your teams.");
-    if (blocked) return;
     setBusy(true);
     setError("");
     setLimitError("");
     try {
-      await sendJson("/api/helpdesk/admin/agents", "POST", { user_id: who, role, team_ids: teamIds }, "Couldn't add them.");
+      await sendJson(
+        "/api/helpdesk/admin/agents",
+        "POST",
+        // 1.22.0: an extra agent's price was shown on the button: the add confirms it.
+        { user_id: who, role, team_ids: teamIds, ...(step === "extra" || step === "buffer" ? { confirm_extra: true } : {}) },
+        "Couldn't add them."
+      );
       toast("ok", `${person?.name || person?.username || "They"} joined the desk as ${HD_ROLE_LABEL[role]}.`);
       onAdded();
     } catch (err) {
       if (err instanceof ApiError && err.status === 402 && err.code === "agent_limit") {
         setLimitError(err.message);
+        onLimit();
+      } else if (err instanceof ApiError && err.code === "plan_admin_needed") {
+        setError(err.message);
+        onLimit();
+      } else if (err instanceof ApiError && err.code === "confirm_price") {
+        // Someone else added an agent meanwhile: the price step now applies. Show it.
+        setError("The desk changed while this was open: check the price below and add them again.");
         onLimit();
       }
       else setError((err as Error).message);
@@ -544,8 +665,10 @@ function AddAgentModal({
           </button>
         </div>
         <p className="mt-1 text-sm text-slate-600">Put someone on the desk at a level, in the teams whose queues they work.</p>
-        {(limitError || (limit.full && limit.allowed !== null)) && (
-          <div className="notice-warn mt-3 flex gap-2 rounded-lg border px-3 py-2 text-sm" role={limitError ? "alert" : undefined}>
+        {limit.plan && step === "held" && !limitError && <PlanHeld p={limit.plan} />}
+        {(limitError || (limit.full && limit.allowed !== null && !limit.plan)) && (
+          // After a 402 this is the reason the aria-disabled button points at (PlanHeld gives way to it).
+          <div className="notice-warn mt-3 flex gap-2 rounded-lg border px-3 py-2 text-sm" role={limitError ? "alert" : undefined} id={limit.plan ? "plan-held-reason" : undefined}>
             <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
             <div>
               {limitError ? (
@@ -555,10 +678,12 @@ function AddAgentModal({
                   <b>{limit.allowed === 1 ? "The 1 agent on your license is in use." : `All ${limit.allowed} agents on your license are in use.`}</b> Buy more agents to add someone, or take someone off the desk first.
                 </p>
               )}
-              <BuyAgentsLink href={limit.buyUrl} className="mt-1" />
+              {!limit.plan && <BuyAgentsLink href={limit.buyUrl} className="mt-1" />}
             </div>
           </div>
         )}
+        {/* 1.22.0: held at the plan's limit (design C3): the notice and the comparison stand in for the role and
+            teams, but the person stays: someone already counted as an agent can still be given a desk role. */}
         <div className="mt-4 space-y-4">
           <div>
             <p className="mb-1 text-xs font-medium text-slate-500">Person</p>
@@ -577,7 +702,10 @@ function AddAgentModal({
                 placeholder="Search people…"
               />
             )}
+            {limit.plan && step === "held" && <p className="mt-1 text-xs text-slate-500">Only someone already counted as an agent can be added while new agents are held.</p>}
           </div>
+          {!(limit.plan && step === "held") && (
+          <>
           <Field label="Role" help={HD_ROLE_DESCRIPTION[role]}>
             <Select value={role} onChange={(e) => setRole(e.target.value as HdRole)}>
               {me.assignable_roles.map((r) => (
@@ -588,11 +716,32 @@ function AddAgentModal({
             </Select>
           </Field>
           <TeamChecks teams={allowed} value={teamIds} onChange={setTeamIds} legend={lead ? "Your teams" : "Teams (optional for Managers and Admins)"} />
+          </>
+          )}
+          {limit.plan && step === "ask" && <PlanAskAdmin p={limit.plan} />}
+          {limit.plan && step === "buffer" && <PlanBuffer p={limit.plan} />}
+          {limit.plan && (step === "extra" || step === "buffer") && <PlanPrice p={limit.plan} inBuffer={step === "buffer"} />}
           {error && <FormError>{error}</FormError>}
         </div>
         <div className="mt-5 flex flex-wrap items-center gap-2">
-          <Button type="submit" busy={busy} disabled={blocked} icon={<Plus />}>
-            Add to desk
+          {/* The upgrade only for whoever can open Plan & usage (the page it leads to). */}
+          {limit.plan && step === "held" && limit.plan.admin && limit.plan.next && (
+            <a href="/admin/plan#upgrade" className={buttonClass("primary")}>
+              <ArrowUpRight className="h-4 w-4" aria-hidden />
+              {limit.plan.next.name === "dedicated" ? "Talk to us about Dedicated" : `Upgrade to ${limit.plan.next.label}`}
+            </a>
+          )}
+          <Button
+            type="submit"
+            busy={busy}
+            variant={limit.plan && step === "held" && limit.plan.admin ? "secondary" : "primary"}
+            disabled={blocked && !limit.plan}
+            aria-disabled={stopped ? true : undefined}
+            aria-describedby={stopped ? reasonId : undefined}
+            className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+            icon={<Plus />}
+          >
+            {limit.plan && limit.plan.monthly_usd !== null && (step === "extra" || step === "buffer") ? `Add to desk · ${usd(limit.plan.monthly_usd)}/mo` : "Add to desk"}
           </Button>
           <Button type="button" variant="ghost" onClick={onClose}>
             Cancel
@@ -600,6 +749,108 @@ function AddAgentModal({
         </div>
       </form>
     </Modal>
+  );
+}
+
+/** C1: the price box. Past the included agents the add costs $9.99/mo, prorated to the plan's renewal. */
+function PlanPrice({ p, inBuffer }: { p: PlanAgents; inBuffer: boolean }) {
+  if (p.monthly_usd === null || !p.proration) return null;
+  const extraAfter = p.used + 1 - p.included;
+  return (
+    <div className="notice-info rounded-lg border px-3 py-2 text-sm" data-testid="plan-price">
+      <p className="font-semibold">Adds an extra agent: {usd(p.monthly_usd)}/mo, prorated.</p>
+      <p className="mt-0.5 text-xs">
+        {inBuffer
+          ? `With this one, ${extraAfter} extra ${extraAfter === 1 ? "agent" : "agents"}: ${usd(extraAfter * p.monthly_usd)} a month.`
+          : `${p.used === p.included ? `All ${p.included} agents included in ${p.label} are in use.` : `${p.label} includes ${p.included} agents.`} About ${usd(p.proration.nowUsd)} is charged now for the rest of your plan ${
+              p.billing === "annual" ? `year (to ${shortDate(p.proration.until)})` : "month"
+            }, then it renews with the plan.`}
+      </p>
+    </div>
+  );
+}
+
+/** C2: past the plan's maximum, inside the buffer: the add still works, and we talk. */
+function PlanBuffer({ p }: { p: PlanAgents }) {
+  const left = (p.hold_at ?? p.used) - p.used;
+  return (
+    <div className="notice-warn flex gap-2 rounded-lg border px-3 py-2 text-sm" data-testid="plan-buffer">
+      <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+      <p>
+        <b>
+          This is your {ordinal(p.used + 1)} agent; {p.label} goes up to {p.max}.
+        </b>{" "}
+        You can add {left} more while we talk{p.next ? ` about ${p.next.label}` : ""}
+        {p.next && p.next.max !== null ? `, which includes ${p.next.included} agents and goes up to ${p.next.max}` : ""}.
+      </p>
+    </div>
+  );
+}
+
+/** C3: at the maximum with its buffer, new agents are held; nobody already on the desk is removed. */
+function PlanHeld({ p }: { p: PlanAgents }) {
+  const n = p.next;
+  const move = n ? `${p.admin ? "move" : "ask an admin about moving"} to ${n.label}${n.max !== null ? ` (up to ${n.max} agents)` : ", where agents are by contract"}` : p.admin ? "talk to CompassDocs" : "ask an admin";
+  // The comparison only with the prices (whoever can open Plan & usage).
+  const priced = p.admin && p.price_usd !== null && p.monthly_usd !== null && n !== null && n.price_usd !== null;
+  return (
+    <>
+      <div className="notice-warn mt-3 flex gap-2 rounded-lg border px-3 py-2 text-sm" role="note" id="plan-held-reason" data-testid="plan-held">
+        <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+        <p>
+          <b>
+            This workspace has {p.used} agents, {p.label}'s limit with its buffer.
+          </b>{" "}
+          Everyone on the desk keeps working. To add more, {move}, or take someone off the desk first.
+        </p>
+      </div>
+      {priced && <PlanCompare p={p} price={p.price_usd!} monthly={p.monthly_usd!} n={n!} />}
+    </>
+  );
+}
+
+/** C3's comparison: the plan now (its price plus the extra agents) beside the next one; a plan with agents by contract says so, with no sum. */
+function PlanCompare({ p, price, monthly, n }: { p: PlanAgents; price: number; monthly: number; n: NonNullable<PlanAgents["next"]> }) {
+  const extraNow = Math.max(0, p.used - p.included);
+  const extraNext = Math.max(0, p.used - n.included);
+  const nextPrice = n.price_usd ?? 0;
+  return (
+    <div className="mt-3 grid gap-2 sm:grid-cols-2" data-testid="plan-compare">
+      <div className="rounded-lg border border-slate-200 p-3 text-sm">
+        <p className="text-xs text-slate-500">{p.label} now</p>
+        <p className="font-semibold text-slate-900">{p.used} agents</p>
+        <p className="text-xs text-slate-600">
+          {usdShort(price)} + {extraNow} × {usd(monthly)}
+        </p>
+        <p className="text-xs text-slate-600">{usd(price + extraNow * monthly)}/mo</p>
+      </div>
+      <div className="rounded-lg border border-compass-300 bg-compass-50/60 p-3 text-sm dark:border-compass-500">
+        <p className="text-xs text-slate-500">{n.label}</p>
+        <p className="font-semibold text-slate-900">{n.max === null ? "Agents by contract" : `${p.used} agents`}</p>
+        {n.max === null ? (
+          <p className="text-xs text-slate-600">From {usdShort(nextPrice)}/mo, agents by contract</p>
+        ) : (
+          <>
+            <p className="text-xs text-slate-600">
+              {usdShort(nextPrice)} + {extraNext} × {usd(monthly)}
+            </p>
+            <p className="text-xs text-slate-600">{usd(nextPrice + extraNext * monthly)}/mo</p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Past the included agents, for a desk Manager who can't open Plan & usage: an extra agent is an admin's to add (no price). */
+function PlanAskAdmin({ p }: { p: PlanAgents }) {
+  return (
+    <div className="notice-info flex gap-2 rounded-lg border px-3 py-2 text-sm" role="note" id="plan-ask-reason" data-testid="plan-ask-admin">
+      <Info className="mt-0.5 h-4 w-4 shrink-0 text-compass-600" aria-hidden />
+      <p>
+        <b>All {p.included} agents included in {p.label} are in use.</b> Another one adds to the plan's bill, so an admin adds them. Ask an admin to add this person.
+      </p>
+    </div>
   );
 }
 

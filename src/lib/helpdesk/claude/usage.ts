@@ -69,7 +69,7 @@ export const MAX_TURNS_IN_FLIGHT = 2;
  */
 export async function reserveTurn(
   cfg: ClaudeDeskConfig,
-  row: { userId: number; chatId: number; ticketNumber: number | null; model: string; reserveUsd: number }
+  row: { userId: number; chatId: number; ticketNumber: number | null; model: string; reserveUsd: number; /** 1.22.0: on the platform's key, so the plan's (lib/plan-usage aiMetered). */ planMetered?: boolean }
 ): Promise<{ ok: true; id: number } | { ok: false; error: string }> {
   const tz = await zone();
   return withTx(async (client) => {
@@ -89,9 +89,9 @@ export async function reserveTurn(
     const refusal = limitSentence(cfg, { workspace: Number(r.rows[0].workspace), agent: Number(r.rows[0].agent) });
     if (refusal) return { ok: false as const, error: refusal };
     const ins = await client.query<{ id: string }>(
-      `INSERT INTO hd_claude_usage (user_id, chat_id, ticket_number, model, cost_usd, requests, stop_reason)
-       VALUES ($1, $2, $3, $4, $5, 0, 'running') RETURNING id`,
-      [row.userId, row.chatId, row.ticketNumber, row.model, Math.round(row.reserveUsd * 1_000_000) / 1_000_000]
+      `INSERT INTO hd_claude_usage (user_id, chat_id, ticket_number, model, cost_usd, requests, stop_reason, plan_metered)
+       VALUES ($1, $2, $3, $4, $5, 0, 'running', $6) RETURNING id`,
+      [row.userId, row.chatId, row.ticketNumber, row.model, Math.round(row.reserveUsd * 1_000_000) / 1_000_000, row.planMetered === true]
     );
     return { ok: true as const, id: Number(ins.rows[0].id) };
   });

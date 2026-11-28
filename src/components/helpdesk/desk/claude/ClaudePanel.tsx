@@ -80,6 +80,7 @@ import { getJson, sendJson } from "../api";
 import { StartWorkflowDialog, type StartWorkflowSuggestion } from "../workflow-start/StartWorkflow";
 import { useClaudeDesk } from "./ClaudeDesk";
 import { askClaude } from "./stream";
+import { AiPausedChip, AiPausedPanel, AiPlanLine, aiPausedText, useAiPlan } from "@/components/plan/AiPlan";
 
 const ACTIVITY_ICON: Record<string, React.ReactNode> = {
   search: <Search className="h-3 w-3" aria-hidden />,
@@ -113,6 +114,9 @@ export function ClaudePanel() {
   const [chats, setChats] = useState<ClaudeChatHistory["chats"]>([]);
   const [loading, setLoading] = useState(true);
   const [text, setText] = useState("");
+  // 1.22.0: the CompassDocs Cloud plan's AI cap (lib/plan-usage): paused, the input says so.
+  const aiPlan = useAiPlan();
+  const paused = !!aiPlan?.pausedUntil;
   const [streaming, setStreaming] = useState(false);
   const [status, setStatus] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -205,7 +209,8 @@ export function ClaudePanel() {
   const send = useCallback(
     async (q: string, intent: ClaudeIntent | null) => {
       const question = q.trim();
-      if (!question || streaming) return;
+      // 1.22.0: paused at the plan's AI cap: nothing is sent (Enter included); the panel says why (design D3).
+      if (!question || streaming || paused) return;
       // A history load still on its way must not replace this question and its answer.
       loadSeq.current++;
       setLoading(false);
@@ -281,7 +286,7 @@ export function ClaudePanel() {
         requestAnimationFrame(() => input.current?.focus());
       }
     },
-    [number, chatId, streaming, putDraft, quoteNotes]
+    [number, chatId, streaming, putDraft, quoteNotes, paused]
   );
 
   // A question from the launcher (c2).
@@ -480,6 +485,7 @@ export function ClaudePanel() {
           Claude
         </h2>
         {number && <span className={chipClass("neutral", "sm")}>On #{number}</span>}
+        <AiPausedChip />
         <span className="ml-auto flex items-center gap-0.5">
           <span className="relative">
             <button
@@ -543,7 +549,7 @@ export function ClaudePanel() {
           {status}
         </p>
         <div role="log" aria-label="Chat with Claude" aria-busy={streaming} className="flex flex-col gap-2.5 text-sm text-slate-800">
-          {!loading && turns.length === 0 && (
+          {!paused && !loading && turns.length === 0 && (
             <div className="py-6 text-center">
               <Sparkle className="mx-auto h-6 w-6 text-slate-400" aria-hidden />
               <p className="mt-2 font-semibold text-slate-800">{number ? `Ask Claude about #${number}` : "Ask Claude"}</p>
@@ -561,6 +567,8 @@ export function ClaudePanel() {
               <AssistantTurn key={t.id} t={t} onDecide={decide} filled={filled.current} busy={busyCards} />
             )
           )}
+          {/* 1.22.0 (design D3): paused at the plan's AI cap: the pause in place of the welcome, or after a chat's turns. */}
+          {paused && !loading && <AiPausedPanel />}
         </div>
       </div>
 
@@ -598,7 +606,8 @@ export function ClaudePanel() {
                 void send(text, null);
               }
             }}
-            placeholder={number ? CLAUDE_INPUT_PLACEHOLDER : CLAUDE_INPUT_PLACEHOLDER_NO_TICKET}
+            placeholder={paused ? `Claude is paused until ${aiPlan?.pausedUntil}` : number ? CLAUDE_INPUT_PLACEHOLDER : CLAUDE_INPUT_PLACEHOLDER_NO_TICKET}
+            aria-describedby={paused ? "ai-paused-reason" : undefined}
             className="frame-input max-h-36 min-h-7 flex-1 resize-none bg-transparent py-1 text-sm text-slate-900 placeholder:text-slate-400 [field-sizing:content]"
           />
           {streaming ? (
@@ -606,7 +615,15 @@ export function ClaudePanel() {
               <CircleStop aria-hidden />
             </button>
           ) : (
-            <button type="submit" disabled={!text.trim()} aria-label="Send" data-tt="Send" className={`${iconButtonClass("quiet", "sm")} text-compass-600 disabled:text-slate-400`}>
+            <button
+              type="submit"
+              disabled={!text.trim() && !paused}
+              aria-disabled={paused || undefined}
+              aria-describedby={paused ? "ai-paused-reason" : undefined}
+              aria-label="Send"
+              data-tt={paused ? `Paused until ${aiPlan?.pausedUntil}` : "Send"}
+              className={`${iconButtonClass("quiet", "sm")} text-compass-600 disabled:text-slate-400 aria-disabled:cursor-not-allowed aria-disabled:text-slate-400`}
+            >
               <ArrowUp aria-hidden />
             </button>
           )}
@@ -616,6 +633,13 @@ export function ClaudePanel() {
             <input type="checkbox" className="h-3.5 w-3.5" checked={quoteNotes} onChange={(e) => setQuoteNotes(e.target.checked)} />
             May quote internal notes in a reply (this question only)
           </label>
+        )}
+        {/* 1.22.0: past the CompassDocs Cloud plan's AI allowance (admins only); paused, the panel's body says it once. */}
+        {!paused && <AiPlanLine className="mt-1.5" />}
+        {paused && (
+          <p id="ai-paused-reason" className="sr-only">
+            {aiPausedText(aiPlan?.pausedUntil ?? "", !!aiPlan?.admin)}
+          </p>
         )}
         <p className="mt-1.5 text-xs text-slate-500">{CLAUDE_FOOTER_NOTE}</p>
       </div>

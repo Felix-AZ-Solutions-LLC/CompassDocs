@@ -28,6 +28,7 @@ import type { EditDefault } from "@/lib/compliance-settings";
 import { changeSummary, suggestReconfirm } from "@/lib/diff";
 import { people } from "@/components/compliance/copy";
 import { PolicyFactsFields, cleanPoints } from "./handbooks/PolicyFactsFields";
+import { AiPlanLine, aiPausedText, useAiPlan } from "./plan/AiPlan";
 
 type EditorTab = "rich" | "markdown" | "preview";
 
@@ -178,6 +179,9 @@ export function DocEditor({
   trainingDeck?: boolean;
 }) {
   const router = useRouter();
+  // 1.22.0: a CompassDocs Cloud workspace's monthly AI cap reached (lib/plan-usage): the AI items wait, nothing else does.
+  const aiPlan = useAiPlan();
+  const aiPaused = !!aiPlan?.pausedUntil;
   const [spaceId, setSpaceId] = useState(initial.space_id ?? spaces[0]?.id);
   const [categoryId, setCategoryId] = useState<number | null>(initial.category_id ?? null);
   const [title, setTitle] = useState(initial.title);
@@ -1309,19 +1313,19 @@ export function DocEditor({
                   padding="py-1"
                   className="text-sm"
                 >
-                  <AssistItem onClick={() => runAssist("draft")} disabled={!title.trim()}>
+                  <AssistItem onClick={() => runAssist("draft")} disabled={!title.trim() || aiPaused}>
                     Draft from title
                   </AssistItem>
-                  <AssistItem onClick={() => runAssist("improve")} disabled={!content.trim()}>
+                  <AssistItem onClick={() => runAssist("improve")} disabled={!content.trim() || aiPaused}>
                     Improve writing
                   </AssistItem>
-                  <AssistItem onClick={() => runAssist("expand")} disabled={!content.trim()}>
+                  <AssistItem onClick={() => runAssist("expand")} disabled={!content.trim() || aiPaused}>
                     Expand
                   </AssistItem>
-                  <AssistItem onClick={() => runAssist("shorten")} disabled={!content.trim()}>
+                  <AssistItem onClick={() => runAssist("shorten")} disabled={!content.trim() || aiPaused}>
                     Make shorter
                   </AssistItem>
-                  <AssistItem onClick={() => runAssist("summarize")} disabled={!content.trim()}>
+                  <AssistItem onClick={() => runAssist("summarize")} disabled={!content.trim() || aiPaused}>
                     Summarize → summary field
                   </AssistItem>
                   <div className="my-1 border-t border-slate-100" />
@@ -1329,18 +1333,35 @@ export function DocEditor({
                     Change tone
                   </div>
                   {(["professional", "friendly", "concise", "confident"] as WriteTone[]).map((t) => (
-                    <AssistItem key={t} onClick={() => runAssist("tone", t)} disabled={!content.trim()}>
+                    <AssistItem key={t} onClick={() => runAssist("tone", t)} disabled={!content.trim() || aiPaused}>
                       <span className="capitalize">{t}</span>
                     </AssistItem>
                   ))}
+                  {/* 1.22.0: the CompassDocs Cloud plan's AI allowance (admins) or its pause (everyone), beside the items it holds. */}
+                  {aiPlan && (aiPlan.pausedUntil || (aiPlan.admin && aiPlan.beyond)) && (
+                    <>
+                      <div className="my-1 border-t border-slate-100" />
+                      <AiPlanLine className="px-3 py-1" />
+                    </>
+                  )}
                 </Popover>
               </div>
+              {/* 1.22.0 (design D3): paused at the plan's AI cap, Proofread stays where it is, aria-disabled with its reason. */}
+              {aiPaused && (
+                <span id="proofread-paused" className="sr-only">
+                  {aiPausedText(aiPlan?.pausedUntil ?? "", !!aiPlan?.admin)}
+                </span>
+              )}
               <button
                 type="button"
-                onClick={runProofread}
+                onClick={() => {
+                  if (!aiPaused) void runProofread();
+                }}
                 disabled={proofing || !content.trim()}
-                data-tt="Check grammar, spelling, and clarity with AI" aria-label="Check grammar, spelling, and clarity with AI"
-                className="mr-1 flex items-center gap-1 rounded-md px-2.5 py-1 text-sm font-medium text-compass-700 hover:bg-compass-50 disabled:opacity-50"
+                aria-disabled={aiPaused || undefined}
+                aria-describedby={aiPaused ? "proofread-paused" : undefined}
+                data-tt={aiPaused ? `AI is paused until ${aiPlan?.pausedUntil}` : "Check grammar, spelling, and clarity with AI"} aria-label="Check grammar, spelling, and clarity with AI"
+                className="mr-1 flex items-center gap-1 rounded-md px-2.5 py-1 text-sm font-medium text-compass-700 hover:bg-compass-50 disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-transparent"
               >
                 {proofing ? (
                   "Proofreading…"
