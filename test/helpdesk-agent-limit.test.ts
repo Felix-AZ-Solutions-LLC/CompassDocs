@@ -563,14 +563,16 @@ describe("1.22.0: a CompassDocs Cloud plan's agent rules", () => {
     assert.equal(r.status, 201, JSON.stringify(r.body));
   });
 
+  // Past the included agents whatever other files add or remove meanwhile (test files share the database and run at
+  // once): 0 included, the maximum well above the count.
   test("past the included agents: 409 confirm_price with the price, then the confirmed add", async () => {
     const used = await n();
-    setPlan(used, used + 10);
+    setPlan(0, used + 10);
     const r = await add(P.plan2);
     assert.equal(r.status, 409, JSON.stringify(r.body));
     assert.equal(r.body.code, "confirm_price");
     assert.equal(r.body.monthly_usd, 9.99);
-    assert.equal(r.body.included, used);
+    assert.equal(r.body.included, 0);
     assert.ok(!(await counted()).has(P.plan2.id), "nobody added without the price confirmed");
     const ok = await add(P.plan2, { confirm_extra: true });
     assert.equal(ok.status, 201, JSON.stringify(ok.body));
@@ -592,11 +594,11 @@ describe("1.22.0: a CompassDocs Cloud plan's agent rules", () => {
 
   test("a desk Admin who can't open Plan & usage: the rules without prices, and an extra agent is an admin's to add (review)", async () => {
     const used = await n();
-    setPlan(used, used + 10);
+    setPlan(0, used + 10);
     const r = await call(agentsRoute.GET, req("/helpdesk/admin/agents", P.admin.session));
     assert.equal(r.status, 200);
     assert.equal(r.body.plan.admin, false);
-    assert.equal(r.body.plan.included, used);
+    assert.equal(r.body.plan.included, 0);
     assert.equal(r.body.plan.monthly_usd, null, "no price");
     assert.equal(r.body.plan.price_usd, null);
     assert.equal(r.body.plan.proration, null);
@@ -625,7 +627,7 @@ describe("1.22.0: a CompassDocs Cloud plan's agent rules", () => {
 
   test("at the maximum with its buffer, new adds are held; everyone on the desk stays", async () => {
     const used = await n();
-    setPlan(0, used, 0); // the buffer's end is the count itself
+    setPlan(0, Math.max(0, used - 5), 0); // the buffer's end below the count (with room for other files' changes meanwhile)
     const before = await counted();
     const r = await add(P.plan3, { confirm_extra: true });
     assert.equal(r.status, 402, JSON.stringify(r.body));
